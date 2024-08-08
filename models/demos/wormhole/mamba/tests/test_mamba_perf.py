@@ -5,6 +5,8 @@ import torch
 import pytest
 import time
 import json
+import ttnn
+from loguru import logger
 
 from models.demos.wormhole.mamba.demo.demo import (
     get_tokenizer,
@@ -23,6 +25,8 @@ from models.utility_functions import (
     skip_for_wormhole_b0,
 )
 from tt_metal.tools.profiler.process_model_log import get_samples_per_s
+from models.demos.wormhole.mamba.reference.args import ModelMode
+from models.demos.wormhole.mamba.tt.preprocessing import split_sequence_length
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -129,7 +133,7 @@ def test_mamba_e2e_perf(
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, warmup, expected_device_fw_duration_ms",
-    ((32, True, 1.65),),
+    ((32, True, 1.71),),
 )
 def test_mamba_perf_device(batch, warmup, expected_device_fw_duration_ms, reset_seeds):
     subdir = "ttnn_mamba"
@@ -138,7 +142,7 @@ def test_mamba_perf_device(batch, warmup, expected_device_fw_duration_ms, reset_
         inference_iterations = 2
     else:
         inference_iterations = 1
-    command = f"pytest models/demos/wormhole/mamba/tests/test_full_model.py::test_device_perf[{inference_iterations}]"
+    command = f"pytest models/demos/wormhole/mamba/tests/test_mamba_model.py::test_device_perf[{inference_iterations}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     # convert expected perf (ms) to samples/s
@@ -158,3 +162,57 @@ def test_mamba_perf_device(batch, warmup, expected_device_fw_duration_ms, reset_
         expected_results=expected_results,
         comments=comment,
     )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "prefill_length",
+    (128,),
+)
+@pytest.mark.parametrize(
+    "prefill_chunk_size",
+    (
+        32,
+        64,
+        128,
+    ),
+)
+@pytest.mark.parametrize(
+    "num_layers",
+    (1,),
+)
+def test_mamba_prefill_perf_device(
+    device, use_program_cache, num_layers, prefill_length, prefill_chunk_size, get_tt_cache_path
+):
+    model_version = "state-spaces/mamba-2.8b"
+    batch_size = 32
+    model = get_tt_metal_model(
+        model_version,
+        device,
+        get_tt_cache_path(model_version),
+        batch_size=1,
+        mode=ModelMode.PREFILL,
+        seq_len=prefill_chunk_size,
+        num_layers=num_layers,
+    )
+
+    model.eval()
+    prefill_tokens = ttnn.from_torch(
+        torch.randint(1, 1000, (1, 1, batch_size, prefill_length)),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.uint32,
+    )
+
+    prefill_start = time.time()
+    for chunk in split_sequence_length(prefill_tokens, batch=0, chunk_size=prefill_chunk_size):
+        chunk = ttnn.reshape(chunk, [1, chunk.shape[3]])  # Mamba expects (1, L) in prefill mode
+        with torch.no_grad():
+            model._forward(chunk)
+    prefill_end = time.time()
+
+    prefill_time_per_user = prefill_end - prefill_start
+    prefill_throughput_per_user = prefill_length / prefill_time_per_user
+    logger.info(f"Prefill throughput for user : {prefill_throughput_per_user:.2f} tok/s/u")

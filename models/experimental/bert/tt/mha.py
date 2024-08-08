@@ -48,7 +48,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             #        x = x.view(new_x_shape)
             #        return x.permute(0, 2, 1, 3)
 
-            untilized_x = ttl.tensor.untilize(x)
+            untilized_x = ttnn.untilize(x)
             reshaped_unt = ttl.tensor.reshape(
                 untilized_x,
                 x.get_legacy_shape()[0],
@@ -58,7 +58,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             )
 
             # N, 128, 2, 64
-            transposed = ttl.tensor.transpose(reshaped_unt, 1, -2)
+            transposed = ttnn.transpose(reshaped_unt, 1, -2)
             # N, 2, 128, 64
             retilized = ttnn.tilize(transposed)
             return retilized
@@ -75,7 +75,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
             outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
             """
-            ctx = ttl.tensor.transpose(x, 1, -2)
+            ctx = ttnn.transpose(x, 1, -2)
             ushape = ctx.get_legacy_shape()
             reshaped = ttl.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
             retval = ttnn.tilize(reshaped)
@@ -97,7 +97,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         Q_heads = make_attention_heads(Q)
         K_heads = make_attention_heads(K)
         V_heads = make_attention_heads(V)
-        K_T_heads = ttl.tensor.transpose(K_heads, -2, -1)
+        K_T_heads = ttnn.transpose(K_heads, -2, -1)
 
         qkt = ttnn.matmul(Q_heads, K_T_heads)
 

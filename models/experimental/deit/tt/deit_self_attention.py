@@ -63,11 +63,11 @@ class TtDeiTSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_transposed = tt_lib.tensor.transpose(key_layer, -2, -1)
+        key_layer_transposed = ttnn.transpose(key_layer, -2, -1)
 
         attention_scores = ttnn.matmul(query_layer, key_layer_transposed)
 
-        attention_head_size_tt = tt_lib.tensor.full(attention_scores.get_legacy_shape(), self.attention_head_size)
+        attention_head_size_tt = ttnn.full(attention_scores.get_legacy_shape(), self.attention_head_size)
         attention_head_size_tt = ttnn.sqrt(attention_head_size_tt)
         attention_head_size_tt = ttnn.reciprocal(attention_head_size_tt)
 

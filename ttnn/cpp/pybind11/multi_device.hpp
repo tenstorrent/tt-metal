@@ -26,17 +26,17 @@ void py_module(py::module& module) {
             py::arg("l1_small_size"),
             py::arg("trace_region_size"),
             py::arg("num_command_queues"))
-        .def("get_num_devices", &ttnn::multi_device::DeviceMesh::num_devices)
-        .def("get_device_ids", &ttnn::multi_device::DeviceMesh::get_device_ids)
+        .def("get_num_devices", &DeviceMesh::num_devices)
+        .def("get_device_ids", &DeviceMesh::get_device_ids)
         .def(
             "get_device",
-            py::overload_cast<int>(&ttnn::multi_device::DeviceMesh::get_device, py::const_),
+            py::overload_cast<int>(&DeviceMesh::get_device, py::const_),
             py::return_value_policy::reference)
         .def(
             "get_device",
-            py::overload_cast<int, int>(&ttnn::multi_device::DeviceMesh::get_device, py::const_),
+            py::overload_cast<int, int>(&DeviceMesh::get_device, py::const_),
             py::return_value_policy::reference)
-        .def("get_devices", &ttnn::multi_device::DeviceMesh::get_devices, py::return_value_policy::reference, R"doc(
+        .def("get_devices", &DeviceMesh::get_devices, py::return_value_policy::reference, R"doc(
             Get the devices in the device mesh.
 
             Returns:
@@ -44,7 +44,7 @@ void py_module(py::module& module) {
         )doc")
         .def(
             "get_devices_on_row",
-            &ttnn::multi_device::DeviceMesh::get_devices_on_row,
+            &DeviceMesh::get_devices_on_row,
             py::return_value_policy::reference,
             R"doc(
             Get the devices in a row of the device mesh.
@@ -54,13 +54,42 @@ void py_module(py::module& module) {
         )doc")
         .def(
             "get_devices_on_column",
-            &ttnn::multi_device::DeviceMesh::get_devices_on_column,
+            &DeviceMesh::get_devices_on_column,
             py::return_value_policy::reference,
             R"doc(
             Get the devices in a row of the device mesh.
 
             Returns:
                 List[Device]: The devices on a row in the device mesh.
+        )doc")
+        .def(
+            "compute_with_storage_grid_size",
+            &DeviceMesh::compute_with_storage_grid_size,
+            R"doc(
+            Get the compute grid size (x, y) of the first device in the device mesh denoting region that can be targeted by ops.
+
+            Returns:
+                CoreCoord: The compute grid size of the first device in the device mesh.
+        )doc")
+        .def("dram_grid_size", &DeviceMesh::dram_grid_size,
+        R"doc(
+            Get the dram grid size (x, y) of the first device in the device mesh.
+
+            Returns:
+                CoreCoord: The dram grid size of the first device in the device mesh.
+        )doc")
+        .def("arch", &DeviceMesh::arch,
+        R"doc(
+            Get the arch of the first device in the device mesh.
+
+            Returns:
+                Arch: The arch of the first device in the device mesh.
+        )doc")
+        .def_property_readonly("shape", &DeviceMesh::shape, R"doc(
+            Get the shape of the device mesh.
+
+            Returns:
+                Tuple[int, int]: The shape of the device mesh as (num_rows, num_cols).
         )doc");
 
     module.def(

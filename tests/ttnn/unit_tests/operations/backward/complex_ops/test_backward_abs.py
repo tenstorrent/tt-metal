@@ -23,7 +23,6 @@ from tests.ttnn.unit_tests.operations.backward.complex_ops.backward_complex_util
 )
 
 
-@pytest.mark.skip(reason="this test is failing because ttnn.abs_bw doesn't have a corresponding API call")
 @pytest.mark.parametrize(
     "memcfg",
     (
@@ -41,7 +40,7 @@ def test_level2_abs_bw(bs, hw, memcfg, dtype, device, function_level_defaults):
     in_data = random_complex_tensor(input_shape, (-90, 90), (-70, 70))
     in_data.requires_grad = True
 
-    input_tensor = ttl.tensor.complex_tensor(
+    input_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -63,7 +62,6 @@ def test_level2_abs_bw(bs, hw, memcfg, dtype, device, function_level_defaults):
         assert passing
 
 
-@pytest.mark.skip(reason="this test is failing because ttnn.abs_bw doesn't have a corresponding API call")
 @pytest.mark.parametrize(
     "memcfg",
     (
@@ -81,7 +79,7 @@ def test_level2_abs_bw_inp_zero(bs, hw, memcfg, dtype, device, function_level_de
     in_data = random_complex_tensor(input_shape, (0, 0), (0, 0))
     in_data.requires_grad = True
 
-    input_tensor = ttl.tensor.complex_tensor(
+    input_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )

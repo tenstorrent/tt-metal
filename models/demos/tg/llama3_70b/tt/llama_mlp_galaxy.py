@@ -9,6 +9,7 @@ import ttnn
 from ttnn import ReplicateTensorToMesh
 from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh, ConcatMesh2DToTensor
 from models.utility_functions import nearest_32
+from models.demos.tg.llama3_70b.tt.llama_common import tt_all_reduce
 
 
 class TtLlamaMLP_galaxy:
@@ -57,7 +58,7 @@ class TtLlamaMLP_galaxy:
                     )
                 }
             )
-            M, K, N = 32, 8192, 32768
+            M, K, N = 32, self.model_config["HIDDEN_SIZE"], self.model_config["FFN_EXPANDED_HIDDEN_SIZE"]
 
             K = K // self.cluster_shape[0]
             N = N // self.cluster_shape[1]
@@ -74,7 +75,7 @@ class TtLlamaMLP_galaxy:
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec
             )
 
-            self.DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            self.FF1_DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                 in0_block_w=K
                 // 8
                 // 32,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
@@ -83,11 +84,58 @@ class TtLlamaMLP_galaxy:
                 fused_activation=None,
             )
 
+            self.FF2_DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=w2_K
+                // 8
+                // 32,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+                per_core_M=M // 32,  # M / TILE_HEIGHT = 32 / 32
+                per_core_N=w2_N // 8 // 32,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size
+                fused_activation=None,
+            )
+
             self.COMPUTE_KERNEL_LOFI = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
+            )
+
+            full_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 7),
+                    )
+                }
+            )
+            self.FULL_GRID_MEMCFG = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    full_grid,
+                    [
+                        32,
+                        nearest_32(56),
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            )
+
+            self.FF2_ACT_MEMCFG = ttnn.create_sharded_memory_config(
+                shape=(M, N // 8),
+                core_grid=ttnn.CoreGrid(y=1, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.FF1_ACT_MEMCFG = ttnn.create_sharded_memory_config(
+                shape=(32, 2048 // 8),
+                core_grid=ttnn.CoreGrid(y=1, x=8),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
     def load_weights(self):
@@ -99,55 +147,55 @@ class TtLlamaMLP_galaxy:
         w2_str = f"{self.layer_name}.feed_forward.w2.weight"
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
-        w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_dram_shard.weight"
-        w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_dram_shard.weight"
-        w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_dram_shard.weight"
+        # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+        # w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_dram_shard_unpadded.weight"
+        # w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_dram_shard_unpadded.weight"
+        # w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_dram_shard_unpadded.weight"
+        w1_cache_str = f"{self.layer_name}.feed_forward.w1_galaxy_unpadded.weight"
+        w2_cache_str = f"{self.layer_name}.feed_forward.w2_galaxy_unpadded.weight"
+        w3_cache_str = f"{self.layer_name}.feed_forward.w3_galaxy_unpadded.weight"
 
         w1_dtype = ttnn.bfloat4_b
         w2_dtype = ttnn.bfloat8_b
         w3_dtype = ttnn.bfloat4_b
 
-        padded_w1 = None
-        padded_w2 = None
-        padded_w3 = None
+        w1 = None
+        w2 = None
+        w3 = None
         if not self.read_cache:
-            # Do padding
-            H = 8 * 1024
-            PADDED_H4 = 32 * 1024
-            H4 = 28 * 1024
-            padded_w1 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w2 = torch.zeros(1, 1, PADDED_H4, H)
-            padded_w3 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w1[:, :, :, :H4] = self.state_dict[w1_str].transpose(-2, -1)
-            padded_w2[:, :, :H4, :] = self.state_dict[w2_str].transpose(-2, -1)
-            padded_w3[:, :, :, :H4] = self.state_dict[w3_str].transpose(-2, -1)
+            w1 = self.state_dict[w1_str].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            w2 = self.state_dict[w2_str].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+            w3 = self.state_dict[w3_str].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
 
         self.w1 = ttnn.as_tensor(
-            padded_w1,
+            w1,
             dtype=w1_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            memory_config=self.w1_mem_config,
+            # memory_config=self.w1_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w1_cache_str,
         )
 
         self.w3 = ttnn.as_tensor(
-            padded_w3,
+            w3,
             dtype=w3_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            memory_config=self.w1_mem_config,
+            # memory_config=self.w1_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w3_cache_str,
         )
 
         self.w2 = ttnn.as_tensor(
-            padded_w2,
+            w2,
             dtype=w2_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.device_mesh,
-            memory_config=self.w2_mem_config,
+            # memory_config=self.w2_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(3, 2), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w2_cache_str,
         )
@@ -159,86 +207,12 @@ class TtLlamaMLP_galaxy:
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def tt_all_reduce(self, tensors, cluster_axis, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG):
-        """
-        reduction of a multi-device tensor
-        """
-        concat_dim = (1, 3) if cluster_axis == 0 else (3, 1)
-
-        out = ttnn.to_torch(
-            tensors,
-            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
-        )
-        out = torch.sum(out, dim=1, keepdim=True)
-
-        shape = (
-            out.shape[2],
-            out.shape[3] // 8 // (self.cluster_shape[1] if cluster_axis == 0 else self.cluster_shape[0]),
-        )
-
-        if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
-            act_mem_config = ttnn.create_sharded_memory_config(
-                shape=shape,
-                core_grid=ttnn.CoreGrid(y=1, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-        else:
-            act_mem_config = None
-
-        act_shard_dim = (None, 3) if cluster_axis == 0 else (3, None)
-        out_tt = ttnn.from_torch(
-            out,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=act_mem_config,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=act_shard_dim, cluster_shape=self.cluster_shape),
-        )
-
-        return out_tt
-
-    def tt_all_gather(self, tensors, dim, cluster_axis, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG):
-        """
-        gather of a multi-device tensor
-        """
-        concat_dim = (dim, 1) if cluster_axis == 0 else (1, dim)
-        shard_dim = (None, 1) if cluster_axis == 0 else (1, None)
-
-        out = ttnn.to_torch(
-            tensors,
-            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=concat_dim, cluster_shape=self.cluster_shape),
-        )
-        shape = (out.shape[2], out.shape[3] // 32)
-
-        if memory_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG:
-            act_mem_config = ttnn.create_sharded_memory_config(
-                shape=shape,
-                core_grid=ttnn.CoreGrid(y=4, x=8),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-        else:
-            act_mem_config = None
-
-        out_tt = ttnn.from_torch(
-            out,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=act_mem_config,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=shard_dim, cluster_shape=self.cluster_shape),
-        )
-
-        return out_tt
-
     def decode_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         w1_out = ttnn.matmul(
             x,
             self.w1,
-            program_config=self.DRAM_SHARDED_PROGCFG,
+            # program_config=self.FF1_DRAM_SHARDED_PROGCFG,
+            core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -247,26 +221,32 @@ class TtLlamaMLP_galaxy:
         w3_out = ttnn.matmul(
             x,
             self.w3,
-            program_config=self.DRAM_SHARDED_PROGCFG,
+            # program_config=self.FF1_DRAM_SHARDED_PROGCFG,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
         x.deallocate(True)
 
-        w1_out = self.tt_all_reduce(w1_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
-        w3_out = self.tt_all_reduce(w3_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
+        w1_out = tt_all_reduce(
+            w1_out, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        )
+        w3_out = tt_all_reduce(
+            w3_out, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        )
 
-        # w1_out = ttnn.all_reduce(w1_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
-        # w3_out = ttnn.all_reduce(w3_out, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
-
+        w1_out = ttnn.to_memory_config(w1_out, self.FULL_GRID_MEMCFG)
         w1_out = ttnn.silu(w1_out)
+
+        w1_out = ttnn.to_memory_config(w1_out, self.FF2_ACT_MEMCFG)
+        w3_out = ttnn.to_memory_config(w3_out, self.FF2_ACT_MEMCFG)
 
         hidden_states = ttnn.mul(
             w1_out,
             w3_out,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
         )
         w1_out.deallocate(True)
         w3_out.deallocate(True)
@@ -274,27 +254,21 @@ class TtLlamaMLP_galaxy:
         hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
-            program_config=self.DRAM_SHARDED_PROGCFG,
+            # program_config=self.FF2_DRAM_SHARDED_PROGCFG,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            core_grid=ttnn.CoreGrid(y=1, x=8),
             compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
-        hidden_states = self.tt_all_reduce(
-            hidden_states, cluster_axis=1, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+        hidden_states = tt_all_reduce(
+            hidden_states,
+            self.device_mesh,
+            cluster_axis=0,
+            num_links=2,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
-        # hidden_states = ttnn.all_reduce(hidden_states, cluster_axis=1, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
-
-        hidden_states = self.tt_all_gather(
-            hidden_states, dim=3, cluster_axis=0, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
-        )
-
-        # hidden_states = ttnn.all_gather(
-        #     hidden_states,
-        #     dim=3,
-        #     cluster_axis=0,
-        #     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-        # )
+        hidden_states = ttnn.to_memory_config(hidden_states, self.FF1_ACT_MEMCFG)
 
         return hidden_states

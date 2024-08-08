@@ -35,8 +35,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_ASSERT(storage.buffer->device() != nullptr);
                 workers = {storage.buffer->device()};
-                tensor_impl::validate_on_device_dtype_and_layout(
-                    storage.buffer->device(), shape.value(), dtype, layout);
+                tensor_impl::validate_on_device_dtype_and_layout(storage.buffer->device(), shape.value, dtype, layout);
                 // Increment main thread ref count for all tensors on device
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
                 // This tensor is being created from scratch in a worker. Track this and allow it to be explicitly
@@ -54,7 +53,7 @@ Tensor::Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, L
                     auto buffer = storage.get_buffer_for_device_id(device_id);
                     TT_ASSERT(buffer->device() != nullptr);
                     TT_ASSERT(buffer->device()->id() == device_id);
-                    tensor_impl::validate_on_device_dtype_and_layout(buffer->device(), shape.value(), dtype, layout);
+                    tensor_impl::validate_on_device_dtype_and_layout(buffer->device(), shape.value, dtype, layout);
                     workers.push_back(buffer->device());
                 }
                 // Increment main thread ref count for all tensors on cluster
@@ -339,7 +338,7 @@ std::vector<Device*> Tensor::get_workers(bool blocking) const {
 // Getters - Spin until tensor is populated before querying tensor metadata
 const Shape& Tensor::get_legacy_shape() const {
     this->wait_for_tensor_metadata_populated();
-    return this->tensor_attributes->shape.value();
+    return this->tensor_attributes->shape.value;
 }
 
 const ttnn::Shape& Tensor::get_shape() const {
@@ -969,7 +968,7 @@ Tensor allocate_tensor_on_device(
     Tensor device_tensor = Tensor({device});
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     device->push_work([shape, data_type, layout, device, memory_config, device_tensor]() mutable {
-        auto local_tensor = create_device_tensor(shape.value(), data_type, layout, device, memory_config);
+        auto local_tensor = create_device_tensor(shape.value, data_type, layout, device, memory_config);
         device_tensor.populate_buffers_and_metadata(local_tensor);
     });
     device_tensor.tensor_attributes->update_main_thread_ref_count(device, device_tensor_ref_count);
@@ -991,7 +990,7 @@ Tensor allocate_tensor_on_device(
     for (int worker_index = 0; worker_index < num_workers; ++worker_index) {
         auto& worker = workers[worker_index];
         worker->push_work([shape, data_type, layout, worker, memory_config, device_tensor, worker_index]() mutable {
-            auto local_tensor = create_device_tensor(shape.value(), data_type, layout, worker, memory_config);
+            auto local_tensor = create_device_tensor(shape.value, data_type, layout, worker, memory_config);
             insert_buffer_and_shape_for_device(worker, local_tensor, device_tensor, worker_index);
 
             uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;

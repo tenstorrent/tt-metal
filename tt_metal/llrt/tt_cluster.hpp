@@ -206,8 +206,6 @@ class Cluster {
         return this->device_to_host_mem_channel_.at(device_id);
     }
 
-    uint32_t get_tensix_soft_reset_addr() const;
-
     // Returns collection of devices that are controlled by the specified MMIO device inclusive of the MMIO device
     const std::set<chip_id_t> &get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
         TT_ASSERT(
@@ -307,10 +305,10 @@ class Cluster {
     tt_device_l1_address_params l1_address_params = {
         (uint32_t)MEM_NCRISC_FIRMWARE_BASE,
         (uint32_t)MEM_BRISC_FIRMWARE_BASE,
-        (uint32_t)MEM_TRISC0_SIZE,
-        (uint32_t)MEM_TRISC1_SIZE,
-        (uint32_t)MEM_TRISC2_SIZE,
-        (uint32_t)MEM_TRISC0_BASE,
+        (uint32_t)MEM_TRISC0_FIRMWARE_SIZE,
+        (uint32_t)MEM_TRISC1_FIRMWARE_SIZE,
+        (uint32_t)MEM_TRISC2_FIRMWARE_SIZE,
+        (uint32_t)MEM_TRISC0_FIRMWARE_BASE,
         (uint32_t)GET_MAILBOX_ADDRESS_HOST(l1_barrier),
         (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE,
         (uint32_t)eth_l1_mem::address_map::FW_VERSION_ADDR,

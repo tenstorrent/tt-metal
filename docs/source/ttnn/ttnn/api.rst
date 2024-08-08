@@ -75,6 +75,7 @@ Pointwise Unary
 
    ttnn/abs
    ttnn/acos
+   ttnn/logical_not_
    ttnn/acosh
    ttnn/asin
    ttnn/asinh
@@ -89,6 +90,7 @@ Pointwise Unary
    ttnn/bitwise_right_shift
    ttnn/cbrt
    ttnn/celu
+   ttnn/clamp
    ttnn/clip
    ttnn/clone
    ttnn/cos
@@ -108,6 +110,7 @@ Pointwise Unary
    ttnn/gelu
    ttnn/glu
    ttnn/hardshrink
+   ttnn/normalize_global
    ttnn/hardsigmoid
    ttnn/hardswish
    ttnn/hardtanh
@@ -129,10 +132,12 @@ Pointwise Unary
    ttnn/log2
    ttnn/log_sigmoid
    ttnn/logical_not
+   ttnn/frac
    ttnn/logit
    ttnn/mish
    ttnn/multigammaln
    ttnn/neg
+   ttnn/normalize_hw
    ttnn/prelu
    ttnn/reglu
    ttnn/relu
@@ -143,6 +148,7 @@ Pointwise Unary
    ttnn/rsqrt
    ttnn/rdiv
    ttnn/rsub
+   ttnn/selu
    ttnn/sigmoid
    ttnn/sigmoid_accurate
    ttnn/sign
@@ -160,6 +166,7 @@ Pointwise Unary
    ttnn/polygamma
    ttnn/rad2deg
    ttnn/reciprocal
+   ttnn/round
    ttnn/sqrt
    ttnn/square
    ttnn/swiglu
@@ -167,6 +174,7 @@ Pointwise Unary
    ttnn/triu
    ttnn/tanhshrink
    ttnn/threshold
+   ttnn/trunc
    ttnn/mul_bw
    ttnn/clamp_bw
    ttnn/hardtanh_bw
@@ -276,7 +284,16 @@ Pointwise Binary
    ttnn/subalpha
    ttnn/multiply
    ttnn/subtract
+   ttnn/div
+   ttnn/div_no_nan
+   ttnn/floor_div
+   ttnn/remainder
+   ttnn/fmod
+   ttnn/logical_and_
+   ttnn/logical_or_
+   ttnn/logical_xor_
    ttnn/pow
+   ttnn/rpow
    ttnn/ldexp
    ttnn/logical_and
    ttnn/logical_or
@@ -298,10 +315,12 @@ Pointwise Binary
    ttnn/eq
    ttnn/ne
    ttnn/isclose
-   ttnn/polyval
    ttnn/nextafter
    ttnn/maximum
    ttnn/minimum
+   ttnn/outer
+   ttnn/polyval
+   ttnn/scatter
    ttnn/atan2_bw
    ttnn/embedding_bw
    ttnn/addalpha_bw

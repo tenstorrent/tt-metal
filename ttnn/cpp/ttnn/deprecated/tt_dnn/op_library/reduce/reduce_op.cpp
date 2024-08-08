@@ -10,14 +10,16 @@
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/run_operation.hpp"
 
+#include "ttnn/operations/core/core.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/backward/backward_ops.hpp"
 #include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 
 
 #include <limits>
+#include <optional>
 
 using namespace tt::constants;
 
@@ -38,6 +40,9 @@ std::map<string, string> get_defines(ReduceOpMath reduce_op, ReduceOpDim reduce_
     }
     defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM" );
     defines["REDUCE_DIM"] = reduce_dim_str;
+    if (reduce_dim == ReduceOpDim::W && reduce_op == ReduceOpMath::SUM) {
+        defines["REDUCE_ROW_SUM_VIA_MM"] = 1;
+    }
     return defines;
 }
 
@@ -109,12 +114,12 @@ operation::ProgramWithCallbacks Reduce::create_program(const std::vector<Tensor>
 
     switch (parallelization_strategy){
         case ReduceOpParallelizationStrategy::MULTI_CORE_H:
-            return reduce_multi_core_h(input_tensor, output_tensor, this->math_op, this->scaler);
+            return reduce_multi_core_h(input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
         case ReduceOpParallelizationStrategy::MULTI_CORE_W:
-            return reduce_multi_core_w(input_tensor, output_tensor, this->math_op, this->scaler);
+            return reduce_multi_core_w(input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
         case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
         case ReduceOpParallelizationStrategy::SINGLE_CORE_HW:
-            return reduce_single_core_hw(input_tensor, output_tensor, this->math_op, this->scaler);
+            return reduce_single_core_hw(input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
         default:
             TT_THROW("Unsupported parallelization strategy");
     }
@@ -142,18 +147,18 @@ ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::
 
 //reduce min
 //reduce min = - reduce_max( -x )
-Tensor reduce_min(const Tensor &input_tensor, ReduceOpDim reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+Tensor reduce_min(const Tensor &input_tensor, ReduceOpDim reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
     Tensor input = input_tensor;
     if(input.get_layout()==Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE){
         input = ttnn::operations::unary_backward::change_layout_to_tile(input, output_mem_config);
         }
     Tensor n_input_tensor = ttnn::neg(input,output_mem_config);
-    Tensor max_reduce = reduce(n_input_tensor,ReduceOpMath::MAX,reduce_dim,scaler,output_mem_config);
+    Tensor max_reduce = reduce(n_input_tensor,ReduceOpMath::MAX,reduce_dim,scaler,output_mem_config, std::nullopt, compute_kernel_config);
     Tensor min_tensor = ttnn::neg(max_reduce,output_mem_config);
     return min_tensor;
 }
 
-Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler, const MemoryConfig& output_mem_config, const std::optional<DataType>& output_dtype) {
+Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler, const MemoryConfig& output_mem_config, const std::optional<DataType>& output_dtype, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     if ( reduce_math == ReduceOpMath::MIN ) {
         return reduce_min(input_tensor,reduce_dim,scaler,output_mem_config);
     }
@@ -162,10 +167,13 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
+    DeviceComputeKernelConfig config = compute_kernel_config.value_or(
+        init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
+
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     if (is_multicore_hw) {
         operation::launch_op(
-        [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+        [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config, config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
             Device * device;
 
@@ -181,26 +189,26 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
             if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
                 formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
             }
-            const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {formatted_input_tensor}).at(0);
-            return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {output_tensor});
+            const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0, output_mem_config, output_dtype.value_or(input_tensor.get_dtype()), config}, {formatted_input_tensor}).at(0);
+            return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype()), config}, {output_tensor});
         }, {input_tensor}, output_tensors);
     } else {
         operation::launch_with_autoformat(
-        [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+        [reduce_math, reduce_dim, pad_value, scaler, output_dtype, output_mem_config, config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
-            return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype())}, {input_tensor}, {}, {}, pad_value);
+            return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config, output_dtype.value_or(input_tensor.get_dtype()), config}, {input_tensor}, {}, {}, pad_value);
         }, {input_tensor}, output_tensors);
     }
     return output_tensors.at(0);
 }
-Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return mean(input_tensor,2,output_mem_config);
+Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    return mean(input_tensor,2,output_mem_config, compute_kernel_config);
 }
 Tensor global_mean(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
     float inv_volume = 1.0f/input_tensor.volume();
     return ttnn::mul_sfpu( inv_volume, global_sum(input_tensor,output_mem_config), output_mem_config);
 }
-Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const MemoryConfig& output_mem_config) {
+Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     tt::tt_metal::Shape shape = input_tensor.get_legacy_shape();
 
     TT_FATAL( aggregate_dims >= 2 && aggregate_dims <= 4, "mean aggregate dimensions should be [HW],[CHW] or [NCHW]");
@@ -216,19 +224,19 @@ Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const Memo
     }
 
     float inv_scale_hw = 1.0f/(shape[3]*shape[2]);
-    Tensor scaled_sum_hw = reduce(input_tensor,ReduceOpMath::SUM,ReduceOpDim::HW,inv_scale_hw,output_mem_config);
+    Tensor scaled_sum_hw = reduce(input_tensor,ReduceOpMath::SUM,ReduceOpDim::HW,inv_scale_hw,output_mem_config, std::nullopt, compute_kernel_config);
     return scaled_sum_hw;
 }
 
 template <ReduceOpMath OpKind>
-Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
+Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
     constexpr float scaler1 = 1.0;
 
     if ( dim == 3 ) {
-        return reduce(input_tensor, OpKind, ReduceOpDim::W, scaler1, output_mem_config);
+        return reduce(input_tensor, OpKind, ReduceOpDim::W, scaler1, output_mem_config, std::nullopt, compute_kernel_config);
     } else if ( dim == 2 ) {
-        return reduce(input_tensor, OpKind, ReduceOpDim::H, scaler1, output_mem_config);
+        return reduce(input_tensor, OpKind, ReduceOpDim::H, scaler1, output_mem_config, std::nullopt, compute_kernel_config);
     }
 
     // Other sum dims will autoformat first before doing composite operations
@@ -259,7 +267,7 @@ Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& o
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
         }
         Tensor output = ttnn::transpose(formatted_input_tensor, 1, -2, output_mem_config);
-        output = reduce_on_dim<OpKind>(output, 2, output_mem_config);
+        output = reduce_on_dim<OpKind>(output, 2, output_mem_config, compute_kernel_config);
         output = ttnn::transpose(output, 1, -2, output_mem_config);
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     } else {
@@ -273,34 +281,35 @@ Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& o
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
         Tensor output = ttnn::transpose(input_tensor, 0, -2, output_mem_config);
-        output = reduce_on_dim<OpKind>(output, 2, output_mem_config);
+        output = reduce_on_dim<OpKind>(output, 2, output_mem_config, compute_kernel_config);
         output = ttnn::transpose(output, 0, -2, output_mem_config);
         return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     }
 }
 
 
-Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
+Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
-    return reduce_on_dim<ReduceOpMath::SUM>(input_tensor, dim, output_mem_config);
+    return reduce_on_dim<ReduceOpMath::SUM>(input_tensor, dim, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, compute_kernel_config);
 }
 
-Tensor min(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
+Tensor min(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
-    return reduce_on_dim<ReduceOpMath::MIN>(input_tensor, dim, output_mem_config);
+    return reduce_on_dim<ReduceOpMath::MIN>(input_tensor, dim, output_mem_config, compute_kernel_config);
 }
 
-Tensor max(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config) {
+Tensor max(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
-    return reduce_on_dim<ReduceOpMath::MAX>(input_tensor, dim, output_mem_config);
+    return reduce_on_dim<ReduceOpMath::MAX>(input_tensor, dim, output_mem_config, compute_kernel_config);
 }
 
 
-using ReduceFnT = Tensor(*)(const Tensor&,unsigned int, const MemoryConfig&);
-Tensor global_reduce(ReduceFnT f,const Tensor& val, const MemoryConfig& output_mem_config) {
+using ReduceFnT = Tensor(*)(const Tensor&,unsigned int, const MemoryConfig&, const std::optional<DeviceComputeKernelConfig>&);
+Tensor global_reduce(ReduceFnT f,const Tensor& val, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     Tensor result = val;
-    for(int rank = val.get_legacy_shape().rank()-1; rank >=0; rank--)
-        result = f(result, rank, output_mem_config);
+    for(int rank = val.get_legacy_shape().rank()-1; rank >=0; rank--) {
+        result = f(result, rank, output_mem_config, compute_kernel_config);
+    }
 
     std::array<std::uint32_t, 4> intended_shape_array = {};
     intended_shape_array.fill(1);
@@ -312,16 +321,16 @@ Tensor global_reduce(ReduceFnT f,const Tensor& val, const MemoryConfig& output_m
     return result;
 }
 
-Tensor global_sum(const Tensor& val, const MemoryConfig& output_mem_config) {
-    return  global_reduce(sum,val,output_mem_config);
+Tensor global_sum(const Tensor& val, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    return global_reduce(sum,val,output_mem_config, compute_kernel_config);
 }
 
-Tensor global_max(const Tensor& val, const MemoryConfig& output_mem_config) {
-    return  global_reduce(max,val,output_mem_config);
+Tensor global_max(const Tensor& val, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    return global_reduce(max,val,output_mem_config, compute_kernel_config);
 }
 
-Tensor global_min(const Tensor& val, const MemoryConfig& output_mem_config) {
-    return  global_reduce(min,val,output_mem_config);
+Tensor global_min(const Tensor& val, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    return global_reduce(min,val,output_mem_config, compute_kernel_config);
 }
 
 }  // namespace tt_metal

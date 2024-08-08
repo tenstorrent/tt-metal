@@ -52,6 +52,11 @@ class TestEltwiseUnary:
         input_mem_config,
         output_mem_config,
     ):
+        if fn_kind == "silu":
+            is_ttnn_op = True
+        else:
+            is_ttnn_op = False
+
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
         ]
@@ -70,6 +75,7 @@ class TestEltwiseUnary:
             comparison_func,
             device,
             test_args,
+            ttnn_op=is_ttnn_op,
         )
 
     @pytest.mark.parametrize(

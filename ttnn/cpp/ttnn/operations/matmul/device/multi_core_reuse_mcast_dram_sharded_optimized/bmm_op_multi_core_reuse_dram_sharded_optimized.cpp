@@ -5,15 +5,13 @@
 #include <algorithm>
 
 #include "hostdevcommon/common_values.hpp"
-
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt::constants;
@@ -27,7 +25,6 @@ using ttnn::operations::unary::UnaryOpType;
 
 void get_dram_reader_core_coords_grayskull(
     tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-
     // hardcoded for grayskull
     uint32_t full_grid_size_y = 12;
 
@@ -92,7 +89,8 @@ void get_dram_reader_core_coords_grayskull(
         auto y = coord.y;
 
         // if row is harvested, move core down by 1
-        while (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() and y < (full_grid_size_y - 1)) {
+        while (std::find(harvested_rows.begin(), harvested_rows.end(), y) != harvested_rows.end() and
+               y < (full_grid_size_y - 1)) {
             y += 1;
         }
 
@@ -133,13 +131,15 @@ void get_dram_reader_core_coords_wormhole_b0(
     // get dram banks and coords
     uint32_t num_banks = device->num_dram_channels();
     uint32_t max_bank_id = num_banks - 1;
-    std::vector<CoreCoord> dram_coord_phy; dram_coord_phy.reserve(num_banks);
+    std::vector<CoreCoord> dram_coord_phy;
+    dram_coord_phy.reserve(num_banks);
     for (int i = 0; i < num_banks; ++i) {
         dram_coord_phy.push_back(device->dram_core_from_dram_channel(i));
     }
 
     // get worker logical coords
-    std::vector<CoreCoord> all_worker_cores_logical; all_worker_cores_logical.reserve(num_cores_x * num_cores_y);
+    std::vector<CoreCoord> all_worker_cores_logical;
+    all_worker_cores_logical.reserve(num_cores_x * num_cores_y);
     for (int i = 0; i < num_cores_x; ++i) {
         for (int j = 0; j < num_cores_y; ++j) {
             all_worker_cores_logical.push_back(CoreCoord(i, j));
@@ -147,7 +147,8 @@ void get_dram_reader_core_coords_wormhole_b0(
     }
 
     // get y coords of the workers
-    std::vector<uint32_t> all_worker_cores_y_physical; all_worker_cores_y_physical.reserve(num_cores_y);
+    std::vector<uint32_t> all_worker_cores_y_physical;
+    all_worker_cores_y_physical.reserve(num_cores_y);
     uint32_t max_worker_y_physical = 0;
     uint32_t min_worker_y_physical = 10000;
     for (int i = 0; i < num_cores_y; ++i) {
@@ -173,7 +174,8 @@ void get_dram_reader_core_coords_wormhole_b0(
     }
 
     // get the ajacent cores of DRAM banks
-    std::vector<CoreCoord> adj_core_physical; adj_core_physical.reserve(num_banks);
+    std::vector<CoreCoord> adj_core_physical;
+    adj_core_physical.reserve(num_banks);
     for (int i = 0; i < num_banks; ++i) {
         auto dram_core = dram_coord_phy[i];
         uint32_t adj_core_x = dram_core.x + 1;
@@ -182,10 +184,14 @@ void get_dram_reader_core_coords_wormhole_b0(
     }
 
     // split the adjacent coords into two groups, because DRAM banks has two cols
-    std::vector<CoreCoord> adj_core_physical_g1; adj_core_physical_g1.reserve(num_banks);
-    std::vector<size_t> adj_core_physical_y_g1; adj_core_physical_y_g1.reserve(num_banks);
-    std::vector<CoreCoord> adj_core_physical_g2; adj_core_physical_g2.reserve(num_banks);
-    std::vector<size_t> adj_core_physical_y_g2; adj_core_physical_y_g2.reserve(num_banks);
+    std::vector<CoreCoord> adj_core_physical_g1;
+    adj_core_physical_g1.reserve(num_banks);
+    std::vector<size_t> adj_core_physical_y_g1;
+    adj_core_physical_y_g1.reserve(num_banks);
+    std::vector<CoreCoord> adj_core_physical_g2;
+    adj_core_physical_g2.reserve(num_banks);
+    std::vector<size_t> adj_core_physical_y_g2;
+    adj_core_physical_y_g2.reserve(num_banks);
     for (auto core : adj_core_physical) {
         if (core.x == adj_core_physical.front().x) {
             adj_core_physical_g1.push_back(core);
@@ -276,7 +282,8 @@ void get_dram_reader_core_coords_wormhole_b0(
     process_group(adj_core_physical_g2, adj_core_physical_y_g2, x_step);
 
     // merge two group into one
-    std::vector<CoreCoord> adj_core_physical_realloc; adj_core_physical_realloc.reserve(num_banks);
+    std::vector<CoreCoord> adj_core_physical_realloc;
+    adj_core_physical_realloc.reserve(num_banks);
     for (int i = 0; i < indices_g1_realloc.size(); ++i) {
         adj_core_physical_realloc.push_back(adj_core_physical_g1[indices_g1_realloc[i]]);
     }
@@ -285,7 +292,8 @@ void get_dram_reader_core_coords_wormhole_b0(
     }
 
     // find the logical coord from physical coord
-    std::vector<CoreCoord> adj_core_logical_realloc; adj_core_logical_realloc.reserve(num_banks);
+    std::vector<CoreCoord> adj_core_logical_realloc;
+    adj_core_logical_realloc.reserve(num_banks);
     for (int i = 0; i < adj_core_physical_realloc.size(); ++i) {
         for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
             auto core = device->worker_core_from_logical_core(all_worker_cores_logical[j]);
@@ -396,7 +404,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         uint32_t new_out_subblock_w = out_subblock_w;
         uint32_t preferred_out_subblock_w = out_subblock_w;
 
-        for (uint32_t i=0; i < num_iter; ++i) {
+        for (uint32_t i = 0; i < num_iter; ++i) {
             new_out_subblock_w += 1;
             uint32_t new_num_subblock_w_per_core_N = (per_core_N + new_out_subblock_w - 1) / new_out_subblock_w;
 
@@ -518,7 +526,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 
     // grid bounding box
     CoreRange bounding_box = all_cores.bounding_box();
-    std::set<CoreRange> bounding_box_set; bounding_box_set.insert(bounding_box);
+    std::set<CoreRange> bounding_box_set;
+    bounding_box_set.insert(bounding_box);
     CoreRangeSet all_cores_in_rect_grid(bounding_box_set);
     std::vector<CoreCoord> all_cores_in_rect_grid_vec = corerange_to_cores(all_cores_in_rect_grid);
     log_debug("bounding_box: {}", bounding_box);
@@ -614,8 +623,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
             using ttnn::operations::unary::utils::get_defines;
-            mm_kernel_defines.merge(get_defines(
-                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+            mm_kernel_defines.merge(
+                get_defines(fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
         }
     }
     if (packer_l1_acc_en) {
@@ -884,7 +893,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         // mcast receiver - 3
         uint32_t worker_core_type = 3;
         mm_in0_receiver_args.push_back((std::uint32_t)worker_core_type);
-        mm_in0_receiver_args.push_back((std::uint32_t) 0);
+        mm_in0_receiver_args.push_back((std::uint32_t)0);
         mm_in0_receiver_args.insert(
             mm_in0_receiver_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
         mm_in0_receiver_args.insert(
@@ -896,15 +905,16 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 
     for (auto core : all_cores_in_rect_grid_vec) {
         if (std::find(mcast_senders_coords.begin(), mcast_senders_coords.end(), core) == mcast_senders_coords.end() and
-            std::find(mcast_receiver_coords.begin(), mcast_receiver_coords.end(), core) == mcast_receiver_coords.end()) {
-                // in0 receivers rt args
-                std::vector<uint32_t> mm_in0_idle_args;
-                // idle core - 0
-                uint32_t worker_core_type = 0;
-                mm_in0_idle_args.push_back((std::uint32_t)worker_core_type);
+            std::find(mcast_receiver_coords.begin(), mcast_receiver_coords.end(), core) ==
+                mcast_receiver_coords.end()) {
+            // in0 receivers rt args
+            std::vector<uint32_t> mm_in0_idle_args;
+            // idle core - 0
+            uint32_t worker_core_type = 0;
+            mm_in0_idle_args.push_back((std::uint32_t)worker_core_type);
 
-                tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_idle_args);
-            }
+            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_idle_args);
+        }
     }
 
     uint32_t bank_id = 0;
@@ -921,24 +931,24 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     for (uint32_t i = 0; i < all_cores_in_rect_grid_vec.size(); ++i) {
         auto core = all_cores_in_rect_grid_vec[i];
 
-        if (all_worker_cores.ranges().find(core) == all_worker_cores.ranges().end()) { // not worker
+        if (all_worker_cores.ranges().find(core) == all_worker_cores.ranges().end()) {  // not worker
             // in1 reader rt args
             bool is_worker_core = false;
             std::vector<uint32_t> mm_in1_sender_writer_args;
-            mm_in1_sender_writer_args.push_back((std::uint32_t) is_worker_core);
+            mm_in1_sender_writer_args.push_back((std::uint32_t)is_worker_core);
 
             tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);
 
             // compute rt args
             std::vector<uint32_t> mm_compute_args;
-            mm_compute_args.push_back((std::uint32_t) is_worker_core);
+            mm_compute_args.push_back((std::uint32_t)is_worker_core);
 
             tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_compute_args);
         } else {
             // compute rt args
             bool is_worker_core = true;
             std::vector<uint32_t> mm_compute_args;
-            mm_compute_args.push_back((std::uint32_t) is_worker_core);
+            mm_compute_args.push_back((std::uint32_t)is_worker_core);
 
             tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_compute_args);
         }
@@ -950,7 +960,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         // in1 reader rt args
         bool is_worker_core = true;
         std::vector<uint32_t> mm_in1_sender_writer_args;
-        mm_in1_sender_writer_args.push_back((std::uint32_t) is_worker_core);
+        mm_in1_sender_writer_args.push_back((std::uint32_t)is_worker_core);
         mm_in1_sender_writer_args.push_back(in1_buffer->address());
         if (bias_buffer != nullptr) {
             mm_in1_sender_writer_args.push_back(bias_buffer->address());
@@ -1182,7 +1192,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
                 fp32_dest_acc_en = false;
                 packer_l1_acc = false;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+                TT_FATAL(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;

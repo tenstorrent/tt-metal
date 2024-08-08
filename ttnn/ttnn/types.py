@@ -46,6 +46,7 @@ CoreGrid = ttnn._ttnn.types.CoreGrid
 
 DeviceComputeKernelConfig = ttnn._ttnn.deprecated.tensor.DeviceComputeKernelConfig
 WormholeComputeKernelConfig = ttnn._ttnn.deprecated.tensor.WormholeComputeKernelConfig
+BlackholeComputeKernelConfig = WormholeComputeKernelConfig
 GrayskullComputeKernelConfig = ttnn._ttnn.deprecated.tensor.GrayskullComputeKernelConfig
 
 

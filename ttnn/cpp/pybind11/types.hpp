@@ -47,10 +47,10 @@ void py_module(py::module& module) {
     auto PyShape = py::class_<ttnn::Shape>(module, "Shape");
     PyShape.def(py::init<tt::tt_metal::Shape>());
 
-    PyShape.def_property_readonly("value", [](const Shape& self) { return self.value(); });
+    PyShape.def_property_readonly("value", [](const Shape& self) { return self.value; });
     PyShape.def("__len__", [](const Shape& self) { return self.rank(); });
     PyShape.def("__getitem__", [](const Shape& self, std::int64_t index) { return self[index]; });
-    PyShape.def("__iter__", [](const Shape& self) { return py::iter(py::cast(self.value().without_padding())); });
+    PyShape.def("__iter__", [](const Shape& self) { return py::iter(py::cast(self.value.without_padding())); });
     PyShape.def(pybind11::self == pybind11::self);
     PyShape.def("__repr__", [](const Shape& self) {
         std::stringstream ss;

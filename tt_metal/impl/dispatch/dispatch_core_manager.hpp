@@ -61,7 +61,7 @@ struct dispatch_worker_build_settings_t{
 
 // std::optional is used to determine whether core has been assigned
 // tt_cxy_pair is used over CoreCoord to denote location because remote device command queue interface cores are on the associated MMIO device
-struct dispatch_core_types_t {
+struct dispatch_core_placement_t {
     std::optional<tt_cxy_pair> prefetcher = std::nullopt;  // Pulls commands from the issue queue for a given command queue on a device
     std::optional<tt_cxy_pair> completion_queue_writer = std::nullopt; // Pushes to completion queue for a given command queue on a device
     std::optional<tt_cxy_pair> dispatcher = std::nullopt; // Relays work to worker cores on device that command is targeting. Currently for MMIO devices, dispatcher == completion_queue_writer
@@ -75,7 +75,6 @@ struct dispatch_core_types_t {
     std::optional<tt_cxy_pair> tunneler_d = std::nullopt; // ethernet tunneler
 };
 
-
 class dispatch_core_manager {
    public:
     dispatch_core_manager &operator=(const dispatch_core_manager &) = delete;
@@ -83,14 +82,20 @@ class dispatch_core_manager {
     dispatch_core_manager(const dispatch_core_manager &) = delete;
     dispatch_core_manager(dispatch_core_manager &&other) noexcept = delete;
 
-    // Ugly to accept num HW CQs here but it is needed to pull the correct number of initially available dispatch cores for assignment
-    static dispatch_core_manager &get(uint8_t num_hw_cqs) {
-        static std::unordered_map<uint8_t, std::unique_ptr<dispatch_core_manager>> dispatch_core_managers;
-        if (dispatch_core_managers[num_hw_cqs] == nullptr) {
-            // Need to do this since dispatch_core_manager constructor is private
-            dispatch_core_managers[num_hw_cqs] = std::unique_ptr<dispatch_core_manager>(new dispatch_core_manager(num_hw_cqs));
+
+    //TODO: this should probably be in command_queue_interface.hpp, but it's here for now due to circular dependency
+    static constexpr uint8_t MAX_NUM_HW_CQS = 2;
+    static void initialize() noexcept {
+        log_debug(tt::LogMetal, "DevicePool initialize");
+        if (_inst == nullptr) {
+            static dispatch_core_manager dispatch_core_manager;
+            _inst = &dispatch_core_manager;
         }
-        return *dispatch_core_managers[num_hw_cqs];
+    }
+
+    static dispatch_core_manager &instance() {
+        TT_ASSERT(_inst != nullptr, "Trying to get dispatch_core_manager without initializing it");
+        return *_inst;
     }
 
     /// @brief Gets the location of the kernel desginated to read from the issue queue region from a particular command queue
@@ -101,7 +106,7 @@ class dispatch_core_manager {
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the issue queue interface
     const tt_cxy_pair &prefetcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.prefetcher.has_value()) {
             return assignment.prefetcher.value();
         }
@@ -114,7 +119,7 @@ class dispatch_core_manager {
     }
 
     bool is_prefetcher_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.prefetcher.has_value()) {
             return true;
         }
@@ -128,7 +133,7 @@ class dispatch_core_manager {
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the issue queue interface
     const tt_cxy_pair &prefetcher_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.prefetcher_d.has_value()) {
             return assignment.prefetcher_d.value();
         }
@@ -139,7 +144,7 @@ class dispatch_core_manager {
     }
 
     bool is_prefetcher_d_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.prefetcher_d.has_value()) {
             return true;
         }
@@ -152,7 +157,7 @@ class dispatch_core_manager {
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the mux core
     const tt_cxy_pair &mux_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.mux.has_value()) {
             return assignment.mux.value();
         }
@@ -165,7 +170,7 @@ class dispatch_core_manager {
     }
 
     bool is_mux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.mux.has_value()) {
             return true;
         }
@@ -179,7 +184,7 @@ class dispatch_core_manager {
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the mux_d core
 
     const tt_cxy_pair &mux_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.mux_d.has_value()) {
             return assignment.mux_d.value();
         }
@@ -196,7 +201,7 @@ class dispatch_core_manager {
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the mux core
     const tt_cxy_pair &demux_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.demux.has_value()) {
             return assignment.demux.value();
         }
@@ -209,7 +214,7 @@ class dispatch_core_manager {
     }
 
     bool is_demux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.demux.has_value()) {
             return true;
         }
@@ -222,7 +227,7 @@ class dispatch_core_manager {
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the demux_d core
     const tt_cxy_pair &demux_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.demux_d.has_value()) {
             return assignment.demux_d.value();
         }
@@ -239,7 +244,7 @@ class dispatch_core_manager {
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the ethernet tunnel core
     const tt_cxy_pair &tunneler_core(chip_id_t upstream_device_id, chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.tunneler.has_value()) {
             return assignment.tunneler.value();
         }
@@ -254,7 +259,7 @@ class dispatch_core_manager {
     }
 
     const tt_cxy_pair &us_tunneler_core_local(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.tunneler_d.has_value()) {
             return assignment.tunneler_d.value();
         }
@@ -273,7 +278,7 @@ class dispatch_core_manager {
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the completion queue interface
     const tt_cxy_pair &completion_queue_writer_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.completion_queue_writer.has_value()) {
             return assignment.completion_queue_writer.value();
         }
@@ -288,7 +293,7 @@ class dispatch_core_manager {
     }
 
     bool is_completion_queue_writer_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.completion_queue_writer.has_value()) {
             return true;
         }
@@ -301,7 +306,7 @@ class dispatch_core_manager {
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the dispatcher core
     const tt_cxy_pair &dispatcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.dispatcher.has_value()) {
             return assignment.dispatcher.value();
         }
@@ -315,7 +320,7 @@ class dispatch_core_manager {
     }
 
     bool is_dispatcher_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.dispatcher.has_value()) {
             return true;
         }
@@ -328,7 +333,7 @@ class dispatch_core_manager {
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the dispatcher_d core
     const tt_cxy_pair &dispatcher_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
-        dispatch_core_types_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
         if (assignment.dispatcher_d.has_value()) {
             return assignment.dispatcher_d.value();
         }
@@ -343,6 +348,7 @@ class dispatch_core_manager {
     }
 
     void add_dispatch_core_to_device(chip_id_t device_id, const CoreCoord& core) {
+        // TODO: remove this API, we should read the core descriptor once, should not have backdoors like this to add cores
         auto& dispatch_cores = available_dispatch_cores_by_device.at(device_id);
         if (std::find(dispatch_cores.begin(), dispatch_cores.end(), core) == dispatch_cores.end()) {
             dispatch_cores.push_back(core);
@@ -353,13 +359,13 @@ class dispatch_core_manager {
     /// @brief dispatch_core_manager constructor initializes a list of cores per device that are designated for any dispatch functionality
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
     /// @param num_hw_cqs is used to get the correct collection of dispatch cores for a particular device
-    dispatch_core_manager(uint8_t num_hw_cqs) {
+    dispatch_core_manager() {
         for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
             std::list<CoreCoord> &logical_dispatch_cores = this->available_dispatch_cores_by_device[device_id];
-            for (const CoreCoord &logical_dispatch_core : tt::get_logical_dispatch_cores(device_id, num_hw_cqs)) {
+            for (const CoreCoord &logical_dispatch_core : tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS)) {
                 logical_dispatch_cores.push_back(logical_dispatch_core);
             }
-            this->dispatch_core_type_by_device[device_id] = tt::get_dispatch_core_type(device_id, num_hw_cqs);
+            this->dispatch_core_type_by_device[device_id] = tt::get_dispatch_core_type(device_id, MAX_NUM_HW_CQS);
         }
     }
 
@@ -380,9 +386,11 @@ class dispatch_core_manager {
 
     // {device ID : {channel (hugepage) : {cq_id : dispatch assignment}}}
     // Each device has an assigned hugepage at a specific channel that holds (up to 2) hardware command queues (represented by cq_id)
-    std::unordered_map<chip_id_t, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_types_t>>> dispatch_core_assignments;
+    std::unordered_map<chip_id_t, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>> dispatch_core_assignments;
     std::unordered_map<chip_id_t, std::list<CoreCoord>> available_dispatch_cores_by_device;
     std::unordered_map<chip_id_t, CoreType> dispatch_core_type_by_device;
+    static dispatch_core_manager *_inst;
+
 };
 
 

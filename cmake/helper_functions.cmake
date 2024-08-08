@@ -1,6 +1,6 @@
 function(CREATE_EAGER_TEST_EXE TESTLIST)
     foreach (TEST_SRC ${TESTLIST})
-        get_filename_component(TEST_NAME ${TEST_SRC} NAME)
+        get_filename_component(TEST_NAME ${TEST_SRC} NAME_WE)
         get_filename_component(TEST_DIR ${TEST_SRC} DIRECTORY)
         set(TEST_SRC_PATH ${CMAKE_CURRENT_SOURCE_DIR}/${TEST_SRC})
         # unit_tests and tensor are already taken as target names/executables
@@ -13,7 +13,7 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
         endif()
         add_executable(${TEST_TARGET} ${TEST_SRC_PATH})
 
-        target_link_libraries(${TEST_TARGET} PUBLIC test_eager_common_libs)
+        target_link_libraries(${TEST_TARGET} PUBLIC test_eager_common_libs ttnn)
         target_include_directories(${TEST_TARGET} PRIVATE
             ${UMD_HOME}
             ${PROJECT_SOURCE_DIR}
@@ -30,10 +30,10 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
 endfunction()
 
 function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
-    foreach (TEST ${TESTLIST})
-        get_filename_component(TEST_TARGET ${TEST} NAME)
+    foreach (TEST_SRC ${TESTLIST})
+        get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
 
-        add_executable(${TEST_TARGET} ${TEST})
+        add_executable(${TEST_TARGET} ${TEST_SRC})
         target_link_libraries(${TEST_TARGET} PUBLIC tt_metal m pthread)
         target_include_directories(${TEST_TARGET} PRIVATE
             ${UMD_HOME}

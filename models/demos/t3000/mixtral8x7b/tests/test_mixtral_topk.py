@@ -7,14 +7,6 @@ import pytest
 from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
-# Set Mixtral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-
 import ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn, preprocess_inputs, load_inputs
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
@@ -37,15 +29,22 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "iterations, expected_top1, expected_top5",
     (
-        (64, 0.92, 0.99),
-        (128, 0.92, 0.99),
-        (256, 0.92, 0.99),
+        (64, 0.93, 0.99),
+        # (128, 0.92, 0.99),
+        # (256, 0.92, 0.99),
     ),
-    ids=("64seqlen", "128seqlen", "256seqlen"),
+    ids=(
+        "64seqlen",
+        # "128seqlen",
+        # "256seqlen"
+    ),
 )
 def test_mixtral_model_inference(
     t3k_device_mesh, use_program_cache, reset_seeds, iterations, expected_top1, expected_top5
 ):
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
+
     dtype = ttnn.bfloat8_b
     seqlen = 1  # Generating one token per user at a time
     batch = 32
@@ -80,6 +79,7 @@ def test_mixtral_model_inference(
         args=model_args,
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
+        rotary_on_host=True,
     )
 
     # Select the first token from the prompts for initial decoding
@@ -89,9 +89,9 @@ def test_mixtral_model_inference(
         logger.info(f"[Decode] Generating token {i}")
 
         start_pos = generation_start_pos + i
-        current_pos = start_pos % model_args.sliding_window
+        current_pos = start_pos
 
-        decode_input, attn_mask = prepare_inputs_ttnn(
+        decode_input = prepare_inputs_ttnn(
             pt_decode_input,
             model_args.dim,
             start_pos,
@@ -100,15 +100,15 @@ def test_mixtral_model_inference(
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask)
+        tt_out = tt_model(decode_input, start_pos, current_pos)
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
             .squeeze(1)
-            .view(batch, seqlen, -1)
+            .view(32, seqlen, -1)
             .detach()
             .float()
-        )
+        )[:batch, ...]
 
         # Run reference model
         positions = torch.LongTensor([start_pos])

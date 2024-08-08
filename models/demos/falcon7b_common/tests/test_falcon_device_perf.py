@@ -12,7 +12,7 @@ from models.demos.falcon7b_common.tests.run_falcon_end_to_end import (
 )
 from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
-from models.utility_functions import disable_compilation_reports, disable_persistent_kernel_cache
+from models.utility_functions import disable_compilation_reports, disable_persistent_kernel_cache, skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -26,11 +26,17 @@ from models.utility_functions import disable_compilation_reports, disable_persis
         ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM"),
         ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM"),
         ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM"),
+        ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED"),
+        ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED"),
+        ("decode", 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED"),
     ),
     ids=[
         "prefill_seq128_bfloat16-dram",
         "prefill_seq1024_bfloat16-dram",
         "prefill_seq2048_bfloat16-dram",
+        "decode_seq128_bfloat16-l1_sharded",
+        "decode_seq1024_bfloat16-l1_sharded",
+        "decode_seq2047_bfloat16-l1_sharded",
     ],
 )
 def test_device_perf_wh_bare_metal(
@@ -80,16 +86,31 @@ def test_device_perf_wh_bare_metal(
 
 
 @pytest.mark.models_device_performance_bare_metal
-@pytest.mark.parametrize("seq_len, samples", [(128, 2060), (2048, 2680)])
-def test_device_perf(seq_len, samples):
+@pytest.mark.parametrize(
+    "llm_mode, batch, seq_len, kv_cache_len, model_config_str, samples",
+    (
+        ("prefill", 1, 128, 0, "BFLOAT16-DRAM", 2060),
+        ("prefill", 1, 1024, 0, "BFLOAT16-DRAM", 2890),
+        ("prefill", 1, 2048, 0, "BFLOAT16-DRAM", 2680),
+        ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 625),
+        ("decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 568),
+        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 511),
+    ),
+)
+@skip_for_grayskull()
+def test_device_perf(llm_mode, batch, seq_len, kv_cache_len, model_config_str, samples):
     margin = 0.03
     num_iterations = 1
-    model_config = "BFLOAT16-DRAM".lower()
-    command = f"pytest models/demos/falcon7b_common/tests/test_falcon_device_perf.py::test_device_perf_wh_bare_metal -k prefill_seq{seq_len}_{model_config}"
+    model_config = model_config_str.lower()
+    if llm_mode == "prefill":
+        test_id = f"{llm_mode}_seq{seq_len}_{model_config}"
+    else:
+        test_id = f"{llm_mode}_seq{kv_cache_len}_{model_config}"
+    command = f"pytest models/demos/falcon7b_common/tests/test_falcon_device_perf.py::test_device_perf_wh_bare_metal -k {test_id}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     subdir = "falcon7b"
 
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, seq_len)
+    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch * seq_len)
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     expected_perf_cols = {inference_time_key: samples}
@@ -97,8 +118,8 @@ def test_device_perf(seq_len, samples):
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
 
     prep_device_perf_report(
-        model_name=f"falcon7b_prefill_{model_config}_seq{seq_len}",
-        batch_size=1,
+        model_name=f"falcon7b_{llm_mode}_{model_config}_seq{seq_len}_kv_cache_len{kv_cache_len}",
+        batch_size=batch,
         post_processed_results=post_processed_results,
         expected_results=expected_results,
         comments="",

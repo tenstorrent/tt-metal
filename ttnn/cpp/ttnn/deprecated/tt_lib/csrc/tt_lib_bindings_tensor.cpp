@@ -17,10 +17,8 @@
 #include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_llama_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/loss/loss_op.hpp"
 #include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "type_caster.hpp"
@@ -61,6 +59,16 @@ void implement_buffer_protocol(PyType& py_buffer_t) {
 
 }  // namespace detail
 
+template <typename T>
+auto tt_pybind_class(py::module m, auto name, auto desc) {
+    return py::class_<T>(m, name, desc)
+        .def("to_json", [](const T& self) -> std::string { return tt::stl::json::to_json(self).dump(); })
+        .def(
+            "from_json",
+            [](const std::string& json_string) -> T { return tt::stl::json::from_json<T>(nlohmann::json::parse(json_string)); })
+        .def("__repr__", [](const T& self) { return fmt::format("{}", self); });
+}
+
 void TensorModule(py::module& m_tensor) {
     // ENUM SECTION
 
@@ -77,7 +85,6 @@ void TensorModule(py::module& m_tensor) {
 
     detail::export_enum<ShardOrientation>(m_tensor);
 
-    detail::export_enum<LossReductionMode>(m_tensor);
 
     py::enum_<BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
@@ -85,7 +92,7 @@ void TensorModule(py::module& m_tensor) {
         .value("L1_SMALL", BufferType::L1_SMALL);
 
 
-    auto py_core_coord = py::class_<CoreCoord>(m_tensor, "CoreCoord", R"doc(
+    auto py_core_coord = tt_pybind_class<CoreCoord>(m_tensor, "CoreCoord", R"doc(
         Class defining core coordinate
     )doc");
 
@@ -144,7 +151,7 @@ void TensorModule(py::module& m_tensor) {
 
     py::implicitly_convertible<std::vector<uint32_t>, Shape>();
 
-    auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
+    auto pyMemoryConfig = tt_pybind_class<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.
         There are eight DRAM memory banks on TT Accelerator device, indexed as 0, 1, 2, ..., 7.
     )doc");
@@ -213,7 +220,7 @@ void TensorModule(py::module& m_tensor) {
         py::class_<owned_buffer::Buffer<uint16_t>>(m_tensor, "owned_buffer_for_uint16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<owned_buffer::Buffer<uint16_t>, uint16_t>(py_owned_buffer_for_uint16_t);
 
-    auto pyCoreRange = py::class_<CoreRange>(m_tensor, "CoreRange", R"doc(
+    auto pyCoreRange = tt_pybind_class<CoreRange>(m_tensor, "CoreRange", R"doc(
         Class defining a range of cores)doc");
     pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }))
         .def("__repr__", [](const CoreRange& core_range) -> std::string { return fmt::format("{}", core_range); })
@@ -221,7 +228,7 @@ void TensorModule(py::module& m_tensor) {
         .def_readonly("end", &CoreRange::end_coord)
         .def("grid_size", &CoreRange::grid_size);
 
-    auto pyCoreRangeSet = py::class_<CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(
+    auto pyCoreRangeSet = tt_pybind_class<CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(
         Class defining a set of CoreRanges required for sharding)doc");
     pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
         .def(
@@ -243,7 +250,7 @@ void TensorModule(py::module& m_tensor) {
             Returns a CoreRangeSet from number of cores
         )doc");
 
-    auto pyShardSpec = py::class_<ShardSpec>(m_tensor, "ShardSpec", R"doc(
+    auto pyShardSpec = tt_pybind_class<ShardSpec>(m_tensor, "ShardSpec", R"doc(
         Class defining the specs required for sharding.
     )doc");
 
@@ -329,7 +336,7 @@ void TensorModule(py::module& m_tensor) {
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
         .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc);
 
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "mean_hw",
         tt::tt_metal::mean_hw,
@@ -339,31 +346,31 @@ void TensorModule(py::module& m_tensor) {
         "global_mean",
         tt::tt_metal::global_mean,
         R"doc(  Returns a new tensor with the mean of the input tensor ``{0}`` on all axes.)doc");
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "global_sum",
         tt::tt_metal::global_sum,
         R"doc(  Returns a new tensor with the sum of the input tensor ``{0}`` on all axes.)doc");
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "global_max",
         tt::tt_metal::global_max,
         R"doc(  Returns a new tensor with the max of the input tensor ``{0}`` on all axes.)doc");
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "global_min",
         tt::tt_metal::global_min,
         R"doc(  Returns a new tensor with the min of the input tensor ``{0}`` on all axes.)doc");
 
-    detail::bind_unary_op_with_param(
+    detail::bind_unary_op_with_param<true, false, true>(
         m_tensor,
         "sum",
         &sum,
         py::arg("dim"),
-        R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``; input tensor in TILE LAYOUT.)doc",
-        R"doc("dimension along which to apply sum", "int", "0, 1, 2, or 3")doc");
+        R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``;
+        input tensor in TILE LAYOUT.)doc", R"doc("dimension along which to apply sum", "int", "0, 1, 2, or 3")doc");
 
-    detail::bind_unary_op_with_param(
+    detail::bind_unary_op_with_param<true, false, true>(
         m_tensor,
         "max",
         tt::tt_metal::max,
@@ -473,39 +480,6 @@ void TensorModule(py::module& m_tensor) {
     )doc");
 
     // TMs
-    m_tensor.def(
-        "split_last_dim_two_chunks_tiled",
-        &split_last_dim_two_chunks_tiled,
-        py::arg("input").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Splits a tensor's last dimension in two equal sized chunks. This assumes the last dim is tile sized.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-
-    )doc");
-
-    m_tensor.def(
-        "split_dim_two_chunks_tiled",
-        &split_dim_two_chunks_tiled,
-        py::arg("input").noconvert(),
-        py::arg("dim").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Splits a tensor's last or penultimate dimension in two equal sized chunks. This assumes the last dim is tile sized and penultimate dimension is also tile sized.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
-            "dim", "Dimension", "integer", "Dimension to split over can only be 2 or 3", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-    )doc");
-
     m_tensor.def(
         "convert_conv_weight_tensor_to_tiled_layout",
         &convert_conv_weight_tensor_to_tiled_layout,
@@ -662,7 +636,6 @@ void TensorModule(py::module& m_tensor) {
         )doc");
 
     detail::TensorModuleCompositeOPs(m_tensor);
-    detail::TensorModuleBackwardOPs(m_tensor);
     detail::TensorModulePyTensor(m_tensor);
     detail::TensorModuleDMOPs(m_tensor);
     detail::TensorModuleCustomAndBMMOPs(m_tensor);

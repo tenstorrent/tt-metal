@@ -4,11 +4,9 @@
 
 #pragma once
 
-#include "device/unary_op.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/data_movement/downsample/device/downsample_op.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {
 
@@ -16,31 +14,17 @@ namespace operations {
 
 namespace unary {
 
-namespace detail {
+struct UnaryWithParam;
 
-inline Tensor unary_impl(
-    uint8_t queue_id,
-    const Tensor& input_tensor,
-    const std::vector<UnaryWithParam>& op_chain,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[1]) : input_tensor.get_dtype();
-    bool preserve_fp32_precision = (op_chain[0].op_type == UnaryOpType::TYPECAST) and (input_tensor.get_dtype() == DataType::FLOAT32);
-    bool fp32_dest_acc_en = preserve_fp32_precision or
-                            output_dtype == DataType::UINT32 or
-                            output_dtype == DataType::INT32 or
-                            output_dtype == DataType::FLOAT32 or
-                            input_tensor.get_dtype() == DataType::UINT32 or
-                            input_tensor.get_dtype() == DataType::INT32;  // MT: Currently only uint32/int32 is moved to
-                                                                          // DST directly, fp32 is converted to fp16b
+template <UnaryOpType... unary_op_types>
+struct ExecuteUnaryInvokeResult {
+  using type = ComplexTensor;
+};
 
-    auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
-    return operation::run(
-               Unary{op_chain, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype},
-               {input_tensor}, {}, {optional_output_tensor}, queue_id).at(0);
-}
-
-}  // namespace detail
+template <>
+struct ExecuteUnaryInvokeResult<UnaryOpType::ABS> {
+  using type = Tensor;
+};
 
 template <UnaryOpType... unary_op_types>
 struct ExecuteUnary {
@@ -48,17 +32,16 @@ struct ExecuteUnary {
         uint8_t queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            queue_id, input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config, optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
     static Tensor operator()(
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            DefaultQueueId, input_tensor, {UnaryWithParam{unary_op_types}...}, memory_config, optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static typename ExecuteUnaryInvokeResult<unary_op_types...>::type operator()(
+        const ComplexTensor& input_tensor,
+        const MemoryConfig& memory_config);
 };
 
 template <UnaryOpType unary_op_type>
@@ -68,26 +51,13 @@ struct ExecuteUnaryWithFastAndApproximateMode {
         const Tensor& input_tensor,
         const bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            queue_id,
-            input_tensor,
-            {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
     static Tensor operator()(
         const Tensor& input_tensor,
         const bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            DefaultQueueId,
-            input_tensor,
-            {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 template <UnaryOpType unary_op_type>
@@ -97,27 +67,41 @@ struct ExecuteUnaryWithFloatParameter {
         const Tensor& input_tensor,
         const float parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            queue_id,
-            input_tensor,
-            {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor operator()(
         const Tensor& input_tensor,
         const float parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            DefaultQueueId,
-            input_tensor,
-            {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Sigmoid_accurate {
+    static Tensor operator()(
+        uint8_t queue_id,
+        const Tensor& input,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor operator()(
+        const Tensor& input,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Unary_chain {
+    static Tensor operator()(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        const std::vector<UnaryWithParam>& ops_chain,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor operator()(
+        const Tensor& input_tensor,
+        const std::vector<UnaryWithParam>& ops_chain,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 struct Softplus {
@@ -127,83 +111,14 @@ struct Softplus {
         const float beta,
         const float threshold,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
-        return detail::unary_impl(
-            queue_id,
-            input,
-            {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
     static Tensor operator()(
         const Tensor& input,
         const float beta,
         const float threshold,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Softplus is not currently supported on Grayskull");
-        return detail::unary_impl(
-            DefaultQueueId,
-            input,
-            {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}},
-            memory_config,
-            optional_output_tensor);
-    }
-};
-
-struct Sigmoid_accurate {
-    static Tensor operator()(
-        uint8_t queue_id,
-        const Tensor& input,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            queue_id,
-            input,
-            {UnaryWithParam(UnaryOpType::NEG),
-             UnaryWithParam(UnaryOpType::EXP, 1.0f),
-             UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
-             UnaryWithParam(UnaryOpType::RECIP)},
-            memory_config,
-            optional_output_tensor);
-    }
-
-    static Tensor operator()(
-        const Tensor& input,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            DefaultQueueId,
-            input,
-            {UnaryWithParam(UnaryOpType::NEG),
-             UnaryWithParam(UnaryOpType::EXP, 1.0f),
-             UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
-             UnaryWithParam(UnaryOpType::RECIP)},
-            memory_config,
-            optional_output_tensor);
-    }
-};
-
-struct Unary_chain {
-    static Tensor operator()(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        const std::vector<UnaryWithParam>& ops_chain,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        TT_FATAL(ops_chain.size() > 0, "Op chain cannot be empty");
-        return detail::unary_impl(queue_id, input_tensor, ops_chain, memory_config, optional_output_tensor);
-    }
-
-    static Tensor operator()(
-        const Tensor& input_tensor,
-        const std::vector<UnaryWithParam>& ops_chain,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        TT_FATAL(ops_chain.size() > 0, "Op chain cannot be empty");
-        return detail::unary_impl(DefaultQueueId, input_tensor, ops_chain, memory_config, optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 struct Identity {
@@ -211,57 +126,28 @@ struct Identity {
         uint8_t queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        UnaryOpType op_type = UnaryOpType::IDENTITY;
-        if (input_tensor.get_dtype() == DataType::UINT32) {
-            op_type = UnaryOpType::IDENTITY_UINT32;
-        }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-        return detail::unary_impl(
-            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-    }
     static Tensor operator()(
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        UnaryOpType op_type = UnaryOpType::IDENTITY;
-        if (input_tensor.get_dtype() == DataType::UINT32) {
-            op_type = UnaryOpType::IDENTITY_UINT32;
-        }
-
-        return detail::unary_impl(
-            DefaultQueueId, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-template <UnaryOpType unary_op_type, typename T = int32_t >
+template <UnaryOpType unary_op_type, typename T = int32_t>
 struct ExecuteUnaryWithIntegerParameter {
     static Tensor operator()(
         uint8_t queue_id,
         const Tensor& input_tensor,
         T parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            queue_id,
-            input_tensor,
-            {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor operator()(
         const Tensor& input_tensor,
         T parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            DefaultQueueId,
-            input_tensor,
-            {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 template <UnaryOpType unary_op_type, typename T = float>
@@ -271,105 +157,55 @@ struct SymmetricBinop {
         const Tensor& input_tensor,
         T param,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            queue_id,
-            input_tensor,
-            {UnaryWithParam(unary_op_type, static_cast<float>(param))},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
     static Tensor operator()(
         uint8_t queue_id,
         T param,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            queue_id,
-            input_tensor,
-            {UnaryWithParam(unary_op_type, static_cast<float>(param))},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
     static Tensor operator()(
         const Tensor& input_tensor,
         T param,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            DefaultQueueId,
-            input_tensor,
-            {UnaryWithParam(unary_op_type, static_cast<float>(param))},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
     static Tensor operator()(
         T param,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            DefaultQueueId,
-            input_tensor,
-            {UnaryWithParam(unary_op_type, static_cast<float>(param))},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-template <UnaryOpType unary_op_type, UnaryOpType unary_op_rev_type, typename T = float>
+template <UnaryOpType unary_op_type, UnaryOpType unary_op_rev_type>
 struct AsymmetricBinop {
     static Tensor operator()(
         uint8_t queue_id,
         const Tensor& input_tensor,
-        T param,
+        float param,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            queue_id,
-            input_tensor,
-            {UnaryWithParam(unary_op_type, static_cast<float>(param))},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
     static Tensor operator()(
         uint8_t queue_id,
-        T param,
+        float param,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            queue_id,
-            input_tensor,
-            {UnaryWithParam(unary_op_rev_type, static_cast<float>(param))},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
     static Tensor operator()(
         const Tensor& input_tensor,
-        T param,
+        float param,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            DefaultQueueId,
-            input_tensor,
-            {UnaryWithParam(unary_op_type, static_cast<float>(param))},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
     static Tensor operator()(
-        T param,
+        float param,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return detail::unary_impl(
-            DefaultQueueId,
-            input_tensor,
-            {UnaryWithParam(unary_op_rev_type, static_cast<float>(param))},
-            memory_config,
-            optional_output_tensor);
-    }
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 }  // namespace unary
@@ -377,6 +213,11 @@ struct AsymmetricBinop {
 
 #define REGISTER_UNARY_OPERATION(operation_name, operation_type) \
     constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op<    \
+        "ttnn::" #operation_name,                                \
+        ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::operation_type>>();
+
+#define REGISTER_UNARY_OPERATION_OVERLOAD(operation_name, operation_type) \
+    constexpr auto operation_name = ttnn::register_operation<    \
         "ttnn::" #operation_name,                                \
         ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::operation_type>>();
 
@@ -398,7 +239,7 @@ struct AsymmetricBinop {
         ttnn::operations::unary::                                                                  \
             ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::operation_type, data_type>>();
 
-REGISTER_UNARY_OPERATION(abs, ABS);
+REGISTER_UNARY_OPERATION_OVERLOAD(abs, ABS);
 REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
 REGISTER_UNARY_OPERATION(atan, ATAN);
@@ -425,7 +266,7 @@ REGISTER_UNARY_OPERATION(logical_not, LOGICAL_NOT_UNARY);
 REGISTER_UNARY_OPERATION(ltz, LTZ);
 REGISTER_UNARY_OPERATION(neg, NEG);
 REGISTER_UNARY_OPERATION(nez, NEZ);
-REGISTER_UNARY_OPERATION(reciprocal, RECIP);
+REGISTER_UNARY_OPERATION_OVERLOAD(reciprocal, RECIP);
 REGISTER_UNARY_OPERATION(relu, RELU);
 REGISTER_UNARY_OPERATION(relu6, RELU6);
 REGISTER_UNARY_OPERATION(sigmoid, SIGMOID);
@@ -437,6 +278,7 @@ REGISTER_UNARY_OPERATION(sqrt, SQRT);
 REGISTER_UNARY_OPERATION(square, SQUARE);
 REGISTER_UNARY_OPERATION(tan, TAN);
 REGISTER_UNARY_OPERATION(tanh, TANH);
+REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
 
 constexpr auto log_sigmoid = ttnn::register_operation_with_auto_launch_op<"ttnn::log_sigmoid", ttnn::operations::unary::ExecuteUnary<
     ttnn::operations::unary::UnaryOpType::SIGMOID,
@@ -456,8 +298,8 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(relu_max, RELU_MAX);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(relu_min, RELU_MIN);
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(remainder, REMAINDER);
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(fmod, FMOD);
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(unary_remainder, REMAINDER);
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(unary_fmod, FMOD);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(gt_unary, UNARY_GT);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(lt_unary, UNARY_LT);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ne_unary, UNARY_NE);
@@ -471,8 +313,7 @@ REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_or, BITWISE_OR, int32_t)
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_xor, BITWISE_XOR, int32_t);
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_not, BITWISE_NOT, int32_t);
 
-// Unaries used for composite implementation
-REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
+
 
 // Other unaries
 constexpr auto identity = ttnn::register_operation_with_auto_launch_op<"ttnn::identity", ttnn::operations::unary::Identity>();
@@ -498,5 +339,4 @@ constexpr auto div_sfpu = ttnn::register_operation_with_auto_launch_op<
     ttnn::operations::unary::AsymmetricBinop<
         ttnn::operations::unary::UnaryOpType::DIV_UNARY_SFPU,
         ttnn::operations::unary::UnaryOpType::RDIV>>();
-
 }  // namespace ttnn

@@ -108,7 +108,7 @@ def known_configs(configs, **_):
             "rank": len(shape),
             "split_dim": 2,
             "shape": shape,
-            "splits": [shape[2] // 2, shape[2] // 2],
+            "splits": 2,
             "layout": ttnn.TILE_LAYOUT,
             "dtype": ttnn.bfloat16,
         }
@@ -117,7 +117,7 @@ def known_configs(configs, **_):
             "rank": len(shape),
             "split_dim": 3,
             "shape": shape,
-            "splits": [shape[3] // 2, shape[3] // 2],
+            "splits": 2,
             "layout": ttnn.TILE_LAYOUT,
             "dtype": ttnn.bfloat16,
         }
@@ -161,9 +161,7 @@ def run(config, memory_config, *, device) -> Tuple[bool, Optional[str]]:
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=layout, device=device, dtype=dtype, memory_config=memory_config
     )
-    # TODO: uncomments this when ttnn.split is implemented
-    # ttnn_output_tensors = ttnn.split(ttnn_input_tensor, splits, dim=split_dim)
-    ttnn_output_tensors = ttnn.experimental.tensor.split_dim_two_chunks_tiled(ttnn_input_tensor, split_dim)
+    ttnn_output_tensors = ttnn.split(ttnn_input_tensor, splits, dim=split_dim)
 
     output_tensors = [ttnn.to_torch(ttnn_output_tensor) for ttnn_output_tensor in ttnn_output_tensors]
 

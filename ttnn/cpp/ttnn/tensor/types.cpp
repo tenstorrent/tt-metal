@@ -13,7 +13,10 @@ static DistributedTensorConfig create_shard_distributed_tensor_config(const std:
     return ShardTensor(std::stoi(metadata.at("shard_dim")));
 }
 static DistributedTensorConfig create_replicate_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
-    return ReplicateTensor{};
+    if (auto it = metadata.find("replication_factor"); it != metadata.end()) {
+        return ReplicateTensor(std::stoi(it->second));
+    }
+    TT_THROW("Unsupported Replication strategy:");
 }
 
 DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
@@ -166,8 +169,8 @@ const uint32_t Shape::get_normalized_index(std::int64_t index) const {
     return normalized_index;
 }
 
-bool operator==(const ReplicateTensor&, const ReplicateTensor&) {
-    return true; // All instances are considered equal because there are no data members.
+bool operator==(const ReplicateTensor& a, const ReplicateTensor& b) {
+    return a.replication_factor == b.replication_factor; // All instances are considered equal because there are no data members.
 }
 bool operator==(const AllGatherTensor&, const AllGatherTensor&) {
     return true; // All instances are considered equal because there are no data members.
@@ -232,7 +235,7 @@ void dump_memory_config(std::ostream& output_stream, const MemoryConfig& memory_
 }
 
 void dump_memory_config(const std::string& file_name, const MemoryConfig& memory_config) {
-    ofstream output_stream(file_name, ios::out | ios::binary);
+    std::ofstream output_stream(file_name, std::ios::out | std::ios::binary);
     if (not output_stream) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }
@@ -275,7 +278,7 @@ MemoryConfig load_memory_config(std::ifstream& input_stream) {
 }
 
 MemoryConfig load_memory_config(const std::string& file_name) {
-    ifstream input_stream(file_name, ios::in | ios::binary);
+    std::ifstream input_stream(file_name, std::ios::in | std::ios::binary);
     if (not input_stream) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }

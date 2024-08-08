@@ -8,10 +8,9 @@ import ttnn
 import tt_lib as ttl
 from typing import Callable
 
-from models.demos.wormhole.mamba.reference.args import ModelArgs
-from models.demos.wormhole.mamba.reference.args import ModelMode
-from models.demos.wormhole.mamba.tt.mamba_one_step_ssm import TtMambaSSM
+from models.demos.wormhole.mamba.reference.args import ModelArgs, ModelMode
 from models.demos.wormhole.mamba.tt.cache import TensorCache
+from models.demos.wormhole.mamba.tt.mamba_ssm import TtMambaSSM
 from models.demos.wormhole.mamba.tt.mamba_conv import MambaConvConfig, MambaConv
 
 
@@ -55,13 +54,17 @@ class TtMambaBlock(torch.nn.Module):
             self.conv1d_weights.append(
                 load_fn(
                     conv1d_weight_name,
-                    lambda x: x[:, :, i].transpose(-1, -2).repeat(self.batch_size, 1).unsqueeze(0).unsqueeze(0),
-                    postfix=f"{i}_{args.batch_size}",
+                    lambda x: x[:, :, i]
+                    .transpose(-1, -2)
+                    .repeat(self.configs["num_users"], 1)
+                    .unsqueeze(0)
+                    .unsqueeze(0),
+                    postfix=f"{i}_{self.configs['num_users']}",
                 )
             )
 
         conv1d_bias_name = "mixer.conv1d.bias"
-        self.conv1d_bias = load_fn(
+        self.conv1d_bias_prefill = load_fn(
             conv1d_bias_name,
             lambda x: x.repeat(self.configs["outer_dim"], 1),
             postfix=f"{self.configs['outer_dim']}",
@@ -71,40 +74,26 @@ class TtMambaBlock(torch.nn.Module):
             lambda x: x.repeat(self.configs["num_users"], 1),
             postfix=f"{self.configs['num_users']}",
         )
+        self.conv1d_bias = self.conv1d_bias_prefill
 
-        if self.configs["mode"] == ModelMode.DECODE:
-            self.conv_states = []
-            for i in range(4):
-                self.conv_states.append(
-                    load_fn(
-                        f"conv_state{i}",
-                        torch_tensor=torch.zeros(1, 1, self.batch_size, self.args.d_inner),
-                        postfix=f"{args.batch_size}",
-                    )
+        self.conv_states = []
+        for i in range(4):
+            self.conv_states.append(
+                load_fn(
+                    f"conv_state{i}",
+                    torch_tensor=torch.zeros(1, 1, self.batch_size, self.args.d_inner),
+                    postfix=f"{args.batch_size}",
                 )
-        elif self.configs["mode"] == ModelMode.PREFILL:
-            self.convolution_cache = TensorCache(configs["num_users"], 4, self.args.d_inner, device)
-            self.conv_states = [self.convolution_cache.concat_users(i) for i in range(4)]
+            )
+        self.convolution_cache = TensorCache(configs["num_users"], 4, self.args.d_inner, device)
 
-        self.use_torch_conv = False
-        if self.use_torch_conv:
-            self.torch_depthwise_conv1d = torch.nn.Conv1d(
-                in_channels=self.args.d_inner,
-                out_channels=self.args.d_inner,
-                kernel_size=4,
-                padding=0,
-                groups=self.args.d_inner,
-                bias=True,
-            )
-            self.torch_depthwise_conv1d.weight.data = load_fn(conv1d_weight_name, return_as_torch=True)
-            self.torch_depthwise_conv1d.bias.data = load_fn(conv1d_bias_name, return_as_torch=True)
-        else:
-            mamba_conv_config = MambaConvConfig(
-                input_length=self.configs["outer_dim"] + (args.d_conv - 1),
-                weights_dtype=ttnn.bfloat16,
-                output_dtype=ttnn.bfloat16,
-            )
-            self.mamba_conv = MambaConv(device, load_fn, mamba_conv_config)
+        mamba_conv_config = MambaConvConfig(
+            input_length=self.configs["outer_dim"] + (args.d_conv - 1),
+            weights_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat16,
+        )
+        self.mamba_conv = MambaConv(device, load_fn, mamba_conv_config)
+
         self.tt_ssm = TtMambaSSM(self.args, self.device, configs, load_fn)
 
         self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
@@ -113,18 +102,20 @@ class TtMambaBlock(torch.nn.Module):
             fp32_dest_acc_en=True,
         )
 
+    def to_prefill(self, prefill_config):
+        self.configs = prefill_config
+        self.conv1d_bias = self.conv1d_bias_prefill
+        self.tt_ssm.to_prefill(self.configs)
+
     def to_decode(self, decode_config):
         self.configs = decode_config
-        self.tt_ssm.to_decode(self.configs)
-
-        # deallocate prefill conv_bias, need to reinitialize when back in prefill mode
-        ttnn.deallocate(self.conv1d_bias)
         self.conv1d_bias = self.conv1d_bias_decode
-
+        self.conv_states = []
         for i in range(0, 4):
-            self.conv_states[i] = ttnn.typecast(
-                self.convolution_cache.concat_users(i), self.configs["dtype"]["activations"]
+            self.conv_states.append(
+                ttnn.typecast(self.convolution_cache.concat_users(i), self.configs["dtype"]["activations"])
             )
+        self.tt_ssm.to_decode(self.configs)
 
     def forward(self, x):
         assert len(x.shape) == 4, "Mamba block expects inputs to be rank 4"
@@ -196,9 +187,9 @@ class TtMambaBlock(torch.nn.Module):
             x_ssm = ttnn.to_layout(x_ssm, ttnn.ROW_MAJOR_LAYOUT)
             x_ssm = ttnn.concat(
                 [
-                    (self.convolution_cache.get(self.configs["current_user"], 1)),
-                    (self.convolution_cache.get(self.configs["current_user"], 2)),
-                    (self.convolution_cache.get(self.configs["current_user"], 3)),
+                    self.convolution_cache.get(self.configs["current_user"], 1),
+                    self.convolution_cache.get(self.configs["current_user"], 2),
+                    self.convolution_cache.get(self.configs["current_user"], 3),
                     x_ssm,
                 ],
                 dim=-2,
@@ -211,34 +202,15 @@ class TtMambaBlock(torch.nn.Module):
                 self.convolution_cache.set(self.configs["current_user"], i, entry)
                 ttnn.deallocate(entry)
 
-            if self.use_torch_conv:
-                x_ssm_torch = ttnn.to_torch(x_ssm).to(torch.float32)  # 1, 1, 35, 2E
-                ttnn.deallocate(x_ssm)
-                x_ssm_torch = x_ssm_torch.squeeze(0).permute(0, 2, 1)
-                conv_out_with_bias = self.torch_depthwise_conv1d(x_ssm_torch)
-                x_ssm_torch.data = torch.tensor([])
-                conv_out_with_bias = conv_out_with_bias.squeeze(0).permute(1, 0).unsqueeze(0).unsqueeze(0)
-                conv_out_with_bias = ttnn.from_torch(
-                    conv_out_with_bias,
-                    device=self.device,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                    dtype=self.configs["dtype"]["activations"],
-                )
-
-            else:
-                conv_out_without_bias = self.mamba_conv(x_ssm)
-                ttnn.deallocate(x_ssm)
-                conv_out_with_bias = ttnn.add(
-                    conv_out_without_bias,
-                    self.conv1d_bias,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                    dtype=self.configs["dtype"]["activations"],
-                )
-                ttnn.deallocate(conv_out_without_bias)
-
-            # omit the padding at the end
-            # conv_out_with_bias = conv_out_with_bias[:, :, :-3]
+            conv_out_without_bias = self.mamba_conv(x_ssm)
+            ttnn.deallocate(x_ssm)
+            conv_out_with_bias = ttnn.add(
+                conv_out_without_bias,
+                self.conv1d_bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=self.configs["dtype"]["activations"],
+            )
+            ttnn.deallocate(conv_out_without_bias)
 
         conv_out_after_silu = ttnn.silu(conv_out_with_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(conv_out_with_bias)
@@ -265,3 +237,7 @@ class TtMambaBlock(torch.nn.Module):
         ttnn.deallocate(out)
 
         return out_proj
+
+    def reset(self):
+        self.convolution_cache.reset()
+        self.tt_ssm.reset()

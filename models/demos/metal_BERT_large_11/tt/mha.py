@@ -54,10 +54,10 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
             q_heads,
             kt_heads,
             v_heads,
-        ) = tt_lib.operations.primary.transformers.split_query_key_value_and_split_heads(
+        ) = ttnn.experimental.transformer.split_query_key_value_and_split_heads(
             qkv,
             compute_with_storage_grid_size=grid_size,
-            output_mem_config=model_config["OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
+            memory_config=model_config["OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
         )
         return q_heads, kt_heads, v_heads
 
@@ -138,7 +138,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     def mha_(activation, attention_mask):
         # TODO: Remove hardcoded shape hack
         if reserve_split_heads_shape is not None:
-            temp = tt_lib.tensor.empty(
+            temp = ttnn.empty(
                 reserve_split_heads_shape,
                 tt_lib.tensor.DataType.BFLOAT16,
                 tt_lib.tensor.Layout.ROW_MAJOR,

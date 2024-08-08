@@ -48,21 +48,23 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
     return f;
 }
 
-static inline uint32_t GetBaseAddr(Device *device, const CoreCoord &phys_core, int hart_id) {
+static inline uint64_t GetBaseAddr(Device *device, const CoreCoord &phys_core, int hart_id) {
     // For tensix cores, compute the buffer address for the requested hart.
-    uint32_t base_addr = PRINT_BUFFER_START + hart_id*PRINT_BUFFER_SIZE;
+    uint64_t base_addr = GET_MAILBOX_ADDRESS_HOST(dprint_buf);
 
     // Ethernet cores have a different address mapping.
     if (tt::llrt::is_ethernet_core(phys_core, device->id())) {
         CoreCoord logical_core = device->logical_core_from_ethernet_core(phys_core);
         if (device->is_active_ethernet_core(logical_core)) {
-            base_addr = eth_l1_mem::address_map::PRINT_BUFFER_ER;
+            base_addr = GET_ETH_MAILBOX_ADDRESS_HOST(dprint_buf);
         } else {
-            base_addr = PRINT_BUFFER_IDLE_ER;
+            base_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(dprint_buf);
         }
     }
 
-    return base_addr;
+    dprint_buf_msg_t *buf = reinterpret_cast<dprint_buf_msg_t *>(base_addr);
+
+    return reinterpret_cast<uint64_t>(buf->data[hart_id]);
 }
 
 static inline int GetNumRiscs(int chip_id, const CoreCoord &core) {
@@ -160,7 +162,7 @@ private:
     std::map<uint32_t, uint32_t> noc_xfer_counts;
 
     // A map to from {device id, core coord x, y, hart index} to the signal code it's waiting for.
-    std::map<tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> hart_waiting_on_signal_;
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> hart_waiting_on_signal_;
     // Keep a separate set of raised signal codes so that multiple harts can wait for the same
     // signal.
     std::set<uint32_t> raised_signals_;
@@ -325,11 +327,11 @@ static void PrintTypedUint32Array(ostream& stream, int setwidth, uint32_t raw_el
 // Used for debug print server startup sequence.
 void WriteInitMagic(Device *device, const CoreCoord& core, int hart_id, bool enabled) {
     // compute the buffer address for the requested hart
-    uint32_t base_addr = GetBaseAddr(device, core, hart_id);
+    uint64_t base_addr = GetBaseAddr(device, core, hart_id);
 
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
-    vector<uint32_t> initbuf = vector<uint32_t>(PRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
+    vector<uint32_t> initbuf = vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
     initbuf[0] = uint32_t(enabled ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC);
     tt::llrt::write_hex_vec_to_core(device->id(), core, initbuf, base_addr);
 } // WriteInitMagic
@@ -637,7 +639,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     ostream& stream = (mute_print_server_)? null_stream : *stream_;
 
     // Check whether this hart is currently waiting on a WAIT to be fulfilled.
-    tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
+    std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
     raise_wait_lock_.lock();
     if (hart_waiting_on_signal_.count(hart_key) > 0) {
         // Check if the signal the hart is wairint for has been raised.
@@ -677,7 +679,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
 
     if (rpos < wpos) {
         // Now read the entire buffer
-        from_dev = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, PRINT_BUFFER_SIZE);
+        from_dev = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, DPRINT_BUFFER_SIZE);
         // at this point rpos,wpos can be stale but not reset to 0 by the producer
         // it's ok for the consumer to be behind the latest wpos+rpos from producer
         // since the corresponding data in buffer for stale rpos+wpos will not be overwritten
@@ -856,7 +858,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     memcpy (&sigval, ptr, sizeof(uint32_t));
                     // Given that we break immediately on a wait, this core should never be waiting
                     // on multiple signals at the same time.
-                    tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
+                    std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> hart_key {chip_id, core.x, core.y, hart_id};
                     raise_wait_lock_.lock();
                     TT_ASSERT(hart_waiting_on_signal_.count(hart_key) == 0);
                     // Set that this hart is waiting on this signal, and then stop reading for now.

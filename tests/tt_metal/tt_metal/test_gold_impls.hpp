@@ -21,35 +21,13 @@ using std::uint16_t;
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
-inline vector<uint16_t> gold_transpose_wh(std::vector<uint16_t> src_vec, vector<uint32_t> shape) {
-    vector<uint32_t> shapeT{shape[0], shape[1], shape[3], shape[2]};
-    TensAddr addr(shape);
-    TensAddr addrt(shapeT);
-
-    vector<uint16_t> transposed(src_vec.size());
-    for (int n = 0; n < shape[0]; n++)
-    for (int c = 0; c < shape[1]; c++)
-    for (int h = 0; h < shape[2]; h++)
-    for (int w = 0; w < shape[3]; w++) {
-        auto toffs = addrt.offs(n, c, w, h);
-        auto offs = addr.offs(n, c, h, w);
-        TT_FATAL(toffs < transposed.size() && offs < src_vec.size());
-        transposed[toffs] = src_vec[offs];
-    }
-
-    return transposed;
-};
-
-// input shape.x is assumed to have the full number of elements in bfloat16
-// src_vec is expected to be untilized
-// result is also untilized
 // TODO(AP) - move to gold header
-inline vector<uint16_t> gold_transpose_hc(std::vector<uint16_t> src_vec, vector<uint32_t> shape) {
-    vector<uint32_t> shapeT{shape[0], shape[2], shape[1], shape[3]};
+inline std::vector<uint16_t> gold_transpose_hc(std::vector<uint16_t> src_vec, std::vector<uint32_t> shape) {
+    std::vector<uint32_t> shapeT{shape[0], shape[2], shape[1], shape[3]};
     TensAddr addr(shape);
     TensAddr addrt(shapeT);
 
-    vector<uint16_t> transposed(src_vec.size());
+    std::vector<uint16_t> transposed(src_vec.size());
     for (int n = 0; n < shape[0]; n++)
     for (int c = 0; c < shape[1]; c++)
     for (int h = 0; h < shape[2]; h++)
@@ -63,102 +41,6 @@ inline vector<uint16_t> gold_transpose_hc(std::vector<uint16_t> src_vec, vector<
     return transposed;
 };
 
-
-// input shape.x is assumed to have the full number of elements in bfloat16
-// src_vec is expected to be untilized
-// result is also untilized
-inline vector<uint16_t> gold_reduce_hw(vector<uint16_t> src_vec, vector<uint32_t> shape, float scaler, bool red_max = false, bool zeropad = true) {
-    vector<uint32_t> shape_dst{shape[0], shape[1], 1, 1};
-    if (zeropad) {
-        shape_dst[2] = 32;
-        shape_dst[3] = 32;
-    }
-    TensAddr addr(shape);
-    TensAddr addr_dst(shape_dst);
-
-    vector<uint16_t> reduced(addr_dst.numel());
-    std::fill(reduced.begin(), reduced.end(), 0);
-    for (int n = 0; n < shape[0]; n++)
-    for (int c = 0; c < shape[1]; c++) {
-        float sum = red_max ? -std::numeric_limits<float>::max() : 0.0f;
-        for (int h = 0; h < shape[2]; h++) {
-        for (int w = 0; w < shape[3]; w++) {
-            auto offs = addr.offs(n, c, h, w);
-            if (red_max)
-                sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
-            else {
-                sum += bfloat16(src_vec[offs]).to_float();
-                //sum = bfloat16(sum).to_float();
-            }
-        }}
-        auto dest_offs = addr_dst.offs(n, c, 0, 0);
-        reduced[dest_offs] = bfloat16(sum*scaler).to_uint16();
-    }
-
-    return reduced;
-};
-
-// input shape.x is assumed to have the full number of elements in bfloat16
-// src_vec is expected to be untilized
-// result is also untilized
-inline vector<uint16_t> gold_reduce_h(vector<uint16_t> src_vec, vector<uint32_t> shape, float scaler, bool red_max = false, bool zeropad = true) {
-    vector<uint32_t> shape_dst{shape[0], shape[1], 1, shape[3]};
-    TT_FATAL(shape[2] > 0);
-    if (zeropad)
-        shape_dst[2] = 32;
-    TensAddr addr(shape);
-    TensAddr addr_dst(shape_dst);
-
-    vector<uint16_t> reduced(addr_dst.numel());
-    std::fill(reduced.begin(), reduced.end(), 0);
-    for (int n = 0; n < shape[0]; n++)
-    for (int c = 0; c < shape[1]; c++)
-    for (int w = 0; w < shape[3]; w++) {
-        float sum = red_max ? -std::numeric_limits<float>::max() : 0.0f;
-        for (int h = 0; h < shape[2]; h++) {
-            auto offs = addr.offs(n, c, h, w);
-            if (red_max)
-                sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
-            else
-                sum += bfloat16(src_vec[offs]).to_float();
-        }
-        auto dest_offs = addr_dst.offs(n, c, 0, w);
-        reduced[dest_offs] = bfloat16(sum*scaler).to_uint16();
-    }
-
-    return reduced;
-};
-
-// input shape.x is assumed to have the full number of elements in bfloat16
-// src_vec is expected to be untilized
-// result is also untilized
-inline vector<uint16_t> gold_reduce_w(vector<uint16_t> src_vec, vector<uint32_t> shape, float scaler, bool red_max = false, bool zeropad = true) {
-    vector<uint32_t> shape_dst{shape[0], shape[1], shape[2], 1};
-    if (zeropad)
-        shape_dst[3] = 32;
-    TensAddr addr(shape);
-    TensAddr addr_dst(shape_dst);
-
-    vector<uint16_t> reduced(addr_dst.numel());
-    std::fill(reduced.begin(), reduced.end(), 0);
-    for (int n = 0; n < shape[0]; n++)
-    for (int c = 0; c < shape[1]; c++)
-    for (int h = 0; h < shape[2]; h++) {
-        float sum = red_max ? -std::numeric_limits<float>::max() : 0.0f;
-        for (int w = 0; w < shape[3]; w++) {
-            auto offs = addr.offs(n, c, h, w);
-            if (red_max)
-                sum = fmaxf(bfloat16(src_vec[offs]).to_float(), sum);
-            else
-                sum += bfloat16(src_vec[offs]).to_float();
-        }
-        auto dest_offs = addr_dst.offs(n, c, h, 0);
-        reduced[dest_offs] = bfloat16(sum*scaler).to_uint16();
-    }
-
-    return reduced;
-};
-
 struct BcastDim {
     enum Enum : uint32_t {
         W = 2, // broadcast an H-tensor over destination's W
@@ -167,7 +49,7 @@ struct BcastDim {
     };
     // TODO(AP): fix the gap to match defines in llk_3c.h
 
-    static const vector<Enum> all() { return { W, H, HW }; }
+    static const std::vector<Enum> all() { return { W, H, HW }; }
 };
 
 struct BcastOp {
@@ -188,10 +70,10 @@ struct BcastOp {
 // result is also untilized
 // bcast_vals for hw mode is expected to have size 1
 // bcast_vals for h or w mode is supposed to have h or w elements
-inline vector<uint16_t> gold_bcast_op(
-    const vector<uint16_t>& src_vec,
-    const vector<uint32_t>& shape,
-    const vector<uint16_t>& bcast_vals,
+inline std::vector<uint16_t> gold_bcast_op(
+    const std::vector<uint16_t>& src_vec,
+    const std::vector<uint32_t>& shape,
+    const std::vector<uint16_t>& bcast_vals,
     BcastDim::Enum bcast_dim,
     BcastOp::Enum bcast_op
 ) {
@@ -200,9 +82,9 @@ inline vector<uint16_t> gold_bcast_op(
     TT_FATAL(bcast_dim == BcastDim::H ? bcast_vals.size() == N*C*W : true);
     TT_FATAL(bcast_dim == BcastDim::HW ? bcast_vals.size() == N*C : true);
 
-    vector<uint32_t> shape_dst{N, C, H, W};
+    std::vector<uint32_t> shape_dst{N, C, H, W};
     TensAddr addr(shape);
-    vector<uint16_t> result(addr.numel());
+    std::vector<uint16_t> result(addr.numel());
     std::fill(result.begin(), result.end(), 0);
     for (int n = 0; n < N; n++)
     for (int c = 0; c < C; c++)
@@ -236,10 +118,10 @@ inline vector<uint16_t> gold_bcast_op(
 // Basic gold batch matmul implementation.
 // Returns C=A*B, A and B are row-major untilized
 // Accumulates in FP32
-inline vector<uint16_t> gold_bmm(
-    const vector<uint32_t> shapeA,
-    const vector<uint16_t>& A,
-    const vector<uint32_t>& shapeB,
+inline std::vector<uint16_t> gold_bmm(
+    const std::vector<uint32_t> shapeA,
+    const std::vector<uint16_t>& A,
+    const std::vector<uint32_t>& shapeB,
     const vector<uint16_t>& B,
     bool acc16 = false
     )
@@ -286,24 +168,3 @@ inline vector<uint16_t> gold_bmm(
 
 
 typedef BcastOp EltwiseOp;
-
-namespace reduce_args {
-// FIXME:copy pasted the args here from the kernel file
-struct hlk_args_t {
-    // per-batch params
-    int Ht; // number of tiles in H to expect (expected to be a full tensor by this kernel)
-    int Wt; // number of tiles in W to expect (can be a partial tensor), always <= DSTt
-    int NC;
-    float scaler;
-};
-}
-
-namespace bcast_op_params {
-// FIXME:copy pasted the args here from the kernel file,  we could refactor the HLK file
-struct hlk_args_t {
-    uint32_t B;
-    uint32_t Ht;
-    uint32_t Wt;
-};
-
-}

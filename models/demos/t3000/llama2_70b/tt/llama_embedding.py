@@ -51,7 +51,9 @@ class TtLlamaEmbedding:
         self.emb_weights = ttnn.to_device(embd_weights_ttn, device_mesh)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.embedding(x, self.emb_weights, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        x = ttnn.embedding(
+            x, self.emb_weights, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         x = ttnn.reshape(x, [x.shape[0], 1, x.shape[1], x.shape[2]])
 
         return x

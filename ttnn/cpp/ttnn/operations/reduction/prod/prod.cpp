@@ -15,7 +15,6 @@
 
 namespace ttnn::operations::reduction {
 
-namespace prod {
 // Autoformat support
 inline Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = temp;
@@ -45,7 +44,7 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
 inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& output_mem_config) {
     // layout conversion
     auto formatted_input_tensor = temp;
-    if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
+    if(formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
         auto out_shape = temp.get_legacy_shape();
         out_shape = {out_shape[0], out_shape[1], out_shape[2], out_shape[3]};
@@ -57,13 +56,13 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     // Apply prod
     std::vector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
     tt::tt_metal::Shape input_shape = formatted_input_tensor.get_legacy_shape();
-    tt::tt_metal::Shape required = {
+    std::array<uint32_t, 4> required = {
         ((dim == 1 || dim == -3) ? input_shape[0] : 1),
         ((dim == 1 || dim == -3) ? 1 : input_shape[1]),
         input_shape[2],
         input_shape[3]};
 
-    auto ttnn_shape = ttnn::Shape(tt::tt_metal::Shape{required});
+    auto ttnn_shape = ttnn::Shape({required});
     auto ttnn_device = formatted_input_tensor.device();
 
     return tt::operations::primary::prod_nc(
@@ -79,7 +78,8 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
 }
 
 
-Tensor _prod(const Tensor& input_a, bool all_dimensions, int64_t dim, const MemoryConfig& output_mem_config) {
+Tensor ProdOperation::operator()(const Tensor& input_a, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& memory_config) {
+    auto output_mem_config = memory_config.value_or(input_a.memory_config());
     if (all_dimensions) {
         return prod_all(input_a, output_mem_config);
     }
@@ -125,9 +125,9 @@ Tensor _prod(const Tensor& input_a, bool all_dimensions, int64_t dim, const Memo
     }
 }
 
-Tensor _prod_nc(const Tensor &input, const Tensor &output, std::vector<int64_t> &dims, const MemoryConfig &output_mem_config) {
-        return tt::operations::primary::prod_nc(input, output, dims, output_mem_config);
+Tensor ProdOperation::operator()(const Tensor &input, const Tensor &output, std::vector<int64_t> &dims, const std::optional<MemoryConfig>& memory_config) {
+        auto mem_cfg = memory_config.value_or(input.memory_config());
+        return tt::operations::primary::prod_nc(input, output, dims, mem_cfg);
 }
 
-} // prod
 } // namespace ttnn::operations::reduction

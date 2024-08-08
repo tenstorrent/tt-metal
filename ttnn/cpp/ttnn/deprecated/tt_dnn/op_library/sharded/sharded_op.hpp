@@ -192,9 +192,9 @@ struct Reshard {
 inline Tensor reshard(const Tensor &input_tensor, const MemoryConfig &output_mem_config, std::optional<Tensor> output_tensor = std::nullopt) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [output_mem_config, output_tensor] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+        [output_mem_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
-            return operation::run(Reshard{.output_mem_config = output_mem_config,}, {input_tensor}, {}, {output_tensor});
+            return operation::run(Reshard{.output_mem_config = output_mem_config,}, {input_tensor}, {}, {optional_output_tensors});
         }, {input_tensor}, output_tensors, {}, {output_tensor});
     return output_tensors.at(0);
 }

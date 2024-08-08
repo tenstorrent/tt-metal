@@ -31,8 +31,8 @@ def apply_rotary_emb(xq, xk, bcast_freq_xq, bcast_freq_xk, device, mem_config):
 
     xk_out = tt_lib.tensor.complex_mul(xk, bcast_freq_xk, output_mem_config=mem_config)
 
-    xq_out = tt_lib.tensor.concat([xq_out.real, xq_out.imag], -1, mem_config)
-    xk_out = tt_lib.tensor.concat([xk_out.real, xk_out.imag], -1, mem_config)
+    xq_out = ttnn.concat([xq_out.real, xq_out.imag], -1, memory_config=mem_config)
+    xk_out = ttnn.concat([xk_out.real, xk_out.imag], -1, memory_config=mem_config)
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
 
     xq_out.deallocate()
@@ -95,18 +95,18 @@ def attention(config, x, bcast_freq_xq, bcast_freq_xk, positions, mask, seqlen, 
     scatter_pos = scatter_pos.to(torch.int64)
     scatter_pos = scatter_pos.repeat(bsz, 1, config.n_kv_heads, config.head_dim)
 
-    cache_k = tt_lib.tensor.empty(
+    cache_k = ttnn.empty(
         [config.max_batch_size, config.sliding_window, config.n_kv_heads, config.head_dim],
         layout=tt_lib.tensor.Layout.ROW_MAJOR,
         device=device,
-        output_mem_config=config.out_mem_config,
+        memory_config=config.out_mem_config,
     )
     cache_k = tt_to_torch_tensor(cache_k).to(torch.float32)
-    cache_v = tt_lib.tensor.empty(
+    cache_v = ttnn.empty(
         [config.max_batch_size, config.sliding_window, config.n_kv_heads, config.head_dim],
         layout=tt_lib.tensor.Layout.ROW_MAJOR,
         device=device,
-        output_mem_config=config.out_mem_config,
+        memory_config=config.out_mem_config,
     )
     cache_v = tt_to_torch_tensor(cache_v).to(torch.float32)
     cache_k[:bsz].scatter_(dim=1, index=scatter_pos, src=xk[:, -config.sliding_window :])

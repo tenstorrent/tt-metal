@@ -7,23 +7,34 @@ on:
         required: false
         type: string
         default: '["grayskull", "wormhole_b0"]'
-      profiler-build:
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+      tracy:
         required: false
         type: boolean
         default: false
-        description: "Enable tracy and profiler build with _profiler attached to end of artifact"
+        description: "Build with tracy enabled"
   workflow_dispatch:
     inputs:
       arch:
         required: false
         type: string
         default: '["grayskull", "wormhole_b0"]'
-      profiler-build:
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - CI
+      tracy:
         required: false
         type: boolean
         default: false
-        description: "Enable tracy and profiler build with _profiler attached to end of artifact"
-
+        description: "Build with tracy enabled"
 jobs:
   build-artifact:
     strategy:
@@ -44,19 +55,15 @@ jobs:
       - name: Update submodules
         run: |
           git submodule update --init --recursive
-      - name: Build regular tt-metal and libs
-        if: ${{ !inputs.profiler-build }}
+      - name: Build tt-metal and libs
         run: |
-          cmake -B build -G Ninja
-          cmake --build build --target tests
-          cmake --build build --target install
-      - name: Build profiler tt-metal and libs
-        if: ${{ inputs.profiler-build }}
-        run: ./scripts/build_scripts/build_with_profiler_opt.sh
+          nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
+          nice -n 19 cmake --build build --target tests
+          nice -n 19 cmake --build build --target install
       - name: 'Tar files'
         run: tar -cvf ttm_${{ matrix.arch }}.tar build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.arch }}${{ (inputs.profiler-build && '_profiler') || '' }}
+          name: TTMetal_build_${{ matrix.arch }}${{ (inputs.tracy && '_profiler') || '' }}
           path: ttm_${{ matrix.arch }}.tar

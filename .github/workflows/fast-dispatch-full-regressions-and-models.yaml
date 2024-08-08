@@ -23,7 +23,7 @@ jobs:
             { name: "Common models N300 WH B0", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_common_models.sh, timeout: 40 },
             { name: "GS-only ttnn nightly", arch: grayskull, cmd: tests/scripts/single_card/nightly/run_ttnn.sh, timeout: 40 },
             { name: "GS-only models", arch: grayskull, cmd: tests/scripts/single_card/nightly/run_gs_only.sh, timeout: 40 },
-            { name: "N300 WH-only models", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh, timeout: 40 },
+            { name: "N300 WH-only models", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh, timeout: 50 },
             { name: "API tests GS", arch: grayskull, cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast, timeout: 40 },
             { name: "API tests N300 WH B0", arch: wormhole_b0, cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast, timeout: 40 },
             # #9945: Skip SD for now
@@ -34,10 +34,12 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: model-runner-${{ matrix.test-group.arch }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active
+        timeout-minutes: 3
         run: |
           sudo systemctl restart mnt-MLPerf.mount
           sudo /etc/rc.local

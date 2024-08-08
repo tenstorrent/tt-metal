@@ -27,7 +27,6 @@ from tests.ttnn.unit_tests.operations.backward.complex_ops.backward_complex_util
 )
 
 
-@pytest.mark.skip(reason="this test is failing because ttnn.div_bw doesn't have a corresponding API call")
 @pytest.mark.parametrize(
     "memcfg",
     (
@@ -48,17 +47,17 @@ def test_level2_complex_div_bw(bs, hw, memcfg, dtype, device, function_level_def
     other_data = random_complex_tensor(input_shape, (-20, 90), (-30, 100))
     other_data.requires_grad = True
 
-    input_tensor = ttl.tensor.complex_tensor(
+    input_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    other_tensor = ttl.tensor.complex_tensor(
+    other_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
-    grad_tensor = ttl.tensor.complex_tensor(
+    grad_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -77,7 +76,6 @@ def test_level2_complex_div_bw(bs, hw, memcfg, dtype, device, function_level_def
         assert passing
 
 
-@pytest.mark.skip(reason="this test is failing because ttnn.div_bw doesn't have a corresponding API call")
 @pytest.mark.parametrize(
     "memcfg",
     (
@@ -99,17 +97,17 @@ def test_level2_complex_div_bw_other_zero(bs, hw, memcfg, dtype, device, functio
     other_data = random_complex_tensor(input_shape, (0, 0), (0, 0))
     other_data.requires_grad = True
 
-    input_tensor = ttl.tensor.complex_tensor(
+    input_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    other_tensor = ttl.tensor.complex_tensor(
+    other_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(other_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(other_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
 
     grad_data = random_complex_tensor(input_shape, (-50, 50), (-60, 60))
-    grad_tensor = ttl.tensor.complex_tensor(
+    grad_tensor = ttnn.complex_tensor(
         ttl.tensor.Tensor(grad_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(grad_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )

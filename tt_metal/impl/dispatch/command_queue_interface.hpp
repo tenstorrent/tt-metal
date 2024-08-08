@@ -10,6 +10,7 @@
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 
 using namespace tt::tt_metal;
@@ -34,6 +35,7 @@ struct dispatch_constants {
         return inst;
     }
 
+    static constexpr uint8_t MAX_NUM_HW_CQS = 2;
     typedef uint16_t prefetch_q_entry_type;
     static constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
     static constexpr uint32_t PREFETCH_Q_BASE = DISPATCH_L1_UNRESERVED_BASE;
@@ -347,6 +349,8 @@ class SystemMemoryManager {
     vector<uint32_t> bypass_buffer;
     uint32_t bypass_buffer_write_offset;
 
+    WorkerConfigBufferMgr config_buffer_mgr;
+
    public:
     SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
         device_id(device_id),
@@ -354,7 +358,9 @@ class SystemMemoryManager {
         m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size(device_id)),
         fast_write_callable(tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)),
         bypass_enable(false),
-        bypass_buffer_write_offset(0) {
+        bypass_buffer_write_offset(0),
+        config_buffer_mgr({{L1_KERNEL_CONFIG_BASE, eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE}, {L1_KERNEL_CONFIG_SIZE, eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE}}) {
+
         this->completion_byte_addrs.resize(num_hw_cqs);
         this->prefetcher_cores.resize(num_hw_cqs);
         this->prefetch_q_writers.reserve(num_hw_cqs);
@@ -382,17 +388,17 @@ class SystemMemoryManager {
         }
         this->channel_offset = MAX_HUGEPAGE_SIZE * get_umd_channel(channel) + (channel >> 2) * MAX_DEV_CHANNEL_SIZE;
 
-        CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(device_id);
+        CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             tt_cxy_pair prefetcher_core =
-                dispatch_core_manager::get(num_hw_cqs).prefetcher_core(device_id, channel, cq_id);
+                dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
             tt_cxy_pair prefetcher_physical_core =
                 tt_cxy_pair(prefetcher_core.chip, tt::get_physical_core_coordinate(prefetcher_core, core_type));
             this->prefetcher_cores[cq_id] = prefetcher_physical_core;
             this->prefetch_q_writers.emplace_back(tt::Cluster::instance().get_static_tlb_writer(prefetcher_physical_core));
 
             tt_cxy_pair completion_queue_writer_core =
-                dispatch_core_manager::get(num_hw_cqs).completion_queue_writer_core(device_id, channel, cq_id);
+                dispatch_core_manager::instance().completion_queue_writer_core(device_id, channel, cq_id);
             const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data =
                 tt::Cluster::instance()
                     .get_tlb_data(tt_cxy_pair(
@@ -683,7 +689,7 @@ class SystemMemoryManager {
         wait_for_fetch_q_space();
 
         // Wrap FetchQ if possible
-        CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(device_id);
+        CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
         uint32_t prefetch_q_base = DISPATCH_L1_UNRESERVED_BASE;
         uint32_t prefetch_q_limit = prefetch_q_base + dispatch_constants::get(core_type).prefetch_q_entries() *
                                                           sizeof(dispatch_constants::prefetch_q_entry_type);
@@ -695,7 +701,7 @@ class SystemMemoryManager {
 
     void fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher = false) {
         CoreType dispatch_core_type =
-            dispatch_core_manager::get(this->num_hw_cqs).get_dispatch_core_type(this->device_id);
+            dispatch_core_manager::instance().get_dispatch_core_type(this->device_id);
         uint32_t max_command_size_B = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
         TT_ASSERT(
             command_size_B <= max_command_size_B,
@@ -720,4 +726,7 @@ class SystemMemoryManager {
         this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
         this->prefetch_q_dev_ptrs[cq_id] += sizeof(dispatch_constants::prefetch_q_entry_type);
     }
+
+    WorkerConfigBufferMgr& get_config_buffer_mgr() { return config_buffer_mgr; }
+
 };

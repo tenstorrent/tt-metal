@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import (
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     data_gen_with_range,
     compare_results,
 )
@@ -27,7 +27,7 @@ def test_bw_softshrink(input_shapes, lambd, device):
 
     pyt_y = torch.nn.functional.softshrink(in_data, lambd=lambd)
 
-    tt_output_tensor_on_device = ttnn.softshrink_bw(grad_tensor, input_tensor, lambd)
+    tt_output_tensor_on_device = ttnn.softshrink_bw(grad_tensor, input_tensor, lambd=lambd)
 
     pyt_y.backward(gradient=grad_data)
 

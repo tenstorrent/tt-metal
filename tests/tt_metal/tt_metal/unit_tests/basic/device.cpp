@@ -76,7 +76,7 @@ bool dram_ping(
         tt_metal::detail::ReadFromDeviceDRAMChannel(device, channel, dram_byte_address, byte_size, dest_channel_data);
         pass &= (dest_channel_data == inputs);
         if (not pass) {
-            cout << "Mismatch at Channel: " << channel << std::endl;
+            std::cout << "Mismatch at Channel: " << channel << std::endl;
         }
     }
     return pass;
