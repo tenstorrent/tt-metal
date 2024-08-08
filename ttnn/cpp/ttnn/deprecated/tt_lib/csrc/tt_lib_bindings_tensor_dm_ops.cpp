@@ -14,7 +14,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/non_zero_indices/non_zero_indices_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 
@@ -396,10 +395,6 @@ namespace tt::tt_metal::detail{
         m_tensor.def("indexed_fill", &indexed_fill,
             py::arg("batch_id"), py::arg("input_a"), py::arg("input_b"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("dim") = 0,
             R"doc(Replaces batch of input in input_b denoted by batch_ids into input_a)doc"
-        );
-        m_tensor.def("nonzero", &non_zero_indices,
-            py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            R"doc(Returns the number of elements (N) that are non-zero as well as a tensor of the same shape as input where the first N elements are the indices of non-zero elements )doc"
         );
 
 
