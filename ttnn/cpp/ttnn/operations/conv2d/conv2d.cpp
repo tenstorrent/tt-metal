@@ -72,16 +72,13 @@ ParallelConfig determine_parallel_config(
     uint32_t max_num_cores = device_grid_size[0] * device_grid_size[1];
 
     auto calculate_num_cores_nhw = [&]() {
-        if(conv_config.is_height_sharded())
-        {
+        if(conv_config.is_height_sharded()){
             return find_closest_largest_divisor(conv_out_2d_matrix_height_ntiles, max_num_cores);
         }
-        else if(conv_config.is_block_sharded())
-        {
+        else if(conv_config.is_block_sharded()){
             return find_closest_largest_divisor_with_num_padding(conv_out_2d_matrix_height_ntiles, device_grid_size[0]);
         }
-        else if(conv_config.is_width_sharded())
-        {
+        else if(conv_config.is_width_sharded()){
             return 1u;
         }
         TT_FATAL("Invalid Shard Layout",conv_config.shard_layout);
@@ -304,8 +301,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
                 if (conv_config.core_grid.value() != input_shard_grid) {
                     needs_shard_or_reshard = true;
                 }
-                if(conv_config.shard_layout!=input_shard_scheme)
-                {
+                if(conv_config.shard_layout!=input_shard_scheme){
                     needs_shard_or_reshard = true;
                 }
                 bool input_transpose_shards = input_shard_orientation == ShardOrientation::COL_MAJOR;
