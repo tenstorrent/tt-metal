@@ -87,6 +87,8 @@ jobs:
           docker_opts: |
             -e ARCH_NAME=${{ inputs.arch }}
             -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
+            -e PYTHONPATH=/app/mtl
+            -e TT_METAL_HOME=/app/mtl
             -v /dev/hugepages-1G:/dev/hugepages-1G
             --device /dev/tenstorrent
           run_args: |
