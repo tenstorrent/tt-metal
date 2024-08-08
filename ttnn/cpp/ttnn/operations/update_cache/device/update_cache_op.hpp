@@ -46,8 +46,6 @@ struct UpdateCache {
         const std::vector<Tensor> &input_tensors) const;
 };
 
-namespace kv_cache_utils {
-
 inline Tensor fill_cache_impl(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t batch_idx) {
     std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({cache_tensor, input_tensor}))};
     operation::launch_op(
@@ -68,7 +66,5 @@ inline Tensor update_cache_impl(const Tensor& cache_tensor, const Tensor& input_
         }, {cache_tensor, input_tensor}, dummy_output_tensors);
     return cache_tensor;
 }
-
-} // kv_cache_utils
 
 } // ttnn::operations::kv_cache

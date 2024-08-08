@@ -35,20 +35,20 @@ ttnn::Tensor ExecuteFillCache::operator()(
         return cache;
 }
 
-ttnn::Tensor ExecuteStructUpdateCache::operator()(
+ttnn::Tensor UpdateCacheOperation::operator()(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
     const uint32_t update_idx,
     const uint32_t batch_offset,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    return kv_cache_utils::update_cache_impl(cache, input, update_idx, batch_offset, compute_kernel_config);
+    return update_cache_impl(cache, input, update_idx, batch_offset, compute_kernel_config);
 }
 
-ttnn::Tensor ExecuteStructFillCache::operator()(
+ttnn::Tensor FillCacheOperation::operator()(
     const ttnn::Tensor& cache_tensor,
     const ttnn::Tensor& input_tensor,
     const uint32_t batch_idx) {
-    return kv_cache_utils::fill_cache_impl(cache_tensor, input_tensor, batch_idx);
+    return fill_cache_impl(cache_tensor, input_tensor, batch_idx);
 }
 
 }  // namespace ttnn::operations::kv_cache

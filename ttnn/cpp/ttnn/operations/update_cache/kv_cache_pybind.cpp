@@ -117,7 +117,7 @@ void bind_update_cache(pybind11::module& module, const update_cache_operation_t&
                const ttnn::Tensor& input,
                const uint32_t update_idx,
                const uint32_t batch_offset,
-               std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) -> ttnn::Tensor {
+               std::optional<const DeviceComputeKernelConfig> compute_kernel_config) -> ttnn::Tensor {
                 return self(cache, input, update_idx, batch_offset, compute_kernel_config);
             },
             py::arg("cache"),
@@ -167,12 +167,11 @@ void bind_fill_cache(pybind11::module& module, const update_cache_operation_t& o
 
 }  // namespace detail
 
-
 void py_bind_kv_cache(py::module& module) {
-    detail::bind_fill_cache_for_user_(module, ttnn::kv_cache::fill_cache_for_user_);
-    detail::bind_update_cache_for_token_(module, ttnn::kv_cache::update_cache_for_token_);
-    detail::bind_update_cache(module, ttnn::kv_cache::kv_cache_utils::update_cache);
-    detail::bind_fill_cache(module, ttnn::kv_cache::kv_cache_utils::fill_cache);
+    detail::bind_fill_cache_for_user_(module, ttnn::fill_cache_for_user_);
+    detail::bind_update_cache_for_token_(module, ttnn::update_cache_for_token_);
+    detail::bind_update_cache(module, ttnn::update_cache);
+    detail::bind_fill_cache(module, ttnn::fill_cache);
 }
 
 }  // namespace kv_cache
