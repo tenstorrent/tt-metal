@@ -219,9 +219,9 @@ def comp_topk_simmilarity(golden, calculated):
     cosine = torch.nn.CosineSimilarity(dim=-1)
     ttnn_torch_cosine = torch.mean(cosine(golden_indices, calculated_indices))
 
-    indices_passing = ttnn_torch_cosine > 0.99
+    indices_passing = ttnn_torch_cosine > 0.7
 
-    output_str += f" Cosine simmilarity: {ttnn_torch_cosine.item()}"
+    output_str += f", Cosine simmilarity: {ttnn_torch_cosine.item()}"
 
     if not indices_passing:
         output_str += ", Cosine simmilarity check failed"

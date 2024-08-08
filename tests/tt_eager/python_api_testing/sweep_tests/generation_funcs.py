@@ -2213,6 +2213,9 @@ def gen_topk_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=T
         input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
+            max_k = input_shapes[0][3]
+            largest = random.choice([True, False])
             k = 32
+            input_info.update({"largest": largest})
             input_info.update({"k": k})
             yield input_info

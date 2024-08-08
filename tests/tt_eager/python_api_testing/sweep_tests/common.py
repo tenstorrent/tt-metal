@@ -694,6 +694,8 @@ def shapes_and_datagen(
                 last_dim = shape[3]
                 if not (last_dim & (last_dim - 1) == 0) and last_dim != 0:
                     last_dim = 2 ** math.ceil(math.log2(last_dim))
+                    if last_dim % 64 != 0:
+                        last_dim = last_dim // 64 * 64
 
                 shape[3] = last_dim
 

@@ -889,7 +889,7 @@ op_map = {
         "tt_op": ttnn_ops.expm1_bw,
         "pytorch_op": pytorch_ops.expm1_bw,
     },
-    "frac": {
+    "eltwise-frac": {
         "tt_op": ttnn_ops.frac,
         "pytorch_op": pytorch_ops.frac,
     },
