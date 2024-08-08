@@ -394,36 +394,14 @@ Tensor Tensor::to(CommandQueue& queue, const MemoryConfig& mem_config) const {
 
 Tensor Tensor::to(Device* target_device, const MemoryConfig& mem_config) const {
     ZoneScoped;
-    // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
-    Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(target_device, *this);
-    // Populate device storage outside of thread, so that downstream
-    // functions running in main can get storage type without blocking
-    Tensor device_tensor({target_device});
-    // Record main thread ref count for tensors before pushing to queue.
-    uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    uint32_t original_tensor_ref_count = async_safe_tensor.tensor_attributes->record_main_thread_ref_count();
-    target_device->push_work([async_safe_tensor, device_tensor, mem_config, target_device]() mutable {
-        if (async_safe_tensor.storage_type() == StorageType::DEVICE) {
-            TT_ASSERT(async_safe_tensor.device() == target_device && "Currently do not support moving between devices");
-            device_tensor.populate_buffers_and_metadata(async_safe_tensor);
+    if (is_tensor_on_device_or_multidevice(*this)) {
+        if (this->device() == target_device) {
+            return *this;
         } else {
-            tensor_impl::validate_on_device_dtype_and_layout(
-                target_device,
-                async_safe_tensor.get_legacy_shape(),
-                async_safe_tensor.get_dtype(),
-                async_safe_tensor.get_layout());
-            auto local_tensor =
-                tensor_impl::to_device_wrapper(async_safe_tensor, target_device, mem_config, std::nullopt);
-            // Populate device tensor
-            device_tensor.populate_buffers_and_metadata(local_tensor);
+            TT_THROW("Currently do not support moving between devices");
         }
-    });
-    // Update main thread ref count for tensors after pushing to queue (update original tensor and returned tensor,
-    // since both can be on device).
-    device_tensor.tensor_attributes->update_main_thread_ref_count(device_tensor.workers.at(0), device_tensor_ref_count);
-    async_safe_tensor.tensor_attributes->update_main_thread_ref_count(
-        device_tensor.workers.at(0), original_tensor_ref_count);
-    return device_tensor;
+    }
+    return tensor_impl::to_device_wrapper(*this, target_device, mem_config, std::nullopt);
 }
 
 Tensor Tensor::to(DeviceMesh* device_mesh, const MemoryConfig& mem_config) const {
@@ -470,42 +448,10 @@ Tensor Tensor::to(const std::vector<Device*>& workers, const MemoryConfig& mem_c
 
 Tensor Tensor::cpu(bool blocking) const {
     ZoneScoped;
-    auto workers = this->get_workers(blocking);
-    if (not workers.size()) {
-        // Tensor is on host and does not have a worker group.
-        // Return immediately. If this is a result of .cpu() called twice,
-        // tensor accessors will stall until tensor is populated.
+    if (not is_tensor_on_device_or_multidevice(*this)) {
         return *this;
     }
-    TT_FATAL(
-        validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
-    Tensor host_tensor({}, workers.size());
-    uint32_t original_tensor_ref_count = this->tensor_attributes->record_main_thread_ref_count();
-    for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
-        auto target_device = workers[worker_index];
-        target_device->push_work([host_tensor, blocking, target_device, *this, workers, worker_index]() mutable {
-            TT_ASSERT(
-                this->storage_type() == StorageType::DEVICE or this->storage_type() == StorageType::MULTI_DEVICE,
-                "Can only use worker queue for cpu call if tensor is on device.");
-            auto shard = get_shard_for_device(*this, target_device);
-            shard = tensor_impl::to_host_wrapper(shard, blocking);
-            insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
-            uint32_t num_workers_completed = (host_tensor.tensor_attributes->num_workers_completed)++;
-            if (not num_workers_completed) {
-                host_tensor.set_shape(this->get_shape());
-                host_tensor.set_dtype(this->get_dtype());
-                host_tensor.set_layout(this->get_layout());
-                host_tensor.tensor_attributes->metadata_populated = true;
-            }
-        });
-    }
-
-    if (blocking) {
-        detail::SynchronizeWorkerThreads(workers);
-    }
-    // Update main_thread_ref_count for tensor after pushing to queue.
-    this->tensor_attributes->update_main_thread_ref_count(workers.at(0), original_tensor_ref_count);
-    return host_tensor;
+    return tensor_impl::to_host_wrapper(*this, blocking);
 }
 
 Tensor Tensor::cpu_sharded() const {
@@ -526,22 +472,6 @@ Tensor Tensor::extract_shard(const uint32_t& core_id) const {
 
 Tensor Tensor::to(Layout target_layout, Device* worker) const {
     ZoneScoped;
-    // Only push layout conversion to worker if running in async mode
-    if (worker and worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
-        // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
-        Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(worker, *this);
-        Tensor tensor_modified_layout = Tensor({}, 1);
-        worker->push_work([async_safe_tensor, tensor_modified_layout, target_layout]() mutable {
-            TT_ASSERT(
-                async_safe_tensor.storage_type() == StorageType::OWNED or
-                async_safe_tensor.storage_type() == StorageType::BORROWED &&
-                    "to(layout) must be called on host tensors with a single buffer when a single worker is specified");
-            auto local_tensor = tensor_impl::to_layout_wrapper(async_safe_tensor, target_layout);
-            // Populate modified layout tensor
-            tensor_modified_layout.populate_buffers_and_metadata(local_tensor);
-        });
-        return tensor_modified_layout;
-    }
     // Running without worker threads (non-async)
     TT_ASSERT(
         this->storage_type() != StorageType::DEVICE or
@@ -963,15 +893,9 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> tra
 
 Tensor allocate_tensor_on_device(
     const ttnn::Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config) {
-    // Top level wrapper to asynchronously create a device tensor (single device)
-    Tensor device_tensor = Tensor({device});
-    uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    device->push_work([shape, data_type, layout, device, memory_config, device_tensor]() mutable {
-        auto local_tensor = create_device_tensor(shape.value, data_type, layout, device, memory_config);
-        device_tensor.populate_buffers_and_metadata(local_tensor);
-    });
-    device_tensor.tensor_attributes->update_main_thread_ref_count(device, device_tensor_ref_count);
-    return device_tensor;
+    bool allocate = true;
+    return create_device_tensor(shape.value, data_type, layout, device, memory_config, allocate);
+    ;
 }
 
 Tensor allocate_tensor_on_device(

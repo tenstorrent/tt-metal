@@ -478,16 +478,5 @@ namespace tt::tt_metal{
                 specified_core_spec
             );
         }
-
-        inline void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
-            // Push empty work to threads and ensure its been picked up
-            for (auto target_device : workers) {
-                target_device->push_work([]{});
-            }
-            // Block until work has been picked up, to flush the queue
-            for (auto target_device : workers) {
-                target_device->synchronize();
-            }
-        }
     }
 }

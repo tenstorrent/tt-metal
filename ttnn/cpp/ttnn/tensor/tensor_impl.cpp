@@ -648,21 +648,30 @@ std::string to_string<bfloat4_b>(const Tensor& tensor, std::optional<DataType> o
 
 template <typename T>
 Tensor to_host_helper(const Tensor& tensor, bool blocking = true) {
-    TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
-    auto device_buffer = tensor.device_buffer();
+
+    std::shared_ptr<std::promise<Tensor>> promise = std::make_shared<std::promise<Tensor>>();
+    std::future<Tensor> future = promise->get_future();
+
     auto device = tensor.device();
-    TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
-    uint32_t size_in_bytes = device_buffer->size();
-    vector<T> data_vec;
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        data_vec.resize(size_in_bytes / sizeof(T));
-        read_data_from_device_buffer<T>(device->command_queue(), device_buffer, data_vec.data(), blocking);
-    } else {
-        read_data_from_device_buffer<T>(device_buffer, data_vec);
-    }
-    auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
-    return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout());
+
+    device->push_work([tensor, promise, blocking]() mutable {
+        TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
+        auto device_buffer = tensor.device_buffer();
+        auto device = tensor.device();
+        TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
+        uint32_t size_in_bytes = device_buffer->size();
+        std::vector<T> data_vec;
+        const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+            data_vec.resize(size_in_bytes / sizeof(T));
+            read_data_from_device_buffer<T>(device->command_queue(), device_buffer, data_vec.data(), blocking);
+        } else {
+            read_data_from_device_buffer<T>(device_buffer, data_vec);
+        }
+        auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
+        promise->set_value(Tensor{OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout()});
+    });
+    return future.get();
 }
 
 template <typename T>
@@ -863,6 +872,7 @@ Tensor to_device(
     Device* target_device,
     const MemoryConfig& memory_config,
     std::optional<std::reference_wrapper<CommandQueue>> queue) {
+
     TT_ASSERT(tensor.storage_type() != StorageType::DEVICE);
     if (tensor.storage_type() == StorageType::OWNED) {
         TT_ASSERT(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
@@ -890,7 +900,7 @@ Tensor to_device(
 
     auto device_buffer = tensor_impl::to_device_buffer<T>(
         tensor.get_storage(), target_device, shape, data_type, layout, memory_config, shard_spec_buffer_opt, queue);
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
+    return Tensor{DeviceStorage{device_buffer}, shape, data_type, layout};
 }
 
 template Tensor to_device<bfloat16>(

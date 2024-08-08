@@ -269,7 +269,7 @@ def test_async_add(all_devices, scalar, shape):
     #     ttnn.synchronize_device(device)
 
     for output_tensors in output_tensors_per_device.values():
-        for output_tensor in output_tensors[-1:]:
+        for output_tensor in output_tensors:
             output_tensor = ttnn.to_torch(output_tensor)
 
             assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
