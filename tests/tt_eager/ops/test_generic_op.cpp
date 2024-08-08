@@ -17,6 +17,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_metal/host_api.hpp"
@@ -1218,6 +1219,257 @@ void test_numerically() {
         TT_FATAL(allclose);
 
         std::cout << "Finished softmax generic test" << std::endl;
+    }
+
+    // =================
+    // Matmul original and generic test
+    {
+        std::cout << "Running matmul original test" << std::endl;
+        uint32_t Mt_original = 10;
+        uint32_t Kt_original = 2;
+        uint32_t Nt_original = 4;
+        uint32_t B_original = 3;
+        Shape shapea = {B_original, 1, Mt_original*TILE_HEIGHT, Kt_original*TILE_WIDTH};
+        Shape shapeb = {B_original, 1, Kt_original*TILE_HEIGHT, Nt_original*TILE_WIDTH};
+        // Allocates a DRAM buffer on device populated with values specified by initialize
+        Tensor a_original = tt::numpy::random::random(shapea);
+        Tensor b_original = tt::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
+
+        bool bcast_batch = false;
+        Tensor a = a_original;
+        Tensor b = b_original;
+
+        a = a.to(Layout::TILE).to(device);
+        b = b.to(Layout::TILE).to(device);
+
+        a_original = a_original.to(Layout::TILE).to(device);
+        b_original = b_original.to(Layout::TILE).to(device);
+        Tensor mm = tt::operations::primary::matmul(a_original, b_original, /*bias=*/std::nullopt,
+                tt::operations::primary::Matmul{/*program_config=*/std::nullopt, /*bcast_batch=*/std::nullopt,operation::DEFAULT_OUTPUT_MEMORY_CONFIG, /*output_dtype=*/std::nullopt, /*compute_kernel_config=*/std::nullopt, /*untilize_out=*/false, /*user_core_coord=*/std::nullopt, /*user_fused_activation=*/std::nullopt, /*user_run_batched=*/true}).cpu();
+
+        const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+
+        // TODO: pjanevski: This is a hack compile, create proper output tensor
+        auto output = Tensor();
+
+        tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+        tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+        tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+        uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
+        uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);
+        uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
+        MathFidelity math_fidelity = MathFidelity::HiFi4;
+
+        tt::tt_metal::Buffer *src0_buffer = a.buffer();
+        tt::tt_metal::Buffer *src1_buffer = b.buffer();
+
+        // This should allocate a DRAM buffer on the device
+        tt::tt_metal::Device *device = a.device();
+        Shape cshape = output.get_legacy_shape(); // C=A*B, N1MK*11KN->N1MN
+
+        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        uint32_t num_cores_x = compute_with_storage_grid_size.x;
+        uint32_t num_cores_y = compute_with_storage_grid_size.y;
+        std::cout << num_cores_x << " " << num_cores_y << std::endl;
+        uint32_t c_batch_size = get_batch_size(cshape);
+        auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+
+        tt::tt_metal::Buffer *dst_buffer = output.buffer();
+        TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+        // C = A*B*...
+        // MN = MK*KN
+        uint32_t B = get_batch_size(ashape);
+        uint32_t Mt = ashape[-2]/TILE_HEIGHT;
+        uint32_t Kt = ashape[-1]/TILE_WIDTH;
+        uint32_t Nt = bshape[-1]/TILE_WIDTH;
+        uint32_t KtNt = Kt * Nt;
+        uint32_t MtKt = Mt * Kt;
+        uint32_t MtNt = Mt * Nt;
+
+        uint32_t src0_addr = src0_buffer->address();
+        uint32_t src1_addr = src1_buffer->address();
+        uint32_t dst_addr = dst_buffer->address();
+
+        uint32_t src0_cb_index = 0;
+        uint32_t num_input_tiles = 2;
+
+        uint32_t src1_cb_index = 1;
+
+        uint32_t output_cb_index = 16; // output operands start at index 16
+        uint32_t num_output_tiles = 2;
+
+        bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+        bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+
+        bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+        std::vector<uint32_t> writer_compile_time_args = {
+            (std::uint32_t) output_cb_index,
+            (std::uint32_t) dst_is_dram
+        };
+
+        auto all_device_cores_set = CoreRangeSet({all_cores});
+
+        ttnn::operations::generic::GenericOpDeviceOperation::operation_attributes_t program_attributes =
+        {
+            .circular_buffer_attributes =
+            {
+                {
+                    src0_cb_index,
+                    {
+                        .core_spec = all_device_cores_set,
+                        .total_size = num_input_tiles * in0_single_tile_size,
+                        .page_size = in0_single_tile_size,
+                        .data_format = in0_data_format,
+                    }
+                },
+                {
+                    src1_cb_index,
+                    {
+                        .core_spec = all_device_cores_set,
+                        .total_size = num_input_tiles * in1_single_tile_size,
+                        .page_size = in1_single_tile_size,
+                        .data_format = in1_data_format,
+                    }
+                },
+                {
+                    output_cb_index,
+                    {
+                        .core_spec = all_device_cores_set,
+                        .total_size = num_output_tiles * output_single_tile_size,
+                        .page_size = output_single_tile_size,
+                        .data_format = output_data_format,
+                    }
+                }
+            },
+            .data_movement_attributes =
+            {
+                {
+                    .core_spec = all_device_cores_set,
+                    .kernel_path = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+                    .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args)
+                },
+                {
+                    .core_spec = all_device_cores_set,
+                    .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+                    .config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args)
+                }
+            },
+        };
+
+        vector<uint32_t> compute_args_group_1 = {
+            1, // B
+            1, // Mt
+            Kt, // Kt
+            num_output_tiles_per_core_group_1 // Nt
+        }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
+
+        // TODO(pjanevski): assert that we have both core group 1 and 2, this is the point of the test
+
+        if (!core_group_2.ranges().empty()) {
+            std::cout << "core group 2 not empty generic" << std::endl;
+            vector<uint32_t> compute_args_group_2 = {
+                1, // B
+                1, // Mt
+                Kt, // Kt
+                num_output_tiles_per_core_group_2 // Nt
+            }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
+
+            program_attributes.compute_attributes = {
+                {
+                    .core_spec = core_group_1,
+                    .kernel_path = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
+                    .config = {
+                        .math_fidelity = math_fidelity,
+                        .compile_args = compute_args_group_1,
+                    },
+                },
+                {
+                    .core_spec = all_device_cores_set,
+                    .kernel_path ="ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
+                    .config = {
+                        .math_fidelity = math_fidelity,
+                        .compile_args = compute_args_group_2,
+                    },
+                }
+            };
+
+        } else {
+            // TODO(pjanevski): assert that we don't hit this
+        }
+
+
+        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
+
+            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+            uint32_t num_output_tiles_per_core = 0;
+            if (core_group_1.core_coord_in_core_ranges(core)) {
+                num_output_tiles_per_core = num_output_tiles_per_core_group_1;
+            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                num_output_tiles_per_core = num_output_tiles_per_core_group_2;
+            } else {
+                TT_FATAL(false, "Core not in specified core ranges");
+            }
+
+            program_attributes.data_movement_attributes[0].runtime_args_per_core[core] = {
+                src0_addr,
+                src1_addr,
+                Mt,
+                Kt,
+                Nt,
+                MtKt,
+                KtNt,
+                B,
+                uint32_t(bcast_batch),
+                num_tiles_written,
+                num_output_tiles_per_core,
+                MtNt };
+
+            program_attributes.data_movement_attributes[1].runtime_args_per_core[core] = {
+                dst_addr,
+                num_output_tiles_per_core,
+                num_tiles_written };
+
+            // tt_metal::SetRuntimeArgs(
+            //     program, reader_id, core,
+            //     {src0_addr,
+            //     src1_addr,
+            //     Mt,
+            //     Kt,
+            //     Nt,
+            //     MtKt,
+            //     KtNt,
+            //     B,
+            //     uint32_t(bcast_batch),
+            //     num_tiles_written,
+            //     num_output_tiles_per_core,
+            //     MtNt }
+            // );
+            // tt_metal::SetRuntimeArgs(
+            //     program,
+            //     writer_id,
+            //     core,
+            //     {dst_addr,
+            //     num_output_tiles_per_core,
+            //     num_tiles_written }
+            // );
+
+            num_tiles_written += num_output_tiles_per_core;
+        }
+
+        std::cout << "Running softmax generic op" << std::endl;
+        ttnn::generic_op(std::vector<Tensor>{a, b}, output, program_attributes);
+
+        auto output_tensor = output.cpu();
+
+        auto allclose = tt::numpy::allclose<bfloat16>(mm, output_tensor);
+
+        TT_FATAL(allclose);
+
+        std::cout << "Finished matmul original test" << std::endl;
     }
 
     TT_FATAL(tt::tt_metal::CloseDevice(device));
