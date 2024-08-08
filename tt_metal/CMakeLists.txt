@@ -8,6 +8,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/detail)
 
 set(TT_METAL_OBJECTS
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_metal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/graph_tracking.cpp
     $<TARGET_OBJECTS:profiler>
     $<TARGET_OBJECTS:common>
     $<TARGET_OBJECTS:jit_build>

@@ -14,7 +14,6 @@
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/buffers/buffer.hpp"
-
 namespace tt::tt_metal {
 
 using CBHandle = uintptr_t;

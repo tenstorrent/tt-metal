@@ -15,6 +15,7 @@
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "ttnn/config.hpp"
 
+#include "tt_metal/graph_tracking.hpp"
 namespace tt::tt_metal {
     std::atomic<uint32_t> operation_id_atomic_count = 0;
 }
@@ -145,6 +146,7 @@ OutputTensors run_device_operation(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
+
     uint32_t op_id = assign_operation_id();
 
     std::function<std::variant<std::shared_ptr<Program>, std::reference_wrapper<Program>>(
@@ -225,6 +227,25 @@ OutputTensors run_device_operation(
         operation, input_tensors, optional_input_tensors, output_tensors, optional_output_tensors);
     uint32_t device_id = detail::get_device(input_tensors, optional_input_tensors)->id();
 
+    auto prog_ptr = std::visit(
+        [&](auto&& program) -> Program* {
+            auto device = detail::get_device(input_tensors, optional_input_tensors);
+            using T = std::decay_t<decltype(program)>;
+            if constexpr ( std::is_same_v<T, std::reference_wrapper<Program>>) {
+                return &program.get();
+            } else if constexpr(std::is_same_v<T, std::shared_ptr<Program>>) {
+                return program.get();
+            }
+        },
+        program);
+
+    for (auto& cb : prog_ptr->circular_buffers()) {
+        tt::tt_metal::GraphTracker::instance().track_allocate_cb(cb->core_ranges(), 0, cb->size());
+    }
+
+    if(GraphTracker::instance().block_run_program()) {
+        return output_tensors;
+    }
     // Enqueue or Launch Program
     std::visit(
         [&operation, &input_tensors, &optional_input_tensors, &output_tensors, queue](auto&& program) {
