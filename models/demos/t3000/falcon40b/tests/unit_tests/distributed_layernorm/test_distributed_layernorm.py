@@ -160,9 +160,7 @@ class TtDistributedLayernorm:
             total_count += count_local
             counts.append(count_local)
 
-            meanx_local = ttl.tensor.reduce(
-                xs[i], ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
-            )
+            meanx_local = ttnn.sum(xs[i], 3, True, None, None, scaler=1.0 / counts[i])
             meanxs.append(meanx_local)
 
         # meanx2 = torch.mean(torch.square(xs), dim=-1, keepdim=True)

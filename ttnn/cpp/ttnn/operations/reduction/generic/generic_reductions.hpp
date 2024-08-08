@@ -32,7 +32,8 @@ struct Reduce {
         const std::optional<std::variant<int, std::vector<int>>>& dim_arg,
         const bool keepdim,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+        float scalar = 1.0f) {
         if (not keepdim) {
             TT_THROW("keepdim=False is not supported");
         }
@@ -114,16 +115,16 @@ struct Reduce {
 
             if constexpr (reduce_type == ReduceType::Sum) {
                 output_tensor = tt::tt_metal::reduce(
-                    input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0, memory_config, std::nullopt, compute_kernel_config);
+                    input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, scalar, memory_config, std::nullopt, compute_kernel_config);
             } else if constexpr (reduce_type == ReduceType::Mean) {
                 output_tensor = tt::tt_metal::reduce(
                     input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0 / reduced_volume, memory_config, std::nullopt, compute_kernel_config);
             } else if constexpr (reduce_type == ReduceType::Max) {
                 output_tensor = tt::tt_metal::reduce(
-                    input_tensor, tt::tt_metal::ReduceOpMath::MAX, reduce_op_dim, 1.0, memory_config, std::nullopt, compute_kernel_config);
+                    input_tensor, tt::tt_metal::ReduceOpMath::MAX, reduce_op_dim, scalar, memory_config, std::nullopt, compute_kernel_config);
             } else if constexpr (reduce_type == ReduceType::Min) {
                 output_tensor = tt::tt_metal::reduce(
-                    input_tensor, tt::tt_metal::ReduceOpMath::MIN, reduce_op_dim, 1.0, memory_config, std::nullopt, compute_kernel_config);
+                    input_tensor, tt::tt_metal::ReduceOpMath::MIN, reduce_op_dim, scalar, memory_config, std::nullopt, compute_kernel_config);
             } else if constexpr (reduce_type == ReduceType::Var or reduce_type == ReduceType::Std) {
                 auto mean_tensor = tt::tt_metal::reduce(
                     input_tensor, tt::tt_metal::ReduceOpMath::SUM, reduce_op_dim, 1.0 / reduced_volume, memory_config, std::nullopt, compute_kernel_config);
