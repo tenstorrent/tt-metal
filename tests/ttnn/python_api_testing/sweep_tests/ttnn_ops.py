@@ -4133,6 +4133,7 @@ def i0_bw(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     t2 = ttnn.i0_bw(t0, t1, memory_config=output_mem_config)[0]
@@ -4328,4 +4329,3 @@ def eltwise_bitwise_or(
     t1 = ttnn.bitwise_or(t0, value, memory_config=output_mem_config, queue_id=0)
 
     return ttnn_tensor_to_torch(t1)
-
