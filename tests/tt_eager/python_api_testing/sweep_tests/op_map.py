@@ -344,10 +344,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_bitwise_not,
         "pytorch_op": pytorch_ops.bitwise_not,
     },
-    "eltwise-bitwise_or": {
-        "tt_op": tt_lib_ops.eltwise_bitwise_or,
-        "pytorch_op": pytorch_ops.bitwise_or,
-    },
     "eltwise-right_shift": {
         "tt_op": tt_lib_ops.eltwise_right_shift,
         "pytorch_op": pytorch_ops.right_shift,

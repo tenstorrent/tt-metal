@@ -2211,7 +2211,7 @@ def gen_matmul_coregrid_args(
     )
 
 
-def gen_bitwise_and_args(
+def gen_bitwise_args(
     input_shapes,
     supported_dtypes,
     supported_layouts,

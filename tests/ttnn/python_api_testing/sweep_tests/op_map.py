@@ -892,5 +892,9 @@ op_map = {
     "bitwise-and": {
         "tt_op": ttnn_ops.eltwise_bitwise_and,
         "pytorch_op": pytorch_ops.bitwise_and,
-    },    
+    },   
+    "bitwise-or": {
+        "tt_op": ttnn_ops.eltwise_bitwise_or,
+        "pytorch_op": pytorch_ops.bitwise_or,
+    },     
 }
