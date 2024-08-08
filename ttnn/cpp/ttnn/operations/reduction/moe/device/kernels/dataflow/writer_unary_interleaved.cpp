@@ -30,14 +30,16 @@ void kernel_main() {
         .data_format = data_format
     };
 
-    // // Get Kt rows of values and then Kt rows of indices from compute kernel
+    uint32_t tile_id = 0;
+    cb_wait_front(out_cb_index, Ht*Kt);
+    uint32_t l1_read_addr = get_read_ptr(out_cb_index);
     for (uint32_t j = 0; j < Ht; ++j) {
         for (uint32_t i = 0; i < Kt; ++i) {
-            cb_wait_front(out_cb_index, onetile);
-            uint32_t l1_read_addr = get_read_ptr(out_cb_index);
-            noc_async_write_tile(j*Kt + i, interleaved_accessor0, l1_read_addr);
-            noc_async_write_barrier();
-            cb_pop_front(out_cb_index, onetile);
+            noc_async_write_tile(tile_id, interleaved_accessor0, l1_read_addr);
+            l1_read_addr += tile_bytes;
+            tile_id++;
         }
     }
+    noc_async_write_barrier();
+    cb_pop_front(out_cb_index, Ht*Kt);
 }

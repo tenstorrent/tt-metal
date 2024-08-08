@@ -84,34 +84,43 @@ void kernel_main() {
 
     // Stream in input tensor, buffer has four tiles as we double-buffer to continue streaming while waiting for compute and we need two tiles for the bitonic sort llk
     // We could load in an entire row of tiles at a time but that would require substantially more memory (we would be double buffering four Wt sized CBs)
-    for (uint32_t i = 0; i < Ht; ++i) {
 
+    uint32_t tile_id = 0;
+    uint32_t tile_id_topk = 0;
+    uint32_t tile_id_expert = 0;
+    for (uint32_t i = 0; i < Ht; ++i) {
         //input
+        cb_reserve_back(cb_id_in0, Wt);
+        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
         for (uint32_t j = 0; j < Wt; ++j) {
-            cb_reserve_back(cb_id_in0, onetile);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-            noc_async_read_tile(i*Wt + j, s0, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_id_in0, onetile);
+            noc_async_read_tile(tile_id, s0, l1_write_addr);
+            l1_write_addr += tile_bytes_input;
+            tile_id++;
             generate_index_tile(cb_intermed_index, j);
         }
+        noc_async_read_barrier();
+        cb_push_back(cb_id_in0, Wt);
 
         //topk mask
+        cb_reserve_back(cb_topk_mask, Kt);
+        uint32_t l1_write_addr_topk = get_write_ptr(cb_topk_mask);
         for (uint32_t j = 0; j < Kt; ++j) {
-            cb_reserve_back(cb_topk_mask, onetile);
-            uint32_t l1_write_addr = get_write_ptr(cb_topk_mask);
-            noc_async_read_tile(i*Kt + j, s1, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_topk_mask, onetile);
+            noc_async_read_tile(tile_id_topk , s1, l1_write_addr_topk);
+            l1_write_addr_topk += tile_bytes_topk;
+            tile_id_topk++;
         }
+        noc_async_read_barrier();
+        cb_push_back(cb_topk_mask, Kt);
 
         //expert mask
+        cb_reserve_back(cb_expert_mask, Wt);
+        uint32_t l1_write_addr_expert = get_write_ptr(cb_expert_mask);
         for (uint32_t j = 0; j < Wt; ++j) {
-            cb_reserve_back(cb_expert_mask, onetile);
-            uint32_t l1_write_addr = get_write_ptr(cb_expert_mask);
-            noc_async_read_tile(i*Wt + j, s2, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cb_expert_mask, onetile);
+            noc_async_read_tile(tile_id_expert, s2, l1_write_addr_expert);
+            l1_write_addr_expert += tile_bytes_expert;
+            tile_id_expert++;
         }
+        noc_async_read_barrier();
+        cb_push_back(cb_expert_mask, Wt);
     }
 }
