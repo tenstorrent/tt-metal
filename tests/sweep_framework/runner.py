@@ -55,7 +55,6 @@ def run(test_module, input_queue, output_queue):
             output_queue.put([status, message, e2e_perf])
     except Empty as e:
         ttnn.close_device(device)
-        exit(0)
 
 
 def get_timeout(test_module):
@@ -86,15 +85,25 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
             test_vector.pop("invalid_reason")
             test_vector.pop("status")
             test_vector.pop("validity")
-            if p is None:
+            if p is None and len(test_vectors) > 1:
                 p = Process(target=run, args=(test_module, input_queue, output_queue))
                 p.start()
             try:
                 if MEASURE_PERF:
                     # Run one time before capturing result to deal with compile-time slowdown of perf measurement
                     input_queue.put(test_vector)
+                    if len(test_vectors) == 1:
+                        print(
+                            "SWEEPS: Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
+                        )
+                        run(test_module, input_queue, output_queue)
                     output_queue.get(block=True, timeout=timeout)
                 input_queue.put(test_vector)
+                if len(test_vectors) == 1:
+                    print(
+                        "SWEEPS: Executing test on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
+                    )
+                    run(test_module, input_queue, output_queue)
                 response = output_queue.get(block=True, timeout=timeout)
                 status, message, e2e_perf = response[0], response[1], response[2]
                 if status:
