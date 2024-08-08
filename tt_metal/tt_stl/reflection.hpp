@@ -108,6 +108,30 @@ T from_json(const nlohmann::json& json_object) {
 
 namespace reflection {
 
+template<std::size_t Start, std::size_t End, class T, std::size_t Size>
+consteval auto fixed_string_substring(reflect::fixed_string<T, Size> string) {
+    constexpr auto new_size = End - Start;
+    T new_data[new_size];
+    for (auto index = 0; index < new_size; index++) {
+        new_data[index] = string.data[index + Start];
+    }
+    return reflect::fixed_string<T, new_size>{new_data};
+}
+
+template<class T1, std::size_t Size1, class T2, std::size_t Size2>
+consteval auto fixed_string_equals(reflect::fixed_string<T1, Size1> string1, reflect::fixed_string<T2, Size2> string2) {
+    if constexpr (string1.size() != string2.size()) {
+        return false;
+    } else {
+        for (auto index = 0; index < string1.size(); index++) {
+            if (string1.data[index] != string2.data[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
 using AttributeName = std::string;
 
 struct Attribute final {
