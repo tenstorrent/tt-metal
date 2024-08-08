@@ -1914,6 +1914,7 @@ bool Device::close() {
         hw_command_queue->terminate();
     }
     this->work_executor.reset();
+    this->work_executor_v2.synchronize();
     tt_metal::detail::DumpDeviceProfileResults(this, true);
 
     this->trace_buffer_pool_.clear();
