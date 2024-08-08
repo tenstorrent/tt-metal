@@ -173,8 +173,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         softmax_defines["CAUSAL_MASK"] = "1";
     }
 
-    // TODO(pjanevski): finished here
-
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/reader_unary_interleaved_sm.cpp",
