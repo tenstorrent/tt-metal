@@ -7,7 +7,7 @@
 
 namespace ttnn::operations::reduction {
 
-void Moe::validate_with_output_tensors(
+void MoeDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
     auto input_shape = input_tensors.at(0).get_legacy_shape();
     TT_FATAL(input_shape.rank() == 4, fmt::format("Input shape must be 4D, got {}", input_shape.rank()));
@@ -29,13 +29,13 @@ void Moe::validate_with_output_tensors(
     TT_FATAL(expert_shape[-2] == 32, fmt::format("Expert shape inner dim must be equal to 32, got {}", expert_shape[-2]));
 }
 
-std::vector<tt::tt_metal::Shape> Moe::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::Shape> MoeDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
     return {ttnn::Shape(std::array<uint32_t, 4>{input_shape[0], input_shape[1], input_shape[2], 1},std::array<uint32_t, 4>{input_shape[0], input_shape[1], input_shape[2], 32}).value };
 }
 
-std::vector<Tensor> Moe::create_output_tensors(
+std::vector<Tensor> MoeDeviceOperation::create_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
     if (output_tensors.size() == 1) {
         if (output_tensors.at(0).has_value()) {
@@ -48,7 +48,7 @@ std::vector<Tensor> Moe::create_output_tensors(
     return {out_tensor};
 }
 
-operation::ProgramWithCallbacks Moe::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks MoeDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     return detail::moe_single_core_interleaved(input_tensors.at(0), input_tensors.at(1), input_tensors.at(2), this->k, output_tensors.at(0));
 }
 

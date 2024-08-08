@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::reduction {
 
-struct Moe {
+struct MoeDeviceOperation {
     const uint16_t k;
     const MemoryConfig output_mem_config;
 
