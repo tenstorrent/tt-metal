@@ -1,4 +1,10 @@
 
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #include "ttnn/cpp/ttnn/operations/moreh_helper_functions.hpp"
 
 #include "common/constants.hpp"
