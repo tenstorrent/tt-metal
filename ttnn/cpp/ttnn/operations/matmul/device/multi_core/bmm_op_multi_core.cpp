@@ -17,6 +17,10 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor &b, Tensor& output, bool bcast_batch) {
 
+    std::cout << "Running matmul_multi_core" << std::endl;
+
+    std::cout << "bcast batch " << bcast_batch << std::endl;
+
     tt_metal::Program program{};
 
     const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
@@ -39,6 +43,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    std::cout << num_cores_x << " " << num_cores_y << std::endl;
     uint32_t c_batch_size = get_batch_size(cshape);
     auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
@@ -114,6 +119,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     );
 
     if (!core_group_2.ranges().empty()) {
+        std::cout << "core group 2 not empty" << std::endl;
         vector<uint32_t> compute_args_group_2 = {
             1, // B
             1, // Mt
