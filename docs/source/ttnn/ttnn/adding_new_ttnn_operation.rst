@@ -18,8 +18,10 @@ A ttnn operation is a function that takes in one or more input tensors and produ
 
 What steps are needed to add ttnn operation in C++?
 ---------------------------------------------------
-1. (Optional) Implement device operation in C++. Device operation is a struct that specifies how to create output tensors and a program to run on the device. If the ttnn operation is composed of other ttnn operations, then you can skip this step.
-2. Implement ttnn operation in C++ and register it using `ttnn::register_operation`.
+1. There are 2 options for writing a new operation. Optiona ``a`` is to write a device operation and option ``b`` is to write a composite operation
+   a. Implement device operation in C++. Device operation is a struct that specifies how to create output tensors and a program to run on the device.
+   b. Implement a composite operation in C++. Composite operation simply defines ``operator()`` method that calls other operations.
+2. Register the struct using `ttnn::register_operation` or using ``TTNN_REGISTER_OPERATION``.
 
 What steps are needed to add ttnn operation in Python?
 ------------------------------------------------------
@@ -105,13 +107,13 @@ A concrete example:
 .. literalinclude::  examples/example/example_pybind.hpp
    :language: cpp
    :linenos:
-   :caption: ttnn/python/ttnn/operations/examples/example/example_pybind.hpp
+   :caption: ttnn/cpp/ttnn/operations/examples/example/example_pybind.hpp
 
 
 .. literalinclude::  examples/examples_pybind.hpp
    :language: cpp
    :linenos:
-   :caption: ttnn/python/ttnn/operations/examples/examples_pybind.hpp
+   :caption: ttnn/cpp/ttnn/operations/examples/examples_pybind.hpp
 
 Finally, call the module defined in `examples/example/example_pybind.hpp` wherever you want it to be added.
 

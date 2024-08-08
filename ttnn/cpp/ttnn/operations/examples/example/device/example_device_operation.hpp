@@ -11,6 +11,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::examples {
 
@@ -62,6 +63,7 @@ struct ExampleDeviceOperation {
     // std::vector<std::optional<Tensor>>
 
     struct SingleCore {
+        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             KernelHandle unary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
@@ -81,6 +83,7 @@ struct ExampleDeviceOperation {
     };
 
     struct MultiCore {
+        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             KernelHandle unary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
@@ -120,6 +123,13 @@ struct ExampleDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
+    // API call to map user arguments to operation attributes and tensor args.
+    // This is the only method that is called by the user
+    // The user will be able to call the operation using `tensor_return_value_t output = ttnn::prim::example(input_tensor)` after the op is registered
+    // Keep in mind that the the overload with `queue_id` argument will be added automatically for primitive operations
+    // So, the user can also call this operation using `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`
+    static std::tuple<operation_attributes_t, tensor_args_t> operator()(const Tensor& input_tensor);
+
     // Optional methods
 
     // In case the operation need a custom hash function, the following method can be implemented
@@ -137,3 +147,6 @@ struct ExampleDeviceOperation {
 };
 
 }  // namespace ttnn::operations::examples
+
+// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
+TTNN_REGISTER_OPERATION(ttnn::prim, example, ttnn::operations::examples::ExampleDeviceOperation);

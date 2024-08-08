@@ -37,4 +37,14 @@ ExampleDeviceOperation::tensor_return_value_t ExampleDeviceOperation::create_out
         input_tensor.device());
 }
 
+
+std::tuple<ExampleDeviceOperation::operation_attributes_t, ExampleDeviceOperation::tensor_args_t>
+ExampleDeviceOperation::operator()(const Tensor& input_tensor) {
+    return {
+        operation_attributes_t{true, 42},
+        tensor_args_t{input_tensor}
+    };
+}
+
+
 }  // namespace ttnn::operations::examples

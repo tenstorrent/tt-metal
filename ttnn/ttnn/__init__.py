@@ -136,6 +136,7 @@ from ttnn.types import (
     DeviceGrid,
     UnaryWithParam,
     UnaryOpType,
+    BinaryOpType,
 )
 
 from ttnn.device import (

@@ -24,6 +24,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::binary {
 
@@ -164,6 +165,20 @@ struct BinaryDeviceOperation {
         const operation_attributes_t& attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> operator()(
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        BinaryOpType binary_op_type,
+        bool in_place,
+        const std::optional<const DataType>& output_dtype,
+        const std::optional<MemoryConfig>& memory_config,
+        std::optional<Tensor> optional_output_tensor,
+        std::optional<unary::FusedActivations> activations,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation);
 };
 
 }  // namespace ttnn::operations::binary
+
+
+TTNN_REGISTER_OPERATION(ttnn::prim, binary, ttnn::operations::binary::BinaryDeviceOperation);
