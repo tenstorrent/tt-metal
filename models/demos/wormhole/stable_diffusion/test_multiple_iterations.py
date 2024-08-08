@@ -26,7 +26,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_wormhole_b0
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_unet_2d_condition_model import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model import (
     UNet2DConditionModel as UNet2D,
 )
 

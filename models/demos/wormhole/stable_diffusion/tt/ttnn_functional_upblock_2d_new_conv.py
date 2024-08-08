@@ -5,8 +5,8 @@
 import torch
 import ttnn
 
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_upsample_2d_new_conv import upsample2d
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_2d_new_conv import upsample2d
 from loguru import logger
 
 

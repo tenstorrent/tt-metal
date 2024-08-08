@@ -8,7 +8,7 @@
 Stable Diffusion is a latent text-to-image diffusion model capable of generating photo-realistic images given any text input.
 
 # Details
-The entry point to  functional_stable_diffusion model is UNet2DConditionModel in `models/demos/wormhole/stable_diffusion/tt2/ttnn_functional_unet_2d_condition_model.py`. The model picks up certain configs and weights from huggingface pretrained model. We have used `CompVis/stable-diffusion-v1-4` version from huggingface as our reference.
+The entry point to  functional_stable_diffusion model is UNet2DConditionModel in `models/demos/wormhole/stable_diffusion/tt/ttnn_functional_unet_2d_condition_model.py`. The model picks up certain configs and weights from huggingface pretrained model. We have used `CompVis/stable-diffusion-v1-4` version from huggingface as our reference.
 
 # Inputs
 Inputs by default are provided from `input_data.json`. If you wish to change the inputs, provide a different path to test_demo.We do not recommend modifying `input_data.json` file.
