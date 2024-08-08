@@ -246,7 +246,6 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
     assert_with_pcc(torch_output_tensor, output, pcc=0.999)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "batch_size_0, batch_size_1, m_size, k_size, n_size, bcast_batch, input_a_sharded_memory_config_args, input_b_sharded_memory_config_args",
     [

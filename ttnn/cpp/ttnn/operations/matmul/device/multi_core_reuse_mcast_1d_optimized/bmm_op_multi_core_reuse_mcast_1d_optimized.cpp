@@ -193,6 +193,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
+    // DIDT: Toggle worker cores
+    auto pair_sync_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
@@ -232,7 +235,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)(in0_block_w),
 
             // batch args
-            (std::uint32_t)B  // batch
+            (std::uint32_t)B,  // batch
+
+            (std::uint32_t)pair_sync_semaphore  // DIDT: pair sync
         };
     } else {
         in0_sender_compile_time_args = {
@@ -587,6 +592,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             in3_CB_size);
     }
 
+    uint32_t cb_sync_index = 31; // Last intermed CB
+    // 16 bytes is the minimum page size for CB synchronization
+    CircularBufferConfig cb_for_sync_config =
+        CircularBufferConfig(16, {{cb_sync_index, tt::DataFormat::UInt32}}).set_page_size(cb_sync_index, 16);
+    auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_sync_config);
+
+
     // Parameters for last row, col, or block
     uint32_t last_block_h = M % per_core_M == 0 ? per_core_M : M % per_core_M;
     uint32_t last_block_w = N % per_core_N == 0 ? per_core_N : N % per_core_N;
@@ -616,8 +628,30 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         uint32_t output_idx_y = i / num_blocks_x;
 
         if (in0_is_sharded) {
+            CoreCoord pair_other_core_physical;
+            uint32_t worker_flag = 0;
+            uint32_t worker_other_flag = 1;
+            bool enable_pair_toggle = false;
+            if (i % 2 == 1) {
+                pair_other_core_physical = device->worker_core_from_logical_core(cores[i - 1]);
+                worker_flag = 1;
+                worker_other_flag = 0;
+                enable_pair_toggle = true;
+            } else if (i < num_cores - 1) {
+                pair_other_core_physical = device->worker_core_from_logical_core(cores[i + 1]);
+                enable_pair_toggle = true;
+            }
+
             std::vector<uint32_t> mm_in0_sender_args;
-            mm_in0_sender_args.reserve(5 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
+            mm_in0_sender_args.reserve(10 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
+
+            // DIDT args
+            mm_in0_sender_args.push_back(enable_pair_toggle);
+            mm_in0_sender_args.push_back(worker_flag);
+            mm_in0_sender_args.push_back(worker_other_flag);
+            mm_in0_sender_args.push_back(pair_other_core_physical.x);
+            mm_in0_sender_args.push_back(pair_other_core_physical.y);
+
             mm_in0_sender_args.push_back(i);
             mm_in0_sender_args.push_back(start_core_noc.x);
             mm_in0_sender_args.push_back(start_core_noc.y);
@@ -1291,6 +1325,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     }
 
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
         uint32_t output_idx_x = i / num_blocks_y;

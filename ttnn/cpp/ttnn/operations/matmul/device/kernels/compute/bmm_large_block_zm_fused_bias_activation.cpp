@@ -14,6 +14,7 @@
 #endif
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "debug/dprint.h"
 
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
@@ -125,6 +126,9 @@ void MAIN {
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
+
+    // DIDT
+    constexpr uint32_t cb_sync = tt::CB::c_intermed7;
 
     constexpr bool spill = num_blocks > 1;
 
@@ -289,6 +293,10 @@ void MAIN {
                 enable_reload = true;
             }
 #endif
+
+            // DIDT: Let reader know compute is done
+            cb_reserve_back(cb_sync, 1);
+            cb_push_back(cb_sync, 1);
 
             cb_pop_front(in0_cb_id, in0_block_num_tiles);
             cb_pop_front(in1_cb_id, in1_block_num_tiles);

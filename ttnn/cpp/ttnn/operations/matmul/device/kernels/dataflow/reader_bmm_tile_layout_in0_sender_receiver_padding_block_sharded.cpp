@@ -29,13 +29,22 @@ void kernel_main() {
 
     constexpr uint32_t batch = get_compile_time_arg_val(15);
 
-    const uint32_t sender_id = get_arg_val<uint32_t>(0);
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(1);
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(2);
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(3);
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(4);
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_x));
+    constexpr uint32_t pair_sync_semaphore = get_compile_time_arg_val(16);
+
+    // DIDT args
+    const bool enable_pair_toggle = get_arg_val<uint32_t>(0);
+    const bool worker_flag = get_arg_val<uint32_t>(1);
+    const bool worker_other_flag = get_arg_val<uint32_t>(2);
+    const uint32_t pair_other_core_x = get_arg_val<uint32_t>(3);
+    const uint32_t pair_other_core_y = get_arg_val<uint32_t>(4);
+
+    const uint32_t sender_id = get_arg_val<uint32_t>(5);
+    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(6);
+    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(7);
+    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(8);
+    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(9);
+    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(10));
+    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(10 + num_x));
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in2 = 2;  // Sharded cb
@@ -99,6 +108,13 @@ void kernel_main() {
         in0_multicast_data_noc | (uint64_t)in0_mcast_receiver_semaphore_addr;
 
     noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+
+    // DIDT setup
+    constexpr uint32_t cb_sync = tt::CB::c_intermed7;
+    volatile tt_l1_ptr uint32_t* pair_sync_semaphore_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pair_sync_semaphore);
+    uint64_t remote_pair_sync_semaphore_addr = get_noc_addr(pair_other_core_x, pair_other_core_y, pair_sync_semaphore);
+    noc_semaphore_set(pair_sync_semaphore_addr, 0);
 
     cb_reserve_back(cb_id_in2, batch * in0_block_num_tiles);
 
@@ -238,6 +254,12 @@ void kernel_main() {
                 noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
             }
 
+            // DIDT: Wait for core to become worker
+            if (enable_pair_toggle) {
+                noc_semaphore_wait(pair_sync_semaphore_addr, worker_flag);
+                //DPRINT << "DONE wait in " << sender_id << ": " << pair_sync_semaphore_addr[0] << ENDL();
+            }
+
             cb_push_back(cb_id_in0, in0_block_num_tiles);
 
             // If core does not produce output block work, free cb_id_in0 immediately.
@@ -247,6 +269,15 @@ void kernel_main() {
             if constexpr (!core_has_output_block_work) {
                 cb_pop_front(cb_id_in0, in0_block_num_tiles);
             }
+
+            // DIDT: Wait for compute to be done
+            cb_wait_front(cb_sync, 1);
+            if (enable_pair_toggle) {
+                noc_semaphore_set(pair_sync_semaphore_addr, worker_other_flag);
+                //DPRINT << "local sem in " << sender_id << ": " << pair_sync_semaphore_addr[0] << ENDL();
+                noc_semaphore_set_remote(pair_sync_semaphore, remote_pair_sync_semaphore_addr);
+            }
+            cb_pop_front(cb_sync, 1);
         }
     }
 }
