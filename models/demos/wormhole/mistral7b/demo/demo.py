@@ -299,15 +299,6 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
                         else:
                             print(f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n")
 
-        # In CI only print the final generated output to avoid spamming the logs
-        if is_ci_env:
-            if len(user_input) == 1:
-                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-            else:
-                for user in range(batch_size):
-                    text = "".join(tokenizer.decode(all_outputs[user]))
-                    logger.info("[User {}] {}".format(user, text))
-
 
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights, num_batches",
@@ -339,8 +330,10 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
     ],
 )
 def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
-    if is_ci_env and instruct_weights == False:
-        pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
+    if (is_ci_env and instruct_weights == False) or (is_ci_env and not (num_batches == 1 or num_batches == 3)):
+        pytest.skip(
+            "CI demo test only runs instruct weights (1 and 3 batches) to reduce CI pipeline load (both are supported)"
+        )
 
     return run_mistral_demo(
         user_input=input_prompts,
