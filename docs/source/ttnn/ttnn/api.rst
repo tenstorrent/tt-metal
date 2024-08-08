@@ -383,6 +383,7 @@ Data Movement
    :maxdepth: 1
 
    ttnn/concat
+   ttnn/nonzero
    ttnn/pad
    ttnn/permute
    ttnn/reshape

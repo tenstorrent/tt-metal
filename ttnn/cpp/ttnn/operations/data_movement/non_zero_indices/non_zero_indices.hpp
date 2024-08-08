@@ -4,32 +4,29 @@
 
 #pragma once
 
+#include <vector>
+
 #include "ttnn/decorators.hpp"
 
 
 namespace ttnn {
 namespace operations::data_movement {
 
-struct SplitOperation {
+struct NonZeroIndicesOperation {
+
     static std::vector<ttnn::Tensor> operator()(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        int64_t& num_splits,
-        int64_t& dim,
-        const std::optional<MemoryConfig>& memory_config_arg);
+        const std::optional<MemoryConfig>& memory_config);
 
     static std::vector<ttnn::Tensor> operator()(
         const ttnn::Tensor& input_tensor,
-        int64_t& num_splits,
-        int64_t& dim,
         const std::optional<MemoryConfig>& memory_config);
-
-    static std::vector<ttnn::Tensor> operator()(const ttnn::Tensor& input_tensor, int64_t& num_splits, int64_t& dim);
 };
 
 
 }  // namespace operations::data_movement
 
-constexpr auto split = ttnn::register_operation<"ttnn::split", ttnn::operations::data_movement::SplitOperation>();
+constexpr auto nonzero = ttnn::register_operation<"ttnn::nonzero", ttnn::operations::data_movement::NonZeroIndicesOperation>();
 
 }  // namespace ttnn

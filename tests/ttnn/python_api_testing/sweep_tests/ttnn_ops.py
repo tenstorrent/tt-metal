@@ -4268,3 +4268,37 @@ def expm1_bw(
     t2 = ttnn.expm1_bw(t0, t1, memory_config=output_mem_config)[0]
 
     return ttnn_tensor_to_torch(t2)
+
+
+def eltwise_bitwise_and(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.bitwise_and(t0, value, memory_config=output_mem_config, queue_id=0)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_bitwise_or(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.bitwise_or(t0, value, memory_config=output_mem_config, queue_id=0)
+
+    return ttnn_tensor_to_torch(t1)
