@@ -138,8 +138,8 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
         repeat_shape = (attn_batch, 1, 1, 1)
 
         for i in range(self.num_devices):
-            attn_masks[i] = tt_lib.tensor.repeat(
-                attn_masks[i], repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
+            attn_masks[i] = ttnn.repeat(
+                attn_masks[i], ttnn.Shape(repeat_shape), memory_config=self.model_config["DRAM_MEMCFG"]
             )
         # Put attn_mask on the device with the sharded config
         attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
