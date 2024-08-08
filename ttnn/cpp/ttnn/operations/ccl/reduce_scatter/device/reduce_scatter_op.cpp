@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "tt_metal/host_api.hpp"
 

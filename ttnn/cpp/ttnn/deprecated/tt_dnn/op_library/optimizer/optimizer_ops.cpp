@@ -5,13 +5,13 @@
 #include "ttnn/deprecated/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/creation.hpp"
 
 namespace tt {
@@ -43,7 +43,7 @@ std::vector<Tensor> _lamb_optimizer(const Tensor& data, const Tensor& grad, cons
 
     auto rmsnorm = [&output_mem_config](Tensor data) -> Tensor {
         Tensor data_val = ttnn::square(data, output_mem_config);
-        data_val = global_sum(data_val,output_mem_config);
+        data_val = ttnn::sum(data_val, std::nullopt, true, output_mem_config);
         Tensor zeros = ttnn::full_like(data, 0.0f);
         data_val = ttnn::sqrt(ttnn::add(zeros, data_val,  std::nullopt, output_mem_config), output_mem_config);
         return data_val;

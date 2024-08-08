@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/avgpool/avg_pool.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
-
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -15,8 +14,9 @@ Tensor pool_2d(const Tensor& input, const MemoryConfig& memory_config, const std
     auto input_shape = input.get_legacy_shape();
     switch (pool) {
         case PoolType::AVG: {
-            auto height_without_padding = input.get_legacy_shape().without_padding()[-2];
-            return reduce(input, ReduceOpMath::SUM, ReduceOpDim::H, 1 / float(height_without_padding), memory_config, output_dtype);
+            // ToDo resolve padding issue
+            // auto height_without_padding = input.get_legacy_shape().without_padding()[-2];
+            return ttnn::mean(input, (int)ReduceOpDim::H, true, memory_config);
         }
         default:
             TT_ASSERT(false && "Undefined pool type");
