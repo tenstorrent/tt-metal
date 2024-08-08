@@ -16,7 +16,7 @@ namespace py = pybind11;
 void bind_untilize_with_halo_v2(py::module& module) {
     auto doc =
         R"doc(
-            untilize_with_halo_v2(input_tensor: ttnn.Tensor, padding_config: ttnn.Tensor, local_config: ttnn.Tensor, remote_config: ttnn.Tensor, *, pad_val: int, ncores_nhw: int, max_out_nsticks_per_core: int,
+            untilize_with_halo_v2(input_tensor: ttnn.Tensor, padding_config: ttnn.Tensor, local_config: ttnn.Tensor, remote_config: ttnn.Tensor, \*, pad_val: int, ncores_nhw: int, max_out_nsticks_per_core: int,
                                   memory_config: Optional[MemoryConfig] = None, remote_read: bool = False, transpose_mcast: bool = False, queue_id: int = 0) -> ttnn.Tensor
 
             Untilizes input tiled data to row major format and constructs halo'd output shards.

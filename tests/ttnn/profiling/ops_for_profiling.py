@@ -1970,8 +1970,8 @@ all_unary_ops = [
         "layout": "ROW_MAJOR",
     },
     {
-        "op": tt_lib.tensor.untilize,
-        "name": "tt_lib.tensor.untilize",
+        "op": ttnn.untilize,
+        "name": "ttnn.untilize",
     },
     {
         "op": tilize_with_val_padding,
@@ -1980,7 +1980,7 @@ all_unary_ops = [
     },
     {
         "op": untilize_with_unpadding,
-        "name": "tt_lib.tensor.untilize_with_unpadding",
+        "name": "ttnn.untilize_with_unpadding",
     },
     {
         "op": ttnn.tilize_with_zero_padding,

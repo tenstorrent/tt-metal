@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
+#include "ttnn/operations/data_movement/untilize_with_halo_v2/device/untilize_with_halo_v2_program_factory.hpp"
 
 namespace ttnn::operations::halo {
 
@@ -100,7 +101,7 @@ operation::ProgramWithCallbacks Halo::create_program(const std::vector<Tensor>& 
     tt::tt_metal::detail::AddConfigBuffer(program, local_config_device_tensor.device_buffer());
     tt::tt_metal::detail::AddConfigBuffer(program, remote_config_device_tensor.device_buffer());
 
-    return {untilize_with_halo_multi_core_v2(
+    return {data_movement::detail::untilize_with_halo_multi_core_v2(
         program,
         input_tensor,
         pad_val_,

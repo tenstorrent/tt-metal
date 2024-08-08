@@ -8,13 +8,12 @@
 
 #include "tt_dnn/op_library/cb_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_dnn/op_library/work_split_tilize.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-
-#define MAX_PACK_UNTILIZE_WIDTH 8  // pack untilize currently does not support > 8 width
 
 using namespace tt::constants;
 
