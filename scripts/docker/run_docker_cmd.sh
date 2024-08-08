@@ -3,8 +3,8 @@
 set -e
 
 if [[ -z "${TT_METAL_DOCKER_IMAGE_TAG}" ]]; then
-  echo "TT_METAL_DOCKER_IMAGE_TAG is not set or is empty, setting to ubuntu-20.04-amd64:latest"
-  TT_METAL_DOCKER_IMAGE_TAG="ubuntu-20.04-amd64:latest"
+  echo "TT_METAL_DOCKER_IMAGE_TAG is not set or is empty, setting to ubuntu-22.04-amd64:latest"
+  TT_METAL_DOCKER_IMAGE_TAG="ubuntu-22.04-amd64:latest"
 else
   echo "TT_METAL_DOCKER_IMAGE_TAG is set to ${TT_METAL_DOCKER_IMAGE_TAG}"
 fi
