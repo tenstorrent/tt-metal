@@ -47,7 +47,7 @@ namespace ckernel::packer
    //   //uint32_t read_mode : 1; //Removed in BH
    //   uint32_t exp_threshold_en  : 1;
    //   uint32_t reserved_2 : 1;
-   //   uint32_t unp_lf8_4b_exp: 1; 
+   //   uint32_t unp_lf8_4b_exp: 1;
    //   uint32_t pac_lf8_4b_exp: 1;
    //   uint32_t exp_threshold : 8;
    } pack_config_t;
@@ -155,11 +155,11 @@ namespace ckernel::packer
                       (uint)(pack_src_format&0x3) == (uint)DataFormat::Float16 ? 2 : 1;
       uint y_stride = FACE_C_DIM*x_stride;
       uint w_stride = TILE_NUM_FACES*FACE_C_DIM*FACE_R_DIM*x_stride;
-      
+
       // Untilize mode has 2 packer interfaces active, so z counter needs to jump by 2
       // faces, since z counter is only 1 bit (can't be programmed to inc by 2)
       const uint z_stride = ((untilize ^ tilize) && (tile_c_dim == TILE_C_DIM)) ? 2*FACE_R_DIM*y_stride : FACE_R_DIM*y_stride;
-      
+
 
       TT_SETDMAREG(0, LOWER_HALFWORD((y_stride<<PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0)); //x-stride not used!
       TT_SETDMAREG(0, UPPER_HALFWORD((y_stride<<PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
@@ -212,7 +212,7 @@ namespace ckernel::packer
             exp_threshold_val = 113;
          }
          // EXP threshold is updated in the config word 3 which has a bit programmed by the unpacker as well
-         constexpr uint exp_threshold_rmw_mask = THCON_SEC0_REG1_Exp_threshold_en_MASK|THCON_SEC0_REG1_Exp_threshold_MASK; 
+         constexpr uint exp_threshold_rmw_mask = THCON_SEC0_REG1_Exp_threshold_en_MASK|THCON_SEC0_REG1_Exp_threshold_MASK;
          uint exp_threshold_rmw_data = (exp_threshold_val << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (exp_threshold_en << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
          cfg_reg_rmw_tensix<THCON_SEC0_REG1_Row_start_section_size_ADDR32+3,0,exp_threshold_rmw_mask>(exp_threshold_rmw_data);
       }
@@ -259,7 +259,7 @@ namespace ckernel::packer
       cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
 
       // Save to GPR for quick data format reconfig
-      regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       sync_regfile_write(p_gpr_pack::EXP0_SEC_SIZE_BFP);
    }
 
@@ -306,7 +306,7 @@ namespace ckernel::packer
             exp_threshold_val = 113;
          }
          // EXP threshold is updated in the config word 3 which has a bit programmed by the unpacker as well
-         constexpr uint exp_threshold_rmw_mask = THCON_SEC0_REG1_Exp_threshold_en_MASK|THCON_SEC0_REG1_Exp_threshold_MASK; 
+         constexpr uint exp_threshold_rmw_mask = THCON_SEC0_REG1_Exp_threshold_en_MASK|THCON_SEC0_REG1_Exp_threshold_MASK;
          uint exp_threshold_rmw_data = (exp_threshold_val << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (exp_threshold_en << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
          cfg_reg_rmw_tensix<THCON_SEC0_REG1_Row_start_section_size_ADDR32+3,0,exp_threshold_rmw_mask>(exp_threshold_rmw_data);
       }
@@ -343,7 +343,7 @@ namespace ckernel::packer
 
       t6_mutex_acquire(mutex::REG_RMW);
 
-      //Set Fp8 E4M3 mode for packer 
+      //Set Fp8 E4M3 mode for packer
       if((pack_dst_format&0x1F) == (uint)DataFormat::Fp8_e4m3) {
          cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(1);
       }
@@ -388,7 +388,7 @@ namespace ckernel::packer
       cfg[STACC_RELU_ApplyRelu_ADDR32] = hw_relu_config.val[0];
 
       // In Blackhole, x_start/x_end must be within 1 row size (i.e. from 0 to 15)
-      TT_SETADCXX(p_setadc::PAC, FACE_C_DIM-1, 0x0); 
+      TT_SETADCXX(p_setadc::PAC, FACE_C_DIM-1, 0x0);
 
    }
 
@@ -492,7 +492,7 @@ namespace ckernel::packer
       const uint32_t pack_l1_acc_disable_pack_zero_flag = pack_l1_acc ? (0b11) : (0b00);
 
       cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_ADDR32, THCON_SEC0_REG1_Pack_L1_Acc_SHAMT, THCON_SEC0_REG1_Disable_pack_zero_flags_MASK | THCON_SEC0_REG1_Pack_L1_Acc_MASK>(pack_l1_acc_disable_pack_zero_flag);
-      
+
    }
 
    // Write tile header to l1
