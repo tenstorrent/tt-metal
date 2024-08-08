@@ -46,7 +46,9 @@ jobs:
       SILENT: 0
       VERBOSE: 1
     environment: dev
-    runs-on: build
+    runs-on: 
+      - build
+      - in-service
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
