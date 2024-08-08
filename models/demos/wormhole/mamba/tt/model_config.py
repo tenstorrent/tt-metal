@@ -7,11 +7,13 @@ import os
 
 from models.demos.wormhole.mamba.reference.args import ModelMode
 
+MAMBA_MAX_SEQUENCE_LEN = 128
+
 
 def create_model_config(batch_size, hidden_size, mode=ModelMode.DECODE, seq_len=1):
     configs = {}
     latent = 32
-    configs["max_seq_length"] = 128
+    configs["max_seq_length"] = MAMBA_MAX_SEQUENCE_LEN
     configs["core_grid_row"] = 5
     configs["core_grid_col"] = 8
     configs["latent_size"] = latent
