@@ -17,7 +17,6 @@ import multiprocess
 import signal
 import time
 import psutil
-import itertools
 from datetime import datetime
 
 from loguru import logger
