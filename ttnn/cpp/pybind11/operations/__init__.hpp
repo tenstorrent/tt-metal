@@ -39,6 +39,7 @@
 #include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
 #include "ttnn/operations/loss/loss_pybind.hpp"
+#include "ttnn/operations/moreh_embedding/moreh_embedding_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -126,6 +127,9 @@ void py_module(py::module& module) {
 
     auto m_experimental = module.def_submodule("experimental", "experimental operations");
     experimental::py_module(m_experimental);
+
+    auto m_moreh_embedding = module.def_submodule("moreh_embedding", "moreh_embedding operations");
+    moreh_embedding::py_module(m_moreh_embedding);
 }
 
 }  // namespace operations
