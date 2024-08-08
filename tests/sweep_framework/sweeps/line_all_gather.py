@@ -80,9 +80,6 @@ def run(
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
 
-    # for device in devices:
-    #    device.disable_and_clear_program_cache()
-
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
 
@@ -106,5 +103,4 @@ def run(
             eq, output = comp_pcc(tt_output_tensor, input_tensor)
         if not eq:
             logger.error(f"output mismatch for tensor {i}")
-        # assert eq, f"{i} FAILED: {output}"
         return [eq, output, e2e_perf]

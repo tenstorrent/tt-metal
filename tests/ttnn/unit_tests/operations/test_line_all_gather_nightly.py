@@ -42,9 +42,6 @@ def run_line_all_gather(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    # for device in devices:
-    #    device.disable_and_clear_program_cache()
-
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
 
@@ -74,16 +71,16 @@ def run_line_all_gather(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        # (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
+        (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
-        (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
-        (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),
+        # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
+        (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
+        # (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR),
+        (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR),
+        # (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE),
+        (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE),
         (4, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
     ],
 )
@@ -91,20 +88,18 @@ def run_line_all_gather(
     "input_dtype",
     [
         ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B, # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttl.tensor.DataType.BFLOAT8_B,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(
-            buffer_type=ttl.tensor.BufferType.DRAM
-        ),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("enable_async", [True, False])
-def test_line_all_gather_on_t3000_post_commit(
+def test_line_all_gather_on_t3000_nightly(
     t3k_device_mesh,
     num_devices,
     input_shape,
@@ -164,9 +159,6 @@ def run_line_all_gather_instances(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    # devices = get_devices_for_t3000(all_devices, num_devices)
-    # for device in devices:
-    #    device.disable_and_clear_program_cache()
     t3k_device = []
 
     for device in t3k_device_mesh.get_devices():
@@ -210,16 +202,16 @@ def run_line_all_gather_instances(
 @pytest.mark.parametrize(
     "num_devices, num_instances, num_links, input_shape, dim, layout",
     [
-        # (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
+        # (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
         # # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
-        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
-        # (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
+        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),
+        # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
+        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
+        # (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR),
+        # (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR),
+        # (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE),
+        # (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE),
         # (4, 1, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
         (4, 2, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
     ],
@@ -228,20 +220,18 @@ def run_line_all_gather_instances(
     "input_dtype",
     [
         ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B, # https://github.com/tenstorrent/tt-metal/issues/9686
+        # ttl.tensor.DataType.BFLOAT8_B,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(
-            buffer_type=ttl.tensor.BufferType.DRAM
-        ),  # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
         # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("enable_async", [True, False])
-def test_line_all_gather_on_t3000_post_commit_instances(
+def test_line_all_gather_on_t3000_nightly_instances(
     t3k_device_mesh,
     num_devices,
     num_instances,
