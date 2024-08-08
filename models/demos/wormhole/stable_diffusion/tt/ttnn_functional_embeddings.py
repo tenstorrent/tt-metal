@@ -5,20 +5,36 @@
 import ttnn
 
 
-def TtTimestepEmbedding(sample, parameters, act_fn: str = "silu"):
-    sample = ttnn.matmul(sample, parameters.linear_1.weight)
-    sample = ttnn.add(sample, parameters.linear_1.bias)
+class TtTimestepEmbedding:
+    def __init__(self, parameters):
+        self.parameters = parameters
 
-    act = None
-    if act_fn == "silu":
-        act = ttnn.silu
-    elif act_fn == "mish":
-        assert False, "ttnn does not support nn.Mist() yet"
+    def __call__(self, sample, act_fn: str = "silu"):
+        sample = ttnn.linear(
+            sample,
+            self.parameters.linear_1.weight,
+            bias=self.parameters.linear_1.bias,
+            core_grid=sample.device().core_grid,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+        )
 
-    if act is not None:
-        sample = act(sample)
+        act = None
+        if act_fn == "silu":
+            act = ttnn.silu
+        elif act_fn == "mish":
+            assert False, "ttnn does not support nn.Mist() yet"
 
-    sample = ttnn.matmul(sample, parameters.linear_2.weight)
-    sample = ttnn.add(sample, parameters.linear_2.bias)
+        if act is not None:
+            sample = act(sample, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    return sample
+        sample = ttnn.linear(
+            sample,
+            self.parameters.linear_2.weight,
+            bias=self.parameters.linear_2.bias,
+            core_grid=sample.device().core_grid,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+        )
+
+        return sample

@@ -8,7 +8,7 @@ from torch import nn
 from diffusers import StableDiffusionPipeline
 import ttnn
 
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_cross_attention_down_block_2d import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention_down_block_2d import (
     cross_attention_down_block_2d,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -17,7 +17,7 @@ from models.utility_functions import (
     skip_for_grayskull,
 )
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
     pre_process_input,
     post_process_output,
