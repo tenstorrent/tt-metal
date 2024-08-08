@@ -57,7 +57,7 @@ runs:
         image: ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}/${{ inputs.docker_image_arch }}:${{ env.OUTPUT_IMAGE_TAG }}
         options: |
           -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
-          -v ${{ github.workspace }}/tests:/app/mtl/tests
+          -v ${{ github.workspace }}:/app/mtl
           -v /home/ubuntu/.cache/huggingface:/home/ubuntu/.cache/huggingface
           -v /home/ubuntu/.cache/matplotlib:/home/ubuntu/.cache/matplotlib
           -v /home/ubuntu/.cache/pre-commit:/home/ubuntu/.cache/pre-commit

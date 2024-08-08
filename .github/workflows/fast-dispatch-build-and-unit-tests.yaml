@@ -92,6 +92,7 @@ jobs:
             --device /dev/tenstorrent
           run_args: |
             cd /app/mtl
+            rm -rf tt_metal tt_eager
             ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
