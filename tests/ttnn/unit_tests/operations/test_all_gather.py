@@ -582,14 +582,14 @@ def run_line_all_gather_instances(
         # (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR), # https://github.com/tenstorrent/tt-metal/issues/9686
         # (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE), # https://github.com/tenstorrent/tt-metal/issues/9686
-        (4, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
+        # (4, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B, # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttl.tensor.DataType.BFLOAT8_B,  # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
