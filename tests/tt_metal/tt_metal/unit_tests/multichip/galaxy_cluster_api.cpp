@@ -24,6 +24,28 @@ bool is_n150_device(const chip_id_t device_id)
     return tt::Cluster::instance().get_board_type(device_id) == BoardType::N150;
 }
 
+/*
+Returns the ids of the devices that are connected via ethernet links.
+
+tt::Cluster::get_ethernet_connected_device_ids() does not return device ids
+for devices that are only connected via ethernet links reserved for FD tunneling.
+tt::Cluster::get_ethernet_connected_device_ids() should be updated to allow these
+device ids to be returned as an option. Once tt::Cluster::get_ethernet_connected_device_ids()
+is updated with this option, we can call tt::Cluster::get_ethernet_connected_device_ids()
+over this function.
+*/
+std::unordered_set<chip_id_t> get_ethernet_connected_device_ids(const chip_id_t device_id)
+{
+    std::unordered_set<chip_id_t> connected_device_ids;
+    const std::unordered_set<CoreCoord>& active_ethernet_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
+    for (const CoreCoord& ethernet_core : active_ethernet_cores)
+    {
+        const auto& [connected_device_id, _] = tt::Cluster::instance().get_connected_ethernet_core({device_id, ethernet_core});
+        connected_device_ids.insert(connected_device_id);
+    }
+    return connected_device_ids;
+}
+
 // Validate that every pair of adjacent galaxy chips has 4 links between them
 TEST_F(GalaxyFixture, ValidateNumLinksBetweenAdjacentGalaxyChips) {
     for (Device* device : this->devices_)
@@ -32,11 +54,9 @@ TEST_F(GalaxyFixture, ValidateNumLinksBetweenAdjacentGalaxyChips) {
         if (is_galaxy_device(device_id))
         {
             std::unordered_map<chip_id_t, uint32_t> connected_devices_to_num_links_found;
-            const std::unordered_set<CoreCoord>& active_ethernet_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
-            for (const CoreCoord& ethernet_core : active_ethernet_cores)
+            const std::unordered_set<chip_id_t>& connected_device_ids = get_ethernet_connected_device_ids(device_id);
+            for (const chip_id_t& connected_device_id : connected_device_ids)
             {
-                const auto [connected_device_id, _] = tt::Cluster::instance().get_connected_ethernet_core({device_id, ethernet_core});
-
                 if (!is_galaxy_device(connected_device_id)) {
                     continue;
                 }
@@ -63,7 +83,7 @@ TEST_F(GalaxyFixture, ValidateLinksBetweenMMIOAndGalaxyChips) {
     for (Device* device : this->devices_)
     {
         const chip_id_t device_id = device->id();
-        const std::unordered_set<chip_id_t>& connected_device_ids = tt::Cluster::instance().get_ethernet_connected_device_ids(device_id);
+        const std::unordered_set<chip_id_t>& connected_device_ids = get_ethernet_connected_device_ids(device_id);
         if (is_galaxy_device(device_id))
         {
             uint32_t num_mmio_chips_that_curr_chip_is_linked_to = 0;
