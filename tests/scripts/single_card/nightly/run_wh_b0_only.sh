@@ -9,9 +9,8 @@ fi
 fail=0
 
 echo "Running nightly tests for WH B0 only"
-env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/nightly/wh_b0_only_eth/models/demos/wormhole/llama31_8b ; fail+=$?
-# env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/nightly/wh_b0_only_eth ; fail+=$?
-# env pytest -n auto tests/nightly/wh_b0_only ; fail+=$?
+env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/nightly/wh_b0_only_eth ; fail+=$?
+env pytest -n auto tests/nightly/wh_b0_only ; fail+=$?
 
 if [[ $fail -ne 0 ]]; then
   exit 1
