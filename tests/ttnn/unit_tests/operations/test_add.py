@@ -264,3 +264,7 @@ def test_prim_add(device, shape):
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.99988)
     assert output_tensor.shape == shape
+
+    assert shape == ttnn.prim.binary.compute_output_shapes(
+        input_tensor_a, input_tensor_b, ttnn.BinaryOpType.ADD, in_place=True
+    )

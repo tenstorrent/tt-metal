@@ -312,6 +312,7 @@ class FastOperation:
     golden_function: callable
     postprocess_golden_function_outputs: callable
     is_cpp_operation: bool
+    is_primitive: bool
     is_experimental: bool
 
     @property
@@ -327,6 +328,17 @@ class FastOperation:
     def __call__(self, *function_args, **function_kwargs):
         return self.function(*function_args, **function_kwargs)
 
+    def _invoke_primitive_operation_method(self, method_name, *args, **kwargs):
+        if not self.is_primitive:
+            raise RuntimeError(f"{self} is not a primitive operation")
+        return getattr(self.function, method_name)(*args, **kwargs)
+
+    def compute_output_shapes(self, *args, **kwargs):
+        return self._invoke_primitive_operation_method("compute_output_shapes", *args, **kwargs)
+
+    def create_output_tensors(self, *args, **kwargs):
+        return self._invoke_primitive_operation_method("create_output_tensors", *args, **kwargs)
+
     __doc__ = property(lambda self: self.function.__doc__)
 
 
@@ -338,6 +350,7 @@ class Operation:
     golden_function: callable
     postprocess_golden_function_outputs: callable
     is_cpp_operation: bool
+    is_primitive: bool
     is_experimental: bool
 
     @property
@@ -349,6 +362,17 @@ class Operation:
 
     def __hash__(self):
         return hash(self.python_fully_qualified_name)
+
+    def _invoke_primitive_operation_method(self, method_name, *args, **kwargs):
+        if not self.is_primitive:
+            raise RuntimeError(f"{self} is not a primitive operation")
+        return getattr(self.function, method_name)(*args, **kwargs)
+
+    def compute_output_shapes(self, *args, **kwargs):
+        return self._invoke_primitive_operation_method("compute_output_shapes", *args, **kwargs)
+
+    def create_output_tensors(self, *args, **kwargs):
+        return self._invoke_primitive_operation_method("create_output_tensors", *args, **kwargs)
 
     def __post_init__(self):
         function = self.function
@@ -751,6 +775,8 @@ def register_cpp_operation():
         if not is_cpp_operation:
             raise RuntimeError(f"{function} is not a C++ operation)")
 
+        is_primitive = function.is_primitive
+
         operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
 
         operation = operation_class(
@@ -760,6 +786,7 @@ def register_cpp_operation():
             preprocess_golden_function_inputs=None,
             postprocess_golden_function_outputs=None,
             is_cpp_operation=True,
+            is_primitive=is_primitive,
             is_experimental=False,
         )
 
@@ -812,6 +839,7 @@ def register_python_operation(
             preprocess_golden_function_inputs=preprocess_golden_function_inputs,
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,
             is_cpp_operation=False,
+            is_primitive=False,
             is_experimental=is_experimental,
         )
 

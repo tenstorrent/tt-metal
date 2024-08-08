@@ -50,6 +50,18 @@ constexpr auto resolve_primitive_operation_call_method(F) {
     }(typename traits::arg_tuple{});
 }
 
+
+template <typename F>
+constexpr auto resolve_primitive_operation_method(F, auto method) {
+    using traits = function_traits<F>;
+
+    return [method]<typename TSelf, typename... TArgs>(arg_traits<TSelf, TArgs...>) {
+        return [method](TSelf self, TArgs... args) -> decltype(method(self, static_cast<decltype(args) &&>(args)...)) {
+            return method(self, static_cast<decltype(args) &&>(args)...);
+        };
+    }(typename traits::arg_tuple{});
+}
+
 template <typename... py_args_t>
 struct pybind_arguments_t {
     std::tuple<py_args_t...> value;
@@ -171,6 +183,33 @@ auto bind_registered_operation(
             def_call_operator<registered_operation_t, operation_t>(py_operation, overload);
         }(overloads),
         ...);
+
+    if constexpr (PrimitiveOperationConcept<operation_t>) {
+        (
+            [&py_operation](auto&& overload) {
+                def_primitive_operation_method(
+                    py_operation,
+                    overload,
+                    "validate_on_program_cache_miss",
+                    [](const registered_operation_t& self, auto... args) {return self.validate_on_program_cache_miss(args...); });
+                def_primitive_operation_method(
+                    py_operation,
+                    overload,
+                    "validate_on_program_cache_hit",
+                    [](const registered_operation_t& self, auto... args) {return self.validate_on_program_cache_hit(args...); });
+                def_primitive_operation_method(
+                    py_operation,
+                    overload,
+                    "compute_output_shapes",
+                    [](const registered_operation_t& self, auto... args) {return self.compute_output_shapes(args...); });
+                def_primitive_operation_method(
+                    py_operation,
+                    overload,
+                    "create_output_tensors",
+                    [](const registered_operation_t& self, auto... args) {return self.create_output_tensors(args...); });
+            }(overloads),
+            ...);
+    }
 
     module.attr(operation.base_name().c_str()) = operation;  // Bind an instance of the operation to the module
 
