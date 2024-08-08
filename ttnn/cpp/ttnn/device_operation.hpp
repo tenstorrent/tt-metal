@@ -287,7 +287,7 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
                 ::detail::LaunchProgram(device, program);
             }
 
-            TracyOpTNNNDeviceV2(
+            TracyOpTNNNDevice(
                 device_operation_t{},
                 operation_id,
                 device->id(),

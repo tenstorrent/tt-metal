@@ -47,14 +47,6 @@ Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& opt
     return device;
 }
 
-void validate_op_launch(Device* worker) {
-    if (worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
-        TT_FATAL(
-            not worker->in_main_thread(),
-            "launch_op or launch_with_autoformat must be used when running in async mode.");
-    }
-}
-
 template <class OutputTensors>
 void override_addresses(
     const OverrideAddressesCallback& override_addresses_callback,
@@ -249,7 +241,6 @@ OutputTensors run_without_autoformat(
     uint8_t cq_id) {
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
-    detail::validate_op_launch(device);
     Tensors input_tensors_on_dev;
     input_tensors_on_dev.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
@@ -297,7 +288,6 @@ Tensors run_with_autoformat(
     uint8_t cq_id) {
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
-    detail::validate_op_launch(device);
     auto output_shapes = operation.compute_output_shapes(input_tensors);
 
     Tensors formatted_input_tensors;
@@ -355,7 +345,6 @@ Tensors run_with_autoformat(
     uint8_t cq_id) {
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
-    detail::validate_op_launch(device);
     auto output_shapes = operation.compute_output_shapes(input_tensors);
 
     TT_ASSERT(input_tensors.size() == input_formatting.size());
@@ -412,12 +401,8 @@ void launch_with_autoformat(
     Tensors& output_tensors,
     const OptionalConstTensors optional_input_tensors,
     const OptionalTensors optional_output_tensors) {
-    // Mark each output tensor as having dynamic storage (can be on host or device, depending
-    // on autoformat behaviour). Multi device tensors do not support dynamic storage.
-    for (auto& output_tensor : output_tensors) {
-        output_tensor.tensor_attributes->dynamic_storage = (output_tensor.workers.size() <= 1);
-    }
-    launch_op(std::move(op_func), input_tensors, output_tensors, optional_input_tensors, optional_output_tensors);
+    output_tensors = op_func(input_tensors, optional_input_tensors, optional_output_tensors);
+    return;
 }
 
 
