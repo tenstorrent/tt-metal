@@ -4,7 +4,7 @@
 
 #include "optional"
 #include "tt_dnn/op_library/math.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
         uint32_t num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         auto num_tiles_per_core = num_units_per_shard_height * num_units_per_shard_width;
 
-        const auto tensor_start = static_cast<const ttnn::operations::data_movement::Slice *>(operation)->slice_start;
+        const auto tensor_start = static_cast<const ttnn::operations::data_movement::SliceDeviceOperation *>(operation)->slice_start;
         auto all_runtime_args = get_unpad_runtime_args_tile_sharded(
             src_tensor, dst_tensor, tensor_start, num_cores_total, num_cores_x, num_tiles_per_core);
 

@@ -235,7 +235,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
                  num_sticks_per_core_group_2] =
                     split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-            const auto tensor_start = static_cast<const ttnn::operations::data_movement::Slice *>(operation)->slice_start;
+            const auto tensor_start = static_cast<const ttnn::operations::data_movement::SliceDeviceOperation *>(operation)->slice_start;
             auto all_runtime_args = get_slice_runtime_args_rm(
                 src_tensor,
                 dst_tensor,
@@ -510,7 +510,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
             [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
                 split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
-        const auto& tensor_start = static_cast<const ttnn::operations::data_movement::Slice*>(operation)->slice_start;
+        const auto& tensor_start = static_cast<const ttnn::operations::data_movement::SliceDeviceOperation *>(operation)->slice_start;
         set_slice_runtime_args_tile<false>(
             src_tensor,
             dst_tensor,

@@ -177,7 +177,7 @@ ttnn::Tensor ExecutePad::operator()(\
     const ShapeType& input_tensor_start,\
     const float value) {\
 \
-    return pad_impl<ShapeType>(0, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);\
+    return pad_impl<ShapeType>(DefaultQueueId, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);\
 }
 
 PAD_OVERLOAD_DIM_IMPL(tt::tt_metal::Array1D)

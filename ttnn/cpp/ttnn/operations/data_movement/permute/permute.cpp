@@ -4,6 +4,7 @@
 
 #include "permute.hpp"
 
+#include "ttnn/common/constants.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 
@@ -212,7 +213,7 @@ ttnn::Tensor ExecutePermute::operator()(
     const ttnn::Tensor& input_tensor,
     const std::vector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
-    return operator()(0, input_tensor, dims, memory_config);
+    return operator()(DefaultQueueId, input_tensor, dims, memory_config);
 }
 
 ttnn::Tensor ExecutePermute::operator()(const ttnn::Tensor& input_tensor, const std::vector<int64_t>& dims) {

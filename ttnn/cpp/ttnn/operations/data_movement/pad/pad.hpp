@@ -5,11 +5,8 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
-
 #include "tt_metal/common/logger.hpp"
-
 #include <ranges>
-
 #include "ttnn/decorators.hpp"
 
 
