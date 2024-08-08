@@ -40,7 +40,7 @@ def falcon_lm_head_matmul_2d(
         weights_inner_dim_in_tiles == 144
     ), f"Weights are expected to be padded to the inner dim 144 in tiles, instead they are {weights_inner_dim_in_tiles}"
 
-    hidden_states = ttnn.experimental.tensor.concat([hidden_states, lm_head_padding], -1)
+    hidden_states = ttnn.concat([hidden_states, lm_head_padding], -1)
 
     compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
         math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi2,
@@ -85,7 +85,7 @@ def falcon_lm_head_matmul_2d(
             )
         )
 
-    out = ttnn.experimental.tensor.concat(out_slices, -1)
+    out = ttnn.concat(out_slices, -1)
     for i in range(num_slices):
         out_slices[i].deallocate(True)
 

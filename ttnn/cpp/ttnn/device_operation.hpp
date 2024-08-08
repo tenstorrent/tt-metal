@@ -133,15 +133,13 @@ inline auto& create_or_get_program_from_cache(
                 using program_factory_t = std::decay_t<decltype(program_factory)>;
                 using cached_program_t =
                     decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
-
-                auto cached_program_factory = CachedProgramFactory{
-                        program_factory_t::create(operation_attributes, tensor_args, tensor_return_value),
-                        program_factory_index};
-                auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
                 program_cache.insert(
                     program_hash,
-                    std::move(cached_program_factory)
-                    );
+                    CachedProgramFactory{
+                        program_factory_t::create(operation_attributes, tensor_args, tensor_return_value),
+                        program_factory_index});
+                auto& cached_program_factory = program_cache.template get<CachedProgramFactory>(program_hash);
+                auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
                 return cached_program.program;
             },
             program_factory);
@@ -261,7 +259,6 @@ typename device_operation_t::tensor_return_value_t run(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
-
     auto operation_id = assign_operation_id();
 
     tt::stl::reflection::visit_object_of_type<Tensor>(check_tensor_types, tensor_args);
@@ -270,7 +267,7 @@ typename device_operation_t::tensor_return_value_t run(
     static_assert(not std::same_as<tensor_return_value_t, void>, "Operation return type cannot be \"void\"");
 
     // TODO: support the case when tensor args are empty? Or add an overload for that case?
-    auto device = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args).get().device();
+    auto device = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args).device();
     auto& program_cache = device->program_cache;
 
     auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
@@ -294,6 +291,10 @@ typename device_operation_t::tensor_return_value_t run(
 
     auto& program = create_or_get_program_from_cache<device_operation_t>(
         program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
+
+    for (auto& cb : program.circular_buffers()) {
+        tt::tt_metal::GraphTracker::instance().track_allocate_cb(cb->core_ranges(), 0, cb->size());
+    }
 
     if(GraphTracker::instance().block_run_program()) {
         return tensor_return_value;

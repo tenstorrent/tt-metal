@@ -124,6 +124,24 @@ run_t3000_falcon40b_tests() {
   fi
 }
 
+run_t3000_resnet_tests() {
+  fail=0
+  # Record the start time
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_resnet_tests"
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ttnn_resnet/tests/multi_device/test_ttnn_resnet50_performant.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_resnet_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_tests() {
   # Run ethernet tests
   run_t3000_ethernet_tests
@@ -142,6 +160,9 @@ run_t3000_tests() {
 
   # Run mixtral tests
   run_t3000_mixtral_tests
+
+  # Run resnet tests
+  run_t3000_resnet_tests
 
   # Run trace tests
   run_t3000_trace_stress_tests

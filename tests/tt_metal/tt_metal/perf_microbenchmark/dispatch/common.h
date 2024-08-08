@@ -39,7 +39,7 @@ class DeviceData {
     // 10 is a hack...bigger than any core_type
     uint64_t base_data_addr[10];
     uint64_t base_result_data_addr[10];
-    unordered_map<CoreCoord, unordered_map<uint32_t, one_core_data_t>> all_data;
+    std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>> all_data;
     CoreCoord host_core;
 
     // Validate a single core's worth of results vs expected
@@ -80,7 +80,7 @@ class DeviceData {
     int size() { return amt_written; }
     int size(CoreCoord core, int bank_id = 0) { return this->all_data[core][bank_id].data.size(); }
 
-    unordered_map<CoreCoord, unordered_map<uint32_t, one_core_data_t>>& get_data() { return this->all_data; }
+    std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>>& get_data() { return this->all_data; }
 
     CoreType get_core_type(CoreCoord core) { return this->all_data[core][0].core_type; }
     uint32_t size_at(CoreCoord core, int bank_id);
@@ -206,7 +206,7 @@ void DeviceData::prepopulate_dram(Device *device, uint32_t size_words) {
 
 bool DeviceData::core_and_bank_present(CoreCoord core, uint32_t bank) {
     if (this->all_data.find(core) != this->all_data.end()) {
-        unordered_map<uint32_t, one_core_data_t>& core_data = this->all_data.find(core)->second;
+        std::unordered_map<uint32_t, one_core_data_t>& core_data = this->all_data.find(core)->second;
         if (core_data.find(bank) != core_data.end()) {
             return true;
         }
@@ -341,7 +341,7 @@ inline bool DeviceData::validate_one_core(Device *device,
                                           const uint32_t start_index,
                                           uint32_t result_addr) {
     int fail_count = 0;
-    const vector<uint32_t>& dev_data = one_core_data.data;
+    const std::vector<uint32_t>& dev_data = one_core_data.data;
     const vector<bool>& dev_valid = one_core_data.valid;
     const CoreCoord logical_core = one_core_data.logical_core;
     const CoreCoord phys_core = one_core_data.phys_core;

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
+import os
 import torch
 import torchvision
 
@@ -14,6 +15,20 @@ from ttnn.model_preprocessing import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
+
+
+def load_resnet50_model(model_location_generator):
+    # TODO: Can generalize the version to an arg
+    torch_resnet50 = None
+    if model_location_generator is not None:
+        model_version = "IMAGENET1K_V1.pt"
+        model_path = model_location_generator(model_version, model_subdir="ResNet50")
+        if os.path.exists(model_path):
+            torch_resnet50 = torchvision.models.resnet50()
+            torch_resnet50.load_state_dict(torch.load(model_path))
+    if torch_resnet50 is None:
+        torch_resnet50 = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1)
+    return torch_resnet50
 
 
 ## copied from ttlib version test:
@@ -98,7 +113,7 @@ golden_pcc = {
             ttnn.MathFidelity.LoFi,
             ttnn.bfloat8_b,
             ttnn.bfloat8_b,
-        ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419435
+        ): 0.988,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419435
     },
     20: {
         (
@@ -120,6 +135,19 @@ golden_pcc = {
     },
 }
 
+golden_pcc = {
+    ttnn.device.Arch.WORMHOLE_B0: golden_pcc,
+    ttnn.device.Arch.GRAYSKULL: golden_pcc,
+}
+
+golden_pcc[ttnn.device.Arch.GRAYSKULL][16][
+    (
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
+    )
+] = 0.936
+
 
 class ResNet50TestInfra:
     def __init__(
@@ -135,6 +163,7 @@ class ResNet50TestInfra:
         inputs_mesh_mapper=None,
         weights_mesh_mapper=None,
         output_mesh_composer=None,
+        model_location_generator=None,
     ):
         super().__init__()
         torch.manual_seed(0)
@@ -152,7 +181,7 @@ class ResNet50TestInfra:
         self.output_mesh_composer = output_mesh_composer
 
         torch_model = (
-            torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
+            load_resnet50_model(model_location_generator).eval()
             if use_pretrained_weight
             else torchvision.models.resnet50().eval()
         )
@@ -211,7 +240,9 @@ class ResNet50TestInfra:
 
         valid_pcc = 1.0
         if self.batch_size >= 8:
-            valid_pcc = golden_pcc[self.batch_size][(self.math_fidelity, self.weight_dtype, self.act_dtype)]
+            valid_pcc = golden_pcc[self.device.arch()][self.batch_size][
+                (self.math_fidelity, self.weight_dtype, self.act_dtype)
+            ]
         else:
             if self.act_dtype == ttnn.bfloat8_b:
                 if self.math_fidelity == ttnn.MathFidelity.LoFi:
@@ -223,7 +254,6 @@ class ResNet50TestInfra:
                     valid_pcc = 0.93
                 else:
                     valid_pcc = 0.982
-        print(valid_pcc)
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
 
         logger.info(
@@ -243,6 +273,7 @@ def create_test_infra(
     inputs_mesh_mapper=None,
     weights_mesh_mapper=None,
     output_mesh_composer=None,
+    model_location_generator=None,
 ):
     return ResNet50TestInfra(
         device,
@@ -256,4 +287,5 @@ def create_test_infra(
         inputs_mesh_mapper,
         weights_mesh_mapper,
         output_mesh_composer,
+        model_location_generator,
     )

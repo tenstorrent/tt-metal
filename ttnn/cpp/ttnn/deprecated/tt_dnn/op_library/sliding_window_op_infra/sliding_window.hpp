@@ -56,17 +56,25 @@ namespace tt::tt_metal {
                 has_parallel_config_ = num_cores_nhw_ > 0 && !core_range_set_.ranges().empty();
             }
 
+        SlidingWindowConfig(const SlidingWindowConfig& other): batch_size_(other.batch_size_), input_hw_(other.input_hw_), window_hw_(other.window_hw_), stride_hw_(other.stride_hw_), pad_hw_(other.pad_hw_), dilation_hw_(other.dilation_hw_), has_parallel_config_(other.has_parallel_config_), num_cores_nhw_(other.num_cores_nhw_), core_range_set_(other.core_range_set_), snap_to_tile_(other.snap_to_tile_) {}
+
+        SlidingWindowConfig(): core_range_set_({{{0,0}, {0,0}}}) {}
+
         /**
          * Unique hash val for the sliding window configuration.
          */
+        std::string to_string() const {
+            return std::to_string(batch_size_)
+                    + "_" + std::to_string(std::get<0>(input_hw_)) + "_" + std::to_string(std::get<1>(input_hw_))
+                    + "_" + std::to_string(std::get<0>(window_hw_)) + "_" + std::to_string(std::get<1>(window_hw_))
+                    + "_" + std::to_string(std::get<0>(stride_hw_)) + "_" + std::to_string(std::get<1>(stride_hw_))
+                    + "_" + std::to_string(std::get<0>(pad_hw_)) + "_" + std::to_string(std::get<1>(pad_hw_))
+                    + "_" + std::to_string(std::get<0>(dilation_hw_)) + "_" + std::to_string(std::get<1>(dilation_hw_))
+                    + "_" + std::to_string(num_cores_nhw_) + "_" + core_range_set_.str();
+        }
+
         std::size_t get_hash() const {
-            return std::hash<std::string>{}(std::to_string(batch_size_)
-                                            + "_" + std::to_string(std::get<0>(input_hw_)) + "_" + std::to_string(std::get<1>(input_hw_))
-                                            + "_" + std::to_string(std::get<0>(window_hw_)) + "_" + std::to_string(std::get<1>(window_hw_))
-                                            + "_" + std::to_string(std::get<0>(stride_hw_)) + "_" + std::to_string(std::get<1>(stride_hw_))
-                                            + "_" + std::to_string(std::get<0>(pad_hw_)) + "_" + std::to_string(std::get<1>(pad_hw_))
-                                            + "_" + std::to_string(std::get<0>(dilation_hw_)) + "_" + std::to_string(std::get<1>(dilation_hw_))
-                                            + "_" + std::to_string(num_cores_nhw_) + "_" + core_range_set_.str());
+            return std::hash<std::string>()(to_string());
         }
 
         /**
@@ -82,8 +90,6 @@ namespace tt::tt_metal {
         Shape get_output_shape() const {
             uint32_t output_h = (input_hw_.first + 2 * pad_hw_.first - dilation_hw_.first * window_hw_.first) / stride_hw_.first + 1;
             uint32_t output_w = (input_hw_.second + 2 * pad_hw_.second - dilation_hw_.second * window_hw_.second) / stride_hw_.second + 1;
-            // uint32_t output_h = (std::get<0>(input_hw_) + 2 * std::get<0>(pad_hw_) - std::get<0>(dilation_hw_) * std::get<0>(window_hw_)) / std::get<0>(stride_hw_) + 1;
-            // uint32_t output_w = (std::get<1>(input_hw_) + 2 * std::get<1>(pad_hw_) - std::get<1>(dilation_hw_) * std::get<1>(window_hw_)) / std::get<1>(stride_hw_) + 1;
             log_debug(LogOp, "output_size: {} {} {}", batch_size_, output_h, output_w);
             return Shape({batch_size_, output_h, output_w, 0});
         }
@@ -106,13 +112,14 @@ namespace tt::tt_metal {
         std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config);
         std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config);
         std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata);
-        std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t reshard_num_cores_nhw = 0);
+        std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t reshard_num_cores_nhw = 0, bool is_in_tiled = true);
         uint32_t generate_max_out_nsticks_per_core(const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries);
         std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tensors(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool is_block_sharded, bool transpose_mcast, bool remote_read, Device* device);
         std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::vector<uint32_t>& op_trace_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool pad_tile = false, bool pad_last_core = false);
         std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input);
         Tensor construct_on_host_config_tensor(const std::vector<std::vector<uint16_t>>& config, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config);
         Tensor move_config_tensor_to_device(const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, Device* device);
+
     } // namespace sliding_window
 } // namespace tt::tt_metal
 
@@ -134,7 +141,6 @@ struct std::hash<tt::tt_metal::ParallelConfig> {
 
 template <> struct fmt::formatter<tt::tt_metal::SlidingWindowConfig>: formatter<string_view> {
     auto format(const tt::tt_metal::SlidingWindowConfig& t, fmt::format_context& ctx) {
-        // std::string str = fmt::format("SlidingWindowConfig(batch_size_={}, input_hw_={}, window_hw_={}, stride_hw_={}, pad_hw_={}, dilation_hw_={}, num_cores_nhw_={}, core_range_set_=)",
         std::string str = fmt::format("SlidingWindowConfig(batch_size_={}, input_hw_=({},{}), window_hw_=({},{}), stride_hw_=({},{}), pad_hw_=({},{}), dilation_hw_=({},{}), num_cores_nhw_={}, core_range_set_={})",
             t.batch_size_,
             t.input_hw_.first,

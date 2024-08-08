@@ -54,7 +54,7 @@ class TtGEGLU(nn.Module):
     def forward(self, hidden_states: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
         hidden_states = self.proj(hidden_states)
         # hidden_states, gate = fallback_ops.chunk(hidden_states, 2, -1)
-        hidden_states, gate = ttl.tensor.split_last_dim_two_chunks_tiled(hidden_states)
+        hidden_states, gate = ttnn.split(hidden_states, 2, 3)
         act = self.gelu(gate)
         return ttnn.multiply(hidden_states, act)
 

@@ -22,6 +22,7 @@ from models.utility_functions import (
     skip_for_grayskull,
 )
 
+from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import load_resnet50_model
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_xxlarge_new_conv_api import resnet50
 
 
@@ -176,7 +177,7 @@ golden_pcc = {
 
 
 class ResNet50TestInfra:
-    def __init__(self, device, batch_size, act_dtype, weight_dtype, math_fidelity):
+    def __init__(self, device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=None):
         super().__init__()
         torch.manual_seed(0)
         self.pcc_passed = False
@@ -187,7 +188,7 @@ class ResNet50TestInfra:
         self.weight_dtype = weight_dtype
         self.math_fidelity = math_fidelity
 
-        torch_model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
+        torch_model = load_resnet50_model(model_location_generator).eval()
 
         model_config = {
             "MATH_FIDELITY": math_fidelity,
@@ -258,8 +259,10 @@ class ResNet50TestInfra:
         )
 
 
-def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity):
-    return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
+def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
+    return ResNet50TestInfra(
+        device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=model_location_generator
+    )
 
 
 @skip_for_grayskull("Only works for Wormhole")
@@ -268,8 +271,10 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     ((1, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
-    test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
+def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
+    test_infra = create_test_infra(
+        device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=model_location_generator
+    )
     enable_memory_reports()
     test_infra.preprocess_torch_input()
     # First run configures convs JIT

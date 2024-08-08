@@ -4,31 +4,25 @@
 
 import pytest
 from loguru import logger
-import math
-from typing import Union, Tuple, List
 
 import torch
 import torchvision
 
 import ttnn
 from ttnn.model_preprocessing import (
-    preprocess_model,
     preprocess_model_parameters,
-    preprocess_conv2d,
     fold_batch_norm2d_into_conv2d,
-    fold_conv7s2_into_conv4s1,
-    preprocess_remaining_children_and_parameters,
     convert_torch_model_to_ttnn_model,
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     pad_and_fold_conv_filters_for_unity_stride,
-    pad_and_fold_conv_activation_for_unity_stride,
     enable_memory_reports,
     skip_for_grayskull,
 )
 
+from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import load_resnet50_model
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50 import resnet50
 
 
@@ -183,7 +177,7 @@ golden_pcc = {
 
 
 class ResNet50TestInfra:
-    def __init__(self, device, batch_size, act_dtype, weight_dtype, math_fidelity):
+    def __init__(self, device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=None):
         super().__init__()
         torch.manual_seed(0)
         self.pcc_passed = False
@@ -194,7 +188,7 @@ class ResNet50TestInfra:
         self.weight_dtype = weight_dtype
         self.math_fidelity = math_fidelity
 
-        torch_model = torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.IMAGENET1K_V1).eval()
+        torch_model = load_resnet50_model(model_location_generator).eval()
 
         model_config = {
             "MATH_FIDELITY": math_fidelity,
@@ -260,8 +254,10 @@ class ResNet50TestInfra:
         )
 
 
-def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity):
-    return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
+def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=None):
+    return ResNet50TestInfra(
+        device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=model_location_generator
+    )
 
 
 @skip_for_grayskull("#9168: Resnet50 performance test failing after removing 1x1s2 matmul fallback into conv")
@@ -278,12 +274,14 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
         (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),  ## pass
     ),
 )
-def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity):
+def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
     if batch_size == 8:
         pytest.skip("Failing, issue #8555")
     ttnn.CONFIG.enable_logging = True
     ttnn.CONFIG.enable_detailed_buffer_report = True
-    test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
+    test_infra = create_test_infra(
+        device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator=model_location_generator
+    )
     enable_memory_reports()
     test_infra.preprocess_torch_input()
     test_infra.run()

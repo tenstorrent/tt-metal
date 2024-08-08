@@ -227,10 +227,26 @@ OutputTensors run_device_operation(
         operation, input_tensors, optional_input_tensors, output_tensors, optional_output_tensors);
     uint32_t device_id = detail::get_device(input_tensors, optional_input_tensors)->id();
 
-    // Enqueue or Launch Program
+    auto prog_ptr = std::visit(
+        [&](auto&& program) -> Program* {
+            auto device = detail::get_device(input_tensors, optional_input_tensors);
+            using T = std::decay_t<decltype(program)>;
+            if constexpr ( std::is_same_v<T, std::reference_wrapper<Program>>) {
+                return &program.get();
+            } else if constexpr(std::is_same_v<T, std::shared_ptr<Program>>) {
+                return program.get();
+            }
+        },
+        program);
+
+    for (auto& cb : prog_ptr->circular_buffers()) {
+        tt::tt_metal::GraphTracker::instance().track_allocate_cb(cb->core_ranges(), 0, cb->size());
+    }
+
     if(GraphTracker::instance().block_run_program()) {
         return output_tensors;
     }
+    // Enqueue or Launch Program
     std::visit(
         [&operation, &input_tensors, &optional_input_tensors, &output_tensors, queue](auto&& program) {
             auto device = detail::get_device(input_tensors, optional_input_tensors);

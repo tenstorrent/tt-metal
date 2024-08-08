@@ -12,7 +12,7 @@
 namespace ttnn {
 
 namespace operations::complex_unary_backward {
-using ComplexTensor = complex_binary::ComplexTensor;
+
 
 template <ComplexUnaryBackwardOpType complex_unary_backward_op_type>
 struct ExecuteComplexUnaryBackward {

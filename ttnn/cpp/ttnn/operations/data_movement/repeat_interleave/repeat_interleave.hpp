@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/concat/concat_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/repeat/repeat_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"

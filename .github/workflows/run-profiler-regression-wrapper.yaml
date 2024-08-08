@@ -8,7 +8,7 @@ jobs:
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      profiler-build: true
+      tracy: true
     secrets: inherit
   run-profiler-regression:
     needs: build-artifact-profiler

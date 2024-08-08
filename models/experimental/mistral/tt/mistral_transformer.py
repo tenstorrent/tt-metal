@@ -97,17 +97,17 @@ class TtTransformer(nn.Module):
         mask: Optional[torch.Tensor] = None
         if input_ids.get_legacy_shape()[-1] > 1:
             seqlen = input_ids.get_legacy_shape()[-1]
-            tensor = tt_lib.tensor.full(
+            tensor = ttnn.full(
                 (1, 1, seqlen, seqlen),
                 fill_value=1.0,
             )
             diagonal = 0
 
-            mask = tt_lib.tensor.tril(tensor, diagonal)
+            mask = ttnn.tril(tensor, diagonal)
             tensor.deallocate()
             # make the mask banded to account for sliding window
             diagonal = -self.args.sliding_window
-            mask = tt_lib.tensor.triu(mask, diagonal)
+            mask = ttnn.triu(mask, diagonal)
             mask = ttnn.log(mask)
             mask = format_tensor(mask, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config, pad_value=-10000)
 

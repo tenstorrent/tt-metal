@@ -40,7 +40,7 @@ void ConfigureKernelGroup(
 }
 
 std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
-    std::optional<uint32_t> address = nullopt;
+    std::optional<uint32_t> address = std::nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -58,7 +58,7 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
         }
     }
 
-    std::optional<uint32_t> uninitialized_sem_id = nullopt;
+    std::optional<uint32_t> uninitialized_sem_id = std::nullopt;
     for (int sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
         if (semaphore_histogram.at(sem_id) == 0) {
             uninitialized_sem_id = sem_id;
@@ -745,6 +745,7 @@ Device *CreateDevice(
 
 Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs) {
     ZoneScoped;
+    tt::tt_metal::dispatch_core_manager::initialize();
     Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;

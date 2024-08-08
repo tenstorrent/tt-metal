@@ -376,7 +376,7 @@ class TtFalconMLPDecode(nn.Module):
             and self.prefill_seq_len in [1024, 2048]
         ):
             for device_id in range(self.num_devices):
-                x[device_id] = ttnn.experimental.tensor.concat(
+                x[device_id] = ttnn.concat(
                     [x[device_id], self.model_config["MLP_DECODE_PADDING_TENSORS"][device_id]], dim=3
                 )
         for device_id in range(self.num_devices):

@@ -64,10 +64,6 @@ struct BufferInfo {
 std::vector<BufferInfo> get_buffers() {
     std::vector<BufferInfo> buffer_infos;
     for (const auto &[key, buffer] : tt::tt_metal::detail::BUFFER_MAP.value()) {
-        if (not buffer->is_l1()) {
-            continue;
-        }
-
         auto [device_id, address] = key;
         auto device = buffer->device();
 

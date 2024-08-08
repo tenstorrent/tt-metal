@@ -46,3 +46,13 @@ def test_cache(E, num_users, num_entries, on_host, device):
         expected = torch.concat(values[i], dim=2)
         did_pass, output_pcc = comp_pcc(expected, ttnn.to_torch(conv_states), 1.0)
         assert did_pass
+
+    cache.reset()
+
+    for i in range(num_entries):
+        conv_states = cache.concat_users(i)
+        assert list(conv_states.shape) == [1, 1, num_users, E]
+
+        expected = torch.zeros((1, 1, num_users, E), dtype=torch.bfloat16)
+        did_pass, output_pcc = comp_pcc(expected, ttnn.to_torch(conv_states), 1.0)
+        assert did_pass

@@ -8,11 +8,10 @@ from loguru import logger
 import os
 import ttnn
 from models.demos.wormhole.llama31_8b.tt.llama_common import (
-    precompute_freqs,
     prepare_inputs_ttnn,
-    freqs_to_rotation_matrix,
     sample,
     HostEmbedding,
+    get_single_rot_mat,
 )
 from models.demos.wormhole.llama31_8b.tt.llama_model import TtTransformer
 from models.demos.wormhole.llama31_8b.tt.llama_embedding import TtLlamaEmbedding
@@ -45,7 +44,7 @@ def test_llama_model_perf(
     model_args = TtModelArgs(device)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 1
+    model_args.n_layers = 32
     # Clear global profiler state before starting measurements
     profiler.clear()
 
@@ -74,18 +73,6 @@ def test_llama_model_perf(
 
     profiler.start("TtLlama_model_setup")
 
-    # pre-compute the rotational embedding matrix and send to device
-    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
-    rot_emb_matrix = freqs_to_rotation_matrix(cos, sin)
-
-    rot_emb_matrix_list = []
-    for i in range(rot_emb_matrix.shape[0]):
-        rot_emb_matrix_list.append(
-            ttnn.from_torch(
-                rot_emb_matrix[i, :, :].unsqueeze(0).unsqueeze(0), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
-            )
-        )  # ttnn.bfloat16
-
     # Load TTNN model
     tt_model = TtTransformer(
         args=model_args,
@@ -94,7 +81,7 @@ def test_llama_model_perf(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layers=list(range(model_args.n_layers)),
-        rot_mat=rot_emb_matrix_list,
+        rot_mat=None,
         start_pos=generation_start_pos,
     )
     # Load TTNN embedding module
@@ -144,6 +131,13 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
     seqlen = 1  # Generating one token per user at a time
     batch = tt_model.args.max_batch_size
 
+    # pre-compute the rotational embedding matrix and send to device
+    current_rot_mat, rot_matrix = get_single_rot_mat(
+        tt_model.args.head_dim,
+        tt_model.device,
+        start_pos=0,
+    )
+
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
 
@@ -161,7 +155,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
 
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
-        tt_out = tt_model(decode_input, pos)
+        tt_out = tt_model(decode_input, pos, rot_mat=current_rot_mat)
 
         # Convert ttnn tensor to torch tensor
         profiler.start(f"result_wait_for_inference_{i}")
@@ -172,3 +166,6 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
 
         # Greedy decode the generated token and pass it back in, this is just a perf test
         tt_out_tok = sample(tt_output_torch, temperature=0, top_p=1)
+
+        # Update the rotation matrix for the next iteration
+        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)

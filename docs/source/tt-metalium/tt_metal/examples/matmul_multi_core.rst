@@ -187,5 +187,5 @@ Conclusion
 ----------
 
 Those are all the major changes that we made in order to upgrade our single
-core matmul example into one that will use as many cores as possible.  To see a more complicated example using data reuse among these cores, please refer to please refer to the :ref:`Matmul
+core matmul example into one that will use as many cores as possible.  To see a more complicated example using data reuse among these cores, please refer to the :ref:`Matmul
 multi-core data reuse example<MatMul_Multi_Core_Data_Reuse_example>`.

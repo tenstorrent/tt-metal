@@ -17,10 +17,8 @@
 #include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_llama_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/loss/loss_op.hpp"
 #include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "type_caster.hpp"
@@ -87,7 +85,6 @@ void TensorModule(py::module& m_tensor) {
 
     detail::export_enum<ShardOrientation>(m_tensor);
 
-    detail::export_enum<LossReductionMode>(m_tensor);
 
     py::enum_<BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
@@ -339,7 +336,7 @@ void TensorModule(py::module& m_tensor) {
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
         .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc);
 
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "mean_hw",
         tt::tt_metal::mean_hw,
@@ -349,31 +346,31 @@ void TensorModule(py::module& m_tensor) {
         "global_mean",
         tt::tt_metal::global_mean,
         R"doc(  Returns a new tensor with the mean of the input tensor ``{0}`` on all axes.)doc");
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "global_sum",
         tt::tt_metal::global_sum,
         R"doc(  Returns a new tensor with the sum of the input tensor ``{0}`` on all axes.)doc");
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "global_max",
         tt::tt_metal::global_max,
         R"doc(  Returns a new tensor with the max of the input tensor ``{0}`` on all axes.)doc");
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "global_min",
         tt::tt_metal::global_min,
         R"doc(  Returns a new tensor with the min of the input tensor ``{0}`` on all axes.)doc");
 
-    detail::bind_unary_op_with_param(
+    detail::bind_unary_op_with_param<true, false, true>(
         m_tensor,
         "sum",
         &sum,
         py::arg("dim"),
-        R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``; input tensor in TILE LAYOUT.)doc",
-        R"doc("dimension along which to apply sum", "int", "0, 1, 2, or 3")doc");
+        R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``;
+        input tensor in TILE LAYOUT.)doc", R"doc("dimension along which to apply sum", "int", "0, 1, 2, or 3")doc");
 
-    detail::bind_unary_op_with_param(
+    detail::bind_unary_op_with_param<true, false, true>(
         m_tensor,
         "max",
         tt::tt_metal::max,
@@ -483,39 +480,6 @@ void TensorModule(py::module& m_tensor) {
     )doc");
 
     // TMs
-    m_tensor.def(
-        "split_last_dim_two_chunks_tiled",
-        &split_last_dim_two_chunks_tiled,
-        py::arg("input").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Splits a tensor's last dimension in two equal sized chunks. This assumes the last dim is tile sized.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-
-    )doc");
-
-    m_tensor.def(
-        "split_dim_two_chunks_tiled",
-        &split_dim_two_chunks_tiled,
-        py::arg("input").noconvert(),
-        py::arg("dim").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Splits a tensor's last or penultimate dimension in two equal sized chunks. This assumes the last dim is tile sized and penultimate dimension is also tile sized.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
-            "dim", "Dimension", "integer", "Dimension to split over can only be 2 or 3", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-    )doc");
-
     m_tensor.def(
         "convert_conv_weight_tensor_to_tiled_layout",
         &convert_conv_weight_tensor_to_tiled_layout,
@@ -672,7 +636,6 @@ void TensorModule(py::module& m_tensor) {
         )doc");
 
     detail::TensorModuleCompositeOPs(m_tensor);
-    detail::TensorModuleBackwardOPs(m_tensor);
     detail::TensorModulePyTensor(m_tensor);
     detail::TensorModuleDMOPs(m_tensor);
     detail::TensorModuleCustomAndBMMOPs(m_tensor);

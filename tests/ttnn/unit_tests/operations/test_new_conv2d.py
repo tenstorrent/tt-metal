@@ -63,9 +63,8 @@ def run_conv(
     deallocate_activation=False,
     debug=False,
     groups=1,
+    has_bias=True,
 ):
-    # has_bias = False
-    has_bias = True
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
@@ -467,6 +466,7 @@ def test_resnet50_conv_gs(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
+@pytest.mark.parametrize("has_bias", [True, False], ids=["with_bias", "no_bias"])
 def test_resnet50_conv_wh(
     device,
     use_program_cache,
@@ -487,6 +487,7 @@ def test_resnet50_conv_wh(
     use_1d_systolic_array,
     config_override,
     packer_l1_acc,
+    has_bias,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
@@ -533,6 +534,7 @@ def test_resnet50_conv_wh(
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=packer_l1_acc,
         fp32_accum=False,
+        has_bias=has_bias,
     )
 
 

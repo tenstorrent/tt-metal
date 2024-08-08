@@ -11,7 +11,7 @@ using namespace tt::constants;
 using namespace tt;
 
 
-static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(const Tensor &input_tensor, const vector<uint32_t> &&heads_per_group, const uint32_t head_dim, const uint32_t groups, std::vector<Tensor> &output, bool transpose_k) {
+static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(const Tensor &input_tensor, const std::vector<uint32_t> &&heads_per_group, const uint32_t head_dim, const uint32_t groups, std::vector<Tensor> &output, bool transpose_k) {
     // groups = kv_heads usually
     // heads_per_group = [x 1 1] if qkv since q_heads >= kv_heads and k=v heads but this should be generic
     TT_FATAL(head_dim % TILE_WIDTH == 0, fmt::format("head dim {} needs to be a multiple of tile width {}", head_dim, TILE_WIDTH));

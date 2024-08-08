@@ -11,6 +11,7 @@ from models.utility_functions import (
 )
 
 import tt_lib
+import ttnn
 from dataclasses import dataclass
 
 from models.experimental.distilbert.tt.distilbert_embedding import TtDistilBert_Embeddings
@@ -105,7 +106,7 @@ class TtDistilBertModel(nn.Module):
 
         if attention_mask is not None:
             input_shape[0:0] = [1, 1]
-            attention_mask = tt_lib.tensor.ones(input_shape)
+            attention_mask = ttnn.ones(input_shape)
 
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
         """

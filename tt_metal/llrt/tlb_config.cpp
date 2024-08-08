@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tlb_config.hpp"
-#include "device_data.hpp"
 
 #include "third_party/umd/device/blackhole_implementation.h"
 #include "third_party/umd/device/grayskull_implementation.h"
@@ -13,20 +12,10 @@ namespace ll_api {
 
 namespace grayskull {
 
-static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;
-static constexpr unsigned int MEM_SMALL_READ_WRITE_TLB = DEVICE_DATA.TLB_BASE_INDEX_2M + 1;
-static constexpr unsigned int DYNAMIC_TLB_BASE_INDEX = DEVICE_DATA.MEM_LARGE_READ_TLB + 1;
-static constexpr uint32_t DYNAMIC_TLB_2M_SIZE = 0;
-static constexpr uint32_t DYNAMIC_TLB_16M_SIZE = tt::umd::grayskull::DYNAMIC_TLB_16M_SIZE;
+static constexpr unsigned int DYNAMIC_TLB_BASE_INDEX = tt::umd::grayskull::MEM_LARGE_READ_TLB + 1;
 
 int32_t get_static_tlb_index(CoreCoord target) {
-    // Special handling for DRAM TLBs : return a 2MB TLB pointing to the start of the Epoch Cmd Queue Table
-    // The default 1MB TLB is not used for DRAM cores
-    // auto DRAM_TLB_IDX = std::find(DEVICE_DATA.DRAM_LOCATIONS.begin(), DEVICE_DATA.DRAM_LOCATIONS.end(), target);
-    // if (DRAM_TLB_IDX != DEVICE_DATA.DRAM_LOCATIONS.end()) {
-    //     return EPOCH_CMD_QUEUE_TLBS.at(DRAM_TLB_IDX - DEVICE_DATA.DRAM_LOCATIONS.begin());
-    // }
-    int flat_index = target.y * DEVICE_DATA.GRID_SIZE_X + target.x;
+    int flat_index = target.y * tt::umd::grayskull::GRID_SIZE_X + target.x;
     if (flat_index == 0) {
         return -1;
     }
@@ -37,30 +26,17 @@ int32_t get_static_tlb_index(CoreCoord target) {
 
 namespace wormhole {
 
-static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;
-static constexpr unsigned int MEM_SMALL_READ_WRITE_TLB = DEVICE_DATA.TLB_BASE_INDEX_2M + 1;
-static constexpr uint32_t DYNAMIC_TLB_BASE_INDEX = DEVICE_DATA.MEM_LARGE_READ_TLB + 1;
-static constexpr uint32_t DYNAMIC_TLB_2M_SIZE = 0;
-static constexpr uint32_t DYNAMIC_TLB_16M_SIZE = tt::umd::wormhole::DYNAMIC_TLB_16M_SIZE;
-
 int32_t get_static_tlb_index(CoreCoord target) {
     bool is_eth_location =
-        std::find(std::cbegin(DEVICE_DATA.ETH_LOCATIONS), std::cend(DEVICE_DATA.ETH_LOCATIONS), target) !=
-        std::cend(DEVICE_DATA.ETH_LOCATIONS);
+        std::find(std::cbegin(tt::umd::wormhole::ETH_LOCATIONS), std::cend(tt::umd::wormhole::ETH_LOCATIONS), target) !=
+        std::cend(tt::umd::wormhole::ETH_LOCATIONS);
     bool is_tensix_location =
-        std::find(std::cbegin(DEVICE_DATA.T6_X_LOCATIONS), std::cend(DEVICE_DATA.T6_X_LOCATIONS), target.x) !=
-            std::cend(DEVICE_DATA.T6_X_LOCATIONS) &&
-        std::find(std::cbegin(DEVICE_DATA.T6_Y_LOCATIONS), std::cend(DEVICE_DATA.T6_Y_LOCATIONS), target.y) !=
-            std::cend(DEVICE_DATA.T6_Y_LOCATIONS);
+        std::find(std::cbegin(tt::umd::wormhole::T6_X_LOCATIONS), std::cend(tt::umd::wormhole::T6_X_LOCATIONS), target.x) !=
+            std::cend(tt::umd::wormhole::T6_X_LOCATIONS) &&
+        std::find(std::cbegin(tt::umd::wormhole::T6_Y_LOCATIONS), std::cend(tt::umd::wormhole::T6_Y_LOCATIONS), target.y) !=
+            std::cend(tt::umd::wormhole::T6_Y_LOCATIONS);
     // implementation migrated from wormhole.py in `src/t6ifc/t6py/packages/tenstorrent/chip/wormhole.py` from tensix
     // repo (t6py-wormhole-bringup branch)
-
-    // Special handling for DRAM TLBs : return a 2MB TLB pointing to the start of the Epoch Cmd Queue Table
-    // The default 1MB TLB is not used for DRAM cores
-    // auto DRAM_TLB_IDX = std::find(DEVICE_DATA.DRAM_LOCATIONS.begin(), DEVICE_DATA.DRAM_LOCATIONS.end(), target);
-    // if (DRAM_TLB_IDX != DEVICE_DATA.DRAM_LOCATIONS.end()) {
-    //     return EPOCH_CMD_QUEUE_TLBS.at(DRAM_TLB_IDX - DEVICE_DATA.DRAM_LOCATIONS.begin());
-    // }
 
     if (is_eth_location) {
         if (target.y == 6) {
@@ -90,7 +66,7 @@ int32_t get_static_tlb_index(CoreCoord target) {
         int flat_index = target.y * 8 + target.x;
 
         // All 80 get single 1MB TLB.
-        int tlb_index = DEVICE_DATA.ETH_LOCATIONS.size() + flat_index;
+        int tlb_index = tt::umd::wormhole::ETH_LOCATIONS.size() + flat_index;
 
         return tlb_index;
     } else {
@@ -101,12 +77,6 @@ int32_t get_static_tlb_index(CoreCoord target) {
 }  // namespace wormhole
 
 namespace blackhole {
-
-static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;
-static constexpr unsigned int MEM_SMALL_READ_WRITE_TLB = DEVICE_DATA.TLB_BASE_INDEX_2M + 1;
-static constexpr uint32_t DYNAMIC_TLB_BASE_INDEX = DEVICE_DATA.MEM_LARGE_READ_TLB + 1;
-static constexpr uint32_t DYNAMIC_TLB_2M_SIZE = tt::umd::blackhole::DYNAMIC_TLB_2M_SIZE;
-static constexpr uint32_t DYNAMIC_TLB_16M_SIZE = 0;
 
 int32_t get_static_tlb_index(CoreCoord target) {
     bool is_eth_location =
@@ -146,30 +116,36 @@ int32_t get_static_tlb_index(CoreCoord target) {
 void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_SocDescriptor &sdesc, tt_device &device_driver) {
     using get_static_tlb_index_ptr = std::int32_t (*)(tt_xy_pair);
     get_static_tlb_index_ptr get_static_tlb_index;
-    uint32_t DYNAMIC_TLB_BASE_INDEX, DYNAMIC_TLB_COUNT, DYNAMIC_TLB_16M_SIZE, DYNAMIC_TLB_2M_SIZE;
 
+    const uint32_t dynamic_tlb_count = 16;
+    uint32_t dynamic_tlb_base_index, dynamic_tlb_16m_size, dram_channel_0_peer2peer_region_start, dram_channel_0_x, dram_channel_0_y;
+
+    // Need to set these values based on arch because UMD does not expose architecture_implementation
     switch (arch) {
         case tt::ARCH::GRAYSKULL:
             get_static_tlb_index = grayskull::get_static_tlb_index;
-            DYNAMIC_TLB_BASE_INDEX = grayskull::DYNAMIC_TLB_BASE_INDEX;
-            DYNAMIC_TLB_COUNT = grayskull::DYNAMIC_TLB_COUNT;
-            DYNAMIC_TLB_16M_SIZE = grayskull::DYNAMIC_TLB_16M_SIZE;
-            DYNAMIC_TLB_2M_SIZE = grayskull::DYNAMIC_TLB_2M_SIZE;
+            dynamic_tlb_base_index = grayskull::DYNAMIC_TLB_BASE_INDEX; // not defined in grayskull_implementation.h
+            dynamic_tlb_16m_size = tt::umd::grayskull::DYNAMIC_TLB_16M_SIZE;
+            dram_channel_0_peer2peer_region_start = tt::umd::grayskull::DRAM_CHANNEL_0_PEER2PEER_REGION_START;
+            dram_channel_0_x = tt::umd::grayskull::DRAM_CHANNEL_0_X;
+            dram_channel_0_y = tt::umd::grayskull::DRAM_CHANNEL_0_Y;
             break;
         case tt::ARCH::WORMHOLE:
         case tt::ARCH::WORMHOLE_B0:
             get_static_tlb_index = wormhole::get_static_tlb_index;
-            DYNAMIC_TLB_BASE_INDEX = wormhole::DYNAMIC_TLB_BASE_INDEX;
-            DYNAMIC_TLB_COUNT = wormhole::DYNAMIC_TLB_COUNT;
-            DYNAMIC_TLB_16M_SIZE = wormhole::DYNAMIC_TLB_16M_SIZE;
-            DYNAMIC_TLB_2M_SIZE = wormhole::DYNAMIC_TLB_2M_SIZE;
+            dynamic_tlb_base_index = tt::umd::wormhole::DYNAMIC_TLB_BASE_INDEX;
+            dynamic_tlb_16m_size = tt::umd::wormhole::DYNAMIC_TLB_16M_SIZE;
+            dram_channel_0_peer2peer_region_start = tt::umd::wormhole::DRAM_CHANNEL_0_PEER2PEER_REGION_START;
+            dram_channel_0_x = tt::umd::wormhole::DRAM_CHANNEL_0_X;
+            dram_channel_0_y = tt::umd::wormhole::DRAM_CHANNEL_0_Y;
             break;
         case tt::ARCH::BLACKHOLE:
             get_static_tlb_index = blackhole::get_static_tlb_index;
-            DYNAMIC_TLB_BASE_INDEX = blackhole::DYNAMIC_TLB_BASE_INDEX;
-            DYNAMIC_TLB_COUNT = blackhole::DYNAMIC_TLB_COUNT;
-            DYNAMIC_TLB_2M_SIZE = blackhole::DYNAMIC_TLB_2M_SIZE;
-            DYNAMIC_TLB_16M_SIZE = blackhole::DYNAMIC_TLB_16M_SIZE;
+            dynamic_tlb_base_index = tt::umd::blackhole::DYNAMIC_TLB_BASE_INDEX;
+            dynamic_tlb_16m_size = 0;
+            dram_channel_0_peer2peer_region_start = tt::umd::blackhole::DRAM_CHANNEL_0_PEER2PEER_REGION_START;
+            dram_channel_0_x = tt::umd::blackhole::DRAM_CHANNEL_0_X;
+            dram_channel_0_y = tt::umd::blackhole::DRAM_CHANNEL_0_Y;
             break;
         default: TT_THROW("Configuring static TLBs is not supported for {}", tt::get_string(arch));
     }
@@ -197,20 +173,31 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
     // TODO (#9932): Remove workaround for BH
     if (arch != tt::ARCH::BLACKHOLE) {
         // Setup static TLBs for MMIO mapped data space
-        uint64_t peer_dram_offset = DEVICE_DATA.DRAM_CHANNEL_0_PEER2PEER_REGION_START;
-        for (uint32_t tlb_id = DYNAMIC_TLB_BASE_INDEX; tlb_id < DYNAMIC_TLB_BASE_INDEX + DYNAMIC_TLB_COUNT; tlb_id++) {
+        uint64_t peer_dram_offset = dram_channel_0_peer2peer_region_start;
+        for (uint32_t tlb_id = dynamic_tlb_base_index; tlb_id < dynamic_tlb_base_index + dynamic_tlb_count; tlb_id++) {
             device_driver.configure_tlb(
-                mmio_device_id, CoreCoord(DEVICE_DATA.DRAM_CHANNEL_0_X, DEVICE_DATA.DRAM_CHANNEL_0_Y), tlb_id, peer_dram_offset);
+                mmio_device_id, CoreCoord(dram_channel_0_x, dram_channel_0_y), tlb_id, peer_dram_offset);
             // Align address space of 16MB TLB to 16MB boundary
-            peer_dram_offset += DYNAMIC_TLB_16M_SIZE;
+            peer_dram_offset += dynamic_tlb_16m_size;
         }
     }
     device_driver.setup_core_to_tlb_map([get_static_tlb_index](CoreCoord core) { return get_static_tlb_index(core); });
 }
 
-std::unordered_map<std::string, std::int32_t> get_dynamic_tlb_config() {
+std::unordered_map<std::string, std::int32_t> get_dynamic_tlb_config(tt::ARCH arch) {
     std::unordered_map<std::string, std::int32_t> dynamic_tlb_config;
-    dynamic_tlb_config["REG_TLB"] = DEVICE_DATA.REG_TLB;
+    switch (arch) {
+        case tt::ARCH::GRAYSKULL:
+            dynamic_tlb_config["REG_TLB"] = tt::umd::grayskull::REG_TLB;
+            break;
+        case tt::ARCH::WORMHOLE_B0:
+            dynamic_tlb_config["REG_TLB"] = tt::umd::wormhole::REG_TLB;
+            break;
+        case tt::ARCH::BLACKHOLE:
+            dynamic_tlb_config["REG_TLB"] = tt::umd::blackhole::REG_TLB;
+            break;
+        default: TT_THROW("Configuring dynamic TLBs is not supported for {}", tt::get_string(arch));
+    }
     return dynamic_tlb_config;
 }
 

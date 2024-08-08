@@ -34,7 +34,8 @@ void py_module(py::module& module) {
             py::arg("out_subblock_w").noconvert(),
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert())
-        .def_readwrite("compute_with_storage_grid_size", &MatmulMultiCoreReuseProgramConfig::compute_with_storage_grid_size)
+        .def_readwrite(
+            "compute_with_storage_grid_size", &MatmulMultiCoreReuseProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseProgramConfig::in0_block_w)
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseProgramConfig::out_subblock_w)
@@ -64,7 +65,9 @@ void py_module(py::module& module) {
             py::arg("transpose_mcast").noconvert(),
             py::arg("fused_activation"),
             py::arg("fuse_batch").noconvert() = true)
-        .def_readwrite("compute_with_storage_grid_size", &MatmulMultiCoreReuseMultiCastProgramConfig::compute_with_storage_grid_size)
+        .def_readwrite(
+            "compute_with_storage_grid_size",
+            &MatmulMultiCoreReuseMultiCastProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCastProgramConfig::in0_block_w)
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_w)
@@ -99,7 +102,9 @@ void py_module(py::module& module) {
             py::arg("fuse_batch").noconvert(),
             py::arg("fused_activation"),
             py::arg("mcast_in0").noconvert())
-        .def_readwrite("compute_with_storage_grid_size", &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
+        .def_readwrite(
+            "compute_with_storage_grid_size",
+            &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::in0_block_w)
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_w)
@@ -115,11 +120,7 @@ void py_module(py::module& module) {
     py::class_<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
         module, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig")
         .def(
-            py::init<
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                std::optional<UnaryWithParam>>(),
+            py::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>>(),
             py::kw_only(),
             py::arg("in0_block_w").noconvert(),
             py::arg("per_core_M").noconvert(),
@@ -154,7 +155,18 @@ void py_module(py::module& module) {
                 input_tensor_a,
                 input_tensor_b,
                 /*bias=*/std::nullopt,
-                Matmul{program_config, /*bcast_batch=*/std::nullopt, memory_config, dtype, compute_kernel_config, /*untilize_out=*/false, user_core_coord, get_fused_activation(activation), user_run_batched, transpose_a, transpose_b});
+                Matmul{
+                    program_config,
+                    /*bcast_batch=*/std::nullopt,
+                    memory_config,
+                    dtype,
+                    compute_kernel_config,
+                    /*untilize_out=*/false,
+                    user_core_coord,
+                    get_fused_activation(activation),
+                    user_run_batched,
+                    transpose_a,
+                    transpose_b});
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -186,13 +198,26 @@ void py_module(py::module& module) {
                 user_core_coord = CoreCoord(core_grid->x, core_grid->y);
             }
             bool b_is_batched = ttnn::operations::matmul::detail::is_input_batched(input_tensor_b.get_shape());
-            TT_FATAL(!(b_is_batched && bias.has_value()), "Batched input not supported when bias exists (linear operation).");
+            TT_FATAL(
+                !(b_is_batched && bias.has_value()),
+                "Batched input not supported when bias exists (linear operation).");
 
             return ttnn::operations::matmul::matmul(
                 input_tensor_a,
                 input_tensor_b,
                 bias,
-                tt::operations::primary::Matmul{program_config, /*bcast_batch=*/std::nullopt, memory_config, dtype, compute_kernel_config, /*untilize_out=*/false, user_core_coord, get_fused_activation(activation), /*user_run_batched=*/false, transpose_a, transpose_b});
+                tt::operations::primary::Matmul{
+                    program_config,
+                    /*bcast_batch=*/std::nullopt,
+                    memory_config,
+                    dtype,
+                    compute_kernel_config,
+                    /*untilize_out=*/false,
+                    user_core_coord,
+                    get_fused_activation(activation),
+                    /*user_run_batched=*/false,
+                    transpose_a,
+                    transpose_b});
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),

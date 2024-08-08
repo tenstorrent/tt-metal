@@ -83,7 +83,7 @@ class TtLlamaSDPA(torch.nn.Module):
         # values = [batch, num_kv_heads, cache_len + seqlen, dhead]
         # attn_mask = [seq_len, n_heads, batch,cache_len + seqlen]
 
-        keys = tt_lib.tensor.transpose(keys, -1, -2)  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
+        keys = ttnn.transpose(keys, -1, -2)  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
         attn = tt_lib.operations.primary.transformers.group_attn_matmul(
             xq,
             keys,

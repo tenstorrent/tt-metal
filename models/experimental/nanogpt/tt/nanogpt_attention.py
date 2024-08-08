@@ -33,8 +33,8 @@ class TtCausalSelfAttention(nn.Module):
             tt_cache_path + base_address + ".c_proj.weight" + str(dtype) + ".bin"
         )
 
-        self.tt_weight_c_attn = tt_lib.tensor.transpose(self.tt_weight_c_attn, -2, -1)
-        self.tt_weight_c_proj = tt_lib.tensor.transpose(self.tt_weight_c_proj, -2, -1)
+        self.tt_weight_c_attn = ttnn.transpose(self.tt_weight_c_attn, -2, -1)
+        self.tt_weight_c_proj = ttnn.transpose(self.tt_weight_c_proj, -2, -1)
 
         # Load biases
         self.tt_bias_c_attn = tt_lib.tensor.load_tensor(
@@ -48,7 +48,7 @@ class TtCausalSelfAttention(nn.Module):
         self.n_head = self.config.n_head
         self.n_embd = self.config.n_embd
 
-        temp_bias = tt_lib.tensor.tril(tt_lib.tensor.ones([1, 1, self.block_size, self.block_size]))
+        temp_bias = ttnn.tril(ttnn.ones([1, 1, self.block_size, self.block_size]))
         temp_bias = tt_to_torch_tensor(temp_bias)
         self.register_buffer(
             "bias",
@@ -69,7 +69,7 @@ class TtCausalSelfAttention(nn.Module):
         )
 
     def const_tensor(self, shape, value):
-        return tt_lib.tensor.full(shape, value)
+        return ttnn.full(shape, value)
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         (
@@ -89,19 +89,19 @@ class TtCausalSelfAttention(nn.Module):
 
         k = torch_to_tt_tensor_rm(k, self.device)
         k = tt_lib.tensor.reshape(k, B, T, self.n_head, C // self.n_head)
-        k = tt_lib.tensor.transpose(k, 1, 2)
+        k = ttnn.transpose(k, 1, 2)
 
         q = torch_to_tt_tensor_rm(q, self.device)
         q = tt_lib.tensor.reshape(q, B, T, self.n_head, C // self.n_head)
-        q = tt_lib.tensor.transpose(q, 1, 2)
+        q = ttnn.transpose(q, 1, 2)
 
         v = torch_to_tt_tensor_rm(v, self.device)
 
         v = tt_lib.tensor.reshape(v, B, T, self.n_head, C // self.n_head)
-        v = tt_lib.tensor.transpose(v, 1, 2)
+        v = ttnn.transpose(v, 1, 2)
 
         # manual implementation of attention
-        key_layer_transposed = tt_lib.tensor.transpose(k, -2, -1)
+        key_layer_transposed = ttnn.transpose(k, -2, -1)
         att = ttnn.matmul(q, key_layer_transposed)
 
         const_att = self.const_tensor(att.get_legacy_shape(), 1.0 / math.sqrt(k.get_legacy_shape()[-1]))
@@ -117,7 +117,7 @@ class TtCausalSelfAttention(nn.Module):
 
         tt_y = ttnn.matmul(tt_att, v)
 
-        tt_y = tt_lib.tensor.transpose(tt_y, 1, -2)
+        tt_y = ttnn.transpose(tt_y, 1, -2)
         tt_y = tt_lib.tensor.reshape(tt_y, 1, B, T, C)
 
         # output projection

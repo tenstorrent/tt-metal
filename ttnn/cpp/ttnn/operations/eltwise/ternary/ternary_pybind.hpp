@@ -9,7 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
-#include "ttnn/operations/eltwise/ternary/where_op.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;

@@ -61,8 +61,8 @@ uint32_t compare_conv_out_with_golden(
 // It is ok to use pad_metadata since its correctness is validated in other test cases.
 uint32_t validate_generate_halo_kernel_config(
     tt::tt_metal::Device *device,
-    const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
-    const tuple<vector<vector<uint16_t>>, vector<vector<uint16_t>>, vector<vector<uint16_t>>>
+    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
+    const std::tuple<vector<vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
         &halo_kernel_config,
     const vector<bool> &pad_metadata,
     bool remote_read = false,
@@ -132,6 +132,8 @@ uint32_t validate_generate_functions(
     const owned_buffer::Buffer<bfloat16> &out_golden_tensor_buf,
     uint32_t reshard_num_cores_nhw = 0,
     bool remote_read = false) {
+
+    log_debug(tt::LogTest, "Validating generate functions for config = {}", config);
     owned_buffer::Buffer<bfloat16> conv_tensor_buf;
     uint32_t diff;
     uint32_t failed_tests = 0;

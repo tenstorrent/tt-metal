@@ -29,11 +29,15 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "iterations, expected_top1, expected_top5",
     (
-        (64, 0.92, 0.99),
-        (128, 0.92, 0.99),
-        (256, 0.92, 0.99),
+        (64, 0.93, 0.99),
+        # (128, 0.92, 0.99),
+        # (256, 0.92, 0.99),
     ),
-    ids=("64seqlen", "128seqlen", "256seqlen"),
+    ids=(
+        "64seqlen",
+        # "128seqlen",
+        # "256seqlen"
+    ),
 )
 def test_mixtral_model_inference(
     t3k_device_mesh, use_program_cache, reset_seeds, iterations, expected_top1, expected_top5

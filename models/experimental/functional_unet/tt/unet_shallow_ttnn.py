@@ -72,7 +72,7 @@ def unet_concat(ttnn_tensors, dim=-1, use_reshard=True, perf_mode=False):
         for i in range(0, len(ttlib_tensors)):
             if ttlib_tensors[i].is_sharded():
                 ttlib_tensors[i] = ttnn.to_memory_config(ttlib_tensors[i], output_mem_config)
-    return ttnn.experimental.tensor.concat(ttlib_tensors, dim=dim, output_mem_config=output_mem_config)
+    return ttnn.concat(ttlib_tensors, dim=dim, memory_config=output_mem_config)
 
 
 # Unet shallow ttnn implementation

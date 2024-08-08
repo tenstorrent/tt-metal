@@ -83,7 +83,7 @@ class thread_safe_call_stack {
 
    private:
     std::mutex stack_mutex;
-    stack<TracyCZoneCtx> call_stack;
+    std::stack<TracyCZoneCtx> call_stack;
 };
 
 inline thread_safe_cached_ops_map cached_ops{};
@@ -122,7 +122,7 @@ static bool stop_tracy_zone(const string& name = "", uint32_t color = 0) {
     return callStackWasEmpty;
 }
 
-static void tracy_message(const string& source, uint32_t color = 0xf0f8ff) {
+static void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) {
     TracyMessageC(source.c_str(), source.size(), color);
 }
 
@@ -130,8 +130,8 @@ static void tracy_frame() { FrameMark; }
 
 #if defined(TRACY_ENABLE)
 static inline json get_kernels_json(const Program& program) {
-    vector<json> computeKernels;
-    vector<json> datamovementKernels;
+    std::vector<json> computeKernels;
+    std::vector<json> datamovementKernels;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id).get();
         if (kernel->processor() == RISCV::COMPUTE) {
@@ -157,7 +157,7 @@ static inline json get_kernels_json(const Program& program) {
 
 static inline json get_tensor_json(const Tensor& tensor) {
     json ret;
-    string tensorStorageStr;
+    std::string tensorStorageStr;
     if (tensor.storage_type() == StorageType::DEVICE) {
         ret["storage_type"]["device_id"] = tensor.device()->id();
         ret["storage_type"]["memory_config"]["buffer_type"] = magic_enum::enum_name(tensor.memory_config().buffer_type);
@@ -178,7 +178,7 @@ static inline json get_tensor_json(const Tensor& tensor) {
     return ret;
 }
 
-static inline vector<json> get_tensors_json(const vector<Tensor>& tensors) {
+static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tensors) {
     ZoneScoped;
     vector<json> ret;
     for (auto& tensor : tensors) {
@@ -187,7 +187,7 @@ static inline vector<json> get_tensors_json(const vector<Tensor>& tensors) {
     return ret;
 }
 
-static inline vector<json> get_tensors_json(const vector<std::optional<const Tensor>>& tensors) {
+static inline std::vector<json> get_tensors_json(const std::vector<std::optional<const Tensor>>& tensors) {
     ZoneScoped;
     vector<json> ret;
     for (auto& tensor : tensors) {
@@ -198,7 +198,7 @@ static inline vector<json> get_tensors_json(const vector<std::optional<const Ten
     return ret;
 }
 
-static inline vector<json> get_tensors_json(const vector<std::optional<Tensor>>& tensors) {
+static inline std::vector<json> get_tensors_json(const std::vector<std::optional<Tensor>>& tensors) {
     ZoneScoped;
     vector<json> ret;
     for (auto& tensor : tensors) {

@@ -101,12 +101,18 @@ def run_test_FalconAttention_inference(
 
         tt_attention_mask = ttnn.as_tensor(
             tensor=attention_mask_bool,
-            dtype=model_config["ATTN_MASK_DTYPE"],
-            layout=ttnn.TILE_LAYOUT,
+            dtype=model_config["BFLOAT16_DTYPE"],
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device_mesh,
             memory_config=attention_mask_memconfig,
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
-            preprocess=lambda x: x * (-1e5),
+            preprocess=lambda x: (x * (-1e5)).expand(1, 1, -1, -1),
+        )
+
+        tt_attention_mask = ttnn.tilize(
+            tt_attention_mask,
+            memory_config=model_config["DRAM_MEMCFG"],
+            dtype=model_config["ATTN_MASK_DTYPE"],
         )
 
         tt_k_cache_host = torch.zeros(batch, configuration.num_kv_heads, max_position_embeddings, head_dim)

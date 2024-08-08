@@ -11,7 +11,6 @@
 #include <iostream>
 #include <string>
 
-#include "device_data.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "rtoptions.hpp"
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
@@ -254,7 +253,7 @@ void Cluster::open_driver(
         if (is_tg_cluster_) {
             num_host_mem_ch_per_mmio_device = HOST_MEM_CHANNELS;
         }
-        std::unordered_map<std::string, std::int32_t> dynamic_tlb_config = ll_api::get_dynamic_tlb_config();
+        std::unordered_map<std::string, std::int32_t> dynamic_tlb_config = ll_api::get_dynamic_tlb_config(this->arch_);
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
         const bool clean_system_resources = true;
@@ -976,8 +975,6 @@ uint32_t Cluster::get_mmio_device_tunnel_count(chip_id_t mmio_device) const {
 uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
     return this->cluster_desc_->get_ethernet_link_distance(chip_id, this->get_associated_mmio_device(chip_id));
 }
-
-uint32_t Cluster::get_tensix_soft_reset_addr() const { return DEVICE_DATA.TENSIX_SOFT_RESET_ADDR; }
 
 }  // namespace tt
 

@@ -34,7 +34,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
             TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
             fp32_dest_acc_en = false;
         } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "kernel config is not for wormhole_b0");
+            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
             fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
         } else {
             TT_FATAL("arch not supported");
@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
 
     uint32_t B = input_tensor.get_legacy_shape()[-2];
     uint32_t Bcache = cache_tensor.get_legacy_shape()[0];
-    const uint32_t granularity = min(static_cast<uint32_t>(2), Bcache); // granularity = 2 best for performance
+    const uint32_t granularity = std::min(static_cast<uint32_t>(2), Bcache); // granularity = 2 best for performance
     uint32_t num_batched_heads = input_tensor.get_legacy_shape()[1] * B / TILE_HEIGHT;
     uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
     uint32_t batch_read_offset = batch_offset * Wbytes;  // Offset to read from input tensor
@@ -144,7 +144,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
 
     bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    const uint32_t u_range = min(static_cast<uint32_t>(32), Bcache);
+    const uint32_t u_range = std::min(static_cast<uint32_t>(32), Bcache);
     const uint32_t u_count = u_range/granularity;
 
     std::vector<uint32_t> reader_compile_time_args = {

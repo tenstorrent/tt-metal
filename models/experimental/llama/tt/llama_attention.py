@@ -28,7 +28,7 @@ def shape_tt(
     head_dim: int,
 ):
     tt_out = tt_lib.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
-    tt_out = tt_lib.tensor.transpose(tt_out, 1, -2)
+    tt_out = ttnn.transpose(tt_out, 1, -2)
 
     return tt_out
 
@@ -236,15 +236,15 @@ class TtLlamaAttention(nn.Module):
 
         if past_key_value is not None:
             # reuse k, v, self_attention
-            key_states = tt_lib.tensor.concat([past_key_value[0], key_states], dim=2)
-            value_states = tt_lib.tensor.concat([past_key_value[1], value_states], dim=2)
+            key_states = ttnn.concat([past_key_value[0], key_states], dim=2)
+            value_states = ttnn.concat([past_key_value[1], value_states], dim=2)
 
         past_key_value = (key_states, value_states) if use_cache else None
 
         key_states_tt = torch_to_tt_tensor_rm(key_states, self.device)
         query_states_tt = torch_to_tt_tensor_rm(query_states, self.device)
 
-        key_states_tt_transposed = tt_lib.tensor.transpose(key_states_tt, -2, -1)
+        key_states_tt_transposed = ttnn.transpose(key_states_tt, -2, -1)
         mul = ttnn.matmul(query_states_tt, key_states_tt_transposed)
 
         # TODO: Fuse into softmax
@@ -283,7 +283,7 @@ class TtLlamaAttention(nn.Module):
                 f" {attn_output.get_legacy_shape()}"
             )
 
-        attn_output = tt_lib.tensor.transpose(attn_output, 1, -2)
+        attn_output = ttnn.transpose(attn_output, 1, -2)
         attn_output = tt_lib.tensor.reshape(attn_output, bsz, 1, q_len, self.hidden_size)
         attn_output = self.attn_linear(attn_output)
 

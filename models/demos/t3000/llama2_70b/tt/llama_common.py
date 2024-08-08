@@ -126,6 +126,10 @@ def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, ma
             ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"
             tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3/tokenizer.model"
             cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-3/llama-data-cache/weights-cache-3")
+        elif llama_version == "llama3-405b":
+            ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3-405b/llama-3-405b-repacked/"
+            tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3-405b/tokenizer.model"
+            cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-3-405b/llama-data-cache/weights-cache-3-405b")
         else:
             ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-2/llama-2-70b-repacked/"
             tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-2/tokenizer.model"
@@ -135,6 +139,12 @@ def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, ma
             ckpt_dir = os.getenv("LLAMA3_CKPT_DIR", "/proj_sw/llama3-data-repacked/llama-3-70b/")
             tokenizer_path = os.getenv("LLAMA3_TOKENIZER_PATH", "/proj_sw/llama3-data-repacked/tokenizer.model")
             cache_path = Path(os.getenv("LLAMA3_CACHE_PATH", "/proj_sw/llama-cache/llama-3-70b"))
+        elif llama_version == "llama3-405b":
+            ckpt_dir = os.getenv("LLAMA3_405B_CKPT_DIR", "/proj_sw/user_dev/llama3-405B-data-repacked/llama-3-405b/")
+            tokenizer_path = os.getenv(
+                "LLAMA3_405B_TOKENIZER_PATH", "/proj_sw/user_dev/llama3-405B-data-repacked/tokenizer.model"
+            )
+            cache_path = Path(os.getenv("LLAMA3_405B_CACHE_PATH", "/proj_sw/user_dev/llama3-405B-cache/llama-3-405b"))
         else:
             ckpt_dir = os.getenv("LLAMA2_CKPT_DIR", "/proj_sw/llama2-data-repacked/llama-2-70b/")
             tokenizer_path = os.getenv("LLAMA2_TOKENIZER_PATH", "/proj_sw/llama2-data-repacked/tokenizer.model")
@@ -200,13 +210,13 @@ def get_weight_cache_path_galaxy(base_cache_path, tensor_str, device_idx, num_de
 
 
 def rms_decomp(x, norm_weight, eps):
-    squared = tt_lib.tensor.pow(x, 2)
+    squared = ttnn.pow(x, 2)
     # mean_squared = tt_lib.tensor.mean(squared, )
     sum_squared = tt_lib.tensor.reduce(squared, tt_lib.tensor.ReduceOpMath.SUM, tt_lib.tensor.ReduceOpDim.W, scaler=1.0)
     # Tensor is 1,1,32,1+31 now
     mean_squared = ttnn.multiply(sum_squared, (1 / x.shape[-1]))
     mean_squared_eps = ttnn.add(mean_squared, eps)
-    rms = tt_lib.tensor.pow(mean_squared_eps, 0.5)
+    rms = ttnn.pow(mean_squared_eps, 0.5)
     rms_recip = ttnn.reciprocal(rms)
     normed_x = tt_lib.tensor.bcast(x, rms_recip, math_op=tt_lib.tensor.BcastOpMath.MUL, dim=tt_lib.tensor.BcastOpDim.W)
     norm_out = ttnn.mul(normed_x, norm_weight)

@@ -12,7 +12,7 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace py = pybind11;
 
@@ -21,9 +21,6 @@ namespace operations {
 namespace unary {
 
 namespace detail {
-
-using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
-using ComplexTensor = complex_binary::ComplexTensor;
 
 template <typename unary_operation_t>
 void bind_unary_operation(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
@@ -125,8 +122,7 @@ void bind_unary_operation_overload_complex(py::module& module, const unary_opera
             [](const unary_operation_t& self,
                const ComplexTensor& input_tensor,
                const ttnn::MemoryConfig& memory_config) -> Tensor {
-                using ComplexUnaryOp = ttnn::operations::complex_unary::ExecuteComplexUnaryType1<complex_unary::ComplexUnaryOpType::ABS>;
-                return ComplexUnaryOp::operator()(input_tensor, memory_config);
+                return self(input_tensor, memory_config);
             },
             py::arg("input_tensor"),
             py::kw_only(),
@@ -184,8 +180,7 @@ void bind_unary_operation_overload_complex_return_complex(py::module& module, co
             [](const unary_operation_t& self,
                const ComplexTensor& input_tensor,
                const ttnn::MemoryConfig& memory_config) -> ComplexTensor {
-                using ComplexUnaryOp = ttnn::operations::complex_unary::ExecuteComplexUnaryType2<complex_unary::ComplexUnaryOpType::RECIPROCAL>;
-                return ComplexUnaryOp::operator()(input_tensor, memory_config);
+                return self(input_tensor, memory_config);
             },
             py::arg("input_tensor"),
             py::kw_only(),
@@ -1232,8 +1227,6 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_float_parameter(module, ttnn::leaky_relu, "slope", "The slope parameter for the Leaky ReLU function", "");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_max, "upper_limit", "The max value for ReLU function", "This function caps off the input to a max value and a min value of 0");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_min, "lower_limit", "The min value for ReLU function", "This will carry out ReLU operation at min value instead of the standard 0");
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::remainder, "value", "Perform an eltwise-modulus operation a - a.div(b, rounding_mode=floor) * b.", "Support provided only for WH_B0.");
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::fmod, "value", "scalar value", "Perform an eltwise-fmod operation. Formula : a - a.div(b, rounding_mode=trunc) * b . Support provided only for WH_B0.");
 
     // Unaries with integer parameter
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_left_shift, "shift_bits", "integer within range (0, 31)", "Input tensor needs to be of INT32 dtype. Support provided for Wormhole_B0 only");

@@ -226,4 +226,4 @@ c. **Wrapping Up the Intermediate Buffer**:
 Conclusion
 ----------
 
-Those are the additional steps for getting ``matmul_multicore_data_reuse`` operations up and running on the compute engine. To see a more complicated example using core-to-core data movement, please refer to please refer to the :ref:`Matmul multi-core data mcast example<MatMul_Multi_Core_Optimized_Data_Mcast_example>`.
+Those are the additional steps for getting ``matmul_multicore_data_reuse`` operations up and running on the compute engine. To see a more complicated example using core-to-core data movement, please refer to the :ref:`Matmul multi-core data mcast example<MatMul_Multi_Core_Optimized_Data_Mcast_example>`.

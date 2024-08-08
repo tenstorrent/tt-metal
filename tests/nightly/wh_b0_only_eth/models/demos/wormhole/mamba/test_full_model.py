@@ -1,1 +1,0 @@
-../../../../../../../models/demos/wormhole/mamba/tests/test_full_model.py

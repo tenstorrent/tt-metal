@@ -24,8 +24,8 @@ class TtT5DenseActDense(nn.Module):
         self.out_proj_wi = torch2tt_tensor(state_dict[f"{base_address}.wi.weight"], device)
         self.out_proj_w0 = torch2tt_tensor(state_dict[f"{base_address}.wo.weight"], device)
 
-        self.out_proj_wi = tt_lib.tensor.transpose(self.out_proj_wi, -2, -1)
-        self.out_proj_w0 = tt_lib.tensor.transpose(self.out_proj_w0, -2, -1)
+        self.out_proj_wi = ttnn.transpose(self.out_proj_wi, -2, -1)
+        self.out_proj_w0 = ttnn.transpose(self.out_proj_w0, -2, -1)
 
         # self.dropout = nn.Dropout(dropout_rate)
         # activation function

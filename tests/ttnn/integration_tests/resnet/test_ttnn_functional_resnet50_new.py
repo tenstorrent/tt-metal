@@ -37,7 +37,14 @@ from models.utility_functions import (
     ],
 )
 def test_resnet_50(
-    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, use_pretrained_weight
+    device,
+    use_program_cache,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    use_pretrained_weight,
+    model_location_generator,
 ):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
@@ -46,7 +53,15 @@ def test_resnet_50(
     if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
         pytest.skip("Test is not supported on n300 (8,7) grid")
 
-    test_infra = create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity, use_pretrained_weight)
+    test_infra = create_test_infra(
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        use_pretrained_weight,
+        model_location_generator=model_location_generator,
+    )
     enable_memory_reports()
     test_infra.preprocess_torch_input()
     # First run configures convs JIT

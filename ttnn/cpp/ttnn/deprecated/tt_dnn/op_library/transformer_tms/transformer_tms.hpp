@@ -20,42 +20,11 @@ using namespace tt_metal;
 
 namespace transformers {
 
-operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(const Tensor &input_tensor, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
-operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(const Tensor &input_tensor, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
-
 // TODO: Group attention matmul will support sharding, mcasting, and should be faster; we should make attn_matmul (ie. KV heads = 1) a special case of group_attn_matmul and run the same op
 operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config);
 
 operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, const uint32_t out_subblock_w, CoreCoord compute_with_storage_grid_size, const bool row_major, DeviceComputeKernelConfig compute_kernel_config);
-operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, const uint32_t hidden_size, MathFidelity math_fidelity, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(const Tensor &input_tensor_a, Tensor &output_tensor, MathFidelity math_fidelity, CoreCoord compute_with_storage_grid_size);
-operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
-    const Tensor& a,
-    const Tensor& bx,
-    const Tensor& h,
-    Tensor& output,
-    MathFidelity math_fidelity,
-    CoreCoord compute_with_storage_grid_size);
-
-struct SplitFusedQKVAndSplitHeads {
-    CoreCoord compute_with_storage_grid_size;
-    MemoryConfig output_mem_config;
-    uint32_t num_heads;
-
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-};
-
-inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(const Tensor &input_tensor, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, const uint32_t num_heads = 16) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor})), Tensor(operation::get_workers_for_op_output({input_tensor})), Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
-        [compute_with_storage_grid_size, mem_config, num_heads] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            return operation::run(SplitFusedQKVAndSplitHeads{compute_with_storage_grid_size, mem_config, num_heads}, input_tensors);
-        }, {input_tensor}, output_tensors);
-    return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
-}
 
 struct AttnMatmul {
     std::optional<const uint32_t> num_tokens;
@@ -157,30 +126,6 @@ inline Tensor group_attn_matmul(const Tensor &input_tensor_a, const Tensor &inpu
     return output_tensors.at(0);
 }
 
-struct SSMEltwiseMul {
-    MemoryConfig output_mem_config;
-    DataType output_dtype;
-    MathFidelity math_fidelity;
-    const uint32_t HIDDEN_SIZE = 5120;
-
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-};
-
-inline Tensor ssm_eltwise_mul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
-    operation::launch_op(
-        [mem_config, output_dtype, math_fidelity] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor_a = input_tensors.at(0);
-
-            return operation::run(SSMEltwiseMul{mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), math_fidelity}, input_tensors);
-        }, {input_tensor_a, input_tensor_b}, output_tensors);
-    return output_tensors.at(0);
-}
-
 struct SSM1DSumReduce {
     MemoryConfig output_mem_config;
     DataType output_dtype;
@@ -200,42 +145,6 @@ inline Tensor ssm_1d_sum_reduce(const Tensor &input_tensor_a, const MemoryConfig
             const auto& input_tensor_a = input_tensors.at(0);
             return operation::run(SSM1DSumReduce{mem_config, output_dtype.value_or(input_tensor_a.get_dtype()), math_fidelity}, input_tensors);
         }, {input_tensor_a}, output_tensors);
-    return output_tensors.at(0);
-}
-
-struct SSMPrefixScan {
-    MemoryConfig output_mem_config;
-    DataType output_dtype;
-    MathFidelity math_fidelity;
-
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-};
-
-inline Tensor ssm_prefix_scan(
-    const Tensor& a,
-    const Tensor& bx,
-    const Tensor& h,
-    const MemoryConfig& mem_config,
-    std::optional<const DataType> output_dtype = std::nullopt,
-    MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, bx}))};
-    operation::launch_op(
-        [mem_config, output_dtype, math_fidelity](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& a = input_tensors.at(0);
-            const auto& bx = input_tensors.at(1);
-            const auto& h = input_tensors.at(2);
-            return operation::run(
-                SSMPrefixScan{mem_config, output_dtype.value_or(a.get_dtype()), math_fidelity}, input_tensors);
-        },
-        {a, bx, h},
-        output_tensors);
     return output_tensors.at(0);
 }
 

@@ -3,15 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv_op.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/common/constants.hpp"
 
-#include "tt_metal/tt_stl/reflection.hpp"
-
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+
 using namespace tt::constants;
 
 namespace conv_op_utils {
@@ -292,7 +291,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         if(conv_act_size_c * weight_size_w != act_block_w_datums) {
             assert(act_block_w_datums > conv_act_size_c * weight_size_w);
             uint32_t conv_act_block_width_padding_bytes = (act_block_w_datums - (conv_act_size_c * weight_size_w)) * num_bytes_of_df;
-            reader_defines["ACT_BLOCK_WIDTH_PADDING_BYTES"] = to_string(conv_act_block_width_padding_bytes);
+            reader_defines["ACT_BLOCK_WIDTH_PADDING_BYTES"] = std::to_string(conv_act_block_width_padding_bytes);
         }
         if (conv_output_size_h * conv_output_size_w < act_block_h_datums * num_blocks_act_h) {
             reader_defines["ACT_BLOCK_HEIGHT_PADDING"] = "1";
@@ -384,7 +383,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     if (fuse_relu) {
         using ttnn::operations::unary::UnaryOpType;
         using ttnn::operations::unary::utils::get_defines;
-        compute_defines.merge(get_defines(UnaryOpType::RELU, nullopt, "ACTIVATION", "i"));
+        compute_defines.merge(get_defines(UnaryOpType::RELU, std::nullopt, "ACTIVATION", "i"));
         if (has_bias) {
             compute_defines["FUSE_BIAS"] = "1";
         }
@@ -821,7 +820,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_conv_activation_address_m
                         uint32_t act_tensor_padded_x = act_tensor_start_x + (channel_stick_col_id % S);
                         uint32_t act_tensor_padded_y = act_tensor_start_y + (channel_stick_col_id / S);
                         assert(w <= end_block_2d_index_w);
-                        uint32_t read_size = min(channel_stick_size - channel_stick_offset, (end_block_2d_index_w+1)-w);
+                        uint32_t read_size = std::min(channel_stick_size - channel_stick_offset, (end_block_2d_index_w+1)-w);
                         read_size_bytes = read_size * num_bytes_df;
                         if(act_tensor_padded_x < Pad_W || act_tensor_padded_x >= (Pad_W + conv_input_x) || act_tensor_padded_y < Pad_H || act_tensor_padded_y >= (Pad_H + conv_input_y)) {
                             // pad (conv padding)

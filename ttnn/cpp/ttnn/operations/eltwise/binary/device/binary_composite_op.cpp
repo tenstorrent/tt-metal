@@ -9,6 +9,12 @@
 #include "ttnn/types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/cpp/ttnn/operations/copy.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/creation.hpp"
 
 namespace ttnn::operations::binary{
 
@@ -151,7 +157,7 @@ Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const std::opt
     return result;
 }
 
-Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, std::string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
     Tensor result = ttnn::multiply(input_a, (1.0f/value), std::nullopt, output_mem_config);
     if(round_mode == "trunc"){
@@ -163,7 +169,7 @@ Tensor _div_overload(const Tensor& input_a, float value, bool accurate_mode, std
     return result;
 }
 
-Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, std::string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor _div(const Tensor& input_a, const Tensor& input_b, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
     auto arch = input_a.device()->arch();
     if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -232,7 +238,7 @@ Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::opti
 }
 
 // Binary remainder will be overloaded by unary remainder in another PR
-Tensor _binary_remainder(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteBinaryRemainder::operator()(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input_a.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     DataType input_dtype = input_a.get_dtype();
@@ -245,8 +251,13 @@ Tensor _binary_remainder(const Tensor& input_a, const Tensor& input_b, const std
     return typecast(result, input_dtype);
 }
 
+
+Tensor ExecuteBinaryRemainder::operator()(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::unary_remainder(input, scalar);
+}
+
 // Binary FMOD will be overloaded by unary FMOD in another PR
-Tensor _binary_fmod(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteBinaryFmod::operator()(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input_a.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     DataType input_dtype = input_a.get_dtype();
@@ -255,6 +266,10 @@ Tensor _binary_fmod(const Tensor& input_a, const Tensor& input_b, const std::opt
     Tensor result = ttnn::subtract(a, ttnn::multiply(ttnn::div(input_a, input_b, true, "trunc", output_mem_config), b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     result = ttnn::where(ttnn::eq(a, b, std::nullopt, output_mem_config), ttnn::full_like(input_a, 0.0f), result);
     return typecast(result, input_dtype);
+}
+
+Tensor ExecuteBinaryFmod::operator()(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::unary_fmod(input, scalar);
 }
 
 Tensor _floor_div_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
@@ -302,6 +317,79 @@ Tensor _logical_xor_(const Tensor& input_a, const Tensor& input_b, const std::op
     in_b_eq_zero = ttnn::eqz(input_b, output_mem_config);
     Tensor result = ttnn::where(input_a, input_b, in_b_eq_zero, output_mem_config, input_a);
     return result;
+}
+
+Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    tt::tt_metal::Array4D start_index = {0, 0, 0, 0};
+    Tensor index_pad = ttnn::pad(0, ttnn::ones_like(input_a), input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
+    Tensor temp_a = ttnn::pad(0, input_a, input_b.get_legacy_shape().to_array_4D(), start_index, 0, false, std::nullopt);
+    return ttnn::where(index_pad, temp_a, input_b);
+}
+
+/**
+ * outer product = matrix multiply when a = [1,1,N,1] and b = [1,1,1,M]
+ * and result is of size [1,1,N,M].
+ * - implementation supports any 1D "squeezable tensor" at input operands
+ *   by running reshape.
+ */
+Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    const tt::tt_metal::Shape s_a = input_a.get_legacy_shape();
+    const tt::tt_metal::Shape s_b = input_b.get_legacy_shape();
+    auto num_ones = [](const tt::tt_metal::Shape& s) -> uint32_t {
+        uint32_t num1s = 0;
+        for (uint32_t idx = 0; idx < 4; idx++) num1s += (uint32_t)(s[idx] == 1);
+        return num1s;
+    };
+
+    // check if 3 dimensions are 1
+    TT_FATAL((num_ones(s_a) >= 3), "3 dimensions are required to be 1 for use with outer product");
+    TT_FATAL((num_ones(s_b) >= 3), "3 dimensions are required to be 1 for use with outer product");
+
+    const bool skip_reshape_a = (s_a[0] == 1 && s_a[1] == 1 && s_a[2] >= 1 && s_a[3] == 1);
+    const bool skip_reshape_b = (s_b[0] == 1 && s_b[1] == 1 && s_b[2] == 1 && s_b[3] >= 1);
+
+    Tensor a_slim = input_a;
+    Tensor b_slim = input_b;
+
+    if(!skip_reshape_a) {
+        a_slim = ttnn::reshape(input_a, ttnn::Shape{std::array<uint32_t, 4>{1, 1, input_a.volume(), 1}});
+    }
+    if(!skip_reshape_b) {
+        b_slim = ttnn::reshape(input_b, ttnn::Shape{std::array<uint32_t, 4>{1, 1, 1, input_b.volume()}});
+    }
+    a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
+    b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
+    Device* device = AutoFormat::GetDefaultDevice();
+    if(device != nullptr) {
+        if (a_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+            a_slim = AutoFormat::move_tensor_to_device(a_slim, device);
+        }
+        if (b_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+            b_slim = AutoFormat::move_tensor_to_device(b_slim, device);
+        }
+    }
+
+    return ttnn::operations::matmul::matmul(
+            a_slim,
+            b_slim,
+            std::nullopt,
+            tt::operations::primary::Matmul{
+            std::nullopt,
+            std::nullopt});
+}
+
+Tensor _polyval(const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_ASSERT(coeffs.size() != 0 && "coeffs should be 1 or more coefficients");
+    if (coeffs.size() == 1) {
+        return ttnn::full_like(input_a, coeffs[0]);
+    }
+    Tensor result = ttnn::multiply(input_a, coeffs[0], std::nullopt, output_mem_config);
+    for (int idx = 1; idx < coeffs.size() - 1; idx++) {
+        result = ttnn::add(result, coeffs[idx], std::nullopt, output_mem_config);
+        result = ttnn::multiply(input_a, result, std::nullopt, output_mem_config);
+    }
+    Tensor final_tensor = ttnn::add(result, coeffs.back(), std::nullopt, output_mem_config);
+    return final_tensor;
 }
 
 } // namespace ttnn::operations::binary

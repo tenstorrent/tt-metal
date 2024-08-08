@@ -8,6 +8,7 @@ import os
 import glob
 from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
 from datasets import load_dataset
+from torchvision import models
 
 
 class InputExample(object):
@@ -108,3 +109,15 @@ def get_data(input_loc):
     image_examples = examples
 
     return image_examples
+
+
+def load_resnet50_model(model_location_generator):
+    # TODO: Can generalize the version to an arg
+    model_version = "IMAGENET1K_V1.pt"
+    model_path = model_location_generator(model_version, model_subdir="ResNet50")
+    if os.path.exists(model_path):
+        torch_resnet50 = models.resnet50()
+        torch_resnet50.load_state_dict(torch.load(model_path))
+    else:
+        torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+    return torch_resnet50

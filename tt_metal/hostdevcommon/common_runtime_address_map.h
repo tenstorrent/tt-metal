@@ -50,8 +50,12 @@ constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
 
 static_assert (PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC > PROFILER_L1_BUFFER_SIZE);
 
+// Kernel config buffer is WIP
+// Will eventually move CBs/Sems and likely kernel bins into this buffer
+// Size is presently based on the old size of the RTAs (large enough to hold 1 set)
+// plus some extra space freed up in the mem map
 constexpr static std::uint32_t L1_KERNEL_CONFIG_BASE = PROFILER_L1_END_ADDRESS;
-constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 3 * 1024 + L1_ALIGNMENT; // alignment between unique&common RTAs
+constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 4 * 1024 + 256;
 
 constexpr static std::uint32_t IDLE_ERISC_L1_KERNEL_CONFIG_BASE = 32 * 1024;
 
@@ -70,27 +74,10 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_CONTROL = CIRCULAR_BUFFER_CONF
 
 // 4 uint32_t semaphores per core aligned to 16B
 constexpr static std::uint32_t SEMAPHORE_BASE = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
-constexpr static std::uint32_t NUM_SEMAPHORES = 4;
+constexpr static std::uint32_t NUM_SEMAPHORES = 8;
 constexpr static std::uint32_t SEMAPHORE_SIZE = NUM_SEMAPHORES * L1_ALIGNMENT;
 
-// Debug printer buffers - A total of 5*PRINT_BUFFER_SIZE starting at PRINT_BUFFER_NC address
-constexpr static std::uint32_t PRINT_BUFFER_START = SEMAPHORE_BASE + SEMAPHORE_SIZE; // per thread
-constexpr static std::uint32_t PRINT_BUFFER_MAX_SIZE = 1024; // per thread
-
-constexpr static std::uint32_t PRINT_BUFFER_SIZE = 204; // per thread
-constexpr static std::uint32_t PRINT_BUFFERS_COUNT = 5; // one for each thread
-constexpr static std::uint32_t PRINT_BUFFER_NC = PRINT_BUFFER_START; // NCRISC, address in bytes
-constexpr static std::uint32_t PRINT_BUFFER_T0 = PRINT_BUFFER_NC + PRINT_BUFFER_SIZE; // TRISC0
-constexpr static std::uint32_t PRINT_BUFFER_T1 = PRINT_BUFFER_T0 + PRINT_BUFFER_SIZE; // TRISC1
-constexpr static std::uint32_t PRINT_BUFFER_T2 = PRINT_BUFFER_T1 + PRINT_BUFFER_SIZE; // TRISC2
-constexpr static std::uint32_t PRINT_BUFFER_BR = PRINT_BUFFER_T2 + PRINT_BUFFER_SIZE; // BRISC
-constexpr static std::uint32_t PRINT_BUFFER_IDLE_ER = PRINT_BUFFER_START; // Idle ERISC
-
-// Debug ring buffer, shared between all cores
-constexpr static std::uint32_t RING_BUFFER_ADDR = PRINT_BUFFER_START + PRINT_BUFFER_MAX_SIZE;
-constexpr static std::uint32_t RING_BUFFER_SIZE = 128;
-
-constexpr static std::uint32_t L1_UNRESERVED_BASE = (((RING_BUFFER_ADDR + RING_BUFFER_SIZE) - 1) | (DRAM_ALIGNMENT - 1)) + 1;
+constexpr static std::uint32_t L1_UNRESERVED_BASE = ((SEMAPHORE_BASE + SEMAPHORE_SIZE - 1) | (DRAM_ALIGNMENT - 1)) + 1;
 constexpr static std::uint32_t ERISC_L1_UNRESERVED_BASE = L1_UNRESERVED_BASE; // Start of unreserved space
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.

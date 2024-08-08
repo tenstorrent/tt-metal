@@ -161,7 +161,7 @@ std::string ComputeKernel::config_hash() const {
 std::string Kernel::compute_hash() const {
     return fmt::format(
         "{}_{}_{}_{}",
-        std::hash<std::string>{}(this->name()),
+        std::hash<std::string>{}(this->kernel_path_file_name_),
         fmt::join(this->compile_time_args_, "_"),
         KernelDefinesHash{}(this->defines_),
         this->config_hash());

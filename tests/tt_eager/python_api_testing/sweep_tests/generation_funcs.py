@@ -1364,6 +1364,23 @@ def gen_elu_args(
         yield input_info
 
 
+def gen_celu_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=-0.01,
+    high=10,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    for input_info in gen_scalar_symmetric_args(
+        input_shapes, dtypes, layouts, mem_configs, "alpha", low, high, dtype, do_sanitize_args=do_sanitize_args
+    ):
+        yield input_info
+
+
 def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
     input_info = gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args)
 
@@ -2028,6 +2045,7 @@ def gen_fmod_args(
     high=10,
     dtype=torch.bfloat16,
     do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -2039,6 +2057,7 @@ def gen_fmod_args(
         high,
         dtype,
         do_sanitize_args=do_sanitize_args,
+        coregrid=coregrid,
     ):
         input_info.update({"value": random.randint(-100, 100) + 0.5})
 

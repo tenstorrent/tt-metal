@@ -75,6 +75,7 @@ Pointwise Unary
 
    ttnn/abs
    ttnn/acos
+   ttnn/logical_not_
    ttnn/acosh
    ttnn/asin
    ttnn/asinh
@@ -286,8 +287,8 @@ Pointwise Binary
    ttnn/div
    ttnn/div_no_nan
    ttnn/floor_div
-   ttnn/binary_remainder
-   ttnn/binary_fmod
+   ttnn/remainder
+   ttnn/fmod
    ttnn/logical_and_
    ttnn/logical_or_
    ttnn/logical_xor_
@@ -314,10 +315,12 @@ Pointwise Binary
    ttnn/eq
    ttnn/ne
    ttnn/isclose
-   ttnn/polyval
    ttnn/nextafter
    ttnn/maximum
    ttnn/minimum
+   ttnn/outer
+   ttnn/polyval
+   ttnn/scatter
    ttnn/atan2_bw
    ttnn/embedding_bw
    ttnn/addalpha_bw

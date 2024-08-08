@@ -173,7 +173,7 @@ struct DebugPrinter {
     }
     uint8_t* buf() { return get_debug_print_buffer(); }
     uint8_t* data() { return reinterpret_cast<DebugPrintMemLayout*>(buf())->data; }
-    uint8_t* bufend() { return buf() + PRINT_BUFFER_SIZE; }
+    uint8_t* bufend() { return buf() + DPRINT_BUFFER_SIZE; }
 
     DebugPrinter() {
 #if defined(DEBUG_PRINT_ENABLED)

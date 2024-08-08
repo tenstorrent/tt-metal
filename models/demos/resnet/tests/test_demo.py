@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import pytest
 from models.demos.resnet.demo.demo import run_resnet_inference, run_resnet_imagenet_inference
 
@@ -12,13 +11,7 @@ from models.demos.resnet.demo.demo import run_resnet_inference, run_resnet_image
     "batch_size, input_loc",
     ((20, "models/demos/resnet/demo/images/"),),
 )
-def test_demo_sample(
-    device,
-    use_program_cache,
-    batch_size,
-    input_loc,
-    imagenet_label_dict,
-):
+def test_demo_sample(device, use_program_cache, batch_size, input_loc, imagenet_label_dict, model_location_generator):
     expected_prediction = [
         "ruffed grouse, partridge, Bonasa umbellus",
         "hay",
@@ -27,11 +20,11 @@ def test_demo_sample(
         "Border terrier",
         "brown bear, bruin, Ursus arctos",
         "soap dispenser",
-        "boa constrictor, Constrictor constrictor",
+        "vestment",
         "gorilla, Gorilla gorilla",
         "sports car, sport car",
         "toilet tissue, toilet paper, bathroom tissue",
-        "hen-of-the-woods, hen of the woods, Polyporus frondosus, Grifola frondosa",
+        "velvet",
         "lakeside, lakeshore",
         "pirate, pirate ship",
         "bee eater",
@@ -42,10 +35,7 @@ def test_demo_sample(
         "Christmas stocking",
     ]
     measurements, predictions = run_resnet_inference(
-        batch_size,
-        input_loc,
-        imagenet_label_dict,
-        device,
+        batch_size, input_loc, imagenet_label_dict, device, model_location_generator
     )
 
     for predicted, expected in zip(predictions, expected_prediction):

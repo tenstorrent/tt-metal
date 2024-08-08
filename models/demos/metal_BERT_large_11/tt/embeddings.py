@@ -154,10 +154,6 @@ class TtEmbeddings:
             embeddings_type=ttnn.EmbeddingsType.BINARY,
             memory_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
         )
-        token_type_embeddings = ttnn.reshape(
-            token_type_embeddings,
-            [token_type_embeddings.shape[0], 1, token_type_embeddings.shape[1], token_type_embeddings.shape[2]],
-        )
         token_type_ids.deallocate()
 
         if self.position_embedding_type == "absolute":
@@ -182,6 +178,15 @@ class TtEmbeddings:
                     1,
                     position_embeddings_tt_tensor.shape[1],
                     position_embeddings_tt_tensor.shape[2],
+                ],
+            )
+            inputs_plus_token_type_embeddings_tt_tensor = ttnn.reshape(
+                inputs_plus_token_type_embeddings_tt_tensor,
+                [
+                    inputs_plus_token_type_embeddings_tt_tensor.shape[0],
+                    1,
+                    inputs_plus_token_type_embeddings_tt_tensor.shape[1],
+                    inputs_plus_token_type_embeddings_tt_tensor.shape[2],
                 ],
             )
             # Deallocate inputs_embeds and token_type_embeddings here to avoid having to move final output

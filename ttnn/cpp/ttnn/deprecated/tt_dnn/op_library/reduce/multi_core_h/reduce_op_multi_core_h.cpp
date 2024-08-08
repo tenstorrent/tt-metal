@@ -18,13 +18,16 @@ namespace tt {
 namespace tt_metal {
 
 operation::ProgramWithCallbacks reduce_multi_core_h(
-    const Tensor &a, Tensor &output, ReduceOpMath reduce_op, float scaler) {
+    const Tensor &a, Tensor &output, ReduceOpMath reduce_op, const DeviceComputeKernelConfig& compute_kernel_config, float scaler) {
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
+
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+        get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -173,7 +176,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/kernels/compute/reduce_h.cpp",
         core_group_1,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1, .defines = reduce_defines});
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args_group_1, .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
         vector<uint32_t> compute_kernel_args_group_2 = {
@@ -186,7 +189,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/kernels/compute/reduce_h.cpp",
             core_group_2,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2, .defines = reduce_defines});
+            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args_group_2, .defines = reduce_defines});
     }
 
     const auto &cores =

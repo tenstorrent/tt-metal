@@ -283,12 +283,11 @@ Tensor untilize_with_unpadding(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor_a = input_tensors.at(0);
-            const Shape output_tensor_shape = {
-                output_tensor_end[0] + 1,
-                output_tensor_end[1] + 1,
-                output_tensor_end[2] + 1,
-                output_tensor_end[3] + 1,
-            };
+            std::vector<std::uint32_t> output_tensor_shape_vec;
+            for (uint32_t i = 0; i < input_tensor_a.get_shape().rank(); i++) {
+                output_tensor_shape_vec.push_back(output_tensor_end[i] + 1);
+            }
+            const Shape output_tensor_shape = {output_tensor_shape_vec};
             if (input_tensor_a.get_layout() != Layout::TILE) {
                 if (input_tensor_a.get_legacy_shape() == output_tensor_shape) {
                     log_warning(
@@ -300,10 +299,12 @@ Tensor untilize_with_unpadding(
             }
             // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
             bool fp32_dest_acc_en = input_tensor_a.get_dtype() == DataType::UINT32;
-            return operation::run_without_autoformat(
+            auto output = operation::run_without_autoformat(
                 UntilizeWithUnpadding{
                     output_tensor_end, output_mem_config, use_multicore, use_pack_untilize, fp32_dest_acc_en},
                 {input_tensor_a});
+
+            return output;
         },
         {input_tensor_a},
         output_tensors);

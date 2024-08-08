@@ -7,8 +7,6 @@
 
 #include "tt_metal/common/logger.hpp"
 
-using namespace std;
-
 namespace tt::test_utils::df {
 
 //! Custom type is supported as long as the custom type supports the following custom functions
@@ -45,7 +43,7 @@ class float32 {
     bool operator!=(float32 rhs) { return uint32_data != rhs.uint32_data; }
 };
 
-inline ostream& operator<<(ostream& os, const float32& val) {
+inline std::ostream& operator<<(std::ostream& os, const float32& val) {
     os << val.to_packed();
     return os;
 }

@@ -373,7 +373,6 @@ CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const 
 
     this->circular_buffers_.push_back(circular_buffer);
     this->circular_buffer_by_id_.insert({circular_buffer->id(), circular_buffer});
-    GraphTracker::instance().track_allocate_cb(core_range_set, 0, circular_buffer->size());
     return circular_buffer->id();
 }
 
@@ -424,7 +423,6 @@ void Program::invalidate_circular_buffer_allocation() {
         cb_allocator.reset_available_addresses();
     }
     this->local_circular_buffer_allocation_needed_ = true;
-    GraphTracker::instance().track_deallocate_cb();
 }
 
 void Program::allocate_circular_buffers() {
@@ -583,7 +581,7 @@ void Program::populate_dispatch_data(Device *device) {
         {RISCV::ERISC, eth_l1_mem::address_map::FIRMWARE_BASE}};
 
     auto extract_dst_noc_unicast_info =
-        [&device](const set<CoreRange> &ranges, const CoreType core_type) -> vector<pair<transfer_info_cores, uint32_t>> {
+        [&device](const std::set<CoreRange> &ranges, const CoreType core_type) -> std::vector<pair<transfer_info_cores, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
         vector<pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
         for (const CoreRange &core_range : ranges) {

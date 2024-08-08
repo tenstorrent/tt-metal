@@ -73,7 +73,7 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     TT_ASSERT(buffer.is_dram() or buffer.is_l1(), "Trying to read an invalid buffer");
 
     this->device = device;
-    this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
 }
 
 void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
@@ -148,7 +148,7 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     pages_to_write(pages_to_write.has_value() ? pages_to_write.value() : buffer.num_pages()) {
     TT_ASSERT(buffer.is_dram() or buffer.is_l1(), "Trying to write to an invalid buffer");
     this->device = device;
-    this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
 }
 
 void EnqueueWriteInterleavedBufferCommand::add_dispatch_write(HugepageDeviceCommand& command_sequence) {
@@ -307,7 +307,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     program(program),
     dispatch_core(dispatch_core) {
     this->device = device;
-    this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
 }
 
@@ -378,7 +378,7 @@ uint32_t get_max_write_packed_sub_cmds(
 
     uint32_t packed_write_max_multicast_sub_cmds =
         get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
-    return min(
+    return std::min(
         max_prefetch_num_packed_cmds,
         is_unicast ? packed_write_max_unicast_sub_cmds : packed_write_max_multicast_sub_cmds);
 };
@@ -493,7 +493,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     static vector<CoreType> core_types = {CoreType::WORKER, CoreType::ETH};
 
     CoreType dispatch_core_type =
-        dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
+        dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
 
     // Note: each sub_cmd contain data for multiple kernels (DM*, COMPUTE)
@@ -795,7 +795,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                         cb_config_payload[base_index + 1] = cb_size;
                         cb_config_payload[base_index + 2] = cb->num_pages(buffer_index);
                         cb_config_payload[base_index + 3] = cb->page_size(buffer_index) >> 4;
-                        max_base_index = max(max_base_index, base_index);
+                        max_base_index = std::max(max_base_index, base_index);
                     }
                 }
                 multicast_cb_config_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
@@ -805,7 +805,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                 multicast_cb_config_data.emplace_back(
                     cb_config_payload.data(),
                     (max_base_index + UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG) * sizeof(uint32_t));
-                max_overall_base_index = max(max_overall_base_index, max_base_index);
+                max_overall_base_index = std::max(max_overall_base_index, max_base_index);
                 i++;
             }
             cb_config_size_bytes =
@@ -1245,7 +1245,7 @@ void EnqueueProgramCommand::process() {
         stall_fetch_size_bytes + preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
 
     CoreType dispatch_core_type =
-        dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
+        dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     if (total_fetch_size_bytes <= dispatch_constants::get(dispatch_core_type).max_prefetch_command_size()) {
         this->manager.issue_queue_reserve(total_fetch_size_bytes, this->command_queue_id);
         uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
@@ -1391,7 +1391,7 @@ void EnqueueRecordEventCommand::process() {
     command_sequence.add_dispatch_wait(
         false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count);
 
-    CoreType core_type = dispatch_core_manager::get(num_hw_cqs).get_dispatch_core_type(this->device->id());
+    CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
     std::vector<CQDispatchWritePackedUnicastSubCmd> unicast_sub_cmds(num_hw_cqs);
     std::vector<std::pair<const void*, uint32_t>> event_payloads(num_hw_cqs);
@@ -1400,10 +1400,10 @@ void EnqueueRecordEventCommand::process() {
         tt_cxy_pair dispatch_location;
         if (device->is_mmio_capable()) {
             dispatch_location =
-                dispatch_core_manager::get(num_hw_cqs).dispatcher_core(this->device->id(), channel, cq_id);
+                dispatch_core_manager::instance().dispatcher_core(this->device->id(), channel, cq_id);
         } else {
             dispatch_location =
-                dispatch_core_manager::get(num_hw_cqs).dispatcher_d_core(this->device->id(), channel, cq_id);
+                dispatch_core_manager::instance().dispatcher_d_core(this->device->id(), channel, cq_id);
         }
 
         CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, core_type);
@@ -1426,7 +1426,7 @@ void EnqueueRecordEventCommand::process() {
     if (not device->is_mmio_capable()) {
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             tt_cxy_pair prefetch_location =
-                dispatch_core_manager::get(num_hw_cqs).prefetcher_core(this->device->id(), channel, cq_id);
+                dispatch_core_manager::instance().prefetcher_core(this->device->id(), channel, cq_id);
             CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_location, core_type);
             command_sequence.add_dispatch_write_remote(
                 this->event_id,
@@ -1456,7 +1456,7 @@ EnqueueWaitForEventCommand::EnqueueWaitForEventCommand(
     manager(manager),
     sync_event(sync_event),
     clear_count(clear_count) {
-    this->dispatch_core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     // Should not be encountered under normal circumstances (record, wait) unless user is modifying sync event ID.
     // TT_ASSERT(command_queue_id != sync_event.cq_id || event != sync_event.event_id,
     //     "EnqueueWaitForEventCommand cannot wait on it's own event id on the same CQ. Event ID: {} CQ ID: {}",
@@ -1575,17 +1575,17 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
     CoreCoord enqueue_program_dispatch_core;
     if (device->is_mmio_capable()) {
         enqueue_program_dispatch_core =
-            dispatch_core_manager::get(device->num_hw_cqs()).dispatcher_core(device->id(), channel, id);
+            dispatch_core_manager::instance().dispatcher_core(device->id(), channel, id);
     } else {
         enqueue_program_dispatch_core =
-            dispatch_core_manager::get(device->num_hw_cqs()).dispatcher_d_core(device->id(), channel, id);
+            dispatch_core_manager::instance().dispatcher_d_core(device->id(), channel, id);
     }
-    CoreType core_type = dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+    CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     this->physical_enqueue_program_dispatch_core =
         device->physical_core_from_logical_core(enqueue_program_dispatch_core, core_type);
 
     tt_cxy_pair completion_q_writer_location =
-        dispatch_core_manager::get(device->num_hw_cqs()).completion_queue_writer_core(device->id(), channel, this->id);
+        dispatch_core_manager::instance().completion_queue_writer_core(device->id(), channel, this->id);
 
     this->completion_queue_writer_core = CoreCoord(completion_q_writer_location.x, completion_q_writer_location.y);
 
@@ -1654,7 +1654,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
     CoreType dispatch_core_type =
-        dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
+        dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
 
     uint32_t padded_page_size = buffer.aligned_page_size();
     uint32_t pages_to_read = buffer.num_pages();
@@ -1683,7 +1683,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
                 num_pages_to_read =
                     buffer_page_mapping.value().core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
             } else {
-                num_pages_to_read = min(num_total_pages, max_pages_per_shard);
+                num_pages_to_read = std::min(num_total_pages, max_pages_per_shard);
                 num_total_pages -= num_pages_to_read;
             }
             uint32_t bank_base_address = buffer.address();
@@ -1792,7 +1792,7 @@ void HWCommandQueue::enqueue_write_buffer(
 }
 
 CoreType HWCommandQueue::get_dispatch_core_type() {
-    return dispatch_core_manager::get(device->num_hw_cqs()).get_dispatch_core_type(device->id());
+    return dispatch_core_manager::instance().get_dispatch_core_type(device->id());
 }
 
 void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src, bool blocking) {
@@ -1803,7 +1803,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
     const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->id);
     CoreType dispatch_core_type =
-        dispatch_core_manager::get(this->device->num_hw_cqs()).get_dispatch_core_type(this->device->id());
+        dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
     uint32_t max_data_sizeB =
         max_prefetch_command_size - ((sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) * 2);  // * 2 to account for issue
@@ -1843,7 +1843,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
                 dst_page_index = buffer_page_mapping.value().host_page_to_dev_page_mapping_
                                      [buffer_page_mapping.value().core_host_page_indices_[core_id][0]];
             } else {
-                num_pages = min(num_total_pages, max_pages_per_shard);
+                num_pages = std::min(num_total_pages, max_pages_per_shard);
                 num_total_pages -= num_pages;
             }
             uint32_t curr_page_idx_in_shard = 0;
@@ -2033,6 +2033,26 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         this->manager,
         expected_workers_completed);
     this->enqueue_command(command, blocking);
+
+    if (program.has_multi_device_dependencies() and not this->device->is_mmio_capable() and tt::Cluster::instance().is_galaxy_cluster() and not this->tid.has_value()) {
+        // Issue #19078 - Temporary workaround to avoid deadlocks on Galaxy, until Ethernet Routing Fabric supports VCs:
+        // For programs that require syncs between devices (ex: CCLs), it must be ensured that all devices in a tunnel
+        // receive the full set of program commands. Due to demux being a shared resource (it has a single input queue) and cannot
+        // toggle its output queue id, until a txn is completed (prefetch_d corresponding to the current packet is unblocked), it
+        // is possible that all devices do not get the program commands and enter a deadlock (dispatch_d gets blocked waiting for
+        // the multi-device program to complete, causing prefetch_d to backpressure, as its picked up other commands -> demux has
+        // CCL program commands for other devices in its queue, but is blocked sending a downstream command to the backpressured
+        // prefetch_d).
+        // To resolve this, prefetch_h for all devices involved in the multi-device program will stall sending commands, until
+        // dispatch_d has notified prefetch_h that workers have completed execution (all chips got the program commands, and there
+        // is no further scope of a deadlock).
+        // This pipeline flush does not need to be issued when using trace, since prefetch_h will stall sending pages to prefetch_d
+        // until it has been notified of trace completion (due to cmddat_q reuse). Additionally, events can currently not be traced,
+        // thus this is skipped during trace capture.
+        std::shared_ptr<Event> event = std::make_shared<Event>();
+        this->enqueue_record_event(event);
+        this->enqueue_wait_for_event(event);
+    }
 
 #ifdef DEBUG
     if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {

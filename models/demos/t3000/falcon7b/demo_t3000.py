@@ -60,9 +60,20 @@ def test_demo_multichip(
 
     for device in devices:
         device.enable_async(async_mode)
+
+    batch_size = 32
+    if perf_mode:
+        csv_perf_targets = {
+            "prefill_t/s": {128: 3531, 1024: 70000, 2048: None}[max_seq_len],
+            "decode_t/s": 14 * batch_size * num_devices,
+            "decode_t/s/u": 14,
+        }  # performance targets that we aim for (t3000)
+    else:
+        csv_perf_targets = {}
+
     return run_falcon_demo_kv(
         user_input=user_input,
-        batch_size=32,
+        batch_size=batch_size,
         max_seq_len=max_seq_len,
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
         model_location_generator=model_location_generator,
@@ -72,4 +83,5 @@ def test_demo_multichip(
         greedy_sampling=greedy_sampling,
         expected_perf_metrics=expected_perf_metrics,
         expected_greedy_output_path=expected_greedy_output_path,
+        csv_perf_targets=csv_perf_targets,
     )

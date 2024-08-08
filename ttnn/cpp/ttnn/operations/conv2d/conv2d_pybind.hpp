@@ -74,7 +74,7 @@ void py_module(py::module& module) {
         "conv2d",
         [](const ttnn::Tensor& input_tensor,
             const ttnn::Tensor& weight_tensor,
-            ttnn::multi_device::DeviceMesh * device,
+            DeviceMesh * device,
             uint32_t in_channels,
             uint32_t out_channels,
             uint32_t batch_size,
@@ -87,7 +87,7 @@ void py_module(py::module& module) {
             uint32_t groups,
             std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
             std::optional<const Conv2dConfig> conv_config_ = std::nullopt) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
-            return ttnn::operations::conv2d::conv2d<ttnn::multi_device::DeviceMesh>(
+            return ttnn::operations::conv2d::conv2d<DeviceMesh>(
                 input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation,
                     groups, bias_tensor, conv_config_);
         },
@@ -174,7 +174,7 @@ void py_module(py::module& module) {
 
     module.def(
         "get_conv_padded_input_shape_and_mem_config",
-        [](ttnn::multi_device::DeviceMesh * device,
+        [](DeviceMesh * device,
             const ttnn::Tensor& input_tensor,
             const Conv2dConfig& conv_config,
             uint32_t batch_size,
@@ -182,7 +182,7 @@ void py_module(py::module& module) {
             uint32_t width,
             uint32_t in_channels,
             uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
-            return ttnn::operations::conv2d::get_conv_padded_input_shape_and_mem_config<ttnn::multi_device::DeviceMesh>(
+            return ttnn::operations::conv2d::get_conv_padded_input_shape_and_mem_config<DeviceMesh>(
                 device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels);
         },
         py::kw_only(),

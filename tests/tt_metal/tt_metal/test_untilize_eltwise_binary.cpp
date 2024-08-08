@@ -13,8 +13,8 @@
 
 using namespace tt;
 
-inline vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_vec, vector<uint32_t> shape) {
-    vector<uint32_t> dst_vec;
+inline std::vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_vec, std::vector<uint32_t> shape) {
+    std::vector<uint32_t> dst_vec;
 
     int num_rows = shape.at(0);
     int num_cols = shape.at(1) / 2;

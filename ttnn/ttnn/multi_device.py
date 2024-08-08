@@ -18,6 +18,40 @@ DeviceMesh = ttnn._ttnn.multi_device.DeviceMesh
 DeviceMesh.core_grid = property(get_device_mesh_core_grid)
 
 
+def visualize_device_mesh(device_mesh):
+    from rich import box, padding
+    from rich.align import Align
+    from rich.console import Console
+    from rich.table import Table
+
+    # Setup rich table
+    rows, cols = device_mesh.shape
+    mesh_table = Table(
+        title=f"DeviceMesh(rows={rows}, cols={cols}):",
+        show_header=False,
+        show_footer=False,
+        box=box.SQUARE,
+        expand=False,
+        show_lines=True,
+        padding=(0, 0),
+    )
+
+    for _ in range(cols):
+        mesh_table.add_column(justify="center", vertical="middle")
+
+    # Populate table
+    for row_idx in range(rows):
+        row_cells = []
+        for col_idx in range(cols):
+            device = device_mesh.get_device(row_idx, col_idx)
+            cell_content = f"Dev. ID: {device.id()}\n ({row_idx}, {col_idx})" if device else "Empty"
+            cell = padding.Padding(Align(cell_content, "center", vertical="middle"), (0, 0))
+            row_cells.append(cell)
+        mesh_table.add_row(*row_cells)
+
+    Console().print(mesh_table)
+
+
 def get_num_devices() -> List[int]:
     return ttnn._ttnn.deprecated.device.GetNumAvailableDevices()
 
@@ -151,6 +185,37 @@ class ShardTensorToMesh(TensorToMesh):
         return {
             "strategy": "shard",
             "shard_dim": f"{self.shard_dim}",
+        }
+
+
+class ShardTensor2dMesh(TensorToMesh):
+    def __init__(self, device_mesh, shard_grid, shard_dimensions):
+        super().__init__(device_mesh)
+        self.shard_grid = shard_grid  # defines shape of 2D grid of shards
+        self.shard_dimensions = shard_dimensions  # defines which dimensions to shard
+
+    def map(self, tensor):
+        import torch
+
+        Y, X = self.shard_dimensions
+        # Returns list of tensors to map to row-major ordering of chips in shard grid
+        if self.shard_dimensions[Y] is None:
+            row_tensors = [tensor.clone() for _ in range(self.shard_grid[Y])]
+        else:
+            row_tensors = torch.chunk(tensor, self.shard_grid[Y], dim=self.shard_dimensions[Y])
+
+        if self.shard_dimensions[X] is None:
+            tensor_2d_shards = [row_tensor.clone() for row_tensor in row_tensors for _ in range(self.shard_grid[X])]
+        else:
+            tensor_2d_shards = [
+                tt for t in row_tensors for tt in torch.chunk(t, self.shard_grid[X], dim=self.shard_dimensions[X])
+            ]
+        return tensor_2d_shards
+
+    def config(self):
+        return {
+            "strategy": "shard",
+            "shard_dim": f"{self.shard_dimensions[0] if self.shard_dimensions[0] else self.shard_dimensions[1]}",
         }
 
 

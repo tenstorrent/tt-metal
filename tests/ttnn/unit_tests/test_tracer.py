@@ -19,6 +19,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.requires_fast_runtime_mode_off
 def test_exp():
     with trace():
         tensor = torch.randint(0, 100, (1, 64))
@@ -58,6 +59,7 @@ def test_torch_bert(show_modules):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("show_modules", [True, False])
 def test_bloom(show_modules):
     model_name = "bigscience/bloom-560m"
@@ -128,6 +130,7 @@ def test_ttnn_bert(device, use_program_cache, model_name, batch_size, sequence_s
     visualize(output)
 
 
+@pytest.mark.requires_fast_runtime_mode_off
 def test_falcon7b_instruct():
     from functools import partial
     from loguru import logger

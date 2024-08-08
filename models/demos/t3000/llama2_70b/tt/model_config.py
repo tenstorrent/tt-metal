@@ -109,11 +109,17 @@ def get_model_config(
         "HEIGHT_SHARDED_MEMCFG": HEIGHT_SHARDED_MEMCFG,
         "BLOCK_SHARDED_MEMCFG": BLOCK_SHARDED_MEMCFG,
         "MAX_MM_SEQ_LEN": 1024,  # Used to support seq len greater than 2k
+        "HIDDEN_SIZE": model_config_entries["hidden_size"],
     }
     hidden_size = model_config_entries["hidden_size"]
     head_dim = model_config_entries["head_dim"]
     n_heads = model_config_entries["num_attention_heads"]
     n_kv_heads = model_config_entries["num_kv_heads"]
+
+    if llama_version == "llama3":
+        model_config["FFN_EXPANDED_HIDDEN_SIZE"] = 28 * 1024
+    elif llama_version == "llama3-405b":
+        model_config["FFN_EXPANDED_HIDDEN_SIZE"] = 52 * 1024
 
     shard_spec_64_cores_grid = ttl.tensor.CoreRangeSet(
         {

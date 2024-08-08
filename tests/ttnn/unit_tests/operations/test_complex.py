@@ -97,7 +97,7 @@ def test_level2_real(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
     # check real
     x = Complex(input_shape)
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -123,7 +123,7 @@ def test_level2_imag(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
     # check imag
     x = Complex(input_shape)
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -149,7 +149,7 @@ def test_level2_abs(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
     # check abs
     x = Complex(input_shape)
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -178,7 +178,7 @@ def test_level2_abs(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
     # check abs
     x = Complex(input_shape)
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -207,7 +207,7 @@ def test_level2_conj(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
     # check abs
     x = Complex(input_shape)
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -239,7 +239,7 @@ def test_level2_recip(bs, memcfg, dtype, device, function_level_defaults):
     # check abs
     x = Complex(input_shape)
     x = x.div(x * 0.5)
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -274,11 +274,11 @@ def test_level2_add(bs, memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape)
     y = Complex(input_shape) * -0.5
 
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    ytt = ttl.tensor.complex_tensor(
+    ytt = ttnn.complex_tensor(
         ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -311,11 +311,11 @@ def test_level2_sub(bs, memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape)
     y = Complex(input_shape) * -0.5
 
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    ytt = ttl.tensor.complex_tensor(
+    ytt = ttnn.complex_tensor(
         ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -349,11 +349,11 @@ def test_level2_mul(bs, memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape)
     y = Complex(input_shape) * -0.5
 
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    ytt = ttl.tensor.complex_tensor(
+    ytt = ttnn.complex_tensor(
         ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -387,11 +387,11 @@ def test_level2_div(bs, memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape) * 0.5
     y = Complex(input_shape) * 1
 
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
-    ytt = ttl.tensor.complex_tensor(
+    ytt = ttnn.complex_tensor(
         ttl.tensor.Tensor(y.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(y.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -422,7 +422,7 @@ def test_level2_is_real(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
     # check abs
     x = Complex(input_shape)
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(0 * x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -452,7 +452,7 @@ def test_level2_is_imag(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
     # check abs
     x = Complex(input_shape)
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(0 * x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -481,7 +481,7 @@ def test_level2_angle(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
     # check imag
     x = Complex(input_shape)
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )
@@ -514,7 +514,7 @@ def test_level2_polar(bs, memcfg, dtype, device, function_level_defaults):
     # we set imag = angle theta
     x = Complex(None, re=torch.ones(input_shape), im=torch.rand(input_shape))
 
-    xtt = ttl.tensor.complex_tensor(
+    xtt = ttnn.complex_tensor(
         ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
         ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
     )

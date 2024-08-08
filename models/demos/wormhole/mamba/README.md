@@ -68,7 +68,7 @@ pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py
 Note : input embedding layer and TopK are on CPU
 
 ```
-pytest -svv models/demos/wormhole/mamba/tests/test_full_model.py::test_inference
+pytest -svv models/demos/wormhole/mamba/tests/test_mamba_model.py::test_inference
 ```
 
 ## Performance Tests

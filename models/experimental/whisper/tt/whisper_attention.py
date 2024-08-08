@@ -4,7 +4,9 @@
 
 import torch
 import torch.nn as nn
+import ttnn
 import tt_lib
+import ttnn
 from typing import Optional, Tuple, Union
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
@@ -85,7 +87,7 @@ class TtWhisperAttention(nn.Module):
     # Copied from transformers.models.bart.modeling_bart.BartAttention._shape with BART->whisper
     def _shape(self, tt_tensor: tt_lib.tensor.Tensor, seq_len: int, bsz: int):
         tt_tensor = fallback_ops.reshape(tt_tensor, bsz, seq_len, self.num_heads, self.head_dim)
-        tt_tensor = tt_lib.tensor.transpose(tt_tensor, 1, -2)
+        tt_tensor = ttnn.transpose(tt_tensor, 1, -2)
         return tt_tensor
 
     def forward(
@@ -114,7 +116,7 @@ class TtWhisperAttention(nn.Module):
         if q_proj_shape == self.cached_q_proj_shape:
             q_proj_mul_const = self.q_proj_mul_const
         else:
-            self.q_proj_mul_const = tt_lib.tensor.full(q_proj_shape, self.scaling)
+            self.q_proj_mul_const = ttnn.full(q_proj_shape, self.scaling)
             self.cached_q_proj_shape = q_proj_shape
             q_proj_mul_const = self.q_proj_mul_const
 
@@ -139,8 +141,8 @@ class TtWhisperAttention(nn.Module):
             key_states = self._shape(linear(hidden_states, self.k_proj_weight, self.k_proj_bias), -1, bsz)
             value_states = self._shape(linear(hidden_states, self.v_proj_weight, self.v_proj_bias), -1, bsz)
 
-            key_states = tt_lib.tensor.concat([past_key_value[0], key_states], dim=-2)
-            value_states = tt_lib.tensor.concat([past_key_value[1], value_states], dim=-2)
+            key_states = ttnn.concat([past_key_value[0], key_states], dim=-2)
+            value_states = ttnn.concat([past_key_value[1], value_states], dim=-2)
 
         else:
             # self_attention
@@ -165,7 +167,7 @@ class TtWhisperAttention(nn.Module):
         key_states = fallback_ops.reshape(key_states, *proj_shape)
         value_states = fallback_ops.reshape(value_states, *proj_shape)
 
-        key_states_transposed = tt_lib.tensor.transpose(key_states, -2, -1)
+        key_states_transposed = ttnn.transpose(key_states, -2, -1)
         src_len = key_states.get_legacy_shape()[-2]
         attn_weights = ttnn.matmul(query_states, key_states_transposed)
 
@@ -235,7 +237,7 @@ class TtWhisperAttention(nn.Module):
                 f" {attn_output.get_legacy_shape()}"
             )
         attn_output = tt_lib.tensor.reshape(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)
-        attn_output = tt_lib.tensor.transpose(attn_output, 1, -2)
+        attn_output = ttnn.transpose(attn_output, 1, -2)
 
         attn_output = fallback_ops.reshape(attn_output, 1, bsz, tgt_len, self.embed_dim)
 

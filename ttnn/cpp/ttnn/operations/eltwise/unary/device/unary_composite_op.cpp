@@ -1,19 +1,27 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
+#include "unary_composite_op.hpp"
 
 #include <functional>
 #include <optional>
 
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/common/bfloat16.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
-#include "unary_composite_op.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
-#include "tt_metal/common/bfloat16.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+
 
 namespace ttnn::operations::unary{
 
@@ -63,7 +71,7 @@ Tensor _power(uint8_t queue_id, const Tensor& input, uint32_t exponent, const st
 
 // acosh(x) = log(x + sqrt(x^2 - 1))
 Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-   Tensor t_one = ttnn::ones_like(input_a);
+   Tensor t_one = ttnn::full_like(input_a, 1.0f);
    Tensor t_result(input_a);
    {
        Tensor ln_res(input_a);
@@ -274,7 +282,7 @@ Tensor _lgamma(const Tensor& x,  const std::optional<MemoryConfig>& output_mem_c
         result = ttnn::subtract(result, t, std::nullopt, output_mem_config);
         {
             {
-                Tensor t_one = ttnn::ones_like(x);
+                Tensor t_one = ttnn::full_like(x, 1.0f);
                 result = ttnn::where(ttnn::eq(x, t_one, std::nullopt, output_mem_config), 0.0f, result);
             }
             {
@@ -289,7 +297,7 @@ Tensor _lgamma(const Tensor& x,  const std::optional<MemoryConfig>& output_mem_c
 // log1p 1
 // use transformation y = log(1.0 + x) by broadcast
 Tensor _log1p(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_one = ttnn::ones_like(x);
+    Tensor t_one = ttnn::full_like(x, 1.0f);
     Tensor x_1 = ttnn::add(t_one, x, std::nullopt, output_mem_config);
     Tensor result_log1p = ttnn::log(x_1, output_mem_config);
     return result_log1p;
@@ -366,6 +374,8 @@ Tensor _trunc(const Tensor& input, const std::optional<MemoryConfig>& output_mem
     return result;
 }
 
+// Function variance of whole tensor.
+// Tensor variance(const Tensor& y,const Tensor& mean_y);
 Tensor _variance_impl(
     const Tensor& y, const Tensor& mean_y, Tensor& y_minus_mean_y, const std::optional<MemoryConfig>& output_mem_config) {
     constexpr float correction = 0.0f;
@@ -427,7 +437,7 @@ Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem
 Tensor _hardsigmoid(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
    Tensor a_t = ttnn::full_like(a,value_1);
    Tensor b_t = ttnn::full_like(a,value_2);
-   Tensor a_mac = mac(a, a_t, b_t);  // multiply and add.
+   Tensor a_mac = ttnn::mac(a, a_t, b_t);  // multiply and add.
    Tensor a_clip = relu_max(a_mac, 1.0f);
    return a_clip;
 }
@@ -447,13 +457,13 @@ Tensor _hardswish(const Tensor& a, float value_1, float value_2, const std::opti
 // Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp
 Tensor _clip(const Tensor& a, float low, float high, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
-    const Tensor h_const = ttnn::full_like(a, high);
-    Tensor a_max = tt::tt_metal::min(a, h_const, output_memory_config);
+    const Tensor h_const = full_like(a, high);
+    Tensor a_max = ttnn::minimum(a, h_const, output_memory_config);
     if (low == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
-        const Tensor l_const = ttnn::full_like(a, low);
-        return tt::tt_metal::max(a_max, l_const, output_memory_config);
+        const Tensor l_const = full_like(a, low);
+        return ttnn::maximum(a_max, l_const, output_memory_config);
     }
 }
 
@@ -615,7 +625,7 @@ Tensor _round(const Tensor& input, int32_t decimals, const std::optional<MemoryC
         Tensor rounded_non_half = ttnn::floor(
             ttnn::add(ttnn::multiply(input, power_10, std::nullopt, output_mem_config), 0.5, std::nullopt, output_mem_config),
             output_mem_config);
-        rounded_non_half = div(rounded_non_half, power_10);
+        rounded_non_half = ttnn::div(rounded_non_half, power_10);
         return rounded_non_half;
     } else {  // Bankers' Rounding
         Tensor rounded_non_half = ttnn::floor(
@@ -748,7 +758,8 @@ Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::op
     TT_FATAL(y.get_legacy_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
 
     // format to HW
-    Tensor y_hw = reshape(y, 1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]);
+    Tensor y_hw = tt::tt_metal::reshape(
+        y, 1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]);
 
     // compute @fn
     Tensor z_0 = fn(y_hw, output_mem_config);
@@ -756,7 +767,8 @@ Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::op
     y_hw.deallocate();
 
     // reformat
-    Tensor z_1 = reshape(z_0, y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]);
+    Tensor z_1 = tt::tt_metal ::reshape(
+        z_0, y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]);
     z_0.deallocate();
 
     return z_1;
@@ -770,7 +782,7 @@ Tensor _normalize_global(const Tensor& y,  const std::optional<MemoryConfig>& ou
 Tensor _frac(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
-    Tensor trunc_res = trunc(input);
+    Tensor trunc_res = ttnn::trunc(input);
     Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);
     return result;
 }

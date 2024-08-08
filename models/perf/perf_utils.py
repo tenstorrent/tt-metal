@@ -45,7 +45,7 @@ def merge_perf_files(fname, perf_fname, expected_cols):
 
 def process_perf_results(fname, expected_cols):
     with open(fname) as file:
-        merge_res = csv.reader(file)
+        merge_res = csv.reader(file, skipinitialspace=True)
         logger.info(next(merge_res)[0].strip())
         logger.info(next(merge_res)[0].strip())
         cols = next(merge_res)

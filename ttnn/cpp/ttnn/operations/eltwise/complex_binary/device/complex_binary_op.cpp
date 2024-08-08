@@ -6,8 +6,9 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/complex/complex_ops.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn::operations::complex_binary {
 
@@ -37,7 +38,7 @@ ComplexTensor _mul(const ComplexTensor& ab, const ComplexTensor& cd,  const Memo
 }
 
 ComplexTensor _div(const ComplexTensor& input_a, const ComplexTensor& input_b,  const MemoryConfig& output_mem_config) {
-    return ttnn::operations::complex_binary::_mul( input_a, ttnn::operations::complex_unary::_reciprocal( input_b , output_mem_config ), output_mem_config  );
+    return ttnn::operations::complex_binary::_mul( input_a, ttnn::reciprocal( input_b , output_mem_config ), output_mem_config  );
 }
 
 }  // namespace ttnn::operations::complex_binary

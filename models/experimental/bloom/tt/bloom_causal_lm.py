@@ -18,7 +18,7 @@ class TtBloomForCausalLM:
         self.lm_head_weight = bloom_utils.torch2tt_tensor(state_dict["lm_head.weight"], device)
 
         # Transpose the weights
-        self.lm_head_weight = tt_lib.tensor.transpose(self.lm_head_weight, -2, -1)
+        self.lm_head_weight = ttnn.transpose(self.lm_head_weight, -2, -1)
 
     # def get_output_embeddings(self):
     #    return self.lm_head

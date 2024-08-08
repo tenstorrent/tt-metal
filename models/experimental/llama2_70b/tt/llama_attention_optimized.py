@@ -282,7 +282,7 @@ class TtLlamaAttention_optimized:
         key_layer = tt_lib.tensor.nlp_kv_cache_load_slice(keys, 0, padded_layer_past_len)
 
         # PRE-SOFTMAX MM
-        key_layer_transposed = tt_lib.tensor.transpose(
+        key_layer_transposed = ttnn.transpose(
             key_layer,
             -2,
             -1,

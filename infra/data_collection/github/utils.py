@@ -51,8 +51,7 @@ BENCHMARK_ENVIRONMENT_CSV_FIELDS = (
     "docker_image",
     "device_hostname",
     "device_ip",
-    "device_type",
-    "device_memory_size",
+    "device_info",
 )
 
 
@@ -143,9 +142,8 @@ def get_job_row_from_github_job(github_job):
     labels = github_job["labels"]
 
     if not host_name:
-        logger.debug("Detected null host_name, so will return unknown location and host_name")
-        location = "unknown"
-        host_name = "unknown"
+        location = None
+        host_name = None
     elif "GitHub Actions " in host_name:
         location = "github"
     else:
@@ -165,7 +163,7 @@ def get_job_row_from_github_job(github_job):
         logger.warning("Assuming ubuntu-20.04 for tt cloud, but may not be the case soon")
         ubuntu_version = "ubuntu-20.04"
     else:
-        ubuntu_version = "unknown"
+        ubuntu_version = None
 
     os = ubuntu_version
 
@@ -181,7 +179,7 @@ def get_job_row_from_github_job(github_job):
     elif "wormhole_b0" in labels:
         card_type = "wormhole_b0"
     else:
-        card_type = "unknown"
+        card_type = None
 
     job_submission_ts = github_job["created_at"]
 
@@ -328,6 +326,13 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
     logger.warning("Hardcoded null for device_memory_size")
     device_memory_size = ""
 
+    device_info = json.dumps(
+        {
+            "device_type": device_type,
+            "device_memory_size": device_memory_size,
+        }
+    )
+
     benchmark_environment_row = {
         "git_repo_name": git_repo_name,
         "git_commit_hash": git_commit_hash,
@@ -338,8 +343,7 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
         "docker_image": docker_image,
         "device_hostname": device_hostname,
         "device_ip": device_ip,
-        "device_type": device_type,
-        "device_memory_size": device_memory_size,
+        "device_info": device_info,
     }
 
     create_csv(github_benchmark_environment_csv_filename, BENCHMARK_ENVIRONMENT_CSV_FIELDS, [benchmark_environment_row])

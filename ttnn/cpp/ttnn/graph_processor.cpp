@@ -166,6 +166,18 @@ namespace ttnn {
 
     void GraphProcessor::track_end_op(const std::any& output_tensors) {
         const std::lock_guard<std::mutex> lock(mutex);
+        tt::log_info("Deallocating CBs");
+        {
+            auto counter = graph.size();
+            graph.push_back(Vertex{
+                .counter = counter,
+                .name = "circular_buffer_deallocate_all",
+                .param = 0,
+                .connections = {current_op_id.top()}
+            });
+            graph[current_op_id.top()].connections.push_back(counter);
+        }
+
         tt::log_info("End op");
         auto counter = graph.size();
         {
@@ -343,6 +355,7 @@ namespace ttnn {
     }
 
     void GraphProcessor::begin_capture() {
+        const std::lock_guard<std::mutex> lock(mutex);
         graph.clear();
         id_to_counter.clear();
         graph.push_back(Vertex{
@@ -357,6 +370,7 @@ namespace ttnn {
         current_op_id.push(0);
     }
     std::string GraphProcessor::end_capture() {
+        const std::lock_guard<std::mutex> lock(mutex);
         auto json_object = tt::stl::json::to_json(graph);
         return json_object.dump();
     }

@@ -70,7 +70,7 @@ typedef bool debug_sanitize_noc_cast_t;
 //  - this isn't racy between riscvs so long as each gets their own noc_index
 inline void debug_sanitize_post_noc_addr_and_hang(
     uint64_t noc_addr, uint32_t l1_addr, uint32_t len, debug_sanitize_noc_cast_t multicast, uint16_t invalid) {
-    debug_sanitize_noc_addr_msg_t tt_l1_ptr *v = *GET_MAILBOX_ADDRESS_DEV(sanitize_noc);
+    debug_sanitize_noc_addr_msg_t tt_l1_ptr *v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize_noc);
 
     if (v[noc_index].invalid == DebugSanitizeNocInvalidOK) {
         v[noc_index].noc_addr = noc_addr;
@@ -256,7 +256,7 @@ void debug_sanitize_noc_and_worker_addr(
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
 #if defined(WATCHER_DEBUG_DELAY)
-    debug_insert_delays_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(debug_insert_delays);
+    debug_insert_delays_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(watcher.debug_insert_delays);
 
     bool delay = false;
     switch (transaction_type) {

@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-cosh:
+  - eltwise-cosh:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -26,7 +26,7 @@ test-list:
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_cosh_sweep.csv
-  - ttnn-cosh:
+  - eltwise-cosh:
       shape:
         start-shape: [1, 1, 1, 2]
         end-shape: [6, 12, 256, 256]

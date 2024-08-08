@@ -27,7 +27,7 @@ def t5_shape_tt(states, batch_size, n_heads, key_value_proj_dim, device):
         tt_out = torch2tt_tensor(states, device)
     else:
         tt_out = tt_lib.tensor.reshape(states, batch_size, -1, n_heads, key_value_proj_dim)
-        tt_out = tt_lib.tensor.transpose(tt_out, 1, -2)
+        tt_out = ttnn.transpose(tt_out, 1, -2)
 
     return tt_out
 
@@ -56,7 +56,7 @@ def t5_unshape_tt(states, batch_size, inner_dim, device):
         states = t5_unshape_pt(states, batch_size, inner_dim)
         tt_out = torch2tt_tensor(states, device)
     else:
-        states = tt_lib.tensor.transpose(states, 1, -2)
+        states = ttnn.transpose(states, 1, -2)
         tt_out = tt_lib.tensor.reshape(states, 1, batch_size, -1, inner_dim)
 
     return tt_out
@@ -326,10 +326,10 @@ class TtT5Attention(nn.Module):
         self.v_weights = torch2tt_tensor(state_dict[f"{base_address}.v.weight"], device)
         self.o_weights = torch2tt_tensor(state_dict[f"{base_address}.o.weight"], device)
 
-        self.q_weights = tt_lib.tensor.transpose(self.q_weights, -2, -1)
-        self.k_weights = tt_lib.tensor.transpose(self.k_weights, -2, -1)
-        self.v_weights = tt_lib.tensor.transpose(self.v_weights, -2, -1)
-        self.o_weights = tt_lib.tensor.transpose(self.o_weights, -2, -1)
+        self.q_weights = ttnn.transpose(self.q_weights, -2, -1)
+        self.k_weights = ttnn.transpose(self.k_weights, -2, -1)
+        self.v_weights = ttnn.transpose(self.v_weights, -2, -1)
+        self.o_weights = ttnn.transpose(self.o_weights, -2, -1)
 
         if self.has_relative_attention_bias:
             self.relative_attention_bias = nn.Embedding(self.relative_attention_num_buckets, self.n_heads)
@@ -499,7 +499,7 @@ class TtT5Attention(nn.Module):
         # compute scores
         # scores = torch.matmul(query_states, key_states.transpose(3, 2))
         # equivalent of torch.einsum("bnqd,bnkd->bnqk", query_states, key_states), compatible with onnx op>9
-        transposed_key_states = tt_lib.tensor.transpose(key_states, -2, -1)
+        transposed_key_states = ttnn.transpose(key_states, -2, -1)
         scores = ttnn.matmul(query_states, transposed_key_states, memory_config=self.mem_config)
 
         if (

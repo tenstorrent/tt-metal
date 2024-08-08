@@ -54,7 +54,7 @@ class TtRobertaForMultipleChoice(nn.Module):
             self.classifier_bias = torch2tt_tensor(state_dict[f"classifier.bias"], self.device)
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight, -2, -1)
+        weight = ttnn.transpose(weight, -2, -1)
         x = ttnn.matmul(x, weight, memory_config=self.mem_config)
         if bias is not None:
             x = tt_lib.tensor.bcast(

@@ -68,6 +68,6 @@ class TtSwinPatchEmbeddings(nn.Module):
         batch, channel, height, width = embeddings.get_legacy_shape()
         output_dimensions = (height, width)
         embeddings = fallback_ops.reshape(embeddings, 1, batch, channel, height * width)
-        embeddings = tt_lib.tensor.transpose(embeddings, -2, -1)
+        embeddings = ttnn.transpose(embeddings, -2, -1)
 
         return embeddings, output_dimensions

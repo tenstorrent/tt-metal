@@ -65,7 +65,7 @@ class TtMultiHeadSelfAttention(nn.Module):
         self.attention_head_size = self.dim // self.n_heads
 
     def const_tensor(self, shape: List[int], value: int) -> tt_lib.tensor.Tensor:
-        return tt_lib.tensor.full(shape, value)
+        return ttnn.full(shape, value)
 
     def get_min(self, tensor: tt_lib.tensor.Tensor):
         tensor = tt_to_torch_tensor(tensor)
@@ -89,10 +89,10 @@ class TtMultiHeadSelfAttention(nn.Module):
 
         def shape(x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
             x = fallback_ops.reshape(x, bs, -1, self.n_heads, dim_per_head)
-            return tt_lib.tensor.transpose(x, 1, -2)
+            return ttnn.transpose(x, 1, -2)
 
         def unshape(x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-            x = tt_lib.tensor.transpose(x, 1, -2)
+            x = ttnn.transpose(x, 1, -2)
             x = fallback_ops.reshape(x, 1, bs, -1, self.n_heads * dim_per_head)
             return x
 
@@ -105,7 +105,7 @@ class TtMultiHeadSelfAttention(nn.Module):
         dim_per_head_tensor = ttnn.reciprocal(dim_per_head_tensor)
 
         q = ttnn.mul(q, dim_per_head_tensor)
-        scores = ttnn.matmul(q, tt_lib.tensor.transpose(k, -2, -1))
+        scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))
         score_value = self.get_min(scores)
         scores = tt_to_torch_tensor(scores)
         mask = tt_to_torch_tensor(mask)

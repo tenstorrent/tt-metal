@@ -22,12 +22,12 @@ using std::uint16_t;
 // src_vec is expected to be untilized
 // result is also untilized
 // TODO(AP) - move to gold header
-inline vector<uint16_t> gold_transpose_hc(std::vector<uint16_t> src_vec, vector<uint32_t> shape) {
-    vector<uint32_t> shapeT{shape[0], shape[2], shape[1], shape[3]};
+inline std::vector<uint16_t> gold_transpose_hc(std::vector<uint16_t> src_vec, std::vector<uint32_t> shape) {
+    std::vector<uint32_t> shapeT{shape[0], shape[2], shape[1], shape[3]};
     TensAddr addr(shape);
     TensAddr addrt(shapeT);
 
-    vector<uint16_t> transposed(src_vec.size());
+    std::vector<uint16_t> transposed(src_vec.size());
     for (int n = 0; n < shape[0]; n++)
     for (int c = 0; c < shape[1]; c++)
     for (int h = 0; h < shape[2]; h++)
@@ -49,7 +49,7 @@ struct BcastDim {
     };
     // TODO(AP): fix the gap to match defines in llk_3c.h
 
-    static const vector<Enum> all() { return { W, H, HW }; }
+    static const std::vector<Enum> all() { return { W, H, HW }; }
 };
 
 struct BcastOp {
@@ -70,10 +70,10 @@ struct BcastOp {
 // result is also untilized
 // bcast_vals for hw mode is expected to have size 1
 // bcast_vals for h or w mode is supposed to have h or w elements
-inline vector<uint16_t> gold_bcast_op(
-    const vector<uint16_t>& src_vec,
-    const vector<uint32_t>& shape,
-    const vector<uint16_t>& bcast_vals,
+inline std::vector<uint16_t> gold_bcast_op(
+    const std::vector<uint16_t>& src_vec,
+    const std::vector<uint32_t>& shape,
+    const std::vector<uint16_t>& bcast_vals,
     BcastDim::Enum bcast_dim,
     BcastOp::Enum bcast_op
 ) {
@@ -82,9 +82,9 @@ inline vector<uint16_t> gold_bcast_op(
     TT_FATAL(bcast_dim == BcastDim::H ? bcast_vals.size() == N*C*W : true);
     TT_FATAL(bcast_dim == BcastDim::HW ? bcast_vals.size() == N*C : true);
 
-    vector<uint32_t> shape_dst{N, C, H, W};
+    std::vector<uint32_t> shape_dst{N, C, H, W};
     TensAddr addr(shape);
-    vector<uint16_t> result(addr.numel());
+    std::vector<uint16_t> result(addr.numel());
     std::fill(result.begin(), result.end(), 0);
     for (int n = 0; n < N; n++)
     for (int c = 0; c < C; c++)
@@ -118,10 +118,10 @@ inline vector<uint16_t> gold_bcast_op(
 // Basic gold batch matmul implementation.
 // Returns C=A*B, A and B are row-major untilized
 // Accumulates in FP32
-inline vector<uint16_t> gold_bmm(
-    const vector<uint32_t> shapeA,
-    const vector<uint16_t>& A,
-    const vector<uint32_t>& shapeB,
+inline std::vector<uint16_t> gold_bmm(
+    const std::vector<uint32_t> shapeA,
+    const std::vector<uint16_t>& A,
+    const std::vector<uint32_t>& shapeB,
     const vector<uint16_t>& B,
     bool acc16 = false
     )

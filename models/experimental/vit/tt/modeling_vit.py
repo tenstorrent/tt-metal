@@ -139,7 +139,7 @@ class TtViTSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_T = tt_lib.tensor.transpose(key_layer, -2, -1, self.out_mem_config_l1)
+        key_layer_T = ttnn.transpose(key_layer, -2, -1, self.out_mem_config_l1)
         attention_scores = ttnn.matmul(query_layer, key_layer_T, memory_config=self.out_mem_config_l1)
 
         attention_scores = tt_lib.tensor.bcast(

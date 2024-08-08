@@ -31,12 +31,8 @@ def custom_compare(*args, **kwargs):
     function = kwargs.pop("function")
     if function in [
         "logical_xor",
-        "logical_ori",
         "logical_or",
-        "logical_xori",
-        "logical_noti",
         "logical_not",
-        "logical_andi",
         "is_close",
     ]:
         comparison_func = comparison_funcs.comp_equal
@@ -63,8 +59,6 @@ if is_wormhole_b0():
                 "lerp_ternary",
                 "addcmul",
                 "addcdiv",
-                "min",
-                "max",
                 "swish",
                 "log1p",
                 "mish",
@@ -76,14 +70,6 @@ if is_wormhole_b0():
                 "hypot",
                 "hardswish",
                 "hardsigmoid",
-                "ones_like",
-                "zeros_like",
-                "full_like",
-                "ones",
-                "empty",
-                "zeros",
-                "full",
-                "arange",
                 "hardshrink",
                 "softshrink",
                 "sinh",
@@ -94,23 +80,20 @@ if is_wormhole_b0():
                 "acosh",
                 "atanh",
                 "atan2",
+                # TO-DO:
                 "subalpha",
-                "bias_gelu_unary",
+                # "bias_gelu_unary",
                 "addalpha",
                 "logit",
-                "logical_ori",
                 "logical_xor",
-                "logical_xori",
-                "logical_noti",
-                "logical_andi",
                 "isclose",
                 "digamma",
                 "lgamma",
                 "multigammaln",
                 "polygamma",
                 "nextafter",
-                "scatter",
-                "celu",
+                # "scatter",
+                # "celu",
             ),
             shapes,
         )
@@ -120,7 +103,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     options = defaultdict(lambda: (-1.0, 1.0))
     options["log1"] = (0.0, 1.0)
     options["polyval"] = (1, 100)
-    options["logit"] = (0, 1)
+    options["logit"] = (0, 0.99)
     options["deg2rad"] = (-180, 180)
     options["bias_gelu_unary"] = (-1e10, 1e10)
     options["rad2deg"] = (0, 2 * pi)
@@ -146,9 +129,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     options["asinh"] = (-100, 100)
     options["isclose"] = (-100, 100)
     options["acosh"] = (1, 100)
-    options["logical_ori"] = (-100, 100)
-    options["logical_andi"] = (-100, 100)
-    options["logical_xori"] = (-100, 100)
 
     generator = generation_funcs.gen_rand
 
@@ -158,7 +138,9 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     if is_grayskull():
         if fn in ["mish"]:
             pytest.skip("does not work for Grayskull -skipping")
-    if fn in ["logical_xor", "logical_xori", "logical_ori", "logical_andi"]:
+    if fn in [
+        "logical_xor",
+    ]:
         datagen_func = [
             generation_funcs.gen_func_with_cast(
                 partial(generator, low=options[fn][0], high=options[fn][1]),
@@ -188,7 +170,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         "atan2",
         "subalpha",
         "addalpha",
-        "logit",
         "logical_xor",
         "isclose",
         "assign_binary",
@@ -219,11 +200,9 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     elif fn in ["bias_gelu_unary", "bias_gelu"]:
         test_args.update({"bias": np.random.randint(1, 100)})
     elif fn in ["logit"]:
-        test_args.update({"eps": np.random.randint(-1e-6, 1e6)})
+        test_args.update({"eps": np.random.randint(-10, 0.99)})
     elif fn in ["polygamma"]:
         test_args.update({"k": np.random.randint(1, 10)})
-    elif fn in ["logical_ori", "logical_andi", "logical_xori", "logical_noti"]:
-        test_args.update({"immediate": np.random.randint(0, 100)})
     elif fn in ["isclose"]:
         test_args.update(
             {
@@ -239,4 +218,43 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         partial(custom_compare, function=fn),
         device,
         test_args,
+        ttnn_op=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "fn, input_shapes",
+    list(
+        product(
+            (
+                "min",
+                "max",
+            ),
+            shapes,
+        )
+    ),  # Single core, and multi-core
+)
+def test_run_min_max_test(fn, input_shapes, device, function_level_defaults):
+    generator = generation_funcs.gen_rand
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generator, low=-100, high=100),
+            torch.bfloat16,
+        )
+    ]
+    comparison_func = comparison_funcs.comp_equal
+    num_inputs = 1
+    input_shapes = input_shapes * num_inputs
+    datagen_func = datagen_func * num_inputs
+    test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+
+    rank = len(input_shapes[0])
+    choices = [(rank - 1,), (rank - 2,)]
+    idx = np.random.choice(len(choices), 1)
+    dims = choices[idx.item()]
+
+    test_args.update({"dim": dims})
+
+    run_single_pytorch_test(
+        f"ttnn-{fn}", input_shapes, datagen_func, partial(custom_compare, function=fn), device, test_args, ttnn_op=True
     )

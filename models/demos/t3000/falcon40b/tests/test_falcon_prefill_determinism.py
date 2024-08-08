@@ -99,7 +99,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
     logger.info("Done loading TT Falcon Model")
 
     # Prepare inputs -----------------------------------------------------------------------
-    model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
+    model_input = torch.randint(0, seq_len * batch, (batch, seq_len))
     model_inputs = torch.split(model_input, 1)
 
     # First run to get reference output ----------------------------------------------------

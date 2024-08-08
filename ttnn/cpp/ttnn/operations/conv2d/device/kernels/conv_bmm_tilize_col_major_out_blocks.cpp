@@ -285,6 +285,10 @@ void MAIN {
                             //then pop to update fifo rd pointer
                             cb_wait_front(matmul_partials_cb, out_block_num_tiles);
                             cb_pop_front(matmul_partials_cb, out_block_num_tiles);
+                            if constexpr (spill) {
+                                UNPACK( cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr );
+                                PACK( cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr );
+                            }
                         }
                         // never reload when with bias, bias uses interm buffer
                         enable_reload = false;
@@ -293,19 +297,32 @@ void MAIN {
                         if (in0_block_w_i < in0_num_blocks_w  - 2) {
                             cb_wait_front(matmul_partials_cb, out_block_num_tiles);
                             cb_pop_front(matmul_partials_cb, out_block_num_tiles);
+                            if constexpr (spill) {
+                                UNPACK( cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr );
+                                PACK( cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr );
+                            }
                         }
                         if (in0_block_w_i == in0_num_blocks_w - 2) { enable_reload = true; }
                     #endif
                 #else
-                    if constexpr (spill) { enable_reload = true; }
-                #endif
+                    if constexpr (spill) {
+                        enable_reload = true;
 
-                if constexpr (spill) {
-                    if (!last_out) {
-                        UNPACK( cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr );
-                        PACK( cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr );
+                        #ifdef FUSE_BIAS
+                        if (!last_out) {
+                            UNPACK( cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr );
+                            PACK( cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr );
+                        }
+                        #else
+                        if (!last_out) {
+                            UNPACK( cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr );
+                        }
+                        if (in0_block_w_i < in0_num_blocks_w - 2) {
+                            PACK( cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr );
+                        }
+                        #endif
                     }
-                }
+                #endif
 
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);

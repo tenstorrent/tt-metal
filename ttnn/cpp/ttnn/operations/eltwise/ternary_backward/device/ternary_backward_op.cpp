@@ -8,11 +8,12 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-
+#include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 
 namespace ttnn::operations::ternary_backward {
@@ -75,9 +76,9 @@ std::vector<OptionalTensor> _where_bw(
     std::vector<OptionalTensor> result;
     if (are_required_outputs.at(0)) {
         if(input_grad.has_value()){
-            tt::tt_metal::where(queue_id, condition, grad, 0.0f, output_mem_config, input_grad);
+            where(queue_id, condition, grad, 0.0f, output_mem_config, input_grad);
         } else {
-            input_grad = tt::tt_metal::where(queue_id, condition, grad, 0.0f, output_mem_config);
+            input_grad = where(queue_id, condition, grad, 0.0f, output_mem_config);
         }
         result.emplace_back(input_grad);
     } else {
@@ -85,9 +86,9 @@ std::vector<OptionalTensor> _where_bw(
     }
     if (are_required_outputs.at(1)) {
         if(other_grad.has_value()){
-            tt::tt_metal::where(queue_id, condition, 0.0f, grad, output_mem_config, other_grad);
+            where(queue_id, condition, 0.0f, grad, output_mem_config, other_grad);
         } else {
-            other_grad = tt::tt_metal::where(queue_id, condition, 0.0f, grad, output_mem_config);
+            other_grad = where(queue_id, condition, 0.0f, grad, output_mem_config);
         }
         result.emplace_back(other_grad);
     } else {
@@ -96,14 +97,9 @@ std::vector<OptionalTensor> _where_bw(
     return std::move(result);
 }
 
-
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
-std::vector<Tensor> _lerp_overload(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& end,
-    const Tensor& weight,
-    const MemoryConfig& output_mem_config) {
+std::vector<Tensor> ExecuteTernaryBackwardLerp::operator()(
+    const Tensor& grad, const Tensor& input, const Tensor& end, const Tensor& weight, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result_1 = ttnn::multiply(grad, ttnn::subtract(ttnn::operations::creation::full_like(weight, 1.0), weight, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_1);
@@ -111,6 +107,17 @@ std::vector<Tensor> _lerp_overload(
     grad_tensor.emplace_back(result_2);
     Tensor zero = ttnn::multiply(grad, ttnn::subtract(end, input, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(zero);
+    return grad_tensor;
+}
+
+std::vector<Tensor> ExecuteTernaryBackwardLerp::operator()(
+    const Tensor& grad, const Tensor& input, const Tensor& end, float weight, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    float sub_scalar = 1.0f - weight;
+    Tensor result_1 = ttnn::multiply(grad, sub_scalar, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result_1);
+    Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result_2);
     return grad_tensor;
 }
 

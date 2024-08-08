@@ -144,6 +144,9 @@ class Program {
     bool is_finalized() const { return this->finalized_; }
     void finalize();
 
+    void capture_multi_device_dependencies() { capture_multi_device_dependencies_ = true; }
+    bool has_multi_device_dependencies() { return capture_multi_device_dependencies_; }
+
    private:
     void populate_dispatch_data(Device *device);
 
@@ -209,7 +212,7 @@ class Program {
 
     std::vector<ProgramConfig> program_configs_;
     std::vector<uint32_t> program_config_sizes_;
-
+    bool capture_multi_device_dependencies_ = false;
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);

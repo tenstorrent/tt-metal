@@ -78,7 +78,7 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const stri
     }
 }
 
-bool is_close_packed_sfpu_output(const vector<uint32_t>& vec_a, const vector<uint32_t>& vec_b, const string& op_name) {
+bool is_close_packed_sfpu_output(const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const string& op_name) {
     if (op_name == "tanh") {
         return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
             vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
