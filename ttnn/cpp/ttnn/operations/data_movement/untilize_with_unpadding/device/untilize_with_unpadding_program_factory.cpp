@@ -8,15 +8,14 @@
 
 #include "tt_dnn/op_library/cb_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
-#include "ttnn/operation.hpp"
 #include "tt_dnn/op_library/work_split_tilize.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/common/constants.hpp"
+#include "ttnn/operation.hpp"
 
 using namespace tt::constants;
-
-#define MAX_PACK_UNTILIZE_WIDTH 8  // pack untilize currently does not support > 8 width
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -161,11 +160,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     vector<uint32_t> compute_args = {uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
 
     std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/compute/pack_untilize.cpp");
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/compute/untilize.cpp");
+        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
@@ -269,10 +267,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     /** compute
      */
     std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/compute/pack_untilize.cpp");
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
-        compute_kernel =
-            "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/compute/untilize.cpp";
+        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
 
     if (core_range.size() > 0) {
@@ -501,11 +498,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     };
 
     std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/compute/pack_untilize.cpp");
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/compute/untilize.cpp");
+        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
