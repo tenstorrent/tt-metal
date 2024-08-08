@@ -9,7 +9,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
@@ -36,13 +36,10 @@ inline void tilize_in(
     tilize_init_short(in_cb_id, in_block_w);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
-            DPRINT_MATH(DPRINT<<"Wait Front "<<"\n";)
             cb_wait_front(in_cb_id, in_block_w);
             cb_reserve_back(out_cb_id, in_block_w);
             tilize_block(in_cb_id, in_block_w, out_cb_id);
-            DPRINT_MATH(DPRINT<<"Push Back  "<<"\n";)
             cb_push_back(out_cb_id, in_block_w);
-            DPRINT_MATH(DPRINT<<"Pop Back"<<"\n";)
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
@@ -131,36 +128,15 @@ void MAIN {
     #endif
 
     constexpr uint32_t mm_in0_cb_id = tilize_in0 ? tilized_in0_cb_id : in0_cb_id;
-    #ifdef PACKER_L1_ACC
-    DPRINT_MATH(DPRINT<<"Packer L1 Acc"<<"\n";)
-    #else
-    DPRINT_MATH(DPRINT<<"No Packer L1 Acc"<<"\n";)
-    #endif
-    #ifdef PRE_TILIZE
-    DPRINT_MATH(DPRINT<<"PRE_TILIZE"<<"\n";)
-    #else
-    DPRINT_MATH(DPRINT<<"No PRE_TILIZE"<<"\n";)
-    #endif
-
-    #ifdef FUSE_BIAS
-    DPRINT_MATH(DPRINT<<"FUSE_BIAS"<<"\n";)
-    #else
-    DPRINT_MATH(DPRINT<<"No FUSE_BIAS"<<"\n";)
-    #endif
 
     #ifdef SPLIT_READER
-    DPRINT_MATH(DPRINT<<"Split Reader Enabled"<<"\n";)
     constexpr uint32_t in0_num_subblocks_read_last = in0_num_subblocks / 2;
     constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks - in0_num_subblocks_read_last;
     #else
     constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks;
-    DPRINT_MATH(DPRINT<<"No Split Reader"<<"\n";)
     #endif
 
 
-    DPRINT_MATH(DPRINT<<"Compute Core L1: "<<in0_block_w<<"  "<<in0_num_subblocks<<"  "<<in0_block_num_tiles<<"  "<<in0_subblock_num_tiles<<"  "<<in0_subblock_h<<"  "<<in1_num_subblocks<<"  "<<in1_block_num_tiles<<"  "<<in1_block_w<<"\n";)
-    DPRINT_MATH(DPRINT<<"Compute Core L2: "<<in0_num_blocks_h<<"  "<<in0_num_blocks_w<<"  "<<in1_num_blocks_w<<"  "<<out_subblock_h<<"  "<<out_subblock_w<<"  "<<out_subblock_num_tiles<<" ||"<<(uint32_t)tilize_in0<<(uint32_t)untilize_out<<"\n";)
-    // return;
     mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
     #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
@@ -172,7 +148,6 @@ void MAIN {
             #ifdef PRE_TILIZE
             unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
 
-            DPRINT_MATH(DPRINT<<"Tilize Loop "<<in0_block_h_i<<" "<<in1_block_w_i<<"\n";)
             tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
 
             mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, in0_pretilize_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);

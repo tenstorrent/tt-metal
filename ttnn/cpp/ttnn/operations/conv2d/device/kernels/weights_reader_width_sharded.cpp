@@ -28,18 +28,15 @@ void kernel_main() {
     constexpr uint32_t bias_cb_id = get_compile_time_arg_val(11);
     constexpr uint32_t bias_in_dram = get_compile_time_arg_val(12) == 1;
     constexpr bool has_bias = true;
-    DPRINT<<"Writer Fuse Bias"<<ENDL();
     #else
     constexpr bool has_bias = false;
-    DPRINT<<"Writer NO Fuse Bias"<<ENDL();
-
     #endif
 
 
 
-    DPRINT<<"Weights  "<<cb_id_weight<<" "<<core_in_channels_ntiles<<" "<<window_size_hw<<" "<<weight_block_width_ntiles<<" "<<
-    weight_block_num_tiles<<" "<<weight_matrix_width_ntiles<<" "<<weight_next_channel_stride_h<<" "<<weight_next_block_this_core_stride_h<<" "<<
-    weight_next_block_other_core_stride_h<<"  "<<other_core_weight_height_blocks<<" "<<this_core_weight_height_blocks<<ENDL();
+    // DPRINT<<"Weights  "<<cb_id_weight<<" "<<core_in_channels_ntiles<<" "<<window_size_hw<<" "<<weight_block_width_ntiles<<" "<<
+    // weight_block_num_tiles<<" "<<weight_matrix_width_ntiles<<" "<<weight_next_channel_stride_h<<" "<<weight_next_block_this_core_stride_h<<" "<<
+    // weight_next_block_other_core_stride_h<<"  "<<other_core_weight_height_blocks<<" "<<this_core_weight_height_blocks<<ENDL();
 
     uint32_t i = 0;
     const uint32_t init_weight_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
@@ -71,34 +68,33 @@ void kernel_main() {
     uint32_t bias_start_tile_id = init_weight_start_tile_id;
     bool to_load_bias = true;
 
-    //Repeat for each weight block along width.
-    for(uint32_t this_core_weight_block_index = 0; this_core_weight_block_index < this_core_weight_height_blocks; this_core_weight_block_index++)
-    {
+    //Outer most loop is each core's block width.
+    //This interleaves reader/tilization with compute. Hopefully better perf.
+    //Activation reader first sends data from the same block of all cores. Then iterates to the next block and repeats for all cores.
+    //Stride = act_block_w*out_channels*sizeof(elem)
+    for(uint32_t this_core_weight_block_index = 0; this_core_weight_block_index < this_core_weight_height_blocks; this_core_weight_block_index++) {
         uint32_t weight_block_start_tile_id = weight_start_tile_id;
-        //repeat for each block that comes from each core.
-        for(uint32_t other_core_weight_block_index = 0; other_core_weight_block_index < other_core_weight_height_blocks; other_core_weight_block_index++)
-        {
+
+         //Iterates over all the cores.
+         //Stride = in_channels*out_channels*sizeof(elem)/num_cores.
+        for(uint32_t other_core_weight_block_index = 0; other_core_weight_block_index < other_core_weight_height_blocks; other_core_weight_block_index++) {
             cb_reserve_back(cb_id_weight, weight_block_num_tiles);
             uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
-            // mcast args
             uint32_t weights_start_address = weight_write_l1_addr;
             uint32_t weights_block_size_bytes = 0;
             uint32_t weight_current_block_start_tile_id = weight_block_start_tile_id;
-            // DPRINT<<"Read Start tile "<<weight_current_block_start_tile_id<<"\n";
 
             //for window size, picking up the channels for that window.
+            //Stride is in_channels*out_channels*sizeof(elem).
             for(uint32_t block_weight_h = 0; block_weight_h < window_size_hw; block_weight_h++) {
                 uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id;
 
-                // mcast args
-                //uint32_t weights_start_address = weight_write_l1_addr;
-                //uint32_t weights_block_size_bytes = 0;
 
-                // for number of input channels in one block
+                // read the channels in one block.
                 for(uint32_t weight_tile_h_i = 0; weight_tile_h_i < core_in_channels_ntiles; ++weight_tile_h_i) { // TODO: 2
                     uint32_t weight_tile_id = weight_row_start_tile_id;
 
-                    // loop over output channels
+                    // loop over output channels, width of the output/weights.
                     for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
                         s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
                         weight_write_l1_addr += weight_tile_nbytes;
@@ -114,8 +110,7 @@ void kernel_main() {
             weight_block_start_tile_id += weight_next_block_other_core_stride_h;
         }
         weight_start_tile_id +=weight_next_block_this_core_stride_h;
-        if(to_load_bias)
-        {
+        if(to_load_bias){
             #ifdef FUSE_BIAS
             uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
             for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i)
