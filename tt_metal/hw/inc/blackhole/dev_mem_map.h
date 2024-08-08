@@ -29,7 +29,8 @@
 #define MEM_L1_SIZE (1464 * 1024)
 
 #define MEM_ETH_BASE 0x0
-#define MEM_ETH_SIZE (256 * 1024)
+// -32 for ETH barrier, see comment in eth_l1_address_map
+#define MEM_ETH_SIZE (256 * 1024 - 32)
 
 #define MEM_LOCAL_BASE 0xFFB00000
 #define MEM_BRISC_LOCAL_SIZE (8 * 1024)
