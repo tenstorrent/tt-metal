@@ -682,17 +682,21 @@ int main(int argc, char** argv) {
 uint32_t get_l1_size(tt::ARCH arch) {
     constexpr uint32_t GS_L1_SIZE = 1048576;
     constexpr uint32_t WH_L1_SIZE = 1499136;
+    constexpr uint32_t BH_L1_SIZE = 1499136;
 
     uint32_t l1_size = 0;
     if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
         l1_size = WH_L1_SIZE;
     } else if (arch == tt::ARCH::GRAYSKULL) {
         l1_size = GS_L1_SIZE;
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        l1_size = BH_L1_SIZE;
     }
     return l1_size;
 }
 
 double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_clock) {
+    constexpr double BH_FPU_BFP8_TFLOPS_PER_TENSIX = 2.97;
     constexpr double WH_FPU_BFP8_TFLOPS_PER_TENSIX = 2.05;
     constexpr double GS_FPU_BFP8_TFLOPS_PER_TENSIX = 0.58;
 
@@ -705,6 +709,9 @@ double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_cl
     } else if (arch == tt::ARCH::GRAYSKULL) {
         rpeak_tflops =
             GS_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        rpeak_tflops =
+            BH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
     }
 
     log_debug(LogTest, "Rpeak {} TFLOPS", rpeak_tflops);
@@ -775,7 +782,7 @@ CoreCoord get_core_range(
 std::tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
+    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) {
         math_fidelity = MathFidelity::HiFi2;
         // TODO: apply packer_l1_acc
         // TODO: need to consider whether to set these variablias as arguments

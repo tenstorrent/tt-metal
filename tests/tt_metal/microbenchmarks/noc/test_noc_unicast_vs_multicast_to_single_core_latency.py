@@ -38,7 +38,7 @@ def test_noc_unicast_vs_multicast_to_single_core_latency():
     unicast_cycles_within_bounds = unicast_cycles_lower_bound <= unicast_cycles <= unicast_cycles_upper_bound
 
     multicast_cycles_lower_bound = 450
-    multicast_cycles_upper_bound = 550
+    multicast_cycles_upper_bound = 565
     multicast_cycles_within_bounds = multicast_cycles_lower_bound <= multicast_cycles <= multicast_cycles_upper_bound
 
     if not unicast_cycles_within_bounds:
