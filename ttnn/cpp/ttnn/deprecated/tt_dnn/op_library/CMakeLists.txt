@@ -10,10 +10,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_overlap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_sharded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/reduce_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/single_core_hw/reduce_op_single_core_hw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_h/reduce_op_multi_core_h.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_w/reduce_op_multi_core_w.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/bcast_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_multi_core_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h.cpp

@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/common.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -16,7 +16,7 @@ struct ExecuteReduceScatter {
     static ttnn::Tensor operator()(
         const ttnn::Tensor& input_tensor,
         const uint32_t scatter_dim,
-        tt::tt_metal::ReduceOpMath math_op,
+        ttnn::operations::reduction::ReduceType math_op,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
