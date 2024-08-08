@@ -54,8 +54,8 @@ void kernel_main() {
     // mcast args
     uint32_t weights_mcast_sender_noc_x           = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_sender_noc_y           = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t weights_mcast_sender_semaphore_addr    = get_semaphore(get_arg_val<uint32_t>(i)); i+=1;
+    uint32_t weights_mcast_receiver_semaphore_addr  = get_semaphore(get_arg_val<uint32_t>(i)); i+=1;
 
 
     constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;

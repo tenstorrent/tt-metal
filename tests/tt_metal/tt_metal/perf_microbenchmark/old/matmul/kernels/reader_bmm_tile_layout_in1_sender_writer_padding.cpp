@@ -50,8 +50,8 @@ void kernel_main() {
     // in1 mcast args
     constexpr uint32_t in1_mcast_dest_noc_start_y         = get_compile_time_arg_val(9);
     constexpr uint32_t in1_mcast_dest_noc_end_y           = get_compile_time_arg_val(10);
-    constexpr uint32_t in1_mcast_sender_semaphore_addr    = get_compile_time_arg_val(11);
-    constexpr uint32_t in1_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(12);
+    uint32_t in1_mcast_sender_semaphore_addr    = get_semaphore(get_compile_time_arg_val(11));
+    uint32_t in1_mcast_receiver_semaphore_addr  = get_semaphore(get_compile_time_arg_val(12));
     constexpr uint32_t in1_mcast_num_dests                = get_compile_time_arg_val(13);
     // batch args
     constexpr uint32_t KtNt                               = get_compile_time_arg_val(14);
@@ -83,8 +83,8 @@ void kernel_main() {
         constexpr uint32_t in3_tensor_stride_w                = get_compile_time_arg_val(26);
         constexpr uint32_t in3_mcast_dest_noc_start_y         = get_compile_time_arg_val(27);
         constexpr uint32_t in3_mcast_dest_noc_end_y           = get_compile_time_arg_val(28);
-        constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(29);
-        constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(30);
+        uint32_t in3_mcast_sender_semaphore_addr    = get_semaphore(get_compile_time_arg_val(29));
+        uint32_t in3_mcast_receiver_semaphore_addr  = get_semaphore(get_compile_time_arg_val(30));
         constexpr uint32_t in3_mcast_num_dests                = get_compile_time_arg_val(31);
 
         constexpr uint32_t cb_id_in3 = 3;

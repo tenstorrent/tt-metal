@@ -243,7 +243,7 @@ void kernel_main() {
     constexpr uint32_t scale_val = get_compile_time_arg_val(5);
     constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(6);  // num cores per batch
     constexpr uint32_t num_cores = get_compile_time_arg_val(7);  // num running cores in total
-    constexpr uint32_t semaphore_addr   = get_compile_time_arg_val(8);  // semaphore for reciever
+    uint32_t semaphore_addr   = get_semaphore(get_compile_time_arg_val(8));  // semaphore for reciever
     constexpr bool is_out_sharded = get_compile_time_arg_val(9);
 
     const uint32_t out_addr  = get_arg_val<uint32_t>(0);

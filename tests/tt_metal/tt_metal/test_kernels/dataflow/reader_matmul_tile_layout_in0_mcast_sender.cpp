@@ -42,8 +42,8 @@ void kernel_main() {
     uint32_t in0_mcast_num_dests                = get_arg_val<uint32_t>(21);
     uint32_t in0_mcast_sender_noc_x             = get_arg_val<uint32_t>(22);
     uint32_t in0_mcast_sender_noc_y             = get_arg_val<uint32_t>(23);
-    uint32_t in0_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(24);
-    uint32_t in0_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(25);
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(24));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(25));
 
     // const args for tile-based bank-swizzled layout
     // could be added to the arg list in the future to test different

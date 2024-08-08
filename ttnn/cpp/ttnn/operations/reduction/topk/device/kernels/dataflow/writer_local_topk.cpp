@@ -6,8 +6,8 @@
 
 void kernel_main() {
 
-    constexpr uint32_t receiver_semaphore = get_compile_time_arg_val(0);
-    constexpr uint32_t sender_semaphore = get_compile_time_arg_val(1);
+    uint32_t receiver_semaphore = get_semaphore(get_compile_time_arg_val(0));
+    uint32_t sender_semaphore = get_semaphore(get_compile_time_arg_val(1));
     constexpr uint32_t noc_final_x = get_compile_time_arg_val(2);
     constexpr uint32_t noc_final_y = get_compile_time_arg_val(3);
     constexpr uint32_t Ht = get_compile_time_arg_val(4);

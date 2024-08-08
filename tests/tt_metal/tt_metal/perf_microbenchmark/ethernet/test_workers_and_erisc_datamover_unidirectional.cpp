@@ -200,7 +200,7 @@ bool RunWriteBWTest(
     //                               Device 0
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program sender_program = tt_metal::Program();
-    uint32_t chip0_worker_semaphores_base_address = tt::tt_metal::CreateSemaphore(sender_program, chip0_sender_worker_core, 0);
+    uint32_t chip0_worker_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, chip0_sender_worker_core, 0);
 
     chip0_edm_args.push_back(chip0_sender_channels_offset);
 
@@ -239,8 +239,8 @@ bool RunWriteBWTest(
         chip0_next_buffer_address += 16;
         //    8) worker_semaphore_address
         //       worker local L1 semaphores that erisc updates
-        chip0_edm_args.push_back(chip0_worker_semaphores_base_address);
-        log_debug(tt::LogTest, "\t\tworker_semaphores_base_address: {}", chip0_worker_semaphores_base_address);
+        chip0_edm_args.push_back(chip0_worker_semaphore_id);
+        log_debug(tt::LogTest, "\t\tworker_semaphores_base_address: {}", chip0_worker_semaphore_id);
         //    9) sender_num_workers
         //       Informs how many worker X/Y coords to accept in the next loop. Each X/Y pair is 2 uint16s
         const uint32_t chip0_num_workers_on_channel = 1;
@@ -299,7 +299,7 @@ bool RunWriteBWTest(
         chip0_eth_sender_l1_sem_addr,
         // worker L1 semaphore address. Sender writes to this address to signal the worker
         // that the buffer is empty and available to write into
-        chip0_worker_semaphores_base_address,
+        chip0_worker_semaphore_id,
         uint32_t(sender_device->ethernet_core_from_logical_core(eth_sender_core).x),
         uint32_t(sender_device->ethernet_core_from_logical_core(eth_sender_core).y)
         };
@@ -345,7 +345,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program receiver_program = tt_metal::Program();
     auto chip1_receiver_worker_core = CoreCoord(0, 0);
-    uint32_t chip1_worker_semaphores_base_address = tt::tt_metal::CreateSemaphore(receiver_program, chip1_receiver_worker_core, 0);
+    uint32_t chip1_worker_semaphore_id = tt::tt_metal::CreateSemaphore(receiver_program, chip1_receiver_worker_core, 0);
 
     uint32_t chip1_receiver_num_channels = chip0_arg_sender_num_channels;
     auto eth_receiver_kernel = tt_metal::CreateKernel(
@@ -397,8 +397,8 @@ bool RunWriteBWTest(
         log_debug(tt::LogTest, "\t\tsender_semaphores_base_address: {}", chip1_next_buffer_address);
         chip1_next_buffer_address += 16;
         //    8) worker_semaphore_address
-        chip1_edm_args.push_back(chip1_worker_semaphores_base_address);
-        log_debug(tt::LogTest, "\t\tworker_semaphores_base_address: {}", chip1_worker_semaphores_base_address);
+        chip1_edm_args.push_back(chip1_worker_semaphore_id);
+        log_debug(tt::LogTest, "\t\tworker_semaphores_base_id: {}", chip1_worker_semaphore_id);
         //    9) sender_num_workers
         //       Informs how many worker X/Y coords to accept in the next loop. Each X/Y pair is 2 uint16s
         const uint32_t chip1_num_workers_on_channel = 1;
@@ -448,8 +448,8 @@ bool RunWriteBWTest(
         chip1_eth_receiver_l1_sem_addr = chip1_next_buffer_address;
         chip1_next_buffer_address += 16;
         //    8) worker_semaphore_address
-        chip1_edm_args.push_back(chip1_worker_semaphores_base_address);
-        log_debug(tt::LogTest, "\t\tworker_semaphores_base_address: {}", chip1_worker_semaphores_base_address);
+        chip1_edm_args.push_back(chip1_worker_semaphore_id);
+        log_debug(tt::LogTest, "\t\tworker_semaphores_base_address: {}", chip1_worker_semaphore_id);
         //    9) sender_num_workers
         //       Informs how many worker X/Y coords to accept in the next loop. Each X/Y pair is 2 uint16s
         const uint32_t chip1_num_workers_on_channel = 1;
@@ -485,7 +485,7 @@ bool RunWriteBWTest(
         input_buffer_page_size,
         (uint32_t)receiver_device->ethernet_core_from_logical_core(eth_receiver_core).x,
         (uint32_t)receiver_device->ethernet_core_from_logical_core(eth_receiver_core).y,
-        chip1_worker_semaphores_base_address};
+        chip1_worker_semaphore_id};
 
     CBHandle cb_src0_receiver_workers = CreateCircularBuffer(receiver_program, chip1_receiver_worker_core, cb_src0_config);
     auto device_1_edm_receiver_worker_receiver_kernel = tt_metal::CreateKernel(

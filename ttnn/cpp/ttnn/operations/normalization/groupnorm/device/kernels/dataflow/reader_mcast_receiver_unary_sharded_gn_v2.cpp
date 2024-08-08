@@ -10,8 +10,8 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    constexpr uint32_t reduce_receiver_semaphore_addr = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_sender_semaphore_addr   = get_compile_time_arg_val(1);
+    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
+    uint32_t reduce_sender_semaphore_addr   = get_semaphore(get_compile_time_arg_val(1));
 
     constexpr uint32_t num_batch_group                  = get_compile_time_arg_val(2);
 

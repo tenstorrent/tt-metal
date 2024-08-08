@@ -37,8 +37,8 @@ void kernel_main() {
     // in0/in1 common args
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
     // in1 mcast args
-    constexpr uint32_t in1_mcast_sender_semaphore_addr = get_compile_time_arg_val(3);
-    constexpr uint32_t in1_mcast_receiver_semaphore_addr = get_compile_time_arg_val(4);
+    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(3));
+    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(4));
     // batch args
     constexpr uint32_t batch = get_compile_time_arg_val(5);
 

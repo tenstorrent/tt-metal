@@ -162,7 +162,7 @@ void kernel_main() {
     const uint32_t transfer_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    volatile uint32_t* start_semaphore = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
+    volatile uint32_t* start_semaphore = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
     const uint32_t init_handshake_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t init_handshake_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t init_handshake_addr = get_arg_val<uint32_t>(arg_idx++);

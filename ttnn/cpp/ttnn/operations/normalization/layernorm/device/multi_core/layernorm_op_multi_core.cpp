@@ -752,9 +752,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
     }
     // Mcast args
-    auto reduce_sender_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto reduce_receiver_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto reduce_second_stage_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto reduce_second_stage_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
     std::map<string, string> reader_mcast_sender_defines;
     std::map<string, string> reader_mcast_receiver_defines;
@@ -776,8 +776,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
-        (std::uint32_t) reduce_receiver_semaphore,
-        (std::uint32_t) reduce_sender_semaphore,
+        (std::uint32_t) reduce_receiver_semaphore_id,
+        (std::uint32_t) reduce_sender_semaphore_id,
         (std::uint32_t) num_blocks,
         (std::uint32_t) block_ht,
         (std::uint32_t) block_ht * single_tile_size,
@@ -792,11 +792,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t) use_two_stage_reduce,
         (std::uint32_t) num_blocks_first_stage,
         (std::uint32_t) num_blocks_second_stage,
-        (std::uint32_t) reduce_second_stage_semaphore
+        (std::uint32_t) reduce_second_stage_semaphore_id
     };
     std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
-        (std::uint32_t) reduce_receiver_semaphore,
-        (std::uint32_t) reduce_sender_semaphore,
+        (std::uint32_t) reduce_receiver_semaphore_id,
+        (std::uint32_t) reduce_sender_semaphore_id,
         (std::uint32_t) num_blocks,
         (std::uint32_t) block_ht,
         (std::uint32_t) 1,
@@ -809,11 +809,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t) use_two_stage_reduce,
         (std::uint32_t) num_blocks_first_stage,
         (std::uint32_t) num_blocks_second_stage,
-        (std::uint32_t) reduce_second_stage_semaphore
+        (std::uint32_t) reduce_second_stage_semaphore_id
     };
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
-        (std::uint32_t) reduce_receiver_semaphore,
-        (std::uint32_t) reduce_sender_semaphore,
+        (std::uint32_t) reduce_receiver_semaphore_id,
+        (std::uint32_t) reduce_sender_semaphore_id,
         (std::uint32_t) num_blocks,
         (std::uint32_t) block_ht,
         (std::uint32_t) 0,
@@ -826,7 +826,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t) 0,
         (std::uint32_t) 0,
         (std::uint32_t) 0,
-        (std::uint32_t) reduce_second_stage_semaphore
+        (std::uint32_t) reduce_second_stage_semaphore_id
     };
 
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());

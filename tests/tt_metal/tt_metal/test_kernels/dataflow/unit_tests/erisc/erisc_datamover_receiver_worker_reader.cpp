@@ -37,7 +37,7 @@ void kernel_main() {
     const uint32_t receiver_erisc_datamover_noc_x = get_arg_val<uint32_t>(3);
     const uint32_t receiver_erisc_datamover_noc_y = get_arg_val<uint32_t>(4);
     // Worker local L1 semaphore that erisc datamover signals to
-    const uint32_t receiver_read_sem_addr = get_arg_val<uint32_t>(5);
+    const uint32_t receiver_read_sem_addr = get_semaphore(get_arg_val<uint32_t>(5));
 
     DPRINT << " rwr: args: eth_receiver_l1_base_addr="<<
         eth_receiver_l1_base_addr<<

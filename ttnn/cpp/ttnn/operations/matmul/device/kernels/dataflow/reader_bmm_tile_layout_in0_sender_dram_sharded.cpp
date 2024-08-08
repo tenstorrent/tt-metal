@@ -13,8 +13,8 @@ void kernel_main() {
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(1);
     // in0 mcast args
-    constexpr uint32_t in0_mcast_sender_semaphore_addr = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_mcast_receiver_semaphore_addr = get_compile_time_arg_val(3);
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(2));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(3));
     constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(4);
     constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(5);
     // block args
@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t in0_mcast_dest_noc_end_x = get_compile_time_arg_val(9);
     constexpr uint32_t in0_mcast_dest_noc_end_y = get_compile_time_arg_val(10);
     // in0 semaphore always valid
-    constexpr uint32_t in0_mcast_sender_valid_semaphore = get_compile_time_arg_val(11);
+    uint32_t in0_mcast_sender_valid_semaphore = get_semaphore(get_compile_time_arg_val(11));
 
     constexpr uint32_t num_blocks_per_shard = get_compile_time_arg_val(12);
     constexpr uint32_t num_storage_cores = num_blocks / num_blocks_per_shard;

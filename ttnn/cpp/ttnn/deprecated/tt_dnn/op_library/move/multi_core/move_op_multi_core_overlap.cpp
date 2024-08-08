@@ -85,7 +85,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
 		.set_page_size(cb_index, aligned_page_size);
     auto cb = tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
-    auto semaphore_addr = CreateSemaphore(program, all_cores, 0);
+    auto semaphore_id = CreateSemaphore(program, all_cores, 0);
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
@@ -140,7 +140,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
             dst_buffer->address(),
             pages_handled_per_core,
             num_pages_per_core,
-            semaphore_addr,
+            semaphore_id,
             (uint32_t)noc_controller.x,
             (uint32_t)noc_controller.y,
             /*control_value=*/(num_cores - 1),
