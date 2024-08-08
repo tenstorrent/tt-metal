@@ -45,7 +45,7 @@ void kernel_main() {
     constexpr uint32_t output_addr_offset = get_compile_time_arg_val(18);
     constexpr uint32_t input_start_ring_idx = get_compile_time_arg_val(19);
     // Same per worker receiver writer
-    constexpr uint32_t sem_addr = get_compile_time_arg_val(20);
+    uint32_t sem_addr = get_semaphore(get_compile_time_arg_val(20));
     constexpr bool is_clockwise_direction = get_compile_time_arg_val(21) == 1;
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(22);
     constexpr uint32_t ring_size = get_compile_time_arg_val(23);

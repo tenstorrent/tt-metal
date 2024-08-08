@@ -89,8 +89,8 @@ void kernel_main() {
     uint32_t weights_mcast_dest_noc_end_y           = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_num_dests                = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_num_cores                = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t weights_mcast_sender_semaphore_addr    = get_semaphore(get_arg_val<uint32_t>(i)); i+=1;
+    uint32_t weights_mcast_receiver_semaphore_addr  = get_semaphore(get_arg_val<uint32_t>(i)); i+=1;
 
     constexpr uint32_t cb_id_act_second_reader = 7;
     constexpr uint32_t cb_id_sharded_act = 3;
