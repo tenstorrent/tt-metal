@@ -26,8 +26,8 @@ owned_buffer::Buffer<bfloat16> ref_conv_op(
     uint32_t stride_h,
     uint32_t stride_w,
     const vector<float> &filter_vector,
-    Shape &filter_pyt_tensor_shape,
-    Shape &out_golden_pyt_tensor_shape);
+    Shape filter_pyt_tensor_shape,
+    Shape out_golden_pyt_tensor_shape);
 
 // Calculate convolution using op_trace_metadata on padded input buffer.
 owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(

@@ -4,24 +4,19 @@
 
 #include <tuple>
 
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/reference_sliding_window.hpp"
+#include "ttnn/operations/sliding_window/reference_sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using tt::tt_metal::Shape;
 using tt::tt_metal::Tensor;
-using tt::tt_metal::sliding_window::conv_using_op_trace_metadata;
-using tt::tt_metal::sliding_window::conv_using_shard_boundaries;
-using tt::tt_metal::sliding_window::conv_using_sliding_window_op_config;
-using tt::tt_metal::sliding_window::input_indices_from_flattened_local_config;
-using tt::tt_metal::sliding_window::input_indices_from_flattened_remote_config;
-using tt::tt_metal::sliding_window::pad_indices_from_flattened_pad_config;
-using tt::tt_metal::sliding_window::pad_metadata_from_tensor_metadata;
-using tt::tt_metal::sliding_window::ref_conv_op;
+using namespace ttnn::operations::sliding_window;
 
 // From owned_buffer of type bfloat16 of create float vector for convolution operation.
 vector<float> create_filter_vec(
@@ -137,13 +132,13 @@ uint32_t validate_generate_functions(
     owned_buffer::Buffer<bfloat16> conv_tensor_buf;
     uint32_t diff;
     uint32_t failed_tests = 0;
-    auto pad_metadata = sliding_window::generate_pad_metadata(config);
-    auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config, reshard_num_cores_nhw);
-    auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config);
-    auto shard_boundaries = sliding_window::generate_shard_boundaries(config, op_trace_metadata);
+    auto pad_metadata = generate_pad_metadata(config);
+    auto tensor_metadata = generate_tensor_metadata(pad_metadata, config, reshard_num_cores_nhw);
+    auto op_trace_metadata = generate_op_trace_metadata(config);
+    auto shard_boundaries = generate_shard_boundaries(config, op_trace_metadata);
     auto sharded_input_top_left_indices =
-        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, false, false);
-    auto halo_kernel_config = sliding_window::generate_halo_kernel_config_tensors(
+        generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, false, false);
+    auto halo_kernel_config = generate_halo_kernel_config_tensors(
         tensor_metadata, shard_boundaries, false, false, remote_read, device);
 
     auto [filter_h, filter_w] = config.window_hw_;
@@ -151,7 +146,7 @@ uint32_t validate_generate_functions(
     auto [stride_h, stride_w] = config.stride_hw_;
     auto output_shape = config.get_output_shape();
     uint32_t output_n, output_h, output_w;
-    std::tie(output_n, output_h, output_w) = std::tie(output_shape[0], output_shape[1], output_shape[2]);
+    std::tie(output_n, output_h, output_w) = std::forward_as_tuple(output_shape[0], output_shape[1], output_shape[2]);
 
     uint32_t padded_input_h = input_h + 2 * config.pad_hw_.first;
     uint32_t padded_input_w = input_w + 2 * config.pad_hw_.second;
@@ -384,7 +379,7 @@ int main() {
             config.batch_size_,
             config.input_hw_.first + 2 * config.pad_hw_.first,
             config.input_hw_.second + 2 * config.pad_hw_.second};
-        Shape output_tensor_shape = config.get_output_shape();
+        Shape output_tensor_shape = config.get_output_shape().value;
         Shape filter_tensor_shape = {config.window_hw_.first, config.window_hw_.second};
 
         Tensor input_padded_tensor =
@@ -397,12 +392,12 @@ int main() {
         vector<float> filter_vector = create_filter_vec(filter_tensor_buf, tc.filter_h, tc.filter_w);
         owned_buffer::Buffer<bfloat16> out_golden_tensor_buf = ref_conv_op(
             input_padded_tensor,
-            input_tensor_shape,
+            ttnn::types::Shape(input_tensor_shape),
             tc.stride_h,
             tc.stride_w,
             filter_vector,
-            filter_tensor_shape,
-            output_tensor_shape);
+            ttnn::types::Shape(filter_tensor_shape),
+            ttnn::types::Shape(output_tensor_shape));
 
         auto failed_tests = validate_generate_functions(
             device,
