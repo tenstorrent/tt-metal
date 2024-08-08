@@ -10,16 +10,24 @@ from models.utility_functions import is_wormhole_b0
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
+        (True, 128, {"prefill_t/s": 0, "decode_t/s": 0, "decode_t/s/u": 0}, False, None),
+        (True, 1024, {"prefill_t/s": 0, "decode_t/s": 0, "decode_t/s/u": 0}, False, None),
+        (True, 2048, {"prefill_t/s": 0, "decode_t/s": 0, "decode_t/s/u": 0}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),
+        (False, 1024, None, True, "models/demos/tg/falcon7b/expected_greedy_output.json"),
         (False, 1024, None, True, None),
         (False, 1024, None, False, None),
     ),
     ids=[
+        "perf_mode_128_stochastic_verify",
+        "perf_mode_1024_stochastic_verify",
+        "perf_mode_2048_stochastic_verify",
         "perf_mode_128_stochastic",
         "perf_mode_1024_stochastic",
         "perf_mode_2048_stochastic",
+        "default_mode_1024_greedy_verify",
         "default_mode_1024_greedy",
         "default_mode_1024_stochastic",
     ],
@@ -46,16 +54,34 @@ def test_demo_multichip(
     device_mesh,
     use_program_cache,
     async_mode,
+    is_ci_env,
 ):
     assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
     devices = device_mesh.get_devices()
+    num_devices = len(devices)
+
+    if is_ci_env:
+        if num_devices != 32 or (not expected_greedy_output_path and not expected_perf_metrics):
+            pytest.skip("Skipping test in CI since it provides redundant testing")
+    elif expected_greedy_output_path or expected_perf_metrics:
+        assert num_devices == 32, "32 devices are expected for perf and greedy output verification"
 
     for device in devices:
         device.enable_async(async_mode)
 
+    batch_size = 32
+    if perf_mode:
+        csv_perf_targets = {
+            "prefill_t/s": {128: None, 1024: None, 2048: None}[max_seq_len],
+            "decode_t/s": 26 * batch_size * num_devices,
+            "decode_t/s/u": 26,
+        }  # performance targets that we aim for (galaxy-tg)
+    else:
+        csv_perf_targets = {}
+
     return run_falcon_demo_kv(
         user_input=user_input,
-        batch_size=32,
+        batch_size=batch_size,
         max_seq_len=max_seq_len,
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
         model_location_generator=model_location_generator,
@@ -65,4 +91,5 @@ def test_demo_multichip(
         greedy_sampling=greedy_sampling,
         expected_perf_metrics=expected_perf_metrics,
         expected_greedy_output_path=expected_greedy_output_path,
+        csv_perf_targets=csv_perf_targets,
     )

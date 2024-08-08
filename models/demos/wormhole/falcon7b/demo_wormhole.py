@@ -55,8 +55,8 @@ def test_demo(
     if perf_mode:
         csv_perf_targets = {
             "prefill_t/s": {128: 2034, 1024: 9880, 2048: 9881}[max_seq_len],
-            "decode_t/s": 14 * batch_size,
-            "decode_t/s/u": 14,
+            "decode_t/s": 26 * batch_size,
+            "decode_t/s/u": 26,
         }  # performance targets that we aim for (wormhole)
     else:
         csv_perf_targets = {}
