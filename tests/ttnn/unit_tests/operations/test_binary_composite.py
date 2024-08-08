@@ -427,7 +427,7 @@ def test_binary_fmod_ttnn(input_shapes, device):
     "scalar",
     {random.randint(-100, 100) + 0.5 for _ in range(5)},
 )
-@pytest.mark.skip(reason="#10942 Test fails for certain scalar values.")
+@skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod")
 def test_fmod_ttnn(input_shapes, scalar, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
 

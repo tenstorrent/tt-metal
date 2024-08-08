@@ -57,7 +57,13 @@ inline void calculate_remainder(const uint value, const uint recip) {
             v = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
-
+        for(int l=0; l<10; l++)
+        {
+            v_if(v==s){
+                v = s - v;
+            }
+            v_endif;
+        }
         dst_reg[0] = v;
         dst_reg++;
     }
