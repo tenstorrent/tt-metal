@@ -10,8 +10,8 @@
 // split REDUCE across cores
 void kernel_main() {
 
-    constexpr uint32_t reduce_receiver_semaphore_addr  = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_sender_semaphore_addr    = get_compile_time_arg_val(1);
+    uint32_t reduce_receiver_semaphore_addr  = get_semaphore(get_compile_time_arg_val(0));
+    uint32_t reduce_sender_semaphore_addr    = get_semaphore(get_compile_time_arg_val(1));
     constexpr uint32_t num_blocks                      = get_compile_time_arg_val(2);
     constexpr uint32_t block_h                         = get_compile_time_arg_val(3);
     const bool is_all_to_all_worker                    = get_compile_time_arg_val(4) == 1;
@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr bool use_two_stage_reduce                              = (bool) get_compile_time_arg_val(11);
     constexpr uint32_t num_blocks_first_stage                        = get_compile_time_arg_val(12);
     constexpr uint32_t num_blocks_second_stage                       = get_compile_time_arg_val(13);
-    constexpr uint32_t reduce_second_stage_semaphore_addr            = get_compile_time_arg_val(14);
+    uint32_t reduce_second_stage_semaphore_addr            = get_semaphore(get_compile_time_arg_val(14));
 
     const bool is_last_all_to_all_worker                = get_arg_val<uint32_t>(0);
     const uint32_t all_to_all_tile_offset_bytes         = get_arg_val<uint32_t>(1);

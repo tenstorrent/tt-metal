@@ -326,8 +326,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
 
 
     // Create semaphores
-    auto sender_semaphore = tt::tt_metal::CreateSemaphore(program, core, INVALID);
-    auto receiver_semaphore = tt::tt_metal::CreateSemaphore(program, core, INVALID);
+    auto sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core, INVALID);
+    auto receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core, INVALID);
     std::vector<uint32_t> reader_local_compile_time_args = {
                                                         input_cb_index,
                                                         index_cb_index,
@@ -347,8 +347,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
     CoreCoord local_cores_physical_start = device->worker_core_from_logical_core({0, 0});
     CoreCoord local_cores_physical_end = device->worker_core_from_logical_core({0, num_cores - 2u});
     std::vector<uint32_t> reader_compile_time_args =             {
-                (std::uint32_t) receiver_semaphore,
-                (std::uint32_t) sender_semaphore,
+                (std::uint32_t) receiver_semaphore_id,
+                (std::uint32_t) sender_semaphore_id,
                 (std::uint32_t) local_cores_physical_start.x,
                 (std::uint32_t) local_cores_physical_start.y,
                 (std::uint32_t) local_cores_physical_end.x,
@@ -366,8 +366,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
 
     CoreCoord final_cores_physical = device->worker_core_from_logical_core({0, num_cores - 1u});
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t) receiver_semaphore,
-        (std::uint32_t) sender_semaphore,
+        (std::uint32_t) receiver_semaphore_id,
+        (std::uint32_t) sender_semaphore_id,
         (std::uint32_t) final_cores_physical.x,
         (std::uint32_t) final_cores_physical.y,
         Ht,

@@ -36,7 +36,7 @@ void kernel_main() {
     uint32_t const num_transfers = get_arg_val<uint32_t>(arg_idx++);
     uint32_t const page_size = get_arg_val<uint32_t>(arg_idx++);
     uint32_t const full_chunk_num_pages = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t const writer_send_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t const writer_send_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t const half_cb_n_pages = get_arg_val<uint32_t>(arg_idx++);
     uint32_t const num_concurrent_workers = get_arg_val<uint32_t>(arg_idx++);
 

@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr uint32_t num_rows = get_compile_time_arg_val(14);
     constexpr uint32_t num_cols = get_compile_time_arg_val(15);
     constexpr uint32_t input_start_ring_idx = get_compile_time_arg_val(16);
-    constexpr uint32_t writer_send_sem_addr = get_compile_time_arg_val(17);
+    uint32_t writer_send_sem_addr = get_semaphore(get_compile_time_arg_val(17));
     constexpr uint32_t eth_sender_noc_x = get_compile_time_arg_val(18);
     constexpr uint32_t eth_sender_noc_y = get_compile_time_arg_val(19);
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(20);

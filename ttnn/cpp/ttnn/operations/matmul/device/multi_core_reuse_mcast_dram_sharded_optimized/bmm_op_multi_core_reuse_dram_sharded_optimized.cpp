@@ -533,9 +533,9 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     log_debug("bounding_box: {}", bounding_box);
 
     // Mcast args
-    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores_in_rect_grid, INVALID);
-    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores_in_rect_grid, INVALID);
-    auto in0_mcast_sender_valid_semaphore = tt_metal::CreateSemaphore(program, all_cores_in_rect_grid, VALID);
+    auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores_in_rect_grid, INVALID);
+    auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores_in_rect_grid, INVALID);
+    auto in0_mcast_sender_valid_semaphore_id = tt_metal::CreateSemaphore(program, all_cores_in_rect_grid, VALID);
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -577,8 +577,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
         (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
         // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore,
-        (std::uint32_t)in0_mcast_receiver_semaphore,
+        (std::uint32_t)in0_mcast_sender_semaphore_id,
+        (std::uint32_t)in0_mcast_receiver_semaphore_id,
         (std::uint32_t)num_worker_cores,  // in0_mcast_num_dests
         (std::uint32_t)num_mcast_cores,   // in0_mcast_num_cores
         // block
@@ -589,7 +589,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
         (std::uint32_t)end_core_noc.x,
         (std::uint32_t)end_core_noc.y,
         // semahpre valid
-        (std::uint32_t)in0_mcast_sender_valid_semaphore,
+        (std::uint32_t)in0_mcast_sender_valid_semaphore_id,
         //
         (std::uint32_t)num_blocks_per_shard};
 

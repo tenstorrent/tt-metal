@@ -23,7 +23,7 @@
 //    5) sender_num_messages_to_send
 //    6) sender_channel_size
 //    7) sender_semaphores_base_address
-//    8) worker_semaphore_address
+//    8) worker_semaphore_id
 //    9) sender_num_workers
 //       Informs how many worker X/Y coords to accept in the next loop. Each X/Y pair is 2 uint16s
 //       10) worker_coord(s)
@@ -149,7 +149,7 @@ void kernel_main() {
         // The erisc's local l1 copy of the semaphore workers remotely increment
         uint32_t const sender_semaphores_base_address = get_arg_val<uint32_t>(args_offset++);
         // worker's semaphore L1 address
-        const uint32_t worker_semaphore_address = get_arg_val<uint32_t>(args_offset++);
+        const uint32_t worker_semaphore_address = get_semaphore(get_arg_val<uint32_t>(args_offset++));
         const uint32_t sender_num_workers = get_arg_val<uint32_t>(args_offset++);
         const uint32_t workers_xy_list_addr = get_arg_addr(args_offset);
         args_offset += sender_num_workers;
@@ -181,7 +181,7 @@ void kernel_main() {
         // Each channel currently constrained to the same buffer size
         uint32_t const receiver_channel_size = get_arg_val<uint32_t>(args_offset++);
         uint32_t const receiver_semaphores_base_address = get_arg_val<uint32_t>(args_offset++);
-        uint32_t const worker_semaphore_address = get_arg_val<uint32_t>(args_offset++);
+        uint32_t const worker_semaphore_address = get_semaphore(get_arg_val<uint32_t>(args_offset++));
         uint32_t const receiver_num_workers = get_arg_val<uint32_t>(args_offset++);
         const uint32_t workers_xy_list_addr = get_arg_addr(args_offset);
         args_offset += receiver_num_workers;

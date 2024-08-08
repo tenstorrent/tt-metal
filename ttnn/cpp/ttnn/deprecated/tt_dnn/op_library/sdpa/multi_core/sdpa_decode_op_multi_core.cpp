@@ -455,7 +455,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug("reduce_core_physical_ys: {}", reduce_core_physical_ys);
 
     // Common Compile time Args
-    auto in0_mcast_reducer_semaphore = tt_metal::CreateSemaphore(program, core_grid, 0);
+    auto in0_mcast_reducer_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
 
     std::vector<uint32_t> reader_compile_time_args_common = {
         B, PNHt, St, DHt, Sk_chunk_t, num_active_cores, is_q_sharded
@@ -467,7 +467,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         scale_union.u,
         num_cores_per_batch,
         num_active_cores,
-        in0_mcast_reducer_semaphore,
+        in0_mcast_reducer_semaphore_id,
         is_output_sharded,
     };
 

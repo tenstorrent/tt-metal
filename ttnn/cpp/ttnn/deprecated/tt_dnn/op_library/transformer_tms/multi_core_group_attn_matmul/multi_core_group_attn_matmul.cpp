@@ -111,8 +111,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
 
     // Mcast args
-    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_device_cores, INVALID);
-    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_device_cores, INVALID);
+    auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_device_cores, INVALID);
+    auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_device_cores, INVALID);
 
     // Only first 32 of cores mcast KV heads to match num_rows_in_one_tile in reader kernel, so these coordinates are static if we cache on compute_with_storage_grid_size
     // TODO: If this is not the case, then we should set reader_runtime_args to max possible size and update sender noc coordinates based on input
@@ -285,8 +285,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             in1_is_sharded,
             output_is_sharded,
             reader_noc_is_NOC_0,
-            in1_mcast_sender_semaphore,
-            in1_mcast_receiver_semaphore,
+            in1_mcast_sender_semaphore_id,
+            in1_mcast_receiver_semaphore_id,
             in1_mcast_sender_noc_x,
             in1_mcast_sender_noc_y,
 
@@ -408,8 +408,8 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             0, // 24: in1_mcast_num_dests
             0, // 25: in1_mcast_num_cores
             mcast_num_cores, // mcast grid size; in1_mcast_num_cores may change depending on if sender is part of the receiver grid or not
-            in1_mcast_sender_semaphore,
-            in1_mcast_receiver_semaphore,
+            in1_mcast_sender_semaphore_id,
+            in1_mcast_receiver_semaphore_id,
             in1_block_num_tiles * in1_single_tile_size, // in1_mcast_sender_size_bytes
             0, // 30: in1_mcast_sender_id
             (uint32_t) in1_mcast_sender_noc_x.size(), // in1_mcast_sender_num_x

@@ -10,7 +10,7 @@ void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
     uint32_t num_pages = get_arg_val<uint32_t>(3);
-    uint32_t semaphore_addr = get_arg_val<uint32_t>(4);
+    uint32_t semaphore_addr = get_semaphore(get_arg_val<uint32_t>(4));
     uint32_t controller_noc_x = get_arg_val<uint32_t>(5);
     uint32_t controller_noc_y = get_arg_val<uint32_t>(6);
     uint32_t control_value = get_arg_val<uint32_t>(7);

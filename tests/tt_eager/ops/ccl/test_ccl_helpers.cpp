@@ -15,12 +15,7 @@ TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingM
     ttnn::ccl::EriscDataMoverTerminationMode termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
 
     auto edm_builder = create_erisc_datamover_builder(num_channels, page_size, buffer_sharing_mode, termination_mode);
-    std::vector<uint32_t> worker_semaphore_addresses = {
-        0x1000,
-        0x1010,
-        0x1020,
-        0x1030,
-    };
+    std::vector<uint32_t> worker_semaphore_ids = {0, 1, 2, 3};
     std::vector<uint32_t> message_counts = {256, 512, 24, 1};
     std::vector<std::vector<ttnn::ccl::WorkerXY>> const& worker_coords = {
         {ttnn::ccl::WorkerXY{1, 1}, ttnn::ccl::WorkerXY{2, 1}},
@@ -35,8 +30,8 @@ TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingM
     for (std::size_t i = 0; i < num_channels; i++) {
         ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& channel_buffer_interface =
             (is_sender_channel[i])
-                ? edm_builder.add_sender_channel(worker_semaphore_addresses[i], message_counts[i], worker_coords[i])
-                : edm_builder.add_receiver_channel(worker_semaphore_addresses[i], message_counts[i], worker_coords[i]);
+                ? edm_builder.add_sender_channel(worker_semaphore_ids[i], message_counts[i], worker_coords[i])
+                : edm_builder.add_receiver_channel(worker_semaphore_ids[i], message_counts[i], worker_coords[i]);
         channel_buffer_interfaces.push_back(channel_buffer_interface);
         ASSERT_TRUE(channel_buffer_interface.eth_buffer_l1_address > 0);
         ASSERT_TRUE(channel_buffer_interface.eth_semaphore_l1_address > 0);
@@ -48,7 +43,7 @@ TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingM
         ASSERT_EQ(active_channels[i].channel, i);
         ASSERT_EQ(active_channels[i].is_sender, is_sender_channel.at(i));
         ASSERT_EQ(active_channels[i].worker_coords, worker_coords.at(i));
-        ASSERT_TRUE(active_channels[i].worker_semaphore_address == worker_semaphore_addresses.at(i));
+        ASSERT_TRUE(active_channels[i].worker_semaphore_id == worker_semaphore_ids.at(i));
         ASSERT_TRUE(active_channels[i].num_eth_messages_to_forward == message_counts.at(i));
     }
 }

@@ -86,8 +86,8 @@ std::vector<uint32_t> get_sender_writer_rt_args(
     CoreCoord const& other_relay_to_notify_when_done,
     uint32_t other_relay_done_semaphore,
     uint32_t sender_wait_for_receiver_semaphore,
-    uint32_t first_relay_remote_src_start_phase_addr,
-    uint32_t hang_toggle_addr) {
+    uint32_t first_relay_remote_src_start_phase_id,
+    uint32_t hang_toggle_id) {
     return std::vector<uint32_t>{
         num_messages,
 
@@ -112,8 +112,8 @@ std::vector<uint32_t> get_sender_writer_rt_args(
         other_relay_done_semaphore,
 
         static_cast<uint32_t>(sender_wait_for_receiver_semaphore),
-        first_relay_remote_src_start_phase_addr,
-        hang_toggle_addr};
+        first_relay_remote_src_start_phase_id,
+        hang_toggle_id};
 }
 
 std::vector<uint32_t> get_relay_rt_args(
@@ -172,7 +172,7 @@ std::vector<uint32_t> get_receiver_reader_rt_args(
     uint32_t other_relay_done_semaphore,
     CoreCoord const& sender_core,
     uint32_t sender_receiver_semaphore,
-    uint32_t remote_src_start_phase_addr) {
+    uint32_t remote_src_start_phase_id) {
     return std::vector<uint32_t>{
         static_cast<uint32_t>(num_messages),
         static_cast<uint32_t>(relay_stream_id),
@@ -196,7 +196,7 @@ std::vector<uint32_t> get_receiver_reader_rt_args(
         static_cast<uint32_t>(device->worker_core_from_logical_core(sender_core).x),
         static_cast<uint32_t>(device->worker_core_from_logical_core(sender_core).y),
         sender_receiver_semaphore,
-        remote_src_start_phase_addr};
+        remote_src_start_phase_id};
 }
 std::vector<uint32_t> get_receiver_writer_rt_args(
     Device* device, uint32_t output_buffer_addr, uint32_t page_size, uint32_t num_messages_to_read) {
@@ -394,15 +394,15 @@ void build_and_run_autonomous_stream_test(
         tile_header_buffer_num_messages,
         stream_tile_header_buffer_size_bytes};
 
-    uint32_t sender_receiver_semaphore_sender = CreateSemaphore(program, sender_core, 0, CoreType::WORKER);
-    uint32_t remote_sender_hang_toggle_addr = CreateSemaphore(program, sender_core, 0, CoreType::WORKER);
-    uint32_t first_relay_done_semaphore = CreateSemaphore(program, first_relay_core, 0, CoreType::WORKER);
-    uint32_t second_relay_done_semaphore = CreateSemaphore(program, second_relay_core, 0, CoreType::WORKER);
+    // TODO: CreateSemaphore api was updated to return an id. Kernels used in this test have not been updated
+    uint32_t sender_receiver_semaphore_sender_id = CreateSemaphore(program, sender_core, 0, CoreType::WORKER);
+    uint32_t remote_sender_hang_toggle_semaphore_id = CreateSemaphore(program, sender_core, 0, CoreType::WORKER);
+    uint32_t first_relay_done_semaphore_id = CreateSemaphore(program, first_relay_core, 0, CoreType::WORKER);
+    uint32_t second_relay_done_semaphore_id = CreateSemaphore(program, second_relay_core, 0, CoreType::WORKER);
 
-    uint32_t first_relay_remote_src_start_phase_addr = CreateSemaphore(program, first_relay_core, 0, CoreType::WORKER);
-    uint32_t second_relay_remote_src_start_phase_addr =
-        CreateSemaphore(program, second_relay_core, 0, CoreType::WORKER);
-    uint32_t receiver_remote_src_start_phase_addr = CreateSemaphore(program, receiver_core, 0, CoreType::WORKER);
+    uint32_t first_relay_remote_src_start_phase_id = CreateSemaphore(program, first_relay_core, 0, CoreType::WORKER);
+    uint32_t second_relay_remote_src_start_phase_id = CreateSemaphore(program, second_relay_core, 0, CoreType::WORKER);
+    uint32_t receiver_remote_src_start_phase_id = CreateSemaphore(program, receiver_core, 0, CoreType::WORKER);
 
     auto sender_noc_id = tt_metal::NOC::NOC_0;
     auto relay_to_relay_data_noc_id = tt_metal::NOC::NOC_0;
@@ -413,16 +413,16 @@ void build_and_run_autonomous_stream_test(
     std::vector<uint32_t> const& sender_writer_rt_args = get_sender_writer_rt_args(
         device,
         num_messages,
-        first_relay_done_semaphore,
+        first_relay_done_semaphore_id,
         first_relay_core,
         sender_noc_id,
         sender_stream_config,
         first_relay_stream_config,
         second_relay_core,
-        second_relay_done_semaphore,
-        sender_receiver_semaphore_sender,
-        first_relay_remote_src_start_phase_addr,
-        remote_sender_hang_toggle_addr);
+        second_relay_done_semaphore_id,
+        sender_receiver_semaphore_sender_id,
+        first_relay_remote_src_start_phase_id,
+        remote_sender_hang_toggle_semaphore_id);
 
     log_trace(tt::LogTest, "first_relay_stream_config");
     log_trace(tt::LogTest, "\tfirst_relay_stream_config.buffer_addr: {}", first_relay_stream_config.buffer_addr);
@@ -459,43 +459,43 @@ void build_and_run_autonomous_stream_test(
     std::vector<uint32_t> const first_relay_rt_args = get_relay_rt_args(
         device,
         first_relay_stream_overlay_blob_addr,
-        first_relay_done_semaphore,
+        first_relay_done_semaphore_id,
         sender_core,
         second_relay_core,
         sender_noc_id,
         relay_to_relay_data_noc_id,
         /*sender_stream_config,*/ first_relay_stream_config,
         second_relay_stream_config,
-        first_relay_remote_src_start_phase_addr,
-        second_relay_remote_src_start_phase_addr,
+        first_relay_remote_src_start_phase_id,
+        second_relay_remote_src_start_phase_id,
         true);
     std::vector<uint32_t> const second_relay_rt_args = get_relay_rt_args(
         device,
         second_relay_stream_overlay_blob_addr,
-        second_relay_done_semaphore,
+        second_relay_done_semaphore_id,
         first_relay_core,
         receiver_core,
         relay_to_relay_data_noc_id,
         receiver_noc_id,
         /*first_relay_stream_config,*/ second_relay_stream_config,
         receiver_stream_config,
-        second_relay_remote_src_start_phase_addr,
-        receiver_remote_src_start_phase_addr,
+        second_relay_remote_src_start_phase_id,
+        receiver_remote_src_start_phase_id,
         false);
 
     std::vector<uint32_t> const& receiver_reader_rt_args = get_receiver_reader_rt_args(
         device,
         num_messages,
-        second_relay_done_semaphore,
+        second_relay_done_semaphore_id,
         second_relay_core,
         receiver_noc_id,
         second_relay_stream_config,
         receiver_stream_config,
         first_relay_core,
-        first_relay_done_semaphore,
+        first_relay_done_semaphore_id,
         sender_core,
-        sender_receiver_semaphore_sender,
-        receiver_remote_src_start_phase_addr);
+        sender_receiver_semaphore_sender_id,
+        receiver_remote_src_start_phase_id);
     std::vector<uint32_t> const& receiver_writer_rt_args =
         get_receiver_writer_rt_args(device, output_buffer->address(), page_size_plus_header, num_messages);
 

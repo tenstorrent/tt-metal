@@ -42,8 +42,8 @@ void kernel_main() {
     uint32_t in0_mcast_num_dests                = get_arg_val<uint32_t>(21);
     uint32_t in0_mcast_sender_noc_x             = get_arg_val<uint32_t>(22);
     uint32_t in0_mcast_sender_noc_y             = get_arg_val<uint32_t>(23);
-    uint32_t in0_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(24);
-    uint32_t in0_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(25);
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(24));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(25));
 
     // in1 mcast args
     uint32_t in1_mcast_dest_noc_start_x         = get_arg_val<uint32_t>(26);
@@ -53,8 +53,8 @@ void kernel_main() {
     uint32_t in1_mcast_num_dests                = get_arg_val<uint32_t>(30);
     uint32_t in1_mcast_sender_noc_x             = get_arg_val<uint32_t>(31);
     uint32_t in1_mcast_sender_noc_y             = get_arg_val<uint32_t>(32);
-    uint32_t in1_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(33);
-    uint32_t in1_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(34);
+    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(33));
+    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(34));
     // const args for tile-based bank-swizzled layout
     // could be added to the arg list in the future to test different
     // bank-swizzling configurations

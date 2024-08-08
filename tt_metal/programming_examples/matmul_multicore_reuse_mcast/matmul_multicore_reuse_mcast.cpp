@@ -306,10 +306,10 @@ void matmul_multicore_reuse_mcast(std::vector<bfloat16>& a, std::vector<bfloat16
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args}
     );
 
-    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
 
     /*
@@ -365,8 +365,8 @@ void matmul_multicore_reuse_mcast(std::vector<bfloat16>& a, std::vector<bfloat16
                 (std::uint32_t)  (num_cores_c - 1), // in0_mcast_num_dests
                 (std::uint32_t)  left_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  left_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in0_mcast_sender_semaphore,
-                (std::uint32_t)  in0_mcast_receiver_semaphore,
+                (std::uint32_t)  in0_mcast_sender_semaphore_id,
+                (std::uint32_t)  in0_mcast_receiver_semaphore_id,
 
                 (std::uint32_t)  bottom_core_physical.x, // in0_mcast_dest_noc_start_x
                 (std::uint32_t)  bottom_core_physical.y, // in0_mcast_dest_noc_start_y
@@ -375,8 +375,8 @@ void matmul_multicore_reuse_mcast(std::vector<bfloat16>& a, std::vector<bfloat16
                 (std::uint32_t)  (num_cores_r - 1), // in0_mcast_num_dests
                 (std::uint32_t)  top_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  top_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in1_mcast_sender_semaphore,
-                (std::uint32_t)  in1_mcast_receiver_semaphore,
+                (std::uint32_t)  in1_mcast_sender_semaphore_id,
+                (std::uint32_t)  in1_mcast_receiver_semaphore_id,
 
                 (std::uint32_t)  Mt * Kt, // MtKt
                 (std::uint32_t)  Kt * Nt, // KtNt

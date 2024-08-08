@@ -86,7 +86,7 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
     uint32_t start_semaphore,
     uint32_t init_handshake_core_x,
     uint32_t init_handshake_core_y,
-    uint32_t init_handshake_addr
+    uint32_t init_handshake_semaphore_id
     ) {
     constexpr std::size_t semaphore_size = 16;
     std::vector<uint32_t> erisc_semaphore_addresses(max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16);
@@ -107,7 +107,7 @@ std::vector<uint32_t> get_eth_receiver_rt_args(
         start_semaphore,
         init_handshake_core_x,
         init_handshake_core_y,
-        init_handshake_addr};
+        init_handshake_semaphore_id};
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
         rt_args.push_back(erisc_semaphore_addresses.at(i));
         rt_args.push_back(erisc_buffer_addresses.at(i));
@@ -125,7 +125,7 @@ std::vector<uint32_t> get_eth_sender_rt_args(
     uint32_t sample_page_size,
     uint32_t receiver_x,
     uint32_t receiver_y,
-    uint32_t receiver_start_semaphore) {
+    uint32_t receiver_start_semaphore_id) {
     constexpr std::size_t semaphore_size = 16;
     std::vector<uint32_t> erisc_semaphore_addresses(max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16);
     std::vector<uint32_t> erisc_buffer_addresses(max_concurrent_samples, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16 + 16 + round_up(semaphore_size * max_concurrent_samples, 16));
@@ -142,7 +142,7 @@ std::vector<uint32_t> get_eth_sender_rt_args(
         sample_page_size,
         receiver_x,
         receiver_y,
-        receiver_start_semaphore};
+        receiver_start_semaphore_id};
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
         rt_args.push_back(erisc_semaphore_addresses.at(i));
         rt_args.push_back(erisc_buffer_addresses.at(i));

@@ -84,8 +84,8 @@ void kernel_main() {
     uint32_t weights_mcast_dest_noc_end_y           = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_num_dests                = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_num_cores                = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t weights_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t weights_mcast_sender_semaphore_addr    = get_semaphore(get_arg_val<uint32_t>(i)); i+=1;
+    uint32_t weights_mcast_receiver_semaphore_addr  = get_semaphore(get_arg_val<uint32_t>(i)); i+=1;
 
     #ifndef SKIP_MCAST
         // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted

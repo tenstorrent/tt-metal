@@ -429,8 +429,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     // how many cores in a mcast group
     uint32_t num_cores_per_mcast_group = mcast_groups[0].size();
     // Mcast args
-    auto reduce_sender_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto reduce_receiver_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
     std::map<string, string> reader_mcast_sender_defines;
     std::map<string, string> reader_mcast_receiver_defines;
@@ -456,8 +456,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     }
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
-        (std::uint32_t) reduce_receiver_semaphore,
-        (std::uint32_t) reduce_sender_semaphore,
+        (std::uint32_t) reduce_receiver_semaphore_id,
+        (std::uint32_t) reduce_sender_semaphore_id,
         (std::uint32_t) num_cores_per_mcast_group,
         (std::uint32_t) num_groups_per_core * num_batches_per_core,
         (std::uint32_t) per_core_Nt,
@@ -468,8 +468,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t) TILE_HEIGHT
     };
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
-        (std::uint32_t) reduce_receiver_semaphore,
-        (std::uint32_t) reduce_sender_semaphore,
+        (std::uint32_t) reduce_receiver_semaphore_id,
+        (std::uint32_t) reduce_sender_semaphore_id,
         (std::uint32_t) num_groups_per_core * num_batches_per_core,
         (std::uint32_t) per_core_Nt,
         (std::uint32_t) per_core_N_bytes_padded,

@@ -51,7 +51,7 @@ void kernel_main() {
     constexpr uint32_t last_output_addr_offset = get_compile_time_arg_val(19);
     constexpr uint32_t output_addr_offset = get_compile_time_arg_val(20);
     constexpr uint32_t input_start_ring_idx = get_compile_time_arg_val(21);
-    constexpr uint32_t sem_addr = get_compile_time_arg_val(22);
+    uint32_t sem_addr = get_semaphore(get_compile_time_arg_val(22));
     constexpr bool is_clockwise_direction = get_compile_time_arg_val(23) == 1;
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(24);
     constexpr uint32_t ring_size = get_compile_time_arg_val(25);

@@ -29,7 +29,7 @@ struct reduce_scatter_reader_common_args_t {
 
         my_ring_idx(get_arg_val<uint32_t>(arg_idx++)),
         ring_size(get_arg_val<uint32_t>(arg_idx++)),
-        sem_addr(get_arg_val<uint32_t>(arg_idx++)),
+        sem_addr(get_semaphore(get_arg_val<uint32_t>(arg_idx++))),
 
         is_clockwise_direction(get_arg_val<uint32_t>(arg_idx++) == 1),
         half_cb_n_pages(get_arg_val<uint32_t>(arg_idx++)),
