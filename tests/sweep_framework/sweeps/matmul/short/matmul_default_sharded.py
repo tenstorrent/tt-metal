@@ -17,71 +17,71 @@ parameters = {
     "default": {
         "matmul_specs": [
             # mcast 2d
-            """(
-            (2, 3),
-            (1600, 224, 896),
-            False,
-            dict(core_grid=ttnn.CoreGrid(y=5, x=7), strategy=ttnn.ShardStrategy.BLOCK),
-            None,
-        )""",
+            (
+                (2, 3),
+                (1600, 224, 896),
+                False,
+                dict(core_grid=ttnn.CoreGrid(y=5, x=7), strategy=ttnn.ShardStrategy.BLOCK),
+                None,
+            ),
             # mcast 2d transposed
-            """(
-            (2, 3),
-            (1600, 224, 896),
-            False,
-            dict(
-                core_grid=ttnn.CoreGrid(y=7, x=5),
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.COL_MAJOR,
+            (
+                (2, 3),
+                (1600, 224, 896),
+                False,
+                dict(
+                    core_grid=ttnn.CoreGrid(y=7, x=5),
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.COL_MAJOR,
+                ),
+                None,
             ),
-            None,
-        )""",
             # mcast 2d with shard width > 1 TILE
-            """(
-            (2, 1),
-            (128, 256, 512),
-            False,
-            dict(core_grid=ttnn.CoreGrid(y=2, x=2), strategy=ttnn.ShardStrategy.BLOCK),
-            None,
-        )""",
+            (
+                (2, 1),
+                (128, 256, 512),
+                False,
+                dict(core_grid=ttnn.CoreGrid(y=2, x=2), strategy=ttnn.ShardStrategy.BLOCK),
+                None,
+            ),
             # mcast in0
-            """(
-            (2, 3),
-            (64, 32 * 7, 1024),
-            False,
-            dict(
-                core_grid=ttnn.CoreGrid(y=1, x=7),
-                strategy=ttnn.ShardStrategy.WIDTH,
+            (
+                (2, 3),
+                (64, 32 * 7, 1024),
+                False,
+                dict(
+                    core_grid=ttnn.CoreGrid(y=1, x=7),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                ),
+                None,
             ),
-            None,
-        )""",
             # mcast in1
-            """(
-            (2, 3),
-            (160 * 7, 64, 64),
-            False,
-            dict(
-                core_grid=ttnn.CoreGrid(y=7, x=1),
-                strategy=ttnn.ShardStrategy.HEIGHT,
+            (
+                (2, 3),
+                (160 * 7, 64, 64),
+                False,
+                dict(
+                    core_grid=ttnn.CoreGrid(y=7, x=1),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                ),
+                None,
             ),
-            None,
-        )""",
             # bmm
-            """(
-            (7, 7),
-            (384, 64, 384),
-            True,
-            dict(
-                core_grid=ttnn.CoreGrid(y=7, x=7),
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                use_height_and_width_as_shard_shape=True,
+            (
+                (7, 7),
+                (384, 64, 384),
+                True,
+                dict(
+                    core_grid=ttnn.CoreGrid(y=7, x=7),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    use_height_and_width_as_shard_shape=True,
+                ),
+                dict(
+                    core_grid=ttnn.CoreGrid(y=7, x=7),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    use_height_and_width_as_shard_shape=True,
+                ),
             ),
-            dict(
-                core_grid=ttnn.CoreGrid(y=7, x=7),
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                use_height_and_width_as_shard_shape=True,
-            ),
-        )""",
         ],
         "compute_kernel_config": [None],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],

@@ -10,25 +10,26 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 
 class TensorMemoryConfigs(enum.Enum):
     CUSTOM_MEMORY_CONFIG = enum.auto()
+    DEFAULT_MEMORY_CONFIG = enum.auto()
 
 
 IN0_INNER_DIM_PER_CORE = 96
 core_grid = ttnn.CoreCoord(8, 7)
+
+# Set up suites and specify input_shapes, program_config, and input_a_custom_memory_config parameters.
 parameters = {
-    "matmul_specs": [
-        ########################################
-        # TESTS: in0 mcast grid != output grid #
-        ########################################
-        # Matmul 1D mcast in0: in0 grid == output grid
-        (
-            (1,),
-            (64, 32 * IN0_INNER_DIM_PER_CORE, 32 * 96),
+    ########################################
+    # TESTS: in0 mcast grid != output grid #
+    ########################################
+    "mcast_in0__in0_grid_eq_output_grid": {
+        "input_shapes": [(64, 32 * IN0_INNER_DIM_PER_CORE, 32 * 96)],
+        "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=1,
@@ -39,7 +40,9 @@ parameters = {
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=True,
-            ),
+            )
+        ],
+        "input_a_custom_memory_config": [
             ttnn.MemoryConfig(
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
@@ -49,12 +52,12 @@ parameters = {
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
-            ),
-        ),
-        # Matmul 1D mcast in0: in0 grid < output grid
-        (
-            (1,),
-            (64, 28 * IN0_INNER_DIM_PER_CORE, 35 * 96),
+            )
+        ],
+    },
+    "mcast_in0__in0_grid_lt_output_grid": {
+        "input_shapes": [(64, 28 * IN0_INNER_DIM_PER_CORE, 35 * 96)],
+        "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 5),
                 in0_block_w=1,
@@ -65,7 +68,9 @@ parameters = {
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=True,
-            ),
+            )
+        ],
+        "input_a_custom_memory_config": [
             ttnn.MemoryConfig(
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
@@ -75,12 +80,12 @@ parameters = {
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
-            ),
-        ),
-        # Matmul 1D mcast in0: in0 grid > output grid
-        (
-            (1,),
-            (64, 35 * IN0_INNER_DIM_PER_CORE, 28 * 96),
+            )
+        ],
+    },
+    "mcast_in0__in0_grid_gt_output_grid": {
+        "input_shapes": [(64, 35 * IN0_INNER_DIM_PER_CORE, 28 * 96)],
+        "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 5),
                 in0_block_w=1,
@@ -91,7 +96,9 @@ parameters = {
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=True,
-            ),
+            )
+        ],
+        "input_a_custom_memory_config": [
             ttnn.MemoryConfig(
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
@@ -101,12 +108,13 @@ parameters = {
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
-            ),
-        ),
-        # Matmul 1D mcast in0: in0 grid.y == output grid.y but in0 grid.x < output grid.x and output grid.x isn't full row; tests mcast logic for num_active_cores
-        (
-            (1,),
-            (64, 28 * IN0_INNER_DIM_PER_CORE, 30 * 96),
+            )
+        ],
+    },
+    # Matmul 1D mcast in0: in0 grid.y == output grid.y but in0 grid.x < output grid.x and output grid.x isn't full row; tests mcast logic for num_active_cores
+    "mcast_in0__grid_x_lt_output_grid_x": {
+        "input_shapes": [(64, 28 * IN0_INNER_DIM_PER_CORE, 30 * 96)],
+        "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=1,
@@ -117,7 +125,9 @@ parameters = {
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=True,
-            ),
+            )
+        ],
+        "input_a_custom_memory_config": [
             ttnn.MemoryConfig(
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
@@ -127,12 +137,13 @@ parameters = {
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
-            ),
-        ),
-        # Matmul 1D mcast in0: in0 grid.y == output grid.y but in0 grid.x > output grid.x and in0 grid.x isn't full row; tests mcast logic for num_active_cores
-        (
-            (1,),
-            (64, 30 * IN0_INNER_DIM_PER_CORE, 28 * 96),
+            )
+        ],
+    },
+    # Matmul 1D mcast in0: in0 grid.y == output grid.y but in0 grid.x > output grid.x and in0 grid.x isn't full row; tests mcast logic for num_active_cores
+    "mcast_in0__grid_x_gt_output_grid_x": {
+        "input_shapes": [(64, 30 * IN0_INNER_DIM_PER_CORE, 28 * 96)],
+        "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 4),
                 in0_block_w=1,
@@ -143,7 +154,9 @@ parameters = {
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=True,
-            ),
+            )
+        ],
+        "input_a_custom_memory_config": [
             ttnn.MemoryConfig(
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
@@ -153,15 +166,16 @@ parameters = {
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
-            ),
-        ),
-        #############################################
-        # TESTS: Single core output grid edge cases #
-        #############################################
-        # Matmul 1D mcast in0: single-core in0 grid and output grid
-        (
-            (1,),
-            (64, IN0_INNER_DIM_PER_CORE, 128),
+            )
+        ],
+    },
+    #############################################
+    # TESTS: Single core output grid edge cases #
+    #############################################
+    # Matmul 1D mcast in0: single-core in0 grid and output grid
+    "mcast_in0___single_core_in0_grid_single_core_output_grid": {
+        "input_shapes": [(64, IN0_INNER_DIM_PER_CORE, 128)],
+        "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(1, 1),
                 in0_block_w=1,
@@ -172,7 +186,9 @@ parameters = {
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=True,
-            ),
+            )
+        ],
+        "input_a_custom_memory_config": [
             ttnn.MemoryConfig(
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
@@ -182,12 +198,13 @@ parameters = {
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
-            ),
-        ),
-        # Matmul 1D mcast in0: multi-core in0 grid and single-core output grid
-        (
-            (1,),
-            (64, 5 * IN0_INNER_DIM_PER_CORE, 128),
+            )
+        ],
+    },
+    # Matmul 1D mcast in0: multi-core in0 grid and single-core output grid
+    "mcast_in0__multi_core_in0_grid_single_core_output_grid": {
+        "input_shapes": [(64, 5 * IN0_INNER_DIM_PER_CORE, 128)],
+        "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(5, 1),
                 in0_block_w=1,
@@ -198,7 +215,9 @@ parameters = {
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=True,
-            ),
+            )
+        ],
+        "input_a_custom_memory_config": [
             ttnn.MemoryConfig(
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
@@ -208,12 +227,13 @@ parameters = {
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
-            ),
-        ),
-        # Matmul 1D mcast in1: single-core in1 grid and output grid
-        (
-            (1,),
-            (64, IN0_INNER_DIM_PER_CORE, 128),
+            )
+        ],
+    },
+    # Matmul 1D mcast in1: single-core in1 grid and output grid
+    "mcast_in1": {
+        "input_shapes": [(64, IN0_INNER_DIM_PER_CORE, 128)],
+        "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(1, 1),
                 in0_block_w=1,
@@ -224,7 +244,9 @@ parameters = {
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=False,
-            ),
+            )
+        ],
+        "input_a_custom_memory_config": [
             ttnn.MemoryConfig(
                 memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
@@ -234,23 +256,30 @@ parameters = {
                     ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
-            ),
-        ),
-    ],
+            )
+        ],
+    },
+}
+
+# Add the rest of the parameters.
+general = {
+    "batch_sizes": [(1,)],
     "batch_matrix_multiply": [False],
     "in0_block_w": [
         1,
         int(IN0_INNER_DIM_PER_CORE / 32),
     ],  # Used to override in0_block_w in program config (1: loop along in0 shard width; 2: no looping along in0 shard width)
-    "input_a_memory_config": [TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    "input_a_memory_config": [TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG, TensorMemoryConfigs.DEFAULT_MEMORY_CONFIG],
     "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "output_memory_config": [TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+    "output_memory_config": [TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG, TensorMemoryConfigs.DEFAULT_MEMORY_CONFIG],
     "input_a_dtype": [ttnn.bfloat16],
     "input_b_dtype": [ttnn.bfloat8_b],
     "output_dtype": [ttnn.bfloat16],
     "input_layout": [ttnn.TILE_LAYOUT],
     "compute_kernel_config": [None],
 }
+for p in parameters.values():
+    p.update(general)
 
 
 def skip(**_) -> Tuple[bool, Optional[str]]:
@@ -262,7 +291,10 @@ def is_expected_to_fail(**_) -> Tuple[bool, Optional[str]]:
 
 
 def run(
-    matmul_specs,
+    input_shapes,
+    program_config,
+    input_a_custom_memory_config,
+    batch_sizes,
     batch_matrix_multiply,
     in0_block_w,
     input_a_memory_config,
@@ -275,23 +307,20 @@ def run(
     compute_kernel_config,
     *,
     device,
-) -> Tuple[bool, Optional[str]]:
-    (
-        batch_sizes,
-        input_shapes,
-        program_config,
-        input_a_custom_memory_config,
-    ) = matmul_specs
-
+) -> list:
     program_config.in0_block_w = in0_block_w
 
     if input_a_memory_config == TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG:
         input_a_memory_config = input_a_custom_memory_config
+    else:
+        input_a_memory_config = ttnn.L1_MEMORY_CONFIG
 
-    if output_memory_config == TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG:
+    if output_memory_config == "TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG":
         output_memory_config = (
             ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if program_config.mcast_in0 else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         )
+    else:
+        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     (m_size, k_size, n_size) = input_shapes
     input_shape_a = (*batch_sizes, m_size, k_size)
@@ -321,6 +350,7 @@ def run(
         memory_config=input_b_memory_config,
     )
 
+    start_time = start_measuring_time()
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
@@ -329,7 +359,8 @@ def run(
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
+    e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 
     expected_pcc = 0.99
-    return check_with_pcc(torch_output_tensor, output_tensor, expected_pcc)
+    return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]

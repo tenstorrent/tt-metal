@@ -12,7 +12,12 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc, get_per_core_size_and_num_cores
+from tests.ttnn.utils_for_testing import (
+    check_with_pcc,
+    get_per_core_size_and_num_cores,
+    start_measuring_time,
+    stop_measuring_time,
+)
 from models.utility_functions import torch_random
 
 
@@ -28,30 +33,32 @@ def get_height_sharded_specs(
 
 
 parameters = {
-    "height_sharded_specs": list(
-        get_height_sharded_specs(
-            [(1,), (2,)],
-            [x if x > 0 else 32 for x in range(0, 4096, 384)],
-            [x if x > 0 else 1 for x in range(0, 50, 10)],
-        )
-    ),
-    "k_size": [x if x > 0 else 32 for x in range(0, 384, 96)],
-    "n_size": [x if x > 0 else 32 for x in range(0, 384, 96)],
-    "batch_matrix_multiply": [False],
-    "input_a_memory_config": [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG],
-    "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "output_memory_config": [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
-    "input_a_dtype": [ttnn.bfloat8_b],
-    "input_b_dtype": [ttnn.bfloat16],
-    "output_dtype": [ttnn.bfloat8_b],
-    # "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-    # "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-    # "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-    # "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    # "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    # "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    "input_layout": [ttnn.TILE_LAYOUT],
-    "compute_kernel_config": [None],
+    "default": {
+        "height_sharded_specs": list(
+            get_height_sharded_specs(
+                [(1,), (2,)],
+                [x if x > 0 else 32 for x in range(0, 4096, 384)],
+                [x if x > 0 else 1 for x in range(0, 50, 10)],
+            )
+        ),
+        "k_size": [x if x > 0 else 32 for x in range(0, 384, 96)],
+        "n_size": [x if x > 0 else 32 for x in range(0, 384, 96)],
+        "batch_matrix_multiply": [False],
+        "input_a_memory_config": [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        "input_a_dtype": [ttnn.bfloat8_b],
+        "input_b_dtype": [ttnn.bfloat16],
+        "output_dtype": [ttnn.bfloat8_b],
+        # "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        # "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        # "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        # "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        # "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        # "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.TILE_LAYOUT],
+        "compute_kernel_config": [None],
+    }
 }
 
 
@@ -70,7 +77,7 @@ def run(
     compute_kernel_config,
     *,
     device,
-) -> Tuple[bool, Optional[str]]:
+) -> list:
     batch_sizes, m_size, per_core_height, num_cores_height = height_sharded_specs
 
     core_grid = device.compute_with_storage_grid_size()
@@ -112,6 +119,7 @@ def run(
         memory_config=input_b_memory_config,
     )
 
+    start_time = start_measuring_time()
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
@@ -119,7 +127,8 @@ def run(
         dtype=output_dtype,
         compute_kernel_config=compute_kernel_config,
     )
+    e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 
     expected_pcc = 0.99
-    return check_with_pcc(torch_output_tensor, output_tensor, expected_pcc)
+    return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
