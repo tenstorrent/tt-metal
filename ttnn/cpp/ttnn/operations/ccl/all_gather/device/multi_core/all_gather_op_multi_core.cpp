@@ -26,15 +26,15 @@ namespace ttnn {
 
 using namespace ccl;
 
-static std::tuple<CoreRangeSet,CoreRangeSet> select_worker_cores(AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t link, uint32_t full_send_direction) {
+static std::tuple<CoreRangeSet,CoreRangeSet> select_worker_cores(AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t link, uint32_t full_send_direction, CoreCoord const& core_grid_offset) {
     constexpr uint32_t worker_grid_width = 8;
     const bool fit_sender_and_receiver_workers_on_same_row = (worker_grid_width / 2) >= all_gather_config.get_num_eth_buffers_per_edm();
     std::set<CoreRange> receiver_worker_cores = {};
     std::set<CoreRange> sender_worker_cores = {};
     uint32_t max_cols = 8;
     uint32_t curr_row = link * (((all_gather_config.get_num_eth_buffers_per_edm() * 2 - 1) / max_cols) + 1) +
-        (full_send_direction * num_links * (((all_gather_config.get_num_eth_buffers_per_edm() * 2 - 1) / max_cols) + 1));
-    uint32_t curr_col = 0;
+        (full_send_direction * num_links * (((all_gather_config.get_num_eth_buffers_per_edm() * 2 - 1) / max_cols) + 1)) + core_grid_offset.y;
+    uint32_t curr_col = core_grid_offset.x;
     for (uint32_t r = 0; r < all_gather_config.get_num_eth_buffers_per_edm(); r++) {
         receiver_worker_cores.insert(CoreRange(CoreCoord(curr_col, curr_row)));
         curr_col ++;
@@ -171,13 +171,35 @@ static void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pag
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology) {
+
+    tt::tt_metal::Program program{};
+    return all_gather_multi_core_with_workers_helper(program, input_tensor, output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology);
+}
+
+operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    const std::optional<chip_id_t> receiver_device_id,
+    const std::optional<chip_id_t> sender_device_id,
+    all_gather_op::Topology topology,
+    const std::optional<std::vector<CoreCoord>> datacopy_cores,
+    const std::optional<std::vector<uint32_t>> datacopy_signal_semaphore_addr,
+    const CoreCoord core_grid_offset) {
+    std::cout <<  "RING INDEX:::::::: " << ring_index << std::endl;
+    bool overlap_op = datacopy_cores.has_value();
+
+
     TT_FATAL(!(receiver_device_id == std::nullopt && sender_device_id == std::nullopt), "At least one of receiver_device_id or sender_device_id must be specified");
 
     bool is_linear = topology == all_gather_op::Topology::Linear;
     std::unique_ptr<ccl::CclOpTensorConfig> input_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
     std::unique_ptr<ccl::CclOpTensorConfig> output_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
 
-    tt::tt_metal::Program program{};
     // Issue #10978: CCLs need to be tagged as having multi-device dependencies, when running on Galaxy.
     program.capture_multi_device_dependencies();
     const auto& device = input_tensor.device();
@@ -226,6 +248,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         worker_defines["SHARDED_MEM_LAYOUT"] = "1";
     } else {
         worker_defines["INTERLEAVED_MEM_LAYOUT"] = "1";
+    }
+    if (overlap_op) {
+        worker_defines["OVERLAP_OP"] = "1";
     }
 
     bool full_send_both_directions =
@@ -357,7 +382,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         for (uint32_t i = 0; i < num_links; ++i) {
             // We can't have overlap between the mcast grid for worker cores for different links since mcasting the semaphore in receiver would corrupt other link semaphores
             // We can have overlap between a link's sender and receiver worker grids if we have the semaphores at different addresses
-            auto const& [receiver_workers, sender_workers] = select_worker_cores(all_gather_config, num_links, i, direction);
+            auto const& [receiver_workers, sender_workers] = select_worker_cores(all_gather_config, num_links, i, direction, core_grid_offset);
             uint32_t worker_index = 0;
             uint32_t workers_per_link = all_gather_config.get_num_workers_per_link() / all_gather_config.get_num_eth_buffers_per_edm();
 
@@ -433,6 +458,16 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             counter_clockwise_link_buffer_num_messages_to_send.reserve(all_gather_config.get_num_eth_buffers_per_edm());
             edm_semaphores_base_address.reserve(all_gather_config.get_num_eth_buffers_per_edm());
             link_buffer_sender_addresses.reserve(all_gather_config.get_num_eth_buffers_per_edm());
+
+            /*
+                Overlap setup: Setup semaphores used to synchronize different receiver workers processing
+                different chunks across the same tensor slice
+            */
+            auto receiver_worker_sync_semaphore_addr = CreateSemaphore(program, receiver_workers, 0);
+            std::vector<CoreCoord> receiver_worker_cores_noc_coords;
+            for (uint32_t w = 0; w < receiver_worker_cores.size(); ++w) {
+                receiver_worker_cores_noc_coords.push_back(device->worker_core_from_logical_core(receiver_worker_cores.at(w)));
+            }
 
             {
                 for (std::size_t b = 0; b < all_gather_config.get_num_eth_buffers_per_edm(); b++) {
@@ -892,6 +927,13 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
                         }
 
+                        if (overlap_op) {
+                            worker_writer_receiver_ct_args.push_back(static_cast<bool>(overlap_op));
+                            worker_writer_receiver_ct_args.push_back(static_cast<uint32_t>(global_num_workers));
+                            worker_writer_receiver_ct_args.push_back(static_cast<uint32_t>(b));
+                            worker_writer_receiver_ct_args.push_back(static_cast<uint32_t>(receiver_worker_sync_semaphore_addr));
+                        }
+
                         log_trace(tt::LogOp, "Worker {} RW ct args", b);
                         log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
                         log_trace(tt::LogOp, "\treceiver_num_transfers: {}", receiver_worker_num_transfers.at(i).at(b));
@@ -936,6 +978,29 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
 
                         if (is_sharded) {
                             emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_receiver_rt_args);
+                        }
+
+                        /* Overlap params */
+                        if (overlap_op) {
+                            // Push the receiver worker core noc coordinates
+                            for (auto& noc_coord : receiver_worker_cores_noc_coords) { // Should run global_num_workers times
+                                worker_writer_receiver_rt_args.push_back(static_cast<uint32_t>(noc_coord.x));
+                                worker_writer_receiver_rt_args.push_back(static_cast<uint32_t>(noc_coord.y));
+                            }
+
+                            if (datacopy_cores.has_value()) {
+                                for (auto& datacopy_core : datacopy_cores.value()) { // Should only run once for now
+
+                                    auto datacopy_core_noc = device->worker_core_from_logical_core(datacopy_core);
+                                    worker_writer_receiver_rt_args.push_back(static_cast<uint32_t>(datacopy_core_noc.x));
+                                    worker_writer_receiver_rt_args.push_back(static_cast<uint32_t>(datacopy_core_noc.y));
+                                }
+                            }
+
+                            if (datacopy_signal_semaphore_addr.has_value()) {
+                                uint32_t dir = is_clockwise_direction ? 0 : 1;
+                                worker_writer_receiver_rt_args.push_back(static_cast<uint32_t>(datacopy_signal_semaphore_addr.value()[dir]));
+                            }
                         }
 
                         log_trace(tt::LogOp, "Worker {} RW rt args", b);

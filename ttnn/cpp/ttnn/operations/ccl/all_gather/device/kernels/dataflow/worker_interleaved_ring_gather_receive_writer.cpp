@@ -24,6 +24,7 @@ void kernel_main() {
     arg_idx += output_shard_grid_ncols;
     #endif
 
+    // Compile time Args
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t num_transfers = get_compile_time_arg_val(1);
     constexpr uint32_t num_full_chunks = get_compile_time_arg_val(2);
@@ -94,6 +95,7 @@ void kernel_main() {
             .page_size = output_page_size,
             .data_format = in0_df
         };
+
         #elif defined SHARDED_MEM_LAYOUT
             auto d =
                 tt::tt_metal::address_generators::build_sharded_addr_gen<output_tensor_memory_layout>(
@@ -122,6 +124,69 @@ void kernel_main() {
     uint32_t output_page_idx = output_base_page_idx;
     uint32_t col_idx = col_start_idx;
     uint32_t row_idx = row_start_idx;
+
+#ifdef OVERLAP_OP
+    /* Args for overlapped all gather */
+
+    // Compile time args
+    constexpr uint32_t overlap_op = get_compile_time_arg_val(24) ? 1 : 0;
+    constexpr uint32_t global_num_workers = get_compile_time_arg_val(25);
+    constexpr uint32_t curr_worker_index = get_compile_time_arg_val(26);
+    constexpr uint32_t worker_sync_sem_addr = get_compile_time_arg_val(27);
+
+    // Runtime args
+    uint32_t worker_noc_coords[global_num_workers * 2]; // Worker NOC coordinates [x1, y1, x2, y2...]
+    uint32_t op_worker_noc_x;
+    uint32_t op_worker_noc_y;
+    uint32_t signal_op_sem_addr;
+
+    if (overlap_op) {
+        for (uint32_t i = 0; i < global_num_workers * 2; i+=2) {
+            worker_noc_coords[i] = get_arg_val<uint32_t>(arg_idx++);
+            worker_noc_coords[i + 1] = get_arg_val<uint32_t>(arg_idx++);
+        }
+
+        op_worker_noc_x = get_arg_val<uint32_t>(arg_idx++);
+        op_worker_noc_y = get_arg_val<uint32_t>(arg_idx++);
+        signal_op_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    }
+
+
+    /* Setup for overlapped all_gather */
+    uint32_t master_worker_receiver_noc_x;
+    uint32_t master_worker_receiver_noc_y;
+    uint32_t curr_receiver_worker_noc_x;
+    uint32_t curr_receiver_worker_noc_y;
+    uint32_t curr_worker_is_master;
+    volatile tt_l1_ptr uint32_t* curr_worker_l1_semaphore_addr_ptr = nullptr;
+    uint64_t worker_sem_noc_addrs[global_num_workers] = {0}; // First one is for master
+    uint64_t signal_op_sem_noc_addr = 0;
+
+
+    if (overlap_op) {
+        master_worker_receiver_noc_x = worker_noc_coords[0];
+        master_worker_receiver_noc_y = worker_noc_coords[1];
+
+        curr_receiver_worker_noc_x = worker_noc_coords[curr_worker_index * 2];
+        curr_receiver_worker_noc_y = worker_noc_coords[curr_worker_index * 2 + 1];
+
+        curr_worker_is_master = is_master(
+            master_worker_receiver_noc_x, master_worker_receiver_noc_y, curr_receiver_worker_noc_x, curr_receiver_worker_noc_y) ? 1 : 0;
+
+        curr_worker_l1_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
+
+        // Convert sem addresses into remote sem addresses
+        if (curr_worker_is_master) { // If cur is master, skip doing the conversion for the master slot
+            for (uint32_t i = 1; i < global_num_workers; i++) {
+                worker_sem_noc_addrs[i] = get_noc_addr(worker_noc_coords[i * 2], worker_noc_coords[i * 2 + 1], worker_sync_sem_addr);
+            }
+        } else { // If cur is slave, only do conversion for the master slot
+            worker_sem_noc_addrs[0] = get_noc_addr(master_worker_receiver_noc_x, master_worker_receiver_noc_y, worker_sync_sem_addr);
+        }
+
+        signal_op_sem_noc_addr = get_noc_addr(op_worker_noc_x, op_worker_noc_y, signal_op_sem_addr);
+    }
+#endif
 
     for (uint32_t i = 0; i < num_transfers; ++i) {
         if constexpr (num_full_chunks > 0) {
@@ -183,6 +248,17 @@ void kernel_main() {
             }
 
         }
+#ifdef OVERLAP_OP
+        // Synchronize if all gather fusion is enabled
+        if (overlap_op) {
+            // DPRINT << "curr_worker_is_master: " << curr_worker_is_master << ENDL();
+            if (curr_worker_is_master) {
+                master_sync_slaves(curr_worker_l1_semaphore_addr_ptr, global_num_workers - 1, worker_sem_noc_addrs + 1, signal_op_sem_noc_addr/* OP semaphore */);
+            } else {
+                slave_sync_master(curr_worker_l1_semaphore_addr_ptr, worker_sem_noc_addrs[0]);
+            }
+        }
+#endif
         output_page_idx = output_base_page_idx;
         col_idx = col_start_idx;
         row_idx = row_start_idx;
