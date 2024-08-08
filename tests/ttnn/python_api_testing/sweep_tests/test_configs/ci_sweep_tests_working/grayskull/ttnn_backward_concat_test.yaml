@@ -16,7 +16,7 @@ test-list:
           high: 100
       comparison:
         function: comp_equal_list
-      args-gen: gen_dtype_layout_device
+      args-gen: gen_concat_args
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
@@ -39,7 +39,7 @@ test-list:
           high: 100
       comparison:
         function: comp_equal_list
-      args-gen: gen_dtype_layout_device
+      args-gen: gen_concat_args
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT8_B"]
