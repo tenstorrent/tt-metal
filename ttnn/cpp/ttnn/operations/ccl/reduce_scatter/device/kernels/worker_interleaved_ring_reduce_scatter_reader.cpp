@@ -241,6 +241,7 @@ void kernel_main() {
     uint32_t start_ring_index = args.my_ring_idx;
     while (args.worker_slice_offset.x < args.tensor_slice_shape.x &&
            args.worker_slice_offset.y < args.tensor_slice_shape.y) {
+        DeviceZoneScopedN("Reader-Outer-Loop");
         // Need to reset back to the start ring index because the last iteration of the tranfers read chunks
         // loop won't increment after the last iteration since the increment is within the loop body
         args.my_ring_idx = start_ring_index;
@@ -267,100 +268,190 @@ void kernel_main() {
             }
         }
 
-        bool last_page_of_worker = false;
+
         uint32_t const worker_slice_n_pages = valid_worker_slice_shape.x * valid_worker_slice_shape.y;
         ASSERT(
             (args.num_transfers - 1) * worker_slice_n_pages + total_cb_pages_pushed_to_math <=
             args.total_eltwise_kernel_num_pages);
-        {
-            uint32_t offset_into_worker_slice = 0;
-            for (uint32_t p = 0; p < worker_slice_n_pages; p += args.full_chunk_num_pages) {
-                uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - p);
-                ASSERT(!last_page_of_worker);
-                read_wrapped_chunk_from_output_tensor(
-                    curr_tile_id,
-                    offset_into_worker_slice,
-                    args.worker_slice_offset, // Offset into tensor slice
-                    valid_worker_slice_shape,
-                    // In tiles for tile layout
-                    args.input_tensor_shape,
-                    args.tensor_slice_shape,
-                    to_dm_sender_short_circuit_cb,
-                    s,
-                    n_pages,
-                    args.page_size,
-                    last_page_of_worker);
-                total_cb_pages_pushed += n_pages;
-                if (n_pages < args.half_cb_n_pages) {
-                    uint32_t num_filler_pages = args.half_cb_n_pages - n_pages;
-                    push_filler_pages_to_cb(to_dm_sender_short_circuit_cb, num_filler_pages);
-                    ASSERT(args.half_cb_n_pages > n_pages);
-                    ASSERT(p + n_pages == worker_slice_n_pages);
-                    total_cb_pages_pushed += num_filler_pages;
-                }
-            }
-        }
 
-        for (uint32_t i = 1; i < args.num_transfers; ++i) {
-            bool last_transfer = i == args.num_transfers - 1;
-            uint32_t offset_into_worker_slice = 0;
-            std::tie(args.my_ring_idx, curr_ring_slice_start_page_offset) = advance_to_next_transfer_slice(
-                args.ring_size,
-                args.my_ring_idx,
-                curr_ring_slice_start_page_offset,
-                args.input_tensor_shape,
+
+        bool worker_slice_first_input_read_in_progress = true;
+        bool worker_slice_input_forwarding_in_progress = true;
+        bool last_page_of_worker = false;
+
+        // outlined from first input tensor read loop
+        uint32_t first_input_tensor_read_page_offset = 0;
+        uint32_t offset_into_worker_slice = 0;
+        auto worker_slice_offset = args.worker_slice_offset;
+
+
+        uint32_t chunks_forwarded = 0;
+        uint32_t max_chunks_forwarded_before_wait = 0;
+
+        // outlined from loop
+        uint32_t current_transfer = 1;
+        uint32_t forward_input_tensor_read_page_offset = 0;
+        uint32_t forwarder_offset_into_worker_slice = 0;
+        auto forwarder_worker_slice_offset = args.worker_slice_offset;
+        bool incremented_transfer = true;
+        uint32_t forwarder_page_id = curr_ring_slice_start_page_offset + worker_relative_start_offset_into_slice;
+        for (uint32_t p = 0; p < worker_slice_n_pages; p += args.full_chunk_num_pages) {
+            // Step past the input reader portion
+            uint32_t tmp_offset_into_worker_slice = 0;
+            uint32_t tmp_page_id = curr_tile_id;
+            advance_worker_global_page_interleaved(
+                tmp_page_id, // Updated internally
+                tmp_offset_into_worker_slice,
+                forwarder_worker_slice_offset,
+                valid_worker_slice_shape,
                 args.tensor_slice_shape,
-                args.is_clockwise_direction);
-            ASSERT(last_page_of_worker);
-            last_page_of_worker = false;
-            curr_tile_id = curr_ring_slice_start_page_offset + worker_relative_start_offset_into_slice;
+                args.input_tensor_shape,
+                last_page_of_worker
+            );
+        }
+        while (worker_slice_first_input_read_in_progress || worker_slice_input_forwarding_in_progress) {
+            if (worker_slice_first_input_read_in_progress)
+            {
 
-            for (uint32_t p = 0; p < worker_slice_n_pages; p += args.full_chunk_num_pages) {
-                uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - p);
-                ASSERT(n_pages > 0);
-                // Fetch from input tensor
-                read_wrapped_chunk_from_output_tensor(
-                    curr_tile_id,
-                    offset_into_worker_slice,
-                    args.worker_slice_offset, // Offset into tensor slice
-                    valid_worker_slice_shape,
-                    // In tiles for tile layout
+                DeviceZoneScopedN("Read-Input-Tensor");
+                if (first_input_tensor_read_page_offset < worker_slice_n_pages) {
+                    DPRINT << "READ FROM INPUT\n";
+                    DeviceZoneScopedN("Read");
+                    uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - first_input_tensor_read_page_offset);
+                    // ASSERT(!last_p+age_of_worker);
+                    read_wrapped_chunk_from_output_tensor(
+                        curr_tile_id,
+                        offset_into_worker_slice,
+                        worker_slice_offset, // Offset into tensor slice
+                        valid_worker_slice_shape,
+                        // In tiles for tile layout
+                        args.input_tensor_shape,
+                        args.tensor_slice_shape,
+                        to_dm_sender_short_circuit_cb,
+                        s,
+                        n_pages,
+                        args.page_size,
+                        last_page_of_worker);
+                    total_cb_pages_pushed += n_pages;
+                    if (n_pages < args.half_cb_n_pages) {
+                        uint32_t num_filler_pages = args.half_cb_n_pages - n_pages;
+                        push_filler_pages_to_cb(to_dm_sender_short_circuit_cb, num_filler_pages);
+                        ASSERT(args.half_cb_n_pages > n_pages);
+                        ASSERT(first_input_tensor_read_page_offset + n_pages == worker_slice_n_pages);
+                        total_cb_pages_pushed += num_filler_pages;
+                    }
+                    first_input_tensor_read_page_offset += args.full_chunk_num_pages;
+                    if (first_input_tensor_read_page_offset >= worker_slice_n_pages) {
+                        worker_slice_first_input_read_in_progress = false;
+                    }
+                }
+
+            }
+
+            if (worker_slice_input_forwarding_in_progress) {
+                ASSERT (current_transfer < args.num_transfers);
+                // bool last_transfer = current_transfer == args.num_transfers - 1;
+                {
+
+                if (incremented_transfer) {
+                    DPRINT << "advance_to_next_transfer_slice\n";
+                DeviceZoneScopedN("Reader-Advance-Slice");
+                std::tie(args.my_ring_idx, curr_ring_slice_start_page_offset) = advance_to_next_transfer_slice(
+                    args.ring_size,
+                    args.my_ring_idx,
+                    curr_ring_slice_start_page_offset,
                     args.input_tensor_shape,
                     args.tensor_slice_shape,
-                    cb_id_in1,
-                    s,
-                    n_pages,
-                    args.page_size,
-                    last_page_of_worker);
-                uint64_t eth_receiver_l1_curr_noc_addr = eth_receiver_l1_base_noc_addr;
-
-                // Fetch from EDM
-                noc_semaphore_wait(receiver_read_semaphore_addr_ptr, 1);
-                noc_semaphore_set(receiver_read_semaphore_addr_ptr, 0);
-                fetch_chunk(cb_id_in0, n_pages, args.page_size, eth_receiver_l1_base_noc_addr);
-                total_cb_pages_pushed_to_math += n_pages;
-                total_cb_pages_pushed += n_pages;
-
-                bool last_worker_message_to_edm = last_transfer && last_slice_of_worker && (p + n_pages >= worker_slice_n_pages);
-                if (!last_worker_message_to_edm) {
-                    noc_semaphore_inc(
-                        eth_receiver_l1_semaphore_noc_addr,
-                        ttnn::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
+                    args.is_clockwise_direction);
+                    forwarder_offset_into_worker_slice = 0;
+                    forward_input_tensor_read_page_offset = 0;
+                    forwarder_page_id = curr_ring_slice_start_page_offset + worker_relative_start_offset_into_slice;
+                    incremented_transfer = false;
                 }
-                if (n_pages < args.half_cb_n_pages) {
-                    uint32_t num_filler_pages = args.half_cb_n_pages - n_pages;
-                    push_filler_pages_to_cb(cb_id_in0, num_filler_pages);
-                    push_filler_pages_to_cb(cb_id_in1, num_filler_pages);
-                    total_cb_pages_pushed_to_math += num_filler_pages;
-                    total_cb_pages_pushed += num_filler_pages;
+                }
+
+                if (forward_input_tensor_read_page_offset < worker_slice_n_pages && *receiver_read_semaphore_addr_ptr == 1 && (!worker_slice_first_input_read_in_progress || chunks_forwarded < max_chunks_forwarded_before_wait)) {
+                    DeviceZoneScopedN("Read-Inputs-For-Reduction");
+                    uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - forward_input_tensor_read_page_offset);
+                    DPRINT << "full_chunk_num_pages: " << args.full_chunk_num_pages << "\n";
+                    DPRINT << "worker_slice_n_pages: " << worker_slice_n_pages << "\n";
+                    DPRINT << "forward_input_tensor_read_page_offset: " << forward_input_tensor_read_page_offset << "\n";
+                    DPRINT << "n_pages: " << n_pages << "\n";
+                    ASSERT(n_pages > 0);
+                    // Fetch from EDM
+                    {
+                    DeviceZoneScopedN("Reader-Wait-For-EDM");
+                    noc_semaphore_wait(receiver_read_semaphore_addr_ptr, 1);
+                    }
+                    noc_semaphore_set(receiver_read_semaphore_addr_ptr, 0);
+                    {
+                    DeviceZoneScopedN("Reader-Fetch-Chunk");
+                    fetch_chunk(cb_id_in0, n_pages, args.page_size, eth_receiver_l1_base_noc_addr);
+                    }
+                    // Fetch from input tensor
+                    {
+                    DeviceZoneScopedN("Read-Input-Tensor");
+                    read_wrapped_chunk_from_output_tensor(
+                        forwarder_page_id,
+                        forwarder_offset_into_worker_slice,
+                        forwarder_worker_slice_offset, // Offset into tensor slice
+                        valid_worker_slice_shape,
+                        // In tiles for tile layout
+                        args.input_tensor_shape,
+                        args.tensor_slice_shape,
+                        cb_id_in1,
+                        s,
+                        n_pages,
+                        args.page_size,
+                        last_page_of_worker);
+                    }
+                    uint64_t eth_receiver_l1_curr_noc_addr = eth_receiver_l1_base_noc_addr;
+
+                    total_cb_pages_pushed_to_math += n_pages;
+                    total_cb_pages_pushed += n_pages;
+
+                    bool last_transfer = current_transfer == args.num_transfers - 1;
+                    bool last_packet_of_slice = forward_input_tensor_read_page_offset + n_pages >= worker_slice_n_pages;
+
+                    forward_input_tensor_read_page_offset += args.full_chunk_num_pages;
+
+                    if (forward_input_tensor_read_page_offset >= worker_slice_n_pages && last_transfer) {
+                        ASSERT(last_page_of_worker);
+
+                        DPRINT << "worker slice forwarding done iteration\n";
+                        worker_slice_input_forwarding_in_progress = false;
+                    }
+
+                    bool last_worker_message_to_edm = last_transfer && last_slice_of_worker && (last_packet_of_slice);
+                    if (!last_worker_message_to_edm) {
+                        DPRINT << "NSI\n";
+                        noc_semaphore_inc(
+                            eth_receiver_l1_semaphore_noc_addr,
+                            ttnn::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
+                    }
+                    if (n_pages < args.half_cb_n_pages) {
+                        uint32_t num_filler_pages = args.half_cb_n_pages - n_pages;
+                        push_filler_pages_to_cb(cb_id_in0, num_filler_pages);
+                        push_filler_pages_to_cb(cb_id_in1, num_filler_pages);
+                        total_cb_pages_pushed_to_math += num_filler_pages;
+                        total_cb_pages_pushed += num_filler_pages;
+                    }
+
+                    if (last_packet_of_slice) {
+                        DPRINT << "last_packet_of_slice\n";
+                        current_transfer++;
+                        incremented_transfer = true;
+                    }
+                    chunks_forwarded++;
                 }
             }
-            ASSERT(last_page_of_worker);
         }
 
         args.worker_slice_offset = next_slice_offset;
     }
 
+
+    DPRINT << "READER DONE\n";
     ASSERT(args.total_eltwise_kernel_num_pages >= total_cb_pages_pushed_to_math);
     DEBUG_STATUS("DRN1");
     // The host code currently doesn't know how to accuractly count the exact number of pages pushed through the
