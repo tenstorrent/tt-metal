@@ -39,14 +39,6 @@ operation::ProgramWithCallbacks moreh_embeddings_copy(
     bool weight_is_dram = weight.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
-    uint32_t input_element_size_bytes = input.element_size();
-    uint32_t weight_element_size_bytes = weight.element_size();
-
-    // row major, page size is last dim
-    uint32_t input_page_size = input.get_legacy_shape()[-1] * input_element_size_bytes;
-    uint32_t weight_page_size = weight.get_legacy_shape()[-1] * weight_element_size_bytes;
-
-    uint32_t num_embeddings = weight.get_legacy_shape().without_padding()[-2];
     uint32_t embedding_dim = weight.get_legacy_shape().without_padding()[-1];
 
     uint32_t H = output.get_legacy_shape().without_padding()[-3];
@@ -158,8 +150,6 @@ operation::ProgramWithCallbacks moreh_embeddings_copy(
             }
         }
     };
-
-    // return {std::move(program), override_runtime_args_callback};
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
