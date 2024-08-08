@@ -700,19 +700,11 @@ void EnableAllocs(Device *device) { tt::tt_metal::allocator::enable_allocs(*(dev
 }  // namespace detail
 
 size_t GetNumAvailableDevices() {
-#ifdef TT_METAL_VERSIM_DISABLED
     return tt::Cluster::instance().number_of_user_devices();
-#else
-    return 1;
-#endif
 }
 
 size_t GetNumPCIeDevices() {
-#ifdef TT_METAL_VERSIM_DISABLED
     return tt::Cluster::instance().number_of_pci_devices();
-#else
-    return 1;
-#endif
 }
 
 chip_id_t GetPCIeDeviceID(chip_id_t device_id){
