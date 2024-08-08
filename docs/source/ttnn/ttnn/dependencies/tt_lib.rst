@@ -86,18 +86,6 @@ and create_output_tensors with the additional parameter for the output_tensors.
 
     };
 
-New Host Operation
-------------------
-
-And below, is an example of how to declare a new on-host operation with all of the methods required by the interface.
-
-.. code-block::
-
-    struct <NewOperation> {
-        void validate(const std::vector<Tensor> &input_tensors) const;
-        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-        std::vector<Tensor> compute_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    };
 
 Profiler
 ========
