@@ -29,11 +29,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h_optimised.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_w/bcast_op_multi_core_w.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/untilize/multi_core/untilize_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/untilize/single_core/untilize_op_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/untilize/untilize_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/untilize/untilize_with_halo_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/untilize/untilize_with_halo_op_v2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/multi_core/sdpa_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/multi_core/sdpa_decode_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/sdpa_op.cpp
