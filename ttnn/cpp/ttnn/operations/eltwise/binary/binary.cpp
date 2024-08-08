@@ -231,21 +231,7 @@ ComplexTensor BinaryOperation<binary_op_type, in_place>::operator()(
     const ComplexTensor &input_a,
     const ComplexTensor &input_b,
     const ttnn::MemoryConfig &output_mem_config) {
-    if constexpr(binary_op_type == BinaryOpType::MUL) {
-        Tensor re_part = ttnn::subtract(
-            ttnn::multiply(input_a[0],input_b[0],std::nullopt,output_mem_config),
-            ttnn::multiply(input_a[1],input_b[1],std::nullopt,output_mem_config),
-            std::nullopt, output_mem_config);
-
-        Tensor im_part = ttnn::add(
-            ttnn::multiply(input_a[0],input_b[1],std::nullopt,output_mem_config),
-            ttnn::multiply(input_a[1],input_b[0],std::nullopt,output_mem_config),
-            std::nullopt, output_mem_config);
-
-        return ComplexTensor({ re_part, im_part });
-    }else if constexpr(binary_op_type == BinaryOpType::DIV_FAST) {
-        return ttnn::multiply( input_a, ttnn::operations::complex_unary::_reciprocal( input_b , output_mem_config ), output_mem_config ); //TODO: Overload reciprocal
-    }else if constexpr(binary_op_type == BinaryOpType::ADD) {
+    if constexpr(binary_op_type == BinaryOpType::ADD) {
         return ComplexTensor({ ttnn::add(input_a[0], input_b[0], std::nullopt, output_mem_config),
              ttnn::add(input_a[1], input_b[1], std::nullopt, output_mem_config) });
     }else if constexpr(binary_op_type == BinaryOpType::SUB) {
