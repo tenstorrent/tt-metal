@@ -1233,8 +1233,10 @@ void test_numerically() {
         Shape shapeb = {B_original, 1, Kt_original*TILE_HEIGHT, Nt_original*TILE_WIDTH};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a_original = tt::numpy::random::random(shapea);
-        Tensor b_original = tt::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
+        Tensor b_original = tt::numpy::random::random(shapeb);
 
+        // Parameters for matmul call - copy paste from matmul_multi_core in
+        // bmm_op_multi_core.cpp
         bool bcast_batch = false;
         Tensor a = a_original;
         Tensor b = b_original;
@@ -1244,13 +1246,31 @@ void test_numerically() {
 
         a_original = a_original.to(Layout::TILE).to(device);
         b_original = b_original.to(Layout::TILE).to(device);
-        Tensor mm = tt::operations::primary::matmul(a_original, b_original, /*bias=*/std::nullopt,
-                tt::operations::primary::Matmul{/*program_config=*/std::nullopt, /*bcast_batch=*/std::nullopt,operation::DEFAULT_OUTPUT_MEMORY_CONFIG, /*output_dtype=*/std::nullopt, /*compute_kernel_config=*/std::nullopt, /*untilize_out=*/false, /*user_core_coord=*/std::nullopt, /*user_fused_activation=*/std::nullopt, /*user_run_batched=*/true}).cpu();
+        // Tensor mm = tt::operations::primary::matmul(a_original, b_original, /*bias=*/std::nullopt,
+        //         tt::operations::primary::Matmul{/*program_config=*/std::nullopt, /*bcast_batch=*/std::nullopt,operation::DEFAULT_OUTPUT_MEMORY_CONFIG, /*output_dtype=*/std::nullopt, /*compute_kernel_config=*/std::nullopt, /*untilize_out=*/false, /*user_core_coord=*/std::nullopt, /*user_fused_activation=*/std::nullopt, /*user_run_batched=*/true}).cpu();
+
+        Tensor mm = tt::operations::primary::matmul(a_original, b_original);
+
+        auto tensor_mm_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(mm.cpu());
+
+        for (int index = 0; index < 10; index++) {
+            std::cout << tensor_mm_buffer[index].to_float() << " ";
+        }
+        std::cout << std::endl;
+
+        std::cout << "Finished original matmul test" << std::endl;
+
+        std::cout << "Running generic matmul test" << std::endl;
 
         const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
-        // TODO: pjanevski: This is a hack compile, create proper output tensor
-        auto output = Tensor();
+        Shape output_shape = Shape{B_original, 1, Mt_original*TILE_HEIGHT, Nt_original*TILE_WIDTH};
+        auto output = tt::tt_metal::create_device_tensor(
+            output_shape,
+            a.tensor_attributes->dtype,
+            a.tensor_attributes->layout,
+            a.device(),
+            a.memory_config());
 
         tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
         tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.get_dtype());
@@ -1460,16 +1480,31 @@ void test_numerically() {
             num_tiles_written += num_output_tiles_per_core;
         }
 
-        std::cout << "Running softmax generic op" << std::endl;
+        std::cout << "Running matmul generic op" << std::endl;
         ttnn::generic_op(std::vector<Tensor>{a, b}, output, program_attributes);
 
         auto output_tensor = output.cpu();
 
-        auto allclose = tt::numpy::allclose<bfloat16>(mm, output_tensor);
+        auto tensor_output_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(output_tensor);
+
+        for (int index = 0; index < 10; index++) {
+            std::cout << tensor_output_buffer[index].to_float() << " ";
+        }
+        std::cout << std::endl;
+
+        auto allclose = tt::numpy::allclose<bfloat16>(mm.cpu(), output_tensor);
 
         TT_FATAL(allclose);
 
-        std::cout << "Finished matmul original test" << std::endl;
+        std::cout << "a buffer " << a.buffer()->address() << std::endl;
+
+        std::cout << "b buffer " << b.buffer()->address() << std::endl;
+
+        std::cout << "output buffer " << output.buffer()->address() << std::endl;
+
+        std::cout << "mm buffer " << mm.buffer()->address() << std::endl;
+
+        std::cout << "Finished matmul generic test" << std::endl;
     }
 
     TT_FATAL(tt::tt_metal::CloseDevice(device));
