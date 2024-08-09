@@ -897,4 +897,8 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_bitwise_or,
         "pytorch_op": pytorch_ops.bitwise_or,
     },
+    "concat-bw": {
+        "tt_op": ttnn_ops.concat_bw,
+        "pytorch_op": ttnn_pytorch_ops.concat_bw,
+    },
 }
