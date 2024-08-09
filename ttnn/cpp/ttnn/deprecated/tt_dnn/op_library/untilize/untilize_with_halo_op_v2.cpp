@@ -63,7 +63,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t out_nbytes = datum_size(out_df);
 
     CoreRangeSet all_cores = output_tensor.shard_spec().value().grid;
-    auto input_shard_shape = output_tensor.shard_spec().value().shape;
+    auto input_shard_shape = input_tensor.shard_spec().value().shape;
     auto output_shard_shape = output_tensor.shard_spec().value().shape;
     TT_ASSERT(input_shard_shape[1] == output_shard_shape[1]);
     uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
@@ -179,6 +179,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
 
     bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
+
+    log_debug(LogOp, "out_stick_nytes: {}", out_stick_nbytes);
 
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
@@ -195,6 +198,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_block_sharded,
         remote_read,
         (uint32_t) (transpose_mcast ? 1 : 0),
+        is_width_sharded
     };
 
     reader_ct_args[0] = 0;
