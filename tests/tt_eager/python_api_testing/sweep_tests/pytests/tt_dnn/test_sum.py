@@ -21,7 +21,7 @@ import tt_lib as ttl
     ],
 )
 class TestSum:
-    @pytest.mark.parametrize("fn_kind", ["sum-3", "sum-2"])
+    @pytest.mark.parametrize("fn_kind", ["sum-3", "sum-2", "sum-1", "sum-0"])
     def test_run_sum_ops(self, input_shapes, fn_kind, device, function_level_defaults):
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)

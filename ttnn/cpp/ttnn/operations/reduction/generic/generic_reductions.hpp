@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -54,6 +54,43 @@ struct Reduce {
             dim = std::vector<int>(rank);
             for (int i = 0; i < rank; i++) {
                 dim[i] = i;
+            }
+        }
+
+        if (dim.size() == 1) {
+            if (dim[0] == rank - 3) {
+                // Pad before running the op to only pay cost of formatting once
+                auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor_arg.get_legacy_shape(), true);
+                auto out_shape = input_tensor_arg.get_legacy_shape();
+                out_shape[1] = 1;
+
+                auto formatted_input_tensor = input_tensor_arg;
+                float pad_value = (reduce_type == ReduceType::Max)   ? -std::numeric_limits<float>::infinity()
+                                : (reduce_type == ReduceType::Min) ? std::numeric_limits<float>::infinity()
+                                                                    : 0;
+
+                if (!AutoFormat::check_input_tensor_format(input_tensor_arg, input_tensor_pad_shape)) {
+                    formatted_input_tensor = AutoFormat::format_input_tensor(
+                        input_tensor_arg, input_tensor_arg.device(), input_tensor_pad_shape, pad_value, Layout::TILE);
+                }
+                Tensor output = ttnn::transpose(formatted_input_tensor, 1, -2, memory_config);
+                output = Reduce::operator()(output, 2, keepdim, memory_config, compute_kernel_config, scalar);
+                output = ttnn::transpose(output, 1, -2, memory_config);
+                return AutoFormat::format_output_tensor(output, out_shape, input_tensor_arg.device(), Layout::TILE);
+            } else if (dim[0] == 0) {
+                // Pad before running the op to only pay cost of formatting once
+                auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor_arg.get_legacy_shape(), false, true);
+                auto out_shape = input_tensor_arg.get_legacy_shape();
+                out_shape[0] = 1;
+
+                auto formatted_input_tensor = input_tensor_arg;
+                if (!AutoFormat::check_input_tensor_format(input_tensor_arg, input_tensor_pad_shape)) {
+                    formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor_arg, input_tensor_arg.device(), input_tensor_pad_shape, 0.0, Layout::TILE);
+                }
+                Tensor output = ttnn::transpose(formatted_input_tensor, 0, -2, memory_config);
+                output = Reduce::operator()(output, 2, keepdim, memory_config, compute_kernel_config, scalar);
+                output = ttnn::transpose(output, 0, -2, memory_config);
+                return AutoFormat::format_output_tensor(output, out_shape, input_tensor_arg.device(), Layout::TILE);
             }
         }
 

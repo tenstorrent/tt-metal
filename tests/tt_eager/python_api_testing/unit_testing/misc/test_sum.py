@@ -12,7 +12,8 @@ import ttnn
     (
         ((1, 1, 32, 32), 3),
         ((1, 1, 32, 32), 2),
-        ((32, 32, 32, 32), [2, 3]),
+        ((32, 32, 32, 32), 1),
+        ((32, 32, 32, 32), 0),
     ),  # single tile
 )
 def test_sum_for_dim_hw(device, use_program_cache, shape_dim):
