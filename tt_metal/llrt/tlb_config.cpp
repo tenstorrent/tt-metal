@@ -78,6 +78,12 @@ int32_t get_static_tlb_index(CoreCoord target) {
 
 namespace blackhole {
 
+static constexpr uint32_t NUM_PORTS_PER_DRAM_CHANNEL = 3;
+static constexpr uint32_t NUM_DRAM_CHANNELS = 8;
+// Values taken from blackhole.py in `src/t6ifc/t6py/packages/tenstorrent/chip/blackhole.py`
+static constexpr uint32_t ETH_STATIC_TLB_START = 0;
+static constexpr uint32_t TENSIX_STATIC_TLB_START = 38;
+
 int32_t get_static_tlb_index(CoreCoord target) {
     bool is_eth_location =
         std::find(
@@ -93,23 +99,35 @@ int32_t get_static_tlb_index(CoreCoord target) {
     // implementation migrated from blackhole.py in `src/t6ifc/t6py/packages/tenstorrent/chip/blackhole.py` from tensix
     // repo (t6py-blackhole-bringup branch)
 
-    // BH worker cores are starting from y=2
-    target.y--;
-    if (is_eth_location) {
-        // TODO: Uplift this
-        return -1;
-    } else if (is_tensix_location) {
-        if (target.x >= 8) {
-            target.x -= 2;
-        }
-
-        int flat_index = target.y * 14 + target.x;
-        int tlb_index = tt::umd::blackhole::ETH_LOCATIONS.size() + flat_index;
-        return tlb_index;
-    } else {
-        return -1;
+    auto dram_tlb_index =
+        std::find(tt::umd::blackhole::DRAM_LOCATIONS.begin(), tt::umd::blackhole::DRAM_LOCATIONS.end(), target);
+    if (dram_tlb_index != tt::umd::blackhole::DRAM_LOCATIONS.end()) {
+        auto dram_index = dram_tlb_index - tt::umd::blackhole::DRAM_LOCATIONS.begin();
+        // We have 3 ports per DRAM channel so we divide index by 3 to map all the channels of the same core to the same TLB
+        return tt::umd::blackhole::TLB_BASE_INDEX_4G + (dram_index / NUM_PORTS_PER_DRAM_CHANNEL);
     }
+
+    // One row of BH ethernet cores starting at x = 1, y = 1
+    //  and BH tensix cores are starting from x = 1, y = 2
+    target.y--;
+    target.x--;
+    if (target.x >= 8) {
+        target.x -= 2;
+    }
+
+    TT_ASSERT(is_eth_location or is_tensix_location);
+    int y = is_eth_location ? target.y : (target.y - 1);
+    int flat_index = y * 14 + target.x;
+    int tlb_index = (is_eth_location ? ETH_STATIC_TLB_START : TENSIX_STATIC_TLB_START) + flat_index;
+    return tlb_index;
 }
+
+// Returns last port of dram channel passed as the argument to align with dram_preferred_worker_endpoint
+// This core will be used for configuring 4GB TLB.
+tt_xy_pair ddr_to_noc0(unsigned i) {
+    return tt::umd::blackhole::DRAM_LOCATIONS[(NUM_PORTS_PER_DRAM_CHANNEL * i) + (NUM_PORTS_PER_DRAM_CHANNEL - 1)];
+}
+
 
 }  // namespace blackhole
 
@@ -151,11 +169,8 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
     }
 
     auto statically_mapped_cores = sdesc.workers;
-    // TODO (#9933): Remove workaround for BH
-    if (arch != tt::ARCH::BLACKHOLE) {
-        statically_mapped_cores.insert(
-            statically_mapped_cores.end(), sdesc.ethernet_cores.begin(), sdesc.ethernet_cores.end());
-    }
+    statically_mapped_cores.insert(
+        statically_mapped_cores.end(), sdesc.ethernet_cores.begin(), sdesc.ethernet_cores.end());
     std::int32_t address = 0;
 
     // Setup static TLBs for all worker cores
@@ -180,7 +195,16 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
             // Align address space of 16MB TLB to 16MB boundary
             peer_dram_offset += dynamic_tlb_16m_size;
         }
+    } else {
+        // Setup static 4GB tlbs for DRAM cores
+        uint32_t dram_addr = 0;
+        for (std::uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
+            tt_xy_pair dram_core = blackhole::ddr_to_noc0(dram_channel);
+            auto tlb_index = tt::umd::blackhole::TLB_COUNT_2M + dram_channel;
+            device_driver.configure_tlb(mmio_device_id, dram_core, tlb_index, dram_addr, TLB_DATA::Posted);
+        }
     }
+
     device_driver.setup_core_to_tlb_map([get_static_tlb_index](CoreCoord core) { return get_static_tlb_index(core); });
 }
 
