@@ -23,6 +23,8 @@ run_perf_models_other() {
 
     env pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
 
+    env pytest -n auto models/experimental/functional_deit/tests/test_performance.py -m $test_marker
+
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
 }
@@ -75,6 +77,9 @@ run_device_perf_models() {
         env pytest models/demos/bert/tests -m $test_marker
 
         env pytest models/demos/resnet/tests -m $test_marker
+
+        env pytest models/experimental/functional_deit/tests/test_device_perf_deit.py -m $test_marker
+
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
