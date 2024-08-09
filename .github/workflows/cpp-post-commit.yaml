@@ -34,7 +34,6 @@ on:
         required: false
         type: number
         default: 45
-
 jobs:
   models:
     strategy:

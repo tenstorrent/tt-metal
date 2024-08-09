@@ -94,22 +94,21 @@ jobs:
   #     arch: ${{ matrix.test-group.arch}}
   #     runner-label: ${{ matrix.test-group.runner-label}}
   # # FD C++ Unit Tests
-  # cpp-unit-tests:
-  #   needs: build-artifact
-  #   secrets: inherit
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       test-group: [
-  #         { arch: grayskull, runner-label: E150 },
-  #         { arch: wormhole_b0, runner-label: N150 },
-  #         { arch: wormhole_b0, runner-label: N300 },
-  #       ]
-  #   uses: ./.github/workflows/cpp-post-commit.yaml
-  #   with:
-  #     arch: ${{ matrix.test-group.arch}}
-  #     runner-label: ${{ matrix.test-group.runner-label}}
-
+  cpp-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: grayskull, runner-label: E150 },
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch}}
+      runner-label: ${{ matrix.test-group.runner-label}}
   # profiler-regression:
   #   needs: build-artifact-profiler
   #   uses: ./.github/workflows/run-profiler-regression.yaml
