@@ -37,25 +37,36 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
     log_debug(LogTest, "moreh_getitem_rm");
 
     auto input_shape = input.get_legacy_shape();
-    Shape output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_legacy_shape();
 
-    Shape input_4d_shape(tensor_impl::detail::to_4D_shape(input_shape));
-    Shape output_4d_shape = tensor_impl::detail::to_4D_shape(output_shape);
+    std::array<uint32_t, 5> new_input_shape{};
+    std::array<uint32_t, 5> new_output_shape{};
+    new_input_shape.fill(1);
+    new_output_shape.fill(1);
+
+    auto input_dim_offset = 5 - input_shape.rank();
+    for (auto index = 0; index < input_shape.rank(); index++) {
+        new_input_shape[index + input_dim_offset] = input_shape[index];
+    }
+    auto output_dim_offset = 5 - output_shape.rank();
+    for (auto index = 0; index < output_shape.rank(); index++) {
+        new_output_shape[index + output_dim_offset] = output_shape[index];
+    }
+    Shape input_5d_shape(new_input_shape);
+    Shape output_5d_shape(new_output_shape);
 
     uint32_t index_start_dim = index_dims.front();
     uint32_t index_end_dim = index_dims.back();
 
-    Tensor input_4d = input;
-    input_4d = input_4d.reshape(input_4d_shape);
+    Tensor input_5d = input;
+    input_5d = input_5d.reshape(input_5d_shape);
 
-    auto input_4d_shape_without_padding = input_4d_shape.without_padding();
+    auto input_5d_shape_without_padding = input_5d_shape.without_padding();
 
-    IndexInfo index_info[4] = {0};
+    IndexInfo index_info[5] = {0};
 
-
-    uint32_t dim_offset = 4 - input_shape.rank();
     for (uint32_t i = 0 ; i < index_tensors.size(); i++) {
-        auto dim = index_dims[i] + dim_offset;
+        auto dim = index_dims[i] + input_dim_offset;
         auto index = index_tensors.at(i);
 
         index_info[dim].is_defined = true;
@@ -66,7 +77,7 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
 
     uint32_t index_size = index_tensors.front().get_legacy_shape()[-1];
 
-    uint32_t input_unit_size = input_4d_shape[-1] * input_4d.element_size();
+    uint32_t input_unit_size = input_5d_shape[-1] * input_5d.element_size();
     uint32_t output_unit_size = input_unit_size;
 
     // split work
@@ -92,7 +103,7 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
                               .set_page_size(src_cb_index, rounded_input_page_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    for (uint32_t dim = 0; dim < 4; dim++) {
+    for (uint32_t dim = 0; dim < 5; dim++) {
         if (!index_info[dim].is_defined)
             continue;
 
@@ -112,7 +123,7 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
 
 
     // create read/wrtie kernel
-    auto src_is_dram = is_dram(input_4d);
+    auto src_is_dram = is_dram(input_5d);
     auto dst_is_dram = is_dram(output);
 
     std::map<string, string> reader_defines;
@@ -128,6 +139,7 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
             index_info[1].is_dram,
             index_info[2].is_dram,
             index_info[3].is_dram,
+            index_info[4].is_dram,
         },
         reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
@@ -138,8 +150,9 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
         writer_defines);
 
     uint32_t input_stick_idx_stride_h = 1;
-    uint32_t input_stick_idx_stride_c = input_stick_idx_stride_h * input_4d_shape.without_padding()[2];
-    uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_4d_shape.without_padding()[1];
+    uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape.without_padding()[3];
+    uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape.without_padding()[2];
+    uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape.without_padding()[1];
 
     // Set Runtime Args
     auto core_x_offset = core_range.start_coord.x;
@@ -155,40 +168,46 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
 
         vector<uint32_t> reader_args = {
             // buffers
-            input_4d.buffer()->address(),
+            input_5d.buffer()->address(),
             index_info[0].address,
             index_info[1].address,
             index_info[2].address,
             index_info[3].address,
+            index_info[4].address,
 
             // input
             input_stick_idx_stride_n,
             input_stick_idx_stride_c,
+            input_stick_idx_stride_d,
             input_stick_idx_stride_h,
 
-            input_4d_shape_without_padding[0],
-            input_4d_shape_without_padding[1],
-            input_4d_shape_without_padding[2],
-            input_4d_shape_without_padding[3],
+            input_5d_shape_without_padding[0],
+            input_5d_shape_without_padding[1],
+            input_5d_shape_without_padding[2],
+            input_5d_shape_without_padding[3],
+            input_5d_shape_without_padding[4],
 
             // index
             index_info[0].is_defined,
             index_info[1].is_defined,
             index_info[2].is_defined,
             index_info[3].is_defined,
+            index_info[4].is_defined,
             index_info[0].unit_size,
             index_info[1].unit_size,
             index_info[2].unit_size,
             index_info[3].unit_size,
+            index_info[4].unit_size,
             index_size,
             index_start_dim,
             index_end_dim,
 
             // output
-            output_4d_shape[0],
-            output_4d_shape[1],
-            output_4d_shape[2],
-            output_4d_shape[3],
+            output_5d_shape[0],
+            output_5d_shape[1],
+            output_5d_shape[2],
+            output_5d_shape[3],
+            output_5d_shape[4],
 
             // etc
             start_id,
@@ -215,7 +234,7 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
     }
 
     auto override_runtime_args_callback =
-        [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h, index_dims, dim_offset](
+        [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h, index_dims, input_dim_offset](
             const Program &program,
             const std::vector<Buffer *> &input_buffers,
             const std::vector<Buffer *> &output_buffers) {
@@ -224,10 +243,10 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
             auto src_buffer = input_buffers.at(0);
             auto dst_buffer = output_buffers.at(0);
 
-            IndexInfo index_info[4] = {0};
+            IndexInfo index_info[5] = {0};
 
             for (uint32_t i = 0; i < index_dims.size(); i++) {
-                auto dim = index_dims[i] + dim_offset;
+                auto dim = index_dims[i] + input_dim_offset;
                 auto index_buffer = input_buffers.at(i + 1);
 
                 index_info[dim].address = index_buffer->address();
@@ -243,6 +262,7 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
                     runtime_args[2] = index_info[1].address;
                     runtime_args[3] = index_info[2].address;
                     runtime_args[4] = index_info[3].address;
+                    runtime_args[5] = index_info[4].address;
                 }
 
                 {
