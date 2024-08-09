@@ -67,4 +67,5 @@ add_custom_target(metal_tests DEPENDS
     unit_tests_fast_dispatch_single_chip_multi_queue
     unit_tests_frequent
     metal_perf_microbenchmark_tests
+    unit_tests_galaxy
 )
