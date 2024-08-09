@@ -4,35 +4,12 @@
 
 #pragma once
 
-#include "device/transformer_device_operation.hpp"
+#include "device/split_query_key_value_and_split_heads_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
 namespace operations::experimental::transformer {
-
-struct ConcatenateHeadsOperation {
-    static ttnn::Tensor operator()(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        const CoreCoord& compute_with_storage_grid_size,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return operation::run(
-                   ConcatenateHeadsDeviceOperation{compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config())},
-                   {input_tensor}, {}, {optional_output_tensor}, queue_id)
-            .at(0);
-    }
-
-    static ttnn::Tensor operator()(
-        const Tensor& input_tensor,
-        const CoreCoord& compute_with_storage_grid_size,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return operator()(
-            DefaultQueueId, input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
-    }
-};
 
 struct SplitFusedQKVAndSplitHeadsOperation {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> operator() (
@@ -68,16 +45,12 @@ struct SplitFusedQKVAndSplitHeadsOperation {
 
 }  // namespace operations::experimental::transformer
 
-namespace experimental::transformer {
-
-constexpr auto concatenate_heads = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::transformer::concatenate_heads",
-    ttnn::operations::experimental::transformer::ConcatenateHeadsOperation>();
+namespace experimental {
 
 constexpr auto split_query_key_value_and_split_heads = ttnn::register_operation<
-    "ttnn::experimental::transformer::split_query_key_value_and_split_heads",
+    "ttnn::experimental::split_query_key_value_and_split_heads",
     ttnn::operations::experimental::transformer::SplitFusedQKVAndSplitHeadsOperation>();
 
-}  // namespace experimental::transformer
+}  // namespace experimental
 
 }  // namespace ttnn
