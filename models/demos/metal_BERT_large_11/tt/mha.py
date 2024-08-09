@@ -12,6 +12,7 @@ import ttnn
 from tt_lib.utils import pad_weight
 from models.utility_functions import torch2tt_tensor
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
+import ttnn.experimental
 
 
 def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
@@ -129,9 +130,9 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         if num_heads == 1:
             return x
         else:
-            retval = tt_lib.tensor.nlp_concat_heads(
+            retval = ttnn.experimental.nlp_concat_heads(
                 x,
-                output_mem_config=model_config["OP6_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"],
+                memory_config=model_config["OP6_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"],
             )
             return retval
 

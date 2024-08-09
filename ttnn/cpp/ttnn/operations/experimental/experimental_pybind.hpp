@@ -15,6 +15,7 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_pybind.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -25,6 +26,7 @@ void py_module(py::module& module) {
     transformer::detail::bind_nlp_create_qkv_heads(module);
     transformer::detail::bind_create_qkv_heads(module);
     transformer::detail::bind_create_qkv_heads_from_separate_tensors(module);
+    transformer::detail::bind_nlp_concat_heads(module);
     reduction::detail::bind_argmax_operation(module);
     reduction::detail::bind_argmin_operation(module);
     ssm::detail::bind_prefix_scan(module);

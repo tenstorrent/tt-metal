@@ -361,9 +361,9 @@ class TtFalconAttention:
         value_layer.deallocate(True)
 
         # Output projection
-        attn_output = ttnn.experimental.tensor.nlp_concat_heads(
+        attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )
         attn_output = ttnn.all_gather(
             attn_output,
@@ -580,9 +580,9 @@ class TtFalconAttention:
         #########################
         ### ATTENTION SELFOUT ###
         #########################
-        attn_output = ttnn.experimental.tensor.nlp_concat_heads(
+        attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )
         attn_output = ttnn.experimental.tensor.sharded_to_interleaved(
             attn_output,

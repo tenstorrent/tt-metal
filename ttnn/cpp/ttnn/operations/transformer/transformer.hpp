@@ -13,6 +13,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
@@ -169,7 +170,7 @@ inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     }
 }
 
-struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
+struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NLPConcatHeadsDeviceOperation {
     void validate(const std::vector<Tensor>& input_tensors) const {
         const auto& input_tensor = input_tensors.at(0);
         const auto head_size = input_tensor.get_shape()[-1];
@@ -184,7 +185,7 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
                 head_size));
         TT_FATAL(padded_head_size - head_size == 0, "Head size cannot have tile padding!");
 
-        NlpConcatHeads::validate(input_tensors);
+        NLPConcatHeadsDeviceOperation::validate(input_tensors);
     }
 
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const {

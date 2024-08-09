@@ -481,9 +481,9 @@ class TtLlamaAttention_optimized:
 
     def prefill_attn_selfout(self, attn_output):
         # ATTENTION SELFOUT
-        attn_output = tt_lib.tensor.nlp_concat_heads(
+        attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            output_mem_config=self.model_config["L1_MEMCFG"],
+            memory_config=self.model_config["L1_MEMCFG"],
         )  # seqlen, 1, batch, hidden_size
 
         attn_output = ttnn.all_gather(

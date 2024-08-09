@@ -353,9 +353,9 @@ class TtFalconAttentionPrefill(nn.Module):
         ### ATTENTION SELFOUT ###
         #########################
         for i in range(self.num_devices):
-            attn_output[i] = ttnn.experimental.tensor.nlp_concat_heads(
+            attn_output[i] = ttnn.experimental.nlp_concat_heads(
                 attn_output[i],
-                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
 
         for i in range(self.num_devices):
@@ -543,9 +543,9 @@ class TtFalconAttentionPrefill(nn.Module):
         layer_present = layer_past if use_cache else None
 
         attn_outputs = [
-            ttnn.experimental.tensor.nlp_concat_heads(
+            ttnn.experimental.nlp_concat_heads(
                 attention_outputs_concatenated[device_id],
-                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
             for device_id in range(self.num_devices)
         ]
@@ -977,9 +977,9 @@ class TtFalconAttentionDecode(nn.Module):
         ### ATTENTION SELFOUT ###
         #########################
         for i in range(self.num_devices):
-            attn_output[i] = ttnn.experimental.tensor.nlp_concat_heads(
+            attn_output[i] = ttnn.experimental.nlp_concat_heads(
                 attn_output[i],
-                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
 
         for i in range(self.num_devices):

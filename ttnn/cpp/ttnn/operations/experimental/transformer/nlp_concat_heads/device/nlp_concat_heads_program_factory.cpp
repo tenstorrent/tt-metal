@@ -1,19 +1,17 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "nlp_concat_heads_device_operation.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+
+namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
 using namespace tt;
-
-namespace tt {
-
-namespace tt_metal {
 
 operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
 
@@ -57,7 +55,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
         per_tensor_tiles = a.shard_spec().value().shape[0] * a.shard_spec().value().shape[1] / TILE_HW;
         row_major = a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
     } else {
-        std::tie(num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2) = split_work_to_cores(compute_with_storage_grid_size, num_blocks);
+        std::tie(num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2) = tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
     }
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
@@ -90,12 +88,12 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
         };
         reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(compile_time_args));
         writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads_sharded.cpp",
             all_cores,
             tt_metal::WriterDataMovementConfig(compile_time_args));
     } else {
@@ -114,7 +112,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
         };
         reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/reader_tm_tile_layout_nlp_concat_heads.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -231,6 +229,4 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
-} // namespace tt_metal
-
-} // namespace tt
+}  // ttnn::operations::experimental::transformer
