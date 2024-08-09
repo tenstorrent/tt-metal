@@ -186,7 +186,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
         _,
         _,
         rot_emb_matrix_list,
-        _,
+        prefill_seq_len,
         _,
     ) = preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device)
     generation_start_pos = prefill_seq_len
