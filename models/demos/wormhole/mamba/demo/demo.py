@@ -249,6 +249,7 @@ def run_mamba_demo(
 
     profiler.end("tokenizing_inputs")
 
+    logger.info(f"Initalizing Mamba model in prefill mode")
     profiler.start("loading_model")
     model = get_tt_metal_model(
         model_version,
@@ -260,6 +261,8 @@ def run_mamba_demo(
         num_layers=64,
     )
     profiler.end("loading_model")
+    logger.info(f"Done initializing model in {profiler.get_duration('loading_model'):.2f} s")
+
     model.eval()
 
     profiler.start("compile_prefill")
