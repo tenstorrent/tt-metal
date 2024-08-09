@@ -88,7 +88,7 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TilizeConfig
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
-        1, // per_core_block_cnt
+        uint(test_config.num_tiles_r), // per_core_block_cnt
         uint(test_config.num_tiles_c) // per_core_block_tile_cnt
     };
 
@@ -143,7 +143,7 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TilizeConfig
 
 } // namespace unit_tests::compute::tilize
 
-TEST_F(DeviceFixture, ComputeUnpackTilize) {
+TEST_F(DeviceFixture, ComputeUnpackTilize1x4) {
     unit_tests::compute::tilize::TilizeConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 1,
@@ -153,7 +153,27 @@ TEST_F(DeviceFixture, ComputeUnpackTilize) {
     unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
 }
 
-TEST_F(DeviceFixture, ComputeUnpackUntilize) {
+TEST_F(DeviceFixture, ComputeUnpackTilize2x2) {
+    unit_tests::compute::tilize::TilizeConfig test_config = {
+        .single_tile_size = 2 * 1024,
+        .num_tiles_r = 2,
+        .num_tiles_c = 2,
+        .golden_function = unit_tests::compute::gold_standard_tilize
+    };
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, ComputeUnpackTilize4x1) {
+    unit_tests::compute::tilize::TilizeConfig test_config = {
+        .single_tile_size = 2 * 1024,
+        .num_tiles_r = 4,
+        .num_tiles_c = 1,
+        .golden_function = unit_tests::compute::gold_standard_tilize
+    };
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, ComputeUnpackUntilize1x4) {
     unit_tests::compute::tilize::TilizeConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 1,
@@ -164,11 +184,55 @@ TEST_F(DeviceFixture, ComputeUnpackUntilize) {
     unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
 }
 
-TEST_F(DeviceFixture, ComputePackUntilize) {
+TEST_F(DeviceFixture, ComputePackUntilize1x4) {
     unit_tests::compute::tilize::TilizeConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 1,
         .num_tiles_c = 4,
+        .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
+        .golden_function = unit_tests::compute::gold_standard_untilize
+    };
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, ComputeUnpackUntilize2x2) {
+    unit_tests::compute::tilize::TilizeConfig test_config = {
+        .single_tile_size = 2 * 1024,
+        .num_tiles_r = 2,
+        .num_tiles_c = 2,
+        .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
+        .golden_function = unit_tests::compute::gold_standard_untilize
+    };
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, ComputePackUntilize2x2) {
+    unit_tests::compute::tilize::TilizeConfig test_config = {
+        .single_tile_size = 2 * 1024,
+        .num_tiles_r = 2,
+        .num_tiles_c = 2,
+        .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
+        .golden_function = unit_tests::compute::gold_standard_untilize
+    };
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, ComputeUnpackUntilize4x1) {
+    unit_tests::compute::tilize::TilizeConfig test_config = {
+        .single_tile_size = 2 * 1024,
+        .num_tiles_r = 4,
+        .num_tiles_c = 1,
+        .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
+        .golden_function = unit_tests::compute::gold_standard_untilize
+    };
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, ComputePackUntilize4x1) {
+    unit_tests::compute::tilize::TilizeConfig test_config = {
+        .single_tile_size = 2 * 1024,
+        .num_tiles_r = 4,
+        .num_tiles_c = 1,
         .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
         .golden_function = unit_tests::compute::gold_standard_untilize
     };
