@@ -392,4 +392,26 @@ Tensor _polyval(const Tensor& input_a, const std::vector<float>& coeffs, const s
     return final_tensor;
 }
 
+Tensor ExecuteGCD::operator()(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor val;
+    Tensor tmp_result;
+    Tensor result = ttnn::full_like(input_a, 0);
+    for(int index =1; index <= 100 ; index++)
+    {
+        val = ttnn::full_like(input_a, index);
+        tmp_result = where(ttnn::logical_and(ttnn::eqz(ttnn::remainder(input_a,val), output_mem_config),ttnn::eqz(ttnn::remainder(input_b,val), output_mem_config)), val, 1);
+        result = ttnn::where(ttnn::gt(tmp_result, result),tmp_result, result);
+    }
+    result =  ttnn::where(ttnn::logical_and(ttnn::eqz(input_a),ttnn::eqz(input_b)), ttnn::full_like(input_a, 0), result);
+    return result;
+}
+
+Tensor ExecuteLCM::operator()(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor val = ttnn::multiply(input_a, input_b, std::nullopt, output_mem_config);
+    Tensor tmp_result = ttnn::gcd(input_a, input_b);
+    Tensor result = ttnn::div(val, tmp_result, false, "None", output_mem_config);
+    result = ttnn::abs(result);
+    return result;
+}
+
 } // namespace ttnn::operations::binary
