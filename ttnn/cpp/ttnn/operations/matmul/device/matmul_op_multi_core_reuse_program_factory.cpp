@@ -231,9 +231,11 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     return {std::move(program), override_runtime_args_callback};
 }
 
-namespace tt {
+namespace ttnn {
 
-namespace tt_metal {
+namespace operations {
+
+namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse(
     const Tensor &a, const Tensor &b, Tensor &output, bool bcast_batch) {
@@ -277,7 +279,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Shape cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
+    tt::tt_metal::Shape cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
     tt_metal::Buffer *out_buffer = output.buffer();
     TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
@@ -306,6 +308,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(
         out_buffer);
 }
 
-}  // namespace tt_metal
+}  // namespace matmul
 
-}  // namespace tt
+}  // namespace operations
+
+}  // namespace ttnn

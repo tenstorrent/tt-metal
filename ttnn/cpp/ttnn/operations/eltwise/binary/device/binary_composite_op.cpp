@@ -373,7 +373,7 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
             a_slim,
             b_slim,
             std::nullopt,
-            tt::operations::primary::Matmul{
+            ttnn::operations::matmul::Matmul{
             std::nullopt,
             std::nullopt});
 }
