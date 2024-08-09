@@ -139,18 +139,6 @@ class TtLlamaAttention(nn.Module):
             self.wo_list.append(wo)
             self.layer_past_list.append(layer_past)
 
-        # Pre-scaled head dimension (for softmax) to avoid fallbacking to host
-        self.head_dims = [
-            ttnn.from_torch(
-                torch.ones(1, self.n_heads, 32, self.head_dim)
-                * (self.head_dim**-0.5),  # [seqlen, n_heads, bsz, head_dim] [1,32,32,128]
-                device=self.devices[i],
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-            )
-            for i in range(self.num_devices)
-        ]
-
         self.q_heads_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
@@ -171,40 +159,7 @@ class TtLlamaAttention(nn.Module):
             transpose_mcast=False,
             fused_activation=None,
         )
-        expand_D_8D_torch = torch.eye(128, 128).repeat(1, 1, 1, 8)
-        self.expand_D_8D = [
-            ttnn.from_torch(
-                expand_D_8D_torch,
-                device=self.devices[i],
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-            )
-            for i in range(len(devices))
-        ]
 
-        reduce_8D_D_torch = torch.eye(128, 128).repeat(1, 1, 8, 1)
-        self.reduce_8D_D = [
-            ttnn.from_torch(
-                reduce_8D_D_torch,
-                device=self.devices[i],
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-            )
-            for i in range(len(devices))
-        ]
-
-        mask_Q_8D_torch = torch.zeros(1, self.max_batch_size, 32, 8 * 128)
-        for j in range(8):
-            mask_Q_8D_torch[:, :, j * 4 : (j + 1) * 4, j * 128 : (j + 1) * 128] = 1
-        self.mask_Q_8D = [
-            ttnn.from_torch(
-                mask_Q_8D_torch,
-                device=self.devices[i],
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-            )
-            for i in range(len(devices))
-        ]
         self.expand_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
@@ -262,19 +217,10 @@ class TtLlamaAttention(nn.Module):
         dense_outputs = []
         for i in range(self.num_devices):
             x = xs[i]
-            if attn_masks is not None:
-                attn_mask = attn_masks[i]
-            else:
-                attn_mask = None
-            device = self.devices[i]
             wqkv = self.wqkv_list[i]
             wo = self.wo_list[i]
             layer_past = self.layer_past_list[i]
-            head_dim = self.head_dims[i]
-            expand_D_8D = self.expand_D_8D[i]
-            reduce_8D_D = self.reduce_8D_D[i]
-            mask_Q_8D = self.mask_Q_8D[i]
-
+            assert self.max_batch_size * self.n_kv_heads < 64
             ###
             # QKV matmuls
             ###
@@ -288,11 +234,10 @@ class TtLlamaAttention(nn.Module):
             )
 
             # Reshape such that true unpadded batch is tracked in shape
-            if self.max_batch_size < 32:
-                fqkv_shape = xqkv_fused.shape
-                xqkv_fused = ttnn.reshape(
-                    xqkv_fused, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
-                )
+            fqkv_shape = xqkv_fused.shape
+            xqkv_fused = ttnn.reshape(
+                xqkv_fused, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
+            )
 
             # ttnn.deallocate(x)
 
@@ -319,16 +264,16 @@ class TtLlamaAttention(nn.Module):
             q_heads = ttnn.linear(
                 q_heads_pre_rot,
                 rotary_mat,
-                program_config=self.q_heads_program_config,
-                memory_config=self.model_config["QV_ROT_EMB_OUTPUT_MEMCFG"],
+                # program_config=self.q_heads_program_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
-                dtype=self.dtype,
+                dtype=ttnn.bfloat16,
             )
 
             k_heads = ttnn.linear(
                 k_heads_pre_rot,
                 rotary_mat,
-                program_config=self.k_heads_program_config,
+                # program_config=self.k_heads_program_config,
                 memory_config=self.model_config["QV_ROT_EMB_OUTPUT_MEMCFG"],
                 compute_kernel_config=self.compute_kernel_config,
                 dtype=self.dtype,
@@ -353,152 +298,27 @@ class TtLlamaAttention(nn.Module):
             ttnn.deallocate(k_heads)
             ttnn.deallocate(v_heads)
 
-            ###
-            # Attention
-            ###
-            # splitting attention implementation into 2 parts because for token id>575 we run out of memory for group_attn_matmul op
-            if self.start_pos < 575:
-                keys_sliced = keys[:, :, :padded_layer_past_len, :]
-                keys_sliced_T = ttnn.permute(
-                    keys_sliced, (0, 1, 3, 2)
-                )  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
-                ttnn.deallocate(keys_sliced)
-                q_heads = q_heads * head_dim  # Scale q_heads instead of QK before softmax
-
-                # Reshape such that true unpadded batch is tracked in shape
-                if self.max_batch_size < 32:
-                    keys_sliced_T_shape = keys_sliced_T.shape
-                    keys_sliced_T = ttnn.reshape(keys_sliced_T, ttnn.Shape([32, 8, 128, keys_sliced_T_shape[3]]))
-
-                attn = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+            attn_output_1G4D = (
+                ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode_gqa(
                     q_heads,
-                    keys_sliced_T,
-                    compute_with_storage_grid_size=self.attention_grid,
-                    output_mem_config=self.model_config["QK_MM_OUTPUT_MEMCFG"],
-                    output_dtype=ttnn.bfloat16,  # Force bfloat16 for higher accuracy
-                )  # seqlen, n_heads, batch, cache_len + seqlen
-
-                ttnn.deallocate(keys_sliced_T)
-                ttnn.deallocate(q_heads)
-
-                attn_sliced = attn[:, :, :, :layer_slice]
-                attn_sliced = ttnn.softmax(
-                    attn_sliced,
-                    dim=-1,
+                    keys,
+                    values,
+                    [current_pos for _ in range(self.max_batch_size * self.n_kv_heads)],
+                    scale=self.scale,
+                    program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                    compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                    output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
+            )
 
-                # Reshape such that true unpadded batch is tracked in shape
-                if self.max_batch_size < 32:
-                    values_sliced_shape = values.shape
-                    values = ttnn.reshape(values, ttnn.Shape([32, 8, values_sliced_shape[2], 128]))
-                values_sliced = values[:, :, :layer_slice, :]
-                attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
-                    attn_sliced,
-                    values_sliced,
-                    compute_with_storage_grid_size=self.attention_grid,
-                    output_mem_config=self.model_config["QKV_MM_OUTPUT_MEMCFG"],
-                    output_dtype=ttnn.bfloat8_b,  # Force bfloat16 for higher accuracy
-                )  # seqlen, n_heads, batch, dhead
-
-                ttnn.deallocate(attn_sliced)
-                ttnn.deallocate(values_sliced)
-                attn_output_cat = ttnn.transformer.concatenate_heads(
-                    attn_output, memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"]
-                )
-                # seqlen, 1, batch, hidden_size
-
-                ttnn.deallocate(attn_output)
-
-            else:
-                # reshape keys
-                keys_BKPD = keys[:, :, :padded_layer_past_len, :]
-                keys_1B_P_8D = ttnn.unsqueeze_to_4D(ttnn.transformer.concatenate_heads(keys_BKPD))
-                keys_1B_P_8D = ttnn.clone(
-                    keys_1B_P_8D, dtype=ttnn.bfloat16, memory_config=self.model_config["KV_UNPAD_OUTPUT_MEMCFG"]
-                )
-                keys_1B_8D_P_preshard = ttnn.permute(keys_1B_P_8D, (0, 1, 3, 2))
-
-                keys_BKPD.deallocate()
-                keys_1B_P_8D.deallocate()
-
-                # reshape values
-                values_BKPD = values[:, :, :padded_layer_past_len, :]
-                values_B1_P_8D = ttnn.transformer.concatenate_heads(values_BKPD)
-                values_1B_P_8D_preshard = ttnn.unsqueeze_to_4D(values_B1_P_8D)  # [:, :, :layer_slice, :]
-                values_BKPD.deallocate()
-
-                # reshape queries
-                q_heads_1QBD = q_heads * head_dim  # Scale q_heads instead of QK before softmax
-                q_heads_1QBD = ttnn.clone(
-                    q_heads_1QBD, dtype=ttnn.bfloat16, memory_config=self.model_config["KV_UNPAD_OUTPUT_MEMCFG"]
-                )
-                q_heads_1BQD = ttnn.permute(q_heads_1QBD, (0, 2, 1, 3))
-                if self.max_batch_size < 32:
-                    q_heads_1BQD = q_heads_1BQD[:, : self.max_batch_size, :, :]
-                q_heads_1QBD.deallocate()
-                q_heads_1B_Q_8D_preshard = (
-                    ttnn.matmul(
-                        q_heads_1BQD,
-                        expand_D_8D,
-                        program_config=self.expand_program_config,
-                        compute_kernel_config=self.compute_kernel_config,
-                        memory_config=self.model_config["KV_UNPAD_OUTPUT_MEMCFG"],
-                    )
-                    * mask_Q_8D
-                )
-                q_heads_1BQD.deallocate()
-
-                # scores matmul
-                attn_1BQP = ttnn.matmul(
-                    q_heads_1B_Q_8D_preshard,
-                    keys_1B_8D_P_preshard,
-                    core_grid=ttnn.CoreGrid(y=4, x=8),
-                    compute_kernel_config=self.compute_kernel_config_attn,
-                    dtype=ttnn.bfloat16,
-                    memory_config=self.model_config["KV_UNPAD_OUTPUT_MEMCFG"],
-                )
-                keys_1B_8D_P_preshard.deallocate()
-                q_heads_1B_Q_8D_preshard.deallocate()
-
-                # scores softmax
-                attn_1BQP_presoftmax = attn_1BQP[:, :, :, :layer_slice]
-                attn_1BQP = ttnn.softmax(attn_1BQP_presoftmax, dim=-1)
-                attn_1BQP = ttnn.pad(attn_1BQP, ((0, 0), (0, 0), (0, 0), (0, 0)), value=0.0)
-
-                # attention matmul
-                attn_output_1B_Q_8D = ttnn.matmul(
-                    attn_1BQP,
-                    values_1B_P_8D_preshard,
-                    program_config=self.attn_program_config,
-                    memory_config=self.model_config["QKV_MM_OUTPUT_MEMCFG"],
-                    dtype=ttnn.bfloat16,
-                    compute_kernel_config=self.compute_kernel_config_attn,
-                )
-
-                attn_1BQP.deallocate()
-
-                # reduce and reshape
-                attn_output_1BQD = ttnn.matmul(
-                    attn_output_1B_Q_8D * mask_Q_8D,
-                    reduce_8D_D,
-                    compute_kernel_config=self.compute_kernel_config,
-                    program_config=self.reduce_program_config,
-                    memory_config=self.model_config["QKV_MM_OUTPUT_MEMCFG"],
-                )
-                if self.max_batch_size < 32:
-                    attn_output_1BQD_shape = attn_output_1BQD.shape
-                    attn_output_1BQD = ttnn.reshape(
-                        attn_output_1BQD, ttnn.Shape([1, 32, attn_output_1BQD_shape[2], 128])
-                    )
-                attn_output_1QBD = ttnn.permute(attn_output_1BQD, (0, 2, 1, 3))
-
-                attn_output_1BQD.deallocate()
-                attn_output_1B_Q_8D.deallocate()
-
-                attn_output_cat = ttnn.transformer.concatenate_heads(
-                    attn_output_1QBD, memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"]
-                )
-                attn_output_1QBD.deallocate()
+            attn_output_11BH = ttnn.to_memory_config(
+                attn_output_1G4D, memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"]
+            )
+            attn_output_cat = ttnn.experimental.tensor.nlp_concat_heads_decode(
+                attn_output_11BH,
+                num_heads=self.n_heads,
+            )
+            attn_output_cat = ttnn.reshape(attn_output_cat, ttnn.Shape((1, 1, 32, self.hidden_size)))
 
             dense_out = ttnn.linear(
                 attn_output_cat,

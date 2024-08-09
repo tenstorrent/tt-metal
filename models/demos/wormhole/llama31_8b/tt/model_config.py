@@ -21,7 +21,6 @@ class TtModelArgs:
     n_heads = 32
     n_kv_heads = 8
     norm_eps = 1e-05
-    sliding_window = 4096
     vocab_size = 128256
     ffn_dim_multiplier = 1.3
     multiple_of = 1024
@@ -29,10 +28,11 @@ class TtModelArgs:
     use_scaled_rope = True
 
     # Parameters for our use
-    max_batch_size = 8
+    max_batch_size = 1
     # max_seq_len = 131072
-    max_seq_len = 8192  # FIXME: for quick bringup tests only
-    kv_seq_len = 8192
+    max_seq_len = 8192 * 4
+    kv_seq_len = 8192 * 4
+    sliding_window = 8192 * 4
 
     # Default folder location for weights and cached files
     DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/")
@@ -251,6 +251,44 @@ class TtModelArgs:
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
+            )
+
+            self.model_config[
+                "SDPA_DECODE_PROGCFG"
+            ] = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                q_chunk_size=32,
+                k_chunk_size=32,
+            )
+
+            self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+            # Useful core grid based on batch size
+            if self.max_batch_size == 32:
+                core_grid_by_batch = ttnn.CoreGrid(y=4, x=8)
+            elif self.max_batch_size == 16:
+                core_grid_by_batch = ttnn.CoreGrid(y=2, x=8)
+            elif self.max_batch_size == 8:
+                core_grid_by_batch = ttnn.CoreGrid(y=1, x=8)
+            elif self.max_batch_size == 4:
+                core_grid_by_batch = ttnn.CoreGrid(y=1, x=4)
+            elif self.max_batch_size == 2:
+                core_grid_by_batch = ttnn.CoreGrid(y=1, x=2)
+            elif self.max_batch_size == 1:
+                core_grid_by_batch = ttnn.CoreGrid(y=1, x=1)
+            else:
+                raise ValueError(f"Batch size {self.max_batch_size} not supported")
+
+            self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 128),
+                core_grid=core_grid_by_batch,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
     def weight_cache_path(self, dtype):

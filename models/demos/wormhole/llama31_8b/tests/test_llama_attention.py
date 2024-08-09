@@ -58,9 +58,9 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
 
     cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
     freqs_cis = torch.complex(cos, sin)
-
     for i in range(generation_length):
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
+
         tt_attention_input = pt_attention_input.clone()
         current_pos = generation_start_pos + i
 
@@ -76,9 +76,9 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
         # multi-device attention module returns replicated output
         assert isinstance(tt_out, list)
         tt_out = tt_out[0]
-        tt_output_torch = ttnn.to_torch(tt_out).permute(1, 0, 2)[
-            : model_args.max_batch_size, :, :
-        ]  # [ batch, seq, hidden_dim]
+        tt_output_torch = (
+            ttnn.to_torch(tt_out).view(1, -1, 4096).permute(1, 0, 2)[: model_args.max_batch_size, :, :]
+        )  # [ batch, seq, hidden_dim]
 
         freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
         # positions = torch.tensor([current_pos])
