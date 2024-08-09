@@ -39,9 +39,7 @@ def Linear(
         output = ttnn.matmul(activation, weight_T, output_mem_config)
 
         if bias is not None:
-            output_plus_bias = tt_lib.tensor.bcast(
-                output, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, output_mem_config
-            )
+            output_plus_bias = ttnn.add(output, bias, memory_config=output_mem_config)
             return output_plus_bias
 
         return output
@@ -110,17 +108,14 @@ def get_freqs_cis(freqs_cis: torch.Tensor, query_shape, key_shape, device=None, 
     freq_real.deallocate()
     freq_img.deallocate()
 
-    BCH = tt_lib.tensor.BcastOpDim.HW
-    BCMUL = tt_lib.tensor.BcastOpMath.MUL
-
     t_one_xq = ttnn.ones(query_shape, memory_config=mem_config)
     t_one_xq = ttnn.permute(t_one_xq, (3, 1, 2, 0), memory_config=mem_config)
 
     freqs_real = ttnn.permute(freqs_cis.real, (3, 1, 2, 0), memory_config=mem_config)
     freqs_imag = ttnn.permute(freqs_cis.imag, (3, 1, 2, 0), memory_config=mem_config)
 
-    bcast_freq_re_xq = tt_lib.tensor.bcast(t_one_xq, freqs_real, BCMUL, BCH, output_mem_config=mem_config)
-    bcast_freq_im_xq = tt_lib.tensor.bcast(t_one_xq, freqs_imag, BCMUL, BCH, output_mem_config=mem_config)
+    bcast_freq_re_xq = ttnn.multiply(t_one_xq, freqs_real, memory_config=mem_config)
+    bcast_freq_im_xq = ttnn.multiply(t_one_xq, freqs_imag, memory_config=mem_config)
     bcast_freq_re_xq = ttnn.permute(bcast_freq_re_xq, (3, 1, 2, 0), memory_config=mem_config)
     bcast_freq_im_xq = ttnn.permute(bcast_freq_im_xq, (3, 1, 2, 0), memory_config=mem_config)
     t_one_xq.deallocate()
@@ -133,8 +128,8 @@ def get_freqs_cis(freqs_cis: torch.Tensor, query_shape, key_shape, device=None, 
     t_one_xk = ttnn.ones(key_shape, memory_config=mem_config)
     t_one_xk = ttnn.permute(t_one_xk, (3, 1, 2, 0), memory_config=mem_config)
 
-    bcast_freq_re_xk = tt_lib.tensor.bcast(t_one_xk, freqs_real, BCMUL, BCH, output_mem_config=mem_config)
-    bcast_freq_im_xk = tt_lib.tensor.bcast(t_one_xk, freqs_imag, BCMUL, BCH, output_mem_config=mem_config)
+    bcast_freq_re_xk = ttnn.multiply(t_one_xk, freqs_real, memory_config=mem_config)
+    bcast_freq_im_xk = ttnn.multiply(t_one_xk, freqs_imag, memory_config=mem_config)
     bcast_freq_re_xk = ttnn.permute(bcast_freq_re_xk, (3, 1, 2, 0), memory_config=mem_config)
     bcast_freq_im_xk = ttnn.permute(bcast_freq_im_xk, (3, 1, 2, 0), memory_config=mem_config)
 

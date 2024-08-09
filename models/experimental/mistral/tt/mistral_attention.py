@@ -202,12 +202,10 @@ class TtAttention(nn.Module):
             mask = ttnn.permute(mask, [2, 3, 0, 1])
             scores = ttnn.permute(scores, [2, 3, 0, 1])
 
-            scores = tt_lib.tensor.bcast(
+            scores = ttnn.add(
                 scores,
                 mask,
-                tt_lib.tensor.BcastOpMath.ADD,
-                tt_lib.tensor.BcastOpDim.HW,
-                output_mem_config=self.output_mem_config,
+                memory_config=self.output_mem_config,
             )
             scores = ttnn.permute(scores, [2, 3, 0, 1])
         desired_output_shape = [bsz, 32, seqlen, seqlen]

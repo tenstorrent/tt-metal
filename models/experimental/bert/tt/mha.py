@@ -82,12 +82,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             return retval
 
     def multiply_by_sqrt_hidden_dim(x):
-        return ttl.tensor.bcast(
-            x,
-            reciprocal_of_sqrt_hidden_dim_tensor,
-            ttl.tensor.BcastOpMath.MUL,
-            ttl.tensor.BcastOpDim.HW,
-        )
+        return ttnn.multiply(x, reciprocal_of_sqrt_hidden_dim_tensor)
 
     def mha_(activation, attention_mask):
         Q = QProjection(activation)
@@ -112,12 +107,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         ttl.tensor.reshape(qkt, *new_shape)
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
         if attention_mask is not None:
-            attention_score_input = ttl.tensor.bcast(
-                attention_score_input,
-                attention_mask,
-                ttl.tensor.BcastOpMath.ADD,
-                ttl.tensor.BcastOpDim.H,
-            )
+            attention_score_input = ttnn.add(attention_score_input, attention_mask)
         attention_scores = softmax(attention_score_input)
         ttl.tensor.reshape(attention_scores, N, C, H, W)  # Reshape back to original shape
 

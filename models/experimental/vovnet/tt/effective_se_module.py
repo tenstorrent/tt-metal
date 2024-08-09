@@ -60,5 +60,5 @@ class TtEffectiveSEModule(nn.Module):
         out = torch_to_tt_tensor_rm(out, self.device, put_on_device=False)
         out = self.fc(out)
         out = self.activation(out)
-        out = tt_lib.tensor.bcast(input, out, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        out = ttnn.multiply(input, out)
         return out

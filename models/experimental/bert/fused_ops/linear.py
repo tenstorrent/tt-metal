@@ -7,6 +7,7 @@ from tt_lib import tensor
 from ttnn import matmul
 import ttnn
 
+
 def Linear(
     in_features: int,
     out_features: int,
@@ -27,13 +28,11 @@ def Linear(
         assert bias.get_legacy_shape() == [1, 1, 32, out_features]
 
     def linear_(activation):
+        nonlocal bias
         weight_T = ttnn.transpose(weight, -2, -1)
-        output = ttnn.matmul(activation, weight_T)
+        if bias is not None and bias.get_layout() != ttnn.TILE_LAYOUT:
+            bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)
 
-        if bias is not None:
-            output_plus_bias = tensor.bcast(output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
-            return output_plus_bias
-
-        return output
+        return ttnn.linear(activation, weight_T, bias=bias)
 
     return linear_

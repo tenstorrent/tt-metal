@@ -90,12 +90,10 @@ class TtRobertaSelfAttention(nn.Module):
     def linear(self, x, weight, bias):
         weight = ttnn.transpose(weight, -2, -1)
         x = ttnn.matmul(x, weight, memory_config=self.mem_config)
-        x = tt_lib.tensor.bcast(
+        x = ttnn.add(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            output_mem_config=self.mem_config,
+            memory_config=self.mem_config,
         )
         return x
 
@@ -199,12 +197,10 @@ class TtRobertaSelfAttention(nn.Module):
                 torch_attention_scores = torch_attention_scores + torch_attention_mask
                 attention_scores = torch2tt_tensor(torch_attention_scores, self.device)
             else:
-                tt_lib.tensor.bcast(
+                ttnn.add(
                     attention_scores,
                     attention_mask,
-                    tt_lib.tensor.BcastOpMath.ADD,
-                    tt_lib.tensor.BcastOpDim.H,
-                    self.mem_config,
+                    memory_config=self.mem_config,
                 )
         # Normalize the attention scores to probabilities.
 

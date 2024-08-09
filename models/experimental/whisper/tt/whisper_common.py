@@ -15,5 +15,5 @@ def linear(x, weight, bias=None):
     weight = ttnn.transpose(weight, -2, -1)
     x = ttnn.matmul(x, weight)
     if bias is not None:
-        x = tt_lib.tensor.bcast(x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
+        x = ttnn.add(x, bias)
     return x

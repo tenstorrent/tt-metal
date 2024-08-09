@@ -112,7 +112,31 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
         TT_FATAL(output_dtype.value() == optional_output_tensor.value().get_dtype(), "If both output dtype and output tensor provided dtype should match");
     }
 
-    auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg, const auto &input_tensor_b_arg) {
+    Tensor input_tensor_a = input_tensor_a_arg;
+    Tensor input_tensor_b = input_tensor_b_arg;
+
+    auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
+
+    // TODO(arakhmati): #7731 - remove this!
+    auto repeat_smaller = [](const auto& first, auto& second){
+        const auto first_shape = first.get_shape();
+        const auto second_shape = second.get_shape();
+
+        // repeats second if it is smaller
+        if (first_shape.rank() == 4 and second_shape.rank() == 4 and
+            first_shape[0] > second_shape[0]) {
+
+            tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
+            Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
+            second = ttnn::repeat(second, repeats, second.memory_config());
+
+        }
+    };
+
+    repeat_smaller(input_tensor_a, input_tensor_b);
+    repeat_smaller(input_tensor_b, input_tensor_a);
+
+    std::tie(input_tensor_a, input_tensor_b) = [](const auto &input_tensor_a_arg, const auto &input_tensor_b_arg) {
         if (detail::is_associative(binary_op_type)) {
             const auto input_shape_a = input_tensor_a_arg.get_shape();
             const auto input_shape_b = input_tensor_b_arg.get_shape();
@@ -122,29 +146,7 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
             }
         }
         return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);
-    }(input_tensor_a_arg, input_tensor_b_arg);
-
-    auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
-
-    // TODO(arakhmati): #7731 - remove this!
-    auto repeat_smaller = [&output_memory_config](const auto& first, auto& second){
-        const auto first_shape = first.get_shape();
-        const auto second_shape = second.get_shape();
-
-        // repeats second if it is smaller
-        if (first_shape.rank() == 4 and second_shape.rank() == 4 and
-            first_shape[0] > second_shape[0] and
-            first_shape[-1] == second_shape[-1] and
-            first_shape[-2] == second_shape[-2] and
-            first_shape[-3] == second_shape[-3]) {
-
-            tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
-            Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
-            second = ttnn::repeat(second, repeats, output_memory_config);
-        }
-    };
-    repeat_smaller(input_tensor_a, input_tensor_b);
-    repeat_smaller(input_tensor_b, input_tensor_a);
+    }(input_tensor_a, input_tensor_b);
 
     DataType dtype = output_dtype.value_or(input_tensor_a.get_dtype());
     if(optional_output_tensor.has_value()) {

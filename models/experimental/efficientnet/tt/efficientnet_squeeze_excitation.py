@@ -65,5 +65,5 @@ class TtEfficientnetSqueezeExcitation(torch.nn.Module):
     def forward(self, x):
         scale = self._scale(x)
 
-        x = tt_lib.tensor.bcast(x, scale, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        x = ttnn.multiply(x, scale)
         return x
