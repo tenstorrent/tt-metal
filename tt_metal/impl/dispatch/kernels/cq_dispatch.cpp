@@ -926,11 +926,11 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_GO:
-            // DPRINT << "cmd_go" << ENDL();
+            DPRINT << "cmd_go" << ENDL();
             break;
 
         case CQ_DISPATCH_CMD_SINK:
-            // DPRINT << "cmd_sink" << ENDL();
+            DPRINT << "cmd_sink" << ENDL();
             break;
 
         case CQ_DISPATCH_CMD_DEBUG:
