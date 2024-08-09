@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_llama_op.hpp"
+#include "rotary_embedding_llama_device_operation.hpp"
+#include "rotary_embedding_llama_program_factory.hpp"
 
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
 

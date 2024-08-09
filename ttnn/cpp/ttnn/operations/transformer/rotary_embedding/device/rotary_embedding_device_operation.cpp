@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
+#include "rotary_embedding_device_operation.hpp"
+#include "rotary_embedding_program_factory.hpp"
 
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/host_api.hpp"
+
 #include "tt_metal/host_api.hpp"
 
 using namespace tt::constants;
@@ -126,5 +129,4 @@ const operation::Hash RotaryEmbedding::compute_program_hash(const std::vector<Te
 }
 
 }  // namespace tt_metal
-
 }  // namespace tt

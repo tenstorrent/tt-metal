@@ -24,7 +24,7 @@ def torch_functional_rotate_half(x):
 
 
 def ttnn_functional_rotate_half(x):
-    return ttnn.experimental.tensor.rotate_half(x)
+    return ttnn.tranformer.rotate_half(x)
 
 
 def torch_functional_apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx=None):

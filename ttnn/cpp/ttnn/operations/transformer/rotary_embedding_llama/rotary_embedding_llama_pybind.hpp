@@ -8,6 +8,6 @@
 
 namespace ttnn::operations::transformer {
 
-void py_module(pybind11::module& module);
+void py_bind_rotary_embedding_llama(pybind11::module& module);
 
 }  // namespace ttnn::operations::transformer
