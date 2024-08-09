@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, is_grayskull
 
 
 parameters = {
@@ -23,6 +23,10 @@ parameters = {
 }
 
 
+def skip() -> Tuple[bool, Optional[str]]:
+    return (False, "Hangs in Grayskull, So skipping the test")
+
+
 def run(
     batch_sizes,
     height,
@@ -34,6 +38,10 @@ def run(
     *,
     device,
 ) -> Tuple[bool, Optional[str]]:
+    if is_grayskull():
+        # Skipping for GS due to hang issue https://github.com/tenstorrent/tt-metal/issues/10557
+        skip()
+
     input_shape = (*batch_sizes, height, width)
 
     low = -1e-6
