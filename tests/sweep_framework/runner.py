@@ -179,8 +179,8 @@ def run_sweeps(module_name, suite_name, vector_id):
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
 
     if not module_name:
-        for file in sorted(sweeps_path.glob("*.py")):
-            sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3]
+        for file in sorted(sweeps_path.glob("**/*.py")):
+            sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
             test_module = importlib.import_module("sweeps." + sweep_name)
             vector_index = VECTOR_INDEX_PREFIX + sweep_name
             print(f"SWEEPS: Executing tests for module {sweep_name}...")
