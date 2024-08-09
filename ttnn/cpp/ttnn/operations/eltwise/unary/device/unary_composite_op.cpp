@@ -381,9 +381,12 @@ Tensor _variance_impl(
     const Tensor& mean_y,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
     std::vector<int> dims = { 2, 3 };
-    return ttnn::var(sqr_y_minus_mean_y, dims, true, output_mem_config, std::nullopt);
+    constexpr float correction = 0.0f;
+    auto shape_wh = y.get_legacy_shape();
+    float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
+    Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
+    return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor y_minus_mean_y = bcast(y, mean_y, BcastOpMath::SUB, BcastOpDim::HW);
