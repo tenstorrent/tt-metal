@@ -49,7 +49,6 @@ void py_bind_repeat(py::module& module) {
     Args:
         * :attr:`input_tensor`: the input_tensor to apply the repeate operation.
         * :attr:`repeat_dims`: The number of repetitions for each element.
-    *
     Keyword Args:
         * :attr:`memory_config`: the memory configuration to use for the operation
 
