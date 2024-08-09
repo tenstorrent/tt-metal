@@ -182,7 +182,9 @@ class resnet50Bottleneck:
                     dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     math_fidelity=self.model_config["MATH_FIDELITY"],
-                    height_sharding=height_sharding,
+                    shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                    if height_sharding
+                    else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     deallocate_activation=True,
                     reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
@@ -228,7 +230,9 @@ class resnet50Bottleneck:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
-                height_sharding=height_sharding,
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                if height_sharding
+                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
             conv_op_cache=conv_op_cache,
@@ -291,7 +295,9 @@ class resnet50Bottleneck:
                 deallocate_activation=True,
                 reallocate_halo_output=reallocate_halo_output,
                 act_block_h_override=act_block_h_override,
-                height_sharding=height_sharding,
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                if height_sharding
+                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
             conv_op_cache=conv_op_cache,
@@ -316,7 +322,9 @@ class resnet50Bottleneck:
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
-                height_sharding=height_sharding,
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                if height_sharding
+                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
             conv_op_cache=conv_op_cache,
@@ -587,14 +595,7 @@ class resnet50:
         ]
         if is_wormhole_b0() and self.batch_size == 20:
             x, x_height, x_width = self.layer1_module1(
-                x,
-                device,
-                batch_size,
-                x_height,
-                x_width,
-                conv_op_cache,
-                reshard_if_not_optimal=True,
-                height_sharding=True,
+                x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True
             )
         else:
             x, x_height, x_width = self.layer1_module1(x, device, batch_size, x_height, x_width, conv_op_cache)
@@ -629,7 +630,6 @@ class resnet50:
                 x_width,
                 conv_op_cache,
                 reshard_if_not_optimal=True,
-                height_sharding=True,
             )
         else:
             x, x_height, x_width = self.layer2_module1(x, device, batch_size, x_height, x_width, conv_op_cache)

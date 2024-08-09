@@ -40,7 +40,7 @@ struct Conv2dConfig {
     uint32_t act_block_h_override = 0;
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
-    bool height_sharding = true; // used only if override_sharding_config is true
+    TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED; // used only if override_sharding_config is true
     std::optional<CoreRangeSet> core_grid = std::nullopt; // used only if override_sharding_config is true
     bool transpose_shards = true; // used only if override_sharding_config is true and if height sharding is false
     Layout output_layout = Layout::TILE;
@@ -61,7 +61,7 @@ struct Conv2dConfig {
         "act_block_h_override",
         "reshard_if_not_optimal",
         "override_sharding_config",
-        "height_sharding",
+        "shard_layout",
         "core_grid",
         "transpose_shards",
         "output_layout",
@@ -83,7 +83,7 @@ struct Conv2dConfig {
             std::cref(this->act_block_h_override),
             std::cref(this->reshard_if_not_optimal),
             std::cref(this->override_sharding_config),
-            std::cref(this->height_sharding),
+            std::cref(this->shard_layout),
             std::cref(this->core_grid),
             std::cref(this->transpose_shards),
             std::cref(this->output_layout),
@@ -91,6 +91,9 @@ struct Conv2dConfig {
             std::cref(this->enable_split_reader),
             std::cref(this->enable_subblock_padding));
     }
+    bool is_height_sharded() const;
+    bool is_width_sharded() const;
+    bool is_block_sharded() const;
 };
 
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor);
@@ -101,7 +104,7 @@ uint32_t find_closest_common_largest_divisor(uint32_t num1, uint32_t num2, uint3
 
 template <typename T>
 ParallelConfig determine_parallel_config(
-    bool height_sharding,
+    const Conv2dConfig& conv_config,
     uint32_t batch_size,
     uint32_t input_channels,
     uint32_t output_height,

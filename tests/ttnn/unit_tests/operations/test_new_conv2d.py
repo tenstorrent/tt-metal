@@ -107,7 +107,9 @@ def run_conv(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
-        height_sharding=use_1d_systolic_array,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        if use_1d_systolic_array
+        else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         input_channels_alignment=(
             16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
         ),
@@ -240,7 +242,9 @@ def run_conv_with_split(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
-        height_sharding=use_1d_systolic_array,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        if use_1d_systolic_array
+        else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         fp32_dest_acc_enabled=fp32_accum,
         packer_l1_accum_enabled=packer_l1_acc,
         # input_channels_alignment=(16 if use_shallow_conv_variant else 32),
