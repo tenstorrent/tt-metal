@@ -1456,7 +1456,7 @@ def rsqrt_slow(x):
 def fill_rm(x):
     shape = x.get_legacy_shape()
 
-    tt_lib.tensor.fill_rm(
+    ttnn.fill_rm(
         N=shape[0],
         C=shape[1],
         H=shape[2],
@@ -1472,9 +1472,7 @@ def fill_rm(x):
 def fill_ones_rm(x):
     shape = x.get_legacy_shape()
 
-    tt_lib.tensor.fill_ones_rm(
-        N=shape[0], C=shape[1], H=shape[2], W=shape[3], hOnes=shape[2] - 32, wOnes=shape[3] - 32, any=x
-    )
+    ttnn.fill_ones_rm(N=shape[0], C=shape[1], H=shape[2], W=shape[3], hOnes=shape[2] - 32, wOnes=shape[3] - 32, any=x)
 
 
 def group_norm_no_weights(x):

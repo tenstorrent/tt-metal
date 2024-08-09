@@ -356,8 +356,8 @@ bool assign_runtime_args_to_program(
 
 bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *device){
     bool pass = true;
-    int num_cores_r = device->logical_grid_size().y - 1;
-    int num_cores_c = device->logical_grid_size().x;
+    int num_cores_r = device->compute_with_storage_grid_size().y;
+    int num_cores_c = device->compute_with_storage_grid_size().x;
     uint32_t M = 16 * num_cores_r;
     uint32_t K = 16 * 12;
     uint32_t N = 16 * num_cores_c;
@@ -504,6 +504,9 @@ TEST_F(CommonFixture, MatmulMultiCoreMultiDRAM){
         GTEST_SKIP();
     }
     for (unsigned int id = 0; id < devices_.size(); id++) {
+        if (this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP();
+        }
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_multi_dram(this, devices_.at(id)));
     }
 }

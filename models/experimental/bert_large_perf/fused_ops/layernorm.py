@@ -34,7 +34,7 @@ def create_var_scaler(H, W, layer_norm_eps, device):
     )
 
     scaler = 1 / W
-    var_scaler = tensor.fill_rm(1, 1, roundup32(H), 32, H, 1, epsilon_, scaler, 0)
+    var_scaler = ttnn.fill_rm(1, 1, roundup32(H), 32, H, 1, epsilon_, scaler, 0)
     var_scaler = ttnn.tilize(var_scaler)
 
     return var_scaler

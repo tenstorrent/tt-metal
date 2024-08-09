@@ -391,6 +391,8 @@ Data Movement
    ttnn/repeat_interleave
    ttnn/tilize
    ttnn/tilize_with_val_padding
+   ttnn/fill_rm
+   ttnn/fill_ones_rm
 
 Normalization
 =============

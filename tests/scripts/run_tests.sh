@@ -442,7 +442,7 @@ main() {
     pipeline_type=${pipeline_type:-$default_pipeline_type}
 
     available_dispatch_modes=("fast" "slow")
-    available_tt_archs=("grayskull" "wormhole_b0")
+    available_tt_archs=("grayskull" "wormhole_b0" "blackhole")
 
     # Validate arguments
     if [[ ! " ${available_tt_archs[*]} " =~ " $tt_arch " ]]; then

@@ -9,10 +9,6 @@ using namespace tt::tt_metal;
 
 int main(int argc, char **argv) {
 
-    /* Get device type (ie. grayskull, wormhole, etc)*/
-    const char* arch_name = std::getenv("ARCH_NAME");
-    std::string archName(arch_name);
-
     /* Silicon accelerator setup */
     Device *device = CreateDevice(0);
 
@@ -33,13 +29,15 @@ int main(int argc, char **argv) {
     std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
     std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
 
-    /* DRAM NOC coordinates, depending on architecture.  Default is grayskull as initialized below. */
-    uint32_t dram_noc_x = 1;
-    uint32_t dram_noc_y = 0;
-    if (archName == "wormhole") {
-        dram_noc_x = 0;
-        dram_noc_y = 11;
-    }
+    auto src0_dram_noc_coord = src0_dram_buffer->noc_coordinates();
+    auto src1_dram_noc_coord = src1_dram_buffer->noc_coordinates();
+    auto dst_dram_noc_coord = dst_dram_buffer->noc_coordinates();
+    uint32_t src0_dram_noc_x = src0_dram_noc_coord.x;
+    uint32_t src0_dram_noc_y = src0_dram_noc_coord.y;
+    uint32_t src1_dram_noc_x = src1_dram_noc_coord.x;
+    uint32_t src1_dram_noc_y = src1_dram_noc_coord.y;
+    uint32_t dst_dram_noc_x = dst_dram_noc_coord.x;
+    uint32_t dst_dram_noc_y = dst_dram_noc_coord.y;
 
     /* Create source data and write to DRAM */
     std::vector<uint32_t> src0_vec(1, 14);
@@ -65,7 +63,19 @@ int main(int argc, char **argv) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     /* Configure program and runtime kernel arguments, then execute */
-    SetRuntimeArgs(program, binary_reader_kernel_id, core, {dram_noc_x, dram_noc_y, src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address()});
+    SetRuntimeArgs(program, binary_reader_kernel_id, core, 
+        {
+            src0_dram_buffer->address(), 
+            src1_dram_buffer->address(), 
+            dst_dram_buffer->address(),
+            src0_dram_noc_x, 
+            src0_dram_noc_y,
+            src1_dram_noc_x, 
+            src1_dram_noc_y,
+            dst_dram_noc_x, 
+            dst_dram_noc_y,
+        }
+    );
 
     EnqueueProgram(cq, program, false);
     Finish(cq);
