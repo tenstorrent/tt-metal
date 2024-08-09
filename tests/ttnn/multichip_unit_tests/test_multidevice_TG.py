@@ -1336,3 +1336,27 @@ def test_device_line_all_gather_8x4_data(device_mesh, cluster_axis: int, dim: in
 @pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_visualize_device_mesh(device_mesh):
     ttnn.visualize_device_mesh(device_mesh)
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_visualize_device_mesh_with_tensor_row_major(device_mesh):
+    rows, cols, tile_size = 4, 4, 32
+    full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
+
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=(-2, -1))
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    ttnn.visualize_device_mesh(device_mesh, tensor=ttnn_tensor)
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_visualize_device_mesh_with_tensor_col_major(device_mesh):
+    rows, cols, tile_size = 8, 2, 32
+    full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
+
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=(-2, -1))
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    ttnn.visualize_device_mesh(device_mesh, tensor=ttnn_tensor)

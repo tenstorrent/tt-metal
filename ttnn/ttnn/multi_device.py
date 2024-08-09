@@ -4,7 +4,7 @@
 
 import contextlib
 
-from typing import List, Dict
+from typing import List, Dict, Optional, Callable
 
 import ttnn
 
@@ -18,14 +18,21 @@ DeviceMesh = ttnn._ttnn.multi_device.DeviceMesh
 DeviceMesh.core_grid = property(get_device_mesh_core_grid)
 
 
-def visualize_device_mesh(device_mesh):
+def _get_rich_table(
+    device_mesh: "ttnn.DeviceMesh", style_cell: Optional[Callable] = None, annotate_cell: Optional[Callable] = None
+):
     from rich import box, padding
     from rich.align import Align
-    from rich.console import Console
     from rich.table import Table
+    from loguru import logger
 
     # Setup rich table
-    rows, cols = device_mesh.shape
+    try:
+        rows, cols = device_mesh.shape
+    except AttributeError as e:
+        logger.error("Error getting device mesh shape: {}.", e)
+        rows, cols = 0, 0
+
     mesh_table = Table(
         title=f"DeviceMesh(rows={rows}, cols={cols}):",
         show_header=False,
@@ -43,12 +50,55 @@ def visualize_device_mesh(device_mesh):
     for row_idx in range(rows):
         row_cells = []
         for col_idx in range(cols):
-            device = device_mesh.get_device(row_idx, col_idx)
-            cell_content = f"Dev. ID: {device.id()}\n ({row_idx}, {col_idx})" if device else "Empty"
+            try:
+                device = device_mesh.get_device(row_idx, col_idx)
+            except Exception as e:
+                logger.error("Error fetching device from DeviceMesh at row {}, col {}: {}.", row_idx, col_idx, e)
+                device = None
+            try:
+                cell_content = f"Dev. ID: {device.id()}\n ({row_idx}, {col_idx})" if device else "Empty"
+            except AttributeError as e:
+                logger.error("Error getting device ID at row {}, col {}: {}.", row_idx, col_idx, e)
+                cell_content = "Empty"
+            cell_content += f"\n{annotate_cell(device)}" if annotate_cell and device else ""
+            cell_style = style_cell(device) if style_cell and device else None
             cell = padding.Padding(Align(cell_content, "center", vertical="middle"), (0, 0))
+            if cell_style:
+                cell.style = cell_style
             row_cells.append(cell)
         mesh_table.add_row(*row_cells)
+    return mesh_table
 
+
+def visualize_device_mesh(device_mesh: "ttnn.DeviceMesh", tensor: "ttnn.Tensor" = None):
+    """
+    Visualize the device mesh and the given tensor (if specified).
+    """
+    from rich.console import Console
+    from rich.style import Style
+
+    style_cell, annotate_cell = None, None
+    if tensor is not None:
+        try:
+            mapped_devices = set(device.id() for device in tensor.devices())
+        except Exception as e:
+            print(f"Error getting devices for tensor: {e}")
+            mapped_devices = set()
+
+        def color_mapped_devices(device):
+            try:
+                return Style(bgcolor="dark_green") if device.id() in mapped_devices else None
+            except Exception as e:
+                print(f"Error getting device ID: {e}")
+                return None
+
+        def annotate_with_tensor_shape(device):
+            return f"{tensor.shape}"
+
+        style_cell = color_mapped_devices
+        annotate_cell = annotate_with_tensor_shape
+
+    mesh_table = _get_rich_table(device_mesh, style_cell=style_cell, annotate_cell=annotate_cell)
     Console().print(mesh_table)
 
 
