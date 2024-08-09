@@ -33,7 +33,11 @@ class DeviceFixture : public ::testing::Test {
         for (unsigned int id = 0; id < num_devices_; id++) {
             ids.push_back(id);
         }
-        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+        CoreType dispatch_core_type = CoreType::WORKER;
+        if (getenv("TT_METAL_GTEST_ETH_DISPATCH")) {
+            dispatch_core_type = CoreType::ETH;
+        }
+        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
         devices_ = tt::DevicePool::instance().get_all_active_devices();
     }
 

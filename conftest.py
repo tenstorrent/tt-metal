@@ -97,7 +97,11 @@ def device(request, device_params):
 
     num_devices = ttl.device.GetNumPCIeDevices()
     assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
-    device = ttl.device.CreateDevice(device_id=device_id, **device_params)
+    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
+    dispatch_core_type = ttl.device.CoreType.WORKER
+    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
+        dispatch_core_type = ttl.device.CoreType.ETH
+    device = ttl.device.CreateDevice(device_id=device_id, dispatch_core_type=dispatch_core_type, **device_params)
     ttl.device.SetDefaultDevice(device)
 
     yield device
