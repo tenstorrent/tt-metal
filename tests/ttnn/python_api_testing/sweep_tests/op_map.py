@@ -905,7 +905,7 @@ op_map = {
         "tt_op": ttnn_ops.floor_bw,
         "pytorch_op": pytorch_ops.floor_bw,
     },
-    "floor": {
+    "eltwise-floor": {
         "tt_op": ttnn_ops.floor,
         "pytorch_op": pytorch_ops.floor,
     },
