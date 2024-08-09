@@ -167,7 +167,7 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
         device=device,
     )
 
-    output = ttnn_model.encoder(config, ttnn_inputs_embeds, parameters=ttnn_parameters)
+    output = ttnn_model.encoder(config, ttnn_inputs_embeds, parameters=ttnn_parameters, device=device)
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
 
@@ -370,6 +370,7 @@ def test_ttnn_whisper(device, ttnn_model):
         decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
         parameters=ttnn_parameters,
+        device=device,
     )
     last_hidden_state = ttnn.from_device(last_hidden_state)
     last_hidden_state = ttnn.to_torch(last_hidden_state)
