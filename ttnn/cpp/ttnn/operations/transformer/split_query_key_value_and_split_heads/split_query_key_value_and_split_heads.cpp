@@ -14,7 +14,7 @@
 namespace ttnn::operations::transformer {
 
 namespace detail {
-inline std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_split_heads(
+std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_split_heads(
     const std::tuple<Tensor, Tensor, Tensor>& outputs,
     const uint32_t sequence_size,
     const uint32_t sequence_size_padded,
