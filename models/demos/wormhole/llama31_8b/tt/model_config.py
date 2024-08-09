@@ -61,6 +61,7 @@ class TtModelArgs:
         "ATTN_W_LAYOUT",
         # Decoder
         "DEC_SKIP_OUTPUT",
+        "OUTPUT_MM",
     )
 
     def __init__(self, device, instruct=False):
