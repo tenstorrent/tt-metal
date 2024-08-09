@@ -20,12 +20,26 @@ namespace matmul {
 using namespace tt::operations::primary;
 using ttnn::operations::unary::UnaryWithParam;
 
-void py_module(py::module& module) {
-    py::class_<MatmulProgramConfig>(module, "MatmulProgramConfig")
-        .def("__repr__", [](const MatmulProgramConfig& config) { return fmt::format("{}", config); });
-
-    py::class_<MatmulMultiCoreReuseProgramConfig>(module, "MatmulMultiCoreReuseProgramConfig")
+template <typename T>
+auto tt_pybind_class(py::module m, auto name, auto desc) {
+    return py::class_<T>(m, name, desc)
+        .def("to_json", [](const T& self) -> std::string { return tt::stl::json::to_json(self).dump(); })
         .def(
+            "from_json",
+            [](const std::string& json_string) -> T { return tt::stl::json::from_json<T>(nlohmann::json::parse(json_string)); })
+        .def("__repr__", [](const T& self) { return fmt::format("{}", self); });
+}
+
+void py_module(py::module& module) {
+    auto matmul_program_config = tt_pybind_class<MatmulProgramConfig>(module, "MatmulProgramConfig", R"doc(
+        Class defining matmul program config
+    )doc");
+
+    auto matmul_multi_core_reuse_program_config = tt_pybind_class<MatmulMultiCoreReuseProgramConfig>(module, "MatmulMultiCoreReuseProgramConfig", R"doc(
+        Class defining matmul multi core reuse program config
+    )doc");
+
+    matmul_multi_core_reuse_program_config.def(
             py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
@@ -40,11 +54,13 @@ void py_module(py::module& module) {
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseProgramConfig::out_subblock_w)
         .def_readwrite("per_core_M", &MatmulMultiCoreReuseProgramConfig::per_core_M)
-        .def_readwrite("per_core_N", &MatmulMultiCoreReuseProgramConfig::per_core_N)
-        .def("__repr__", [](const MatmulMultiCoreReuseProgramConfig& config) { return fmt::format("{}", config); });
+        .def_readwrite("per_core_N", &MatmulMultiCoreReuseProgramConfig::per_core_N);
 
-    py::class_<MatmulMultiCoreReuseMultiCastProgramConfig>(module, "MatmulMultiCoreReuseMultiCastProgramConfig")
-        .def(
+    auto matmul_multi_core_reuse_multicast_program_config = tt_pybind_class<MatmulMultiCoreReuseMultiCastProgramConfig>(module, "MatmulMultiCoreReuseMultiCastProgramConfig", R"doc(
+        Class defining matmul multi core reuse multi cast program config
+    )doc");
+
+    matmul_multi_core_reuse_multicast_program_config.def(
             py::init<
                 CoreCoord,
                 std::size_t,
@@ -75,13 +91,13 @@ void py_module(py::module& module) {
         .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCastProgramConfig::per_core_N)
         .def_readwrite("transpose_mcast", &MatmulMultiCoreReuseMultiCastProgramConfig::transpose_mcast)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation)
-        .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCastProgramConfig::fuse_batch)
-        .def("__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
-            return fmt::format("{}", config);
-        });
+        .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCastProgramConfig::fuse_batch);
 
-    py::class_<MatmulMultiCoreReuseMultiCast1DProgramConfig>(module, "MatmulMultiCoreReuseMultiCast1DProgramConfig")
-        .def(
+    auto matmul_multi_core_reuse_multicast_1d_program_config = tt_pybind_class<MatmulMultiCoreReuseMultiCast1DProgramConfig>(module, "MatmulMultiCoreReuseMultiCast1DProgramConfig", R"doc(
+        Class defining matmul multi core reuse multi cast 1D program config
+    )doc");
+
+    matmul_multi_core_reuse_multicast_1d_program_config.def(
             py::init<
                 CoreCoord,
                 std::size_t,
@@ -112,14 +128,13 @@ void py_module(py::module& module) {
         .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCast1DProgramConfig::per_core_N)
         .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fuse_batch)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation)
-        .def_readwrite("mcast_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::mcast_in0)
-        .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
-            return fmt::format("{}", config);
-        });
+        .def_readwrite("mcast_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::mcast_in0);
 
-    py::class_<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
-        module, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig")
-        .def(
+    auto matmul_multi_core_reuse_multicast_dram_sharded_program_config = tt_pybind_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(module, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig", R"doc(
+        Class defining matmul multi core reuse multi cast DRAM sharded program config
+    )doc");
+
+    matmul_multi_core_reuse_multicast_dram_sharded_program_config.def(
             py::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>>(),
             py::kw_only(),
             py::arg("in0_block_w").noconvert(),
@@ -129,10 +144,7 @@ void py_module(py::module& module) {
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w)
         .def_readwrite("per_core_M", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_M)
         .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_N)
-        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::fused_activation)
-        .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
-            return fmt::format("{}", config);
-        });
+        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::fused_activation);
 
     module.def(
         "matmul",

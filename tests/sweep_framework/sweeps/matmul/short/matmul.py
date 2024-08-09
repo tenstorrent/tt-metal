@@ -8,24 +8,26 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 parameters = {
-    "batch_sizes": [(1,)],
-    "m_size": [384, 1024],  # [1, 16, 128, 1024]
-    "k_size": [1024, 4096],  # [16, 128, 1024, 4096]
-    "n_size": [1024, 4096],  # [16, 128, 1024, 4096]
-    "batch_matrix_multiply": [True, False],
-    "input_a_dtype": [ttnn.bfloat16],
-    "input_b_dtype": [ttnn.bfloat16],
-    "input_a_layout": [ttnn.TILE_LAYOUT],
-    "input_b_layout": [ttnn.TILE_LAYOUT],
-    "output_dtype": [ttnn.bfloat16],
-    "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "core_grid": [None],
+    "default": {
+        "batch_sizes": [(1,)],
+        "m_size": [384, 1024],  # [1, 16, 128, 1024]
+        "k_size": [1024, 4096],  # [16, 128, 1024, 4096]
+        "n_size": [1024, 4096],  # [16, 128, 1024, 4096]
+        "batch_matrix_multiply": [True, False],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "output_dtype": [ttnn.bfloat16],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "core_grid": [None],
+    }
 }
 
 
@@ -46,7 +48,7 @@ def run(
     core_grid,
     *,
     device,
-) -> Tuple[bool, Optional[str]]:
+) -> list:
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
     if batch_matrix_multiply:
@@ -71,9 +73,11 @@ def run(
         memory_config=input_a_memory_config,
     )
 
+    start_time = start_measuring_time()
     output_tensor = ttnn.matmul(
         input_tensor_a, input_tensor_b, dtype=output_dtype, memory_config=output_memory_config, core_grid=core_grid
     )
     output_tensor = ttnn.to_torch(output_tensor)
+    e2e_perf = stop_measuring_time(start_time)
 
-    return check_with_pcc(torch_output_tensor, output_tensor, 0.995)
+    return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
