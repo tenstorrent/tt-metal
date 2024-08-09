@@ -21,6 +21,7 @@
 #include <type_traits>
 
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 
 using namespace tt::constants;
@@ -44,7 +45,7 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
     CoreCoord datacopy_core_coord
 ) {
 
-    auto const& all_gather_config = AllGatherConfig(input_tensor, all_gather_output_tensor, dim, ring_size, num_links, topology);
+    auto const& all_gather_config = AllGatherConfig(input_tensor, all_gather_output_tensor, dim, ring_size, num_links, topology, true);
     const uint32_t num_transfers = 4; // ring_size - 1;
 
     auto tensor_slicer = ttnn::ccl::InterleavedRingAllGatherTensorSlicer (
@@ -55,20 +56,12 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
     );
 
 
-    // Setup cores used for datacopy
-    std::vector<CoreCoord> all_datacopy_cores;
-    all_datacopy_cores.reserve(1);
-
-
     // Select cores for datacopy (single core for now)
     CoreRangeSet datacopy_workers = CoreRangeSet({CoreRange(datacopy_core_coord)});
-
-    auto datacopy_cores = corerange_to_cores(datacopy_workers, std::nullopt, true);
-    all_datacopy_cores.insert(all_datacopy_cores.end(), datacopy_cores.begin(), datacopy_cores.end());
-
-    std::cout << "Finished setting up datacopy cores." << std::endl;
+    std::vector<CoreCoord> all_datacopy_cores = corerange_to_cores(datacopy_workers, std::nullopt, true);
 
     // Setup semaphores used to signal datacopy. TODO: instead of datacopy, this should be matmul cores
+    // Dir0: first half of all gather (clockwise), Dir1: second half of all gather (counter-clockwise)
     auto datacopy_signal_semaphore_addr_dir0 = CreateSemaphore(program, datacopy_workers, 0);
     auto datacopy_signal_semaphore_addr_dir1 = CreateSemaphore(program, datacopy_workers, 0);
 
@@ -86,9 +79,10 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
     bool datacopy_output_is_dram = datacopy_output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     uint32_t last_output_page_offset = (ring_size - 1) * tensor_slicer.output_page_offset;
-
     uint32_t num_rows = input_tensor.get_legacy_shape()[2] / tile_size ;
+    bool is_clockwise_dir = true; // Specifically for the first half of the all gather
 
+    uint32_t datacopy_buffer_size = 200;
 
     // Compile time args
     std::vector<uint32_t> datacopy_ct_args = {
@@ -104,15 +98,16 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
         static_cast<uint32_t>(num_rows), // tnesor slice height in tiles
         static_cast<uint32_t>(tensor_slicer.output_page_offset),
         static_cast<uint32_t>(last_output_page_offset),
-        static_cast<uint32_t>(true ? 1 : 0), // TODO
+        static_cast<bool>(is_clockwise_dir),
         static_cast<uint32_t>(datacopy_signal_semaphore_addr_dir0),
         static_cast<uint32_t>(datacopy_signal_semaphore_addr_dir1),
+        static_cast<uint32_t>(datacopy_buffer_size),
     };
 
     uint32_t cb_id_in0 = tt::CB::c_in0;
     tt::tt_metal::CircularBufferConfig cb_in0_config =
         tt::tt_metal::CircularBufferConfig(
-            page_size * 200 /* TODO: Update to be actual number */, {{cb_id_in0, cb_data_format}})
+            page_size * datacopy_buffer_size /* TODO: Update to be actual number */, {{cb_id_in0, cb_data_format}})
             .set_page_size(cb_id_in0, page_size);
     auto cb_input = tt::tt_metal::CreateCircularBuffer(program, datacopy_workers, cb_in0_config);
 
@@ -160,8 +155,10 @@ operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(const 
     const std::vector<CoreCoord>& datacopy_cores = std::get<0>(datacopy_params);
     const std::vector<uint32_t> datacopy_signal_semaphore_addr = std::get<1>(datacopy_params);
 
+    ccl::AllGatherFusedOpSignaler fused_op_signaler = AllGatherFusedOpSignaler(datacopy_cores, datacopy_signal_semaphore_addr);
+
     // Pass in the datacopy cores and sempahore address (Using optional arguments)
-    return all_gather_multi_core_with_workers_helper(program, input_tensor, all_gather_output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, datacopy_cores, datacopy_signal_semaphore_addr, core_grid_offset);
+    return all_gather_multi_core_with_workers_helper(program, input_tensor, all_gather_output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, fused_op_signaler, core_grid_offset);
 }
 
 }  // namespace ttnn

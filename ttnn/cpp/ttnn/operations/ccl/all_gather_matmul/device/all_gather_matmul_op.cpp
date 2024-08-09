@@ -24,22 +24,24 @@ namespace ttnn {
 
 void AllGatherMatmul::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors) const {
 
+    TT_ASSERT(input_tensors.size() == 4, "AllGatherMatmul requires 4 input tensors: [input, weight, all_gather_output, datacopy_output]");
+
     // All Gather validate
-    this->all_gather_struct.validate({input_tensors.at(0)});
+    this->all_gather_struct.validate({input_tensors[0]});
 
     // Matmul validate.
-    this->matmul_struct.validate({input_tensors.at(1), input_tensors.at(2)}, optional_input_tensors);
+    this->matmul_struct.validate({input_tensors[1], input_tensors[2]}, optional_input_tensors);
 }
 
 std::vector<tt::tt_metal::Shape> AllGatherMatmul::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
 
     // All Gather shape
-    tt::tt_metal::Shape all_gather_output_shape = this->all_gather_struct.compute_output_shapes({input_tensors.at(0)}).at(0);
+    tt::tt_metal::Shape all_gather_output_shape = this->all_gather_struct.compute_output_shapes({input_tensors[0]})[0];
     tt::tt_metal::Shape datacopy_output_shape = all_gather_output_shape;
 
 
     // Matmul shape
-    tt::tt_metal::Shape matmul_output_shapes = this->matmul_struct.compute_output_shapes({input_tensors.at(1), input_tensors.at(2)}).at(0);
+    tt::tt_metal::Shape matmul_output_shapes = this->matmul_struct.compute_output_shapes({input_tensors[1], input_tensors[2]})[0];
 
     return {all_gather_output_shape, matmul_output_shapes, datacopy_output_shape};
 }
@@ -47,12 +49,12 @@ std::vector<tt::tt_metal::Shape> AllGatherMatmul::compute_output_shapes(const st
 std::vector<Tensor> AllGatherMatmul::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
 
     // All Gather output tensor
-    auto& all_gather_output_tensor = input_tensors.at(1); // this->all_gather_out_tensor = this->all_gather_struct.create_output_tensors(input_tensors).at(0);
-    auto& datacopy_output_tensor = input_tensors.at(3); // this->all_gather_out_tensor = this->all_gather_struct.create_output_tensors(input_tensors).at(0);
+    auto& all_gather_output_tensor = input_tensors[1]; // this->all_gather_out_tensor = this->all_gather_struct.create_output_tensors(input_tensors)[0];
+    auto& datacopy_output_tensor = input_tensors[3]; // this->all_gather_out_tensor = this->all_gather_struct.create_output_tensors(input_tensors)[0];
 
 
     // Matmul output tensor
-    ttnn::Tensor matmul_output_tensor = this->matmul_struct.create_output_tensors({input_tensors.at(1), input_tensors.at(2)}).at(0);
+    ttnn::Tensor matmul_output_tensor = this->matmul_struct.create_output_tensors({input_tensors[1], input_tensors[2]})[0];
 
     return {all_gather_output_tensor, matmul_output_tensor, datacopy_output_tensor};
 }
@@ -60,7 +62,7 @@ std::vector<Tensor> AllGatherMatmul::create_output_tensors(const std::vector<Ten
 operation::ProgramWithCallbacks AllGatherMatmul::create_program(const std::vector<Tensor> & input_tensors, const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const {
 
     // Return the AllGatherMatmul program with callbacks
-    return all_gather_matmul_multi_core_with_workers(input_tensors.at(0), output_tensors.at(0), output_tensors.at(2), this->all_gather_struct.dim, this->all_gather_struct.num_links, this->all_gather_struct.ring_size, this->all_gather_struct.ring_index, this->all_gather_struct.receiver_device_id, this->all_gather_struct.sender_device_id, this->all_gather_struct.topology, this->all_gather_core_grid_offset);
+    return all_gather_matmul_multi_core_with_workers(input_tensors[0], output_tensors[0], output_tensors[2], this->all_gather_struct.dim, this->all_gather_struct.num_links, this->all_gather_struct.ring_size, this->all_gather_struct.ring_index, this->all_gather_struct.receiver_device_id, this->all_gather_struct.sender_device_id, this->all_gather_struct.topology, this->all_gather_core_grid_offset);
 }
 
 namespace operations {
@@ -97,8 +99,8 @@ std::vector <ttnn::Tensor> all_gather_matmul(
             const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
-            const auto& input_tensor = input_tensors.at(0);
-            const auto& weight_tensor = input_tensors.at(1);
+            const auto& input_tensor = input_tensors[0];
+            const auto& weight_tensor = input_tensors[1];
             uint32_t num_devices = devices.size();
 
             /* All Gather stuff */
@@ -142,8 +144,8 @@ std::vector <ttnn::Tensor> all_gather_matmul(
 
 
             /* Create the dummy all gather output tensor used as input (activation) to the matmul */
-            ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor}).at(0);
-            ttnn::Tensor datacopy_out_tensor = all_gather_struct.create_output_tensors({input_tensor}).at(0);
+            ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
+            ttnn::Tensor datacopy_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
 
 
             return operation::run(
@@ -157,7 +159,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
                 {input_tensor, all_gather_out_tensor, weight_tensor, datacopy_out_tensor}, optional_input_tensors);
         },
         {input_tensor, weight_tensor}, output_tensors, optional_input_tensors);
-    return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
+    return {output_tensors[0], output_tensors[1], output_tensors[2]};
 }
 
 

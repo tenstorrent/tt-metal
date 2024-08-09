@@ -31,9 +31,10 @@ void kernel_main() {
     constexpr uint32_t output_page_offset = get_compile_time_arg_val(10);
     constexpr uint32_t last_output_page_offset = get_compile_time_arg_val(11);
 
-    constexpr bool is_clockwise_direction = get_compile_time_arg_val(12) == 1; // Specify direction for the first half
+    constexpr bool is_clockwise_direction = get_compile_time_arg_val(12); // Specify direction for the first half
     constexpr uint32_t signal_op_sem_addr_dir0 = get_compile_time_arg_val(13);
     constexpr uint32_t signal_op_sem_addr_dir1 = get_compile_time_arg_val(14);
+    constexpr uint32_t max_buffer_size = get_compile_time_arg_val(15);
 
 
     // Runtime args
@@ -67,7 +68,6 @@ void kernel_main() {
 
     // Args used to read/write slices of the tensor
     const uint32_t num_pages = tensor_slice_shape_width * tensor_slice_shape_height;
-    const uint32_t max_buffer_size = 200; // TODO: Update to be the actual buffer size of L1
 
     ttnn::ccl::coord_t tensor_shape = {tensor_shape_width, tensor_shape_height};
     ttnn::ccl::coord_t tensor_slice_shape = {tensor_slice_shape_width, tensor_slice_shape_height};

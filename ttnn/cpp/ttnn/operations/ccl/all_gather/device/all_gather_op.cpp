@@ -14,8 +14,11 @@
 namespace ttnn {
 
 
-AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor const& input_tensor) {
-    return AllGatherBidirectionalMode::FULL_TENSOR;
+AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor const& input_tensor, bool fuse_op) {
+    if (fuse_op) {
+        return AllGatherBidirectionalMode::FULL_TENSOR;
+    }
+
     std::size_t eth_l1_capacity = eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     std::size_t tensor_size_bytes = input_tensor.shape().volume() * input_tensor.element_size();
     // This is currently a guestimate. We need a lot more hard data to identify where this dividing line is.
@@ -23,9 +26,10 @@ AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor con
     if (perf_degradation_from_full_tensor_mode) {
         return AllGatherBidirectionalMode::SPLIT_TENSOR;
     }
+    return AllGatherBidirectionalMode::FULL_TENSOR;
 }
 
-AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology, std::size_t num_edm_buffers_per_channel) :
+AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology, std::size_t num_edm_buffers_per_channel, bool fuse_op) :
     num_links(num_links),
     semaphore_size(32),
     ring_size(ring_size),
@@ -37,7 +41,7 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
     input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
     output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM),
 
-    bidirectional_mode(choose_bidirectional_mode(input_tensor)),
+    bidirectional_mode(choose_bidirectional_mode(input_tensor, fuse_op)),
     enable_merged_payload_and_channel_sync(true),
     num_edm_buffers_per_channel(num_edm_buffers_per_channel)
 {

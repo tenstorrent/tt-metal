@@ -11,9 +11,6 @@
 
 #include <vector>
 
-using ttnn::ccl::ShardType;
-using ttnn::ccl::WorkerXY;
-// using ttnn::ccl::coord_t;
 
 // Called by the master worker to synchronize with the slave workers
 FORCE_INLINE void master_sync_slaves(

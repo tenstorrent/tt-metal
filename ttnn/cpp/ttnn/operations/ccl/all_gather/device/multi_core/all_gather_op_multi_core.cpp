@@ -20,6 +20,9 @@
 #include <sstream>
 #include <type_traits>
 
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+
+
 using namespace tt::constants;
 
 namespace ttnn {
@@ -187,12 +190,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology,
-    const std::optional<std::vector<CoreCoord>> datacopy_cores,
-    const std::optional<std::vector<uint32_t>> datacopy_signal_semaphore_addr,
+    std::optional<ccl::AllGatherFusedOpSignaler> fused_op_signaler,
     const CoreCoord core_grid_offset) {
-    std::cout <<  "RING INDEX:::::::: " << ring_index << std::endl;
-    bool overlap_op = datacopy_cores.has_value();
-
 
     TT_FATAL(!(receiver_device_id == std::nullopt && sender_device_id == std::nullopt), "At least one of receiver_device_id or sender_device_id must be specified");
 
@@ -204,7 +203,15 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     // Issue #10978: CCLs need to be tagged as having multi-device dependencies, when running on Galaxy.
     program.capture_multi_device_dependencies();
     const auto& device = input_tensor.device();
-    auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel);
+
+    /* All gather fusion */
+    ccl::AllGatherFusedOpSignaler* all_gather_fused_op_signaler;
+    bool fuse_op = fused_op_signaler.has_value();
+    if (fuse_op) {
+        all_gather_fused_op_signaler = &fused_op_signaler.value();
+        all_gather_fused_op_signaler->set_fused_op_args(device);
+    }
+    auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, fuse_op);
     auto const& topology_config = ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
     bool enable_print = false;
@@ -248,7 +255,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     } else {
         worker_defines["INTERLEAVED_MEM_LAYOUT"] = "1";
     }
-    if (overlap_op) {
+    if (fuse_op) {
         worker_defines["OVERLAP_OP"] = "1";
     }
 
@@ -472,14 +479,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             edm_semaphores_base_address.reserve(all_gather_config.get_num_workers_per_link());
             link_buffer_sender_addresses.reserve(all_gather_config.get_num_workers_per_link());
 
-            /*
-                Overlap setup: Setup semaphores used to synchronize different receiver workers processing
-                different chunks across the same tensor slice
-            */
-            auto receiver_worker_sync_semaphore_addr = CreateSemaphore(program, receiver_workers, 0);
-            std::vector<CoreCoord> receiver_worker_cores_noc_coords;
-            for (uint32_t w = 0; w < receiver_worker_cores.size(); ++w) {
-                receiver_worker_cores_noc_coords.push_back(device->worker_core_from_logical_core(receiver_worker_cores.at(w)));
+            /* All gather fusion */
+            if (fuse_op) {
+                all_gather_fused_op_signaler->set_all_gather_args(program, device, receiver_workers, receiver_worker_cores);
             }
 
             {
@@ -937,11 +939,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
                         }
 
-                        if (overlap_op) {
-                            worker_writer_receiver_ct_args.push_back(static_cast<bool>(overlap_op));
-                            worker_writer_receiver_ct_args.push_back(static_cast<uint32_t>(global_num_workers));
-                            worker_writer_receiver_ct_args.push_back(static_cast<uint32_t>(b));
-                            worker_writer_receiver_ct_args.push_back(static_cast<uint32_t>(receiver_worker_sync_semaphore_addr));
+                        if (fuse_op) {
+                            all_gather_fused_op_signaler->emit_all_gather_fused_op_ct_args(worker_writer_receiver_ct_args, global_num_workers, b);
                         }
 
                         log_trace(tt::LogOp, "Worker {} RW ct args", b);
@@ -990,27 +989,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_receiver_rt_args);
                         }
 
-                        /* Overlap params */
-                        if (overlap_op) {
-                            // Push the receiver worker core noc coordinates
-                            for (auto& noc_coord : receiver_worker_cores_noc_coords) { // Should run global_num_workers times
-                                worker_writer_receiver_rt_args.push_back(static_cast<uint32_t>(noc_coord.x));
-                                worker_writer_receiver_rt_args.push_back(static_cast<uint32_t>(noc_coord.y));
-                            }
-
-                            if (datacopy_cores.has_value()) {
-                                for (auto& datacopy_core : datacopy_cores.value()) { // Should only run once for now
-
-                                    auto datacopy_core_noc = device->worker_core_from_logical_core(datacopy_core);
-                                    worker_writer_receiver_rt_args.push_back(static_cast<uint32_t>(datacopy_core_noc.x));
-                                    worker_writer_receiver_rt_args.push_back(static_cast<uint32_t>(datacopy_core_noc.y));
-                                }
-                            }
-
-                            if (datacopy_signal_semaphore_addr.has_value()) {
-                                uint32_t dir = is_clockwise_direction ? 0 : 1;
-                                worker_writer_receiver_rt_args.push_back(static_cast<uint32_t>(datacopy_signal_semaphore_addr.value()[dir]));
-                            }
+                        /* All Gather fusion */
+                        if (fuse_op) {
+                            all_gather_fused_op_signaler->emit_all_gather_fused_op_rt_args(worker_writer_receiver_rt_args, is_clockwise_direction ? 0 : 1);
                         }
 
                         log_trace(tt::LogOp, "Worker {} RW rt args", b);
