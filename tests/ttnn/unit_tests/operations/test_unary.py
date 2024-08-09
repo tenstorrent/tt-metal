@@ -27,6 +27,23 @@ def run_unary_test(device, h, w, ttnn_function, torch_function, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+def run_unary_test_fixed(device, h, w, fill_value, ttnn_function, torch_function, pcc=0.9999):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.full((h, w), fill_value, dtype=torch.bfloat16)
+    torch_output_tensor = torch.nan_to_num(
+        torch_function(torch_input_tensor), nan=6.9752e19, posinf=1.6948e38, neginf=-1.6948e38
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
 def run_identity_test(device, h, w, data_type, pcc=0.9999):
     torch.manual_seed(0)
 
@@ -351,3 +368,9 @@ def test_remainder(device, h, w, scalar):
 @skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_fmod(device, h, w, scalar):
     run_unary_test_with_float(device, h, w, scalar, ttnn.fmod, torch.fmod)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_asin_fixed(device, h, w):
+    run_unary_test_fixed(device, h, w, 90, ttnn.asin, torch.asin, pcc=0.999)
