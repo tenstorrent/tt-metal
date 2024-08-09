@@ -96,7 +96,7 @@ tt_lib.tensor.real,200,0.027,0.029,0.06,0.012
 ttnn.real_bw,200,0.821,0.827,0.847
 ttnn.reglu_dim_2,200,0.102,0.107,0.245,0.045
 ttnn.reglu_dim_3,200,0.105,0.111,0.244,0.045
-tt_lib.tensor.repeat,200,0.025,0.027,0.368,0.009
+ttnn.repeat,200,0.025,0.027,0.368,0.009
 ttnn.repeat_interleave_dim_0,200,0.039,0.043,0.375,0.01
 ttnn.repeat_interleave_dim_1,80,0.42,0.429,323.298,0.219
 ttnn.repeat_interleave_dim_2,80,0.152,0.154,150.628,0.076

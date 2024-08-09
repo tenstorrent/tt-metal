@@ -410,5 +410,3 @@ Other Operations
 .. autofunction:: tt_lib.tensor.mean_hw
 
 .. autofunction:: tt_lib.tensor.lamb_optimizer
-
-.. autofunction:: tt_lib.tensor.repeat
