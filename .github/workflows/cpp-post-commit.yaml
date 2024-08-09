@@ -55,12 +55,6 @@ jobs:
       - "in-service"
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: 120
         uses: ./.github/actions/docker-run
@@ -68,12 +62,10 @@ jobs:
           docker_username: ${{ github.actor }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
-            -e CONFIG=${{ env.CONFIG }} 
-            -e ARCH_NAME=${{ matrix.runner-info.arch }}
-            -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
-            -e LD_LIBRARY_PATH=${{ env.LD_LIBRARY_PATH }}
-            --device /dev/tenstorrent
+            -e ARCH_NAME=${{ inputs.arch }}
+            -e PYTHONPATH=/app/mtl
             -v /dev/hugepages-1G:/dev/hugepages-1G
+            --device /dev/tenstorrent
           run_args: |
             cd /app/mtl
             rm -rf tt_metal tt_eager

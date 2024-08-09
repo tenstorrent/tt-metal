@@ -71,12 +71,6 @@ jobs:
       - "in-service"
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: ${{ inputs.arch }}
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
@@ -88,17 +82,14 @@ jobs:
           docker_username: ${{ github.actor }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
-            -e CONFIG=${{ env.CONFIG }} 
-            -e ARCH_NAME=${{ matrix.runner-info.arch }}
+            -e ARCH_NAME=${{ inputs.arch }}
             -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
-            -e LD_LIBRARY_PATH=${{ env.LD_LIBRARY_PATH }}
-            -e TT_METAL_ENV=${{ env.TT_METAL_ENV }}
-            --device /dev/tenstorrent
+            -e PYTHONPATH=/app/mtl
             -v /dev/hugepages-1G:/dev/hugepages-1G
+            --device /dev/tenstorrent
           run_args: |
-            source ${{ github.workspace }}/python_env/bin/activate 
-            cd $TT_METAL_HOME
-            export PYTHONPATH=$TT_METAL_HOME
+            cd /app/mtl
+            rm -rf tt_metal tt_eager
             ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
