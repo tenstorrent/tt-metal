@@ -12,6 +12,7 @@ import time
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     skip_for_grayskull,
+    skip_for_wormhole_b0,
     comp_pcc,
     enable_persistent_kernel_cache,
     profiler,
@@ -139,6 +140,7 @@ def test_unet_2d_condition_model_256x256(device, batch_size, in_channels, input_
 
 
 @skip_for_grayskull()
+@skip_for_wormhole_b0(reason_str="#10923: Seems to hang")
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768}], ids=["device_params=l1_small_size_24576"], indirect=True
 )

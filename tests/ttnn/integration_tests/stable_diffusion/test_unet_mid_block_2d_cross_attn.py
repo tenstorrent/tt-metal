@@ -11,6 +11,7 @@ from diffusers import StableDiffusionPipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     skip_for_grayskull,
+    skip_for_wormhole_b0,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
@@ -27,6 +28,7 @@ from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_function
 
 
 @skip_for_grayskull()
+@skip_for_wormhole_b0(reason_str="#10923: Seems to hang")
 @pytest.mark.parametrize(
     "hidden_state_shapes,",
     [
