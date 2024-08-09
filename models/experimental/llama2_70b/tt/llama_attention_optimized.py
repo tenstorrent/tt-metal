@@ -274,7 +274,7 @@ class TtLlamaAttention_optimized:
             kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
 
         keys = self.layer_past[0]
-        tt_lib.tensor.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
+        ttnn.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
         key_layer.deallocate(True)
 
         # key and value layers will have kv_seq_len padded to nearest 32
@@ -321,7 +321,7 @@ class TtLlamaAttention_optimized:
 
         # V CACHE UPDATE
         values = self.layer_past[1]
-        tt_lib.tensor.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
+        ttnn.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
         value_layer.deallocate(True)
 
         values = self.layer_past[1]
@@ -453,13 +453,13 @@ class TtLlamaAttention_optimized:
         keys = self.layer_past[0]
         # Fill cache expects batch in dim0
         keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        tt_lib.tensor.fill_cache(keys_reshaped, tt_lib.tensor.typecast(key_layer, ttnn.bfloat8_b), user_id)
+        ttnn.fill_cache(keys_reshaped, tt_lib.tensor.typecast(key_layer, ttnn.bfloat8_b), user_id)
 
         # FILL V CACHE
         values = self.layer_past[1]
         # Fill cache expects batch in dim0
         values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        tt_lib.tensor.fill_cache(values_reshaped, tt_lib.tensor.typecast(value_layer, ttnn.bfloat8_b), user_id)
+        ttnn.fill_cache(values_reshaped, tt_lib.tensor.typecast(value_layer, ttnn.bfloat8_b), user_id)
 
         # SPDA
         attn_output = tt_lib.operations.primary.transformers.scaled_dot_product_attention(

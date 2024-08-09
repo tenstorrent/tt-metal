@@ -268,7 +268,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ### K CACHE UPDATE ###
         ######################
         for i in range(self.num_devices):
-            ttnn.experimental.tensor.fill_cache(layer_past[i][0], key_layer[i], user_id)
+            ttnn.fill_cache(layer_past[i][0], key_layer[i], user_id)
 
         ######################
         ### PRE-SOFTMAX MM ###
@@ -330,7 +330,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ### V CACHE UPDATE ###
         ######################
         for i in range(self.num_devices):
-            ttnn.experimental.tensor.fill_cache(layer_past[i][1], value_layer[i], user_id)
+            ttnn.fill_cache(layer_past[i][1], value_layer[i], user_id)
 
         layer_present = layer_past if use_cache else None
 
@@ -431,7 +431,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ### K CACHE UPDATE ###
         ######################
         for i in range(self.num_devices):
-            ttnn.experimental.tensor.fill_cache(layer_past[i][0], key_layer[i], user_id)
+            ttnn.fill_cache(layer_past[i][0], key_layer[i], user_id)
 
         ######################
         ### PRE-SOFTMAX MM ###
@@ -538,7 +538,7 @@ class TtFalconAttentionPrefill(nn.Module):
 
         # V cache update
         for device_id in range(self.num_devices):
-            ttnn.experimental.tensor.fill_cache(layer_past[device_id][1], value_layer[device_id], user_id)
+            ttnn.fill_cache(layer_past[device_id][1], value_layer[device_id], user_id)
 
         layer_present = layer_past if use_cache else None
 
@@ -703,7 +703,7 @@ class TtFalconAttentionDecode(nn.Module):
         ######################
         for i in range(self.num_devices):
             # Update kv_cache in place
-            ttnn.experimental.tensor.update_cache(layer_past[i][0], key_layer[i], layer_past_len)
+            ttnn.update_cache(layer_past[i][0], key_layer[i], layer_past_len)
             key_layer[i].deallocate(True)
         for i in range(self.num_devices):
             # key and value layers will have kv_seq_len padded to nearest 32
@@ -869,7 +869,7 @@ class TtFalconAttentionDecode(nn.Module):
         ######################
         for i in range(self.num_devices):
             # Update kv_cache in place
-            ttnn.experimental.tensor.update_cache(layer_past[i][1], value_layer[i], layer_past_len)
+            ttnn.update_cache(layer_past[i][1], value_layer[i], layer_past_len)
         for i in range(self.num_devices):
             value_layer[i] = ttnn.slice(
                 layer_past[i][1],

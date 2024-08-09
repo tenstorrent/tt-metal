@@ -17,7 +17,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_llama_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
@@ -462,21 +461,6 @@ void TensorModule(py::module& m_tensor) {
         "Performs prefill llama rotary embedding with a given input, cos, and sin, and transformation tensors. The input dimensions are as follows: [batch, num_heads, seq_len, head_dim].
         The sequence length must be a power of 2. The transformation matrix should be the size of one tile. Only supported data type is bfloat16. The head dim must be at most 256 (8 tiles wide), and must be a multiple of 32.
         The compute has a granularity of head_dim/tile_width, which means there can be a maximum of 8 tiles in the registers. If head_dim exceeds 128, then fp32_dest_acc_en must be set to false.
-    )doc");
-    m_tensor.def("fill_cache", &fill_cache,
-         py::arg("cache").noconvert(), py::arg("input").noconvert(), py::arg("batch_idx"), R"doc(
-        "Fills the cache tensor in place with the values from input at the specified batch_idx.
-    )doc");
-    m_tensor.def(
-        "update_cache",
-        &update_cache,
-        py::arg("cache").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("update_idx"),
-        py::arg("batch_offset") = 0,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Updates the cache tensor in place with the values from input at the specified update_idx. When cache has batch less than 32, input is assumed to have batch padded to 32 and [batch_offset:batch_offset+batch] from dim[-2] of input is used to update the cache.
     )doc");
 
     // TMs
