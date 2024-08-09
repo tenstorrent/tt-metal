@@ -9,30 +9,26 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 
 parameters = {
-    "batch_sizes": [(1,), (2,)],
-    "m_size": [x if x > 0 else 32 for x in range(0, 4800, 480)],
-    "k_size": [x if x > 0 else 32 for x in range(0, 2048, 224)],
-    "n_size": [x if x > 0 else 32 for x in range(0, 4800, 480)],
-    "batch_matrix_multiply": [False],
-    "input_a_memory_config": [ttnn.L1_MEMORY_CONFIG],
-    "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "input_a_dtype": [ttnn.bfloat16],
-    "input_b_dtype": [ttnn.bfloat8_b],
-    "output_dtype": [ttnn.bfloat16],
-    # "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-    # "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-    # "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-    # "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    # "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    # "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    "input_layout": [ttnn.TILE_LAYOUT],
-    "compute_kernel_config": [None],
+    "default": {
+        "batch_sizes": [(1,), (2,)],
+        "m_size": [x if x > 0 else 32 for x in range(0, 4800, 480)],
+        "k_size": [x if x > 0 else 32 for x in range(0, 2048, 224)],
+        "n_size": [x if x > 0 else 32 for x in range(0, 4800, 480)],
+        "batch_matrix_multiply": [False],
+        "input_a_memory_config": [ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_b_dtype": [ttnn.bfloat8_b],
+        "output_dtype": [ttnn.bfloat16],
+        "input_layout": [ttnn.TILE_LAYOUT],
+        "compute_kernel_config": [None],
+    }
 }
 
 
@@ -52,7 +48,7 @@ def run(
     compute_kernel_config,
     *,
     device,
-) -> Tuple[bool, Optional[str]]:
+) -> list:
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
     if batch_matrix_multiply:
@@ -80,6 +76,7 @@ def run(
         memory_config=input_b_memory_config,
     )
 
+    start_time = start_measuring_time()
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
@@ -88,6 +85,7 @@ def run(
         compute_kernel_config=compute_kernel_config,
     )
     output_tensor = ttnn.to_torch(output_tensor)
+    e2e_perf = stop_measuring_time(start_time)
 
     expected_pcc = 0.99
-    return check_with_pcc(torch_output_tensor, output_tensor, expected_pcc)
+    return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
