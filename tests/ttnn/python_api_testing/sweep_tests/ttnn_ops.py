@@ -4361,3 +4361,20 @@ def floor(
     t1 = ttnn.floor(t0, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_unary_floor_div(
+    x,
+    *args,
+    value,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.floor_div(t0, value, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
