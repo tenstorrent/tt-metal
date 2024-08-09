@@ -52,6 +52,7 @@ def calculate_perplexity(
     return float(nll), float(ppl), float(top1_acc), float(top5_acc)
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "model_version, mode, batch_size, max_seq_len, num_samples, expected_ppl, expected_top1, expected_top5",
     (
@@ -162,7 +163,10 @@ def test_mamba_perplexity(
 
     if mode == ModelMode.DECODE:
         config = model_config.create_model_config(batch_size, reference_model.args.d_model, mode=mode, seq_len=1)
+
+        start = time.time()
         model = MambaTT(reference_model, device, config, tt_cache_path=get_tt_cache_path(model_version))
+        logger.info(f"Finished initializing Mamba (took {time.time() - start:.3f} sec)")
 
         def decode(input_ids, seqlen: int):
             logits = []
@@ -179,7 +183,9 @@ def test_mamba_perplexity(
         config = model_config.create_model_config(
             batch_size, reference_model.args.d_model, mode=mode, seq_len=prefill_chunk_size
         )
+        start = time.time()
         model = MambaTT(reference_model, device, config, tt_cache_path=get_tt_cache_path(model_version))
+        logger.info(f"Finished initializing Mamba (took {time.time() - start:.3f} sec)")
 
         def prefill(input_ids, _: int):
             return model(input_ids)  # assumes input fits into single chunk

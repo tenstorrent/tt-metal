@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import time
 import pytest
 from loguru import logger
 import ttnn
@@ -73,7 +74,10 @@ def test_mamba_block_inference(
 
     loader = TtTensorLoader(reference_model.state_dict(), device)
 
+    logger.info(f"Initalizing Mamba block from layer {LAYER_NUM}")
+    start = time.time()
     model = TtMambaBlock(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM))
+    logger.info(f"Finished initializing Mamba block (took {time.time() - start:.3f} sec)")
 
     tt_input = input.view(1, 1, config["outer_dim"], d_model)
     tt_input = ttnn.to_device(
