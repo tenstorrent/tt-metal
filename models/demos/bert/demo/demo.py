@@ -8,15 +8,13 @@ import torch
 from loguru import logger
 
 import transformers
-import tt_lib
 import ttnn
 from models.utility_functions import (
     disable_compilation_reports,
     disable_persistent_kernel_cache,
     profiler,
 )
-from models.demos.bert.tt import ttnn_bert
-from models.demos.bert.tt import ttnn_optimized_bert
+from models.demos.bert.tt import ttnn_bert, ttnn_optimized_bert
 
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from ttnn.model_preprocessing import (
@@ -41,6 +39,15 @@ def load_inputs(input_path, batch):
             question.append(input_data[i]["question"])
 
         return context, question
+
+
+def positional_ids(config, input_ids, past_key_values_length=0):
+    seq_length = input_ids.size(1)
+    position_ids = torch.arange(config.max_position_embeddings, dtype=torch.long, device=input_ids.device)
+    position_ids = position_ids.unsqueeze(0)[:, past_key_values_length : seq_length + past_key_values_length]
+    position_ids = position_ids.expand_as(input_ids)
+
+    return position_ids
 
 
 def run_bert_question_and_answering_inference(
@@ -106,13 +113,14 @@ def run_bert_question_and_answering_inference(
         return_token_type_ids=True,
         return_tensors="pt",
     )
+
+    position_ids = positional_ids(config, bert_input.input_ids)
     profiler.start(f"preprocessing_input")
-    torch_attention_mask = None
     ttnn_bert_inputs = bert.preprocess_inputs(
         bert_input["input_ids"],
         bert_input["token_type_ids"],
-        torch.zeros(batch_size, sequence_size),
-        torch_attention_mask,
+        position_ids,
+        bert_input["attention_mask"],
         device=device,
     )
     profiler.end(f"preprocessing_input")
@@ -214,12 +222,12 @@ def run_bert_question_and_answering_inference_squad_v2(
             if i < n_iterations:
                 batch_data = batch[0]
                 curr_batch_size = batch_data["input_ids"].shape[0]
-                torch_attention_mask = None
+                position_ids = positional_ids(config, batch_data.input_ids)
                 ttnn_bert_inputs = bert.preprocess_inputs(
                     batch_data["input_ids"],
                     batch_data["token_type_ids"],
-                    torch.zeros(batch_size, sequence_size),
-                    torch_attention_mask,
+                    position_ids,
+                    batch_data["attention_mask"],
                     device=device,
                 )
 
@@ -262,7 +270,7 @@ def run_bert_question_and_answering_inference_squad_v2(
 
 
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
-@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
+@pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert])
 def test_demo(
     input_path,
     model_name,
@@ -287,7 +295,7 @@ def test_demo(
 
 
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
-@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
+@pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert])
 @pytest.mark.parametrize(
     "n_iterations",
     ((3),),
