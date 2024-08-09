@@ -133,8 +133,6 @@ def test_reproduce_matmul_2d_hang(
             )
         )
 
-    nd_output_count = 0
-
     start_time = time.time()
 
     # loop_count iterations to test determinism/hang
@@ -182,12 +180,8 @@ def test_reproduce_matmul_2d_hang(
     for device_idx in range(num_devices):
         out[device_idx].deallocate(True)
 
-    print(f"Iterations with nd output: {nd_output_count}")
-
     for device_idx in range(num_devices):
         ttl.device.Synchronize(devices[device_idx])
-
-    assert nd_output_count != 0
 
 
 @pytest.mark.parametrize(
