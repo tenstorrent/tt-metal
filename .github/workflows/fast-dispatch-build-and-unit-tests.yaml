@@ -42,9 +42,9 @@ jobs:
   # fd-model-tests:
   #   uses: ./.github/workflows/models-post-commit.yaml
   #   secrets: inherit
-  # fd-cpp-tests:
-  #   uses: ./.github/workflows/cpp-post-commit.yaml
-  #   secrets: inherit
+  fd-cpp-tests:
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    secrets: inherit
   fd-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
