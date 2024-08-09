@@ -243,13 +243,6 @@ def preprocessing_model_bert_4(x, *args, **kwargs):
 
 def concat_bw(x, y, z, dim, *args, **kwargs):
     golden_function = ttnn.get_golden_function(ttnn.concat_bw)
-    torch_output_tensor = golden_function(
-        x,
-        y,
-        z,
-        dim=dim,
-        head_size=None,
-        attention_mask=None,
-    )
+    torch_output_tensor = golden_function(x, y, z, dim=dim)
 
     return torch_output_tensor
