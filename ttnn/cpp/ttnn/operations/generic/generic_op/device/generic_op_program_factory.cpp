@@ -82,6 +82,8 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
         }
     }
 
+    std::cout << "GENERIC OP RUN" << std::endl;
+
     return {
         std::move(program),
         {.unary_reader_kernel_id = data_movement_kernel_ids[0],
