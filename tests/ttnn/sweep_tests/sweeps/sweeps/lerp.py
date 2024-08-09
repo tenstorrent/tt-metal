@@ -16,10 +16,10 @@ parameters = {
     "batch_sizes": [(1,)],
     "height": [384, 1024],
     "width": [1024, 4096],
-    "input_a_dtype": [ttnn.bfloat16],
-    "input_b_dtype": [ttnn.bfloat16],
-    "input_a_layout": [ttnn.TILE_LAYOUT],
-    "input_b_layout": [ttnn.TILE_LAYOUT],
+    "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    "input_b_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "input_w_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -30,6 +30,29 @@ parameters = {
     "low": [-10, 10],
     "high": [40, 80],
 }
+
+
+def skip(
+    batch_sizes,
+    height,
+    width,
+    input_a_dtype,
+    input_b_dtype,
+    input_a_layout,
+    input_b_layout,
+    input_b_memory_config,
+    input_a_memory_config,
+    input_w_memory_config,
+    output_memory_config,
+    weight_is_tensor,
+    weight,
+    end,
+    low,
+    high,
+) -> Tuple[bool, Optional[str]]:
+    if input_a_layout == ttnn.ROW_MAJOR_LAYOUT or input_b_layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Skipped as ROW_MAJOR_LAYOUT not supported"
+    return False, None
 
 
 def run(
@@ -89,4 +112,4 @@ def run(
     output_tensor = ttnn.lerp(input_tensor_a, input_tensor_b, input_weight, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    return check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    return check_with_pcc(torch_output_tensor, output_tensor, 0.99)

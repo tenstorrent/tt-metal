@@ -16,14 +16,31 @@ parameters = {
     "batch_sizes": [(1,)],
     "height": [384, 1024],
     "width": [1024, 4096],
-    "input_dtype": [ttnn.bfloat16],
+    "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "layout": [ttnn.TILE_LAYOUT],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "type": ["TensorTensorTensor", "TensorScalarScalar"],
     "float1": [15.5, -6.8],
     "float2": [-4.2, 11.4],
 }
+
+
+def skip(
+    batch_sizes,
+    height,
+    width,
+    input_dtype,
+    input_memory_config,
+    output_memory_config,
+    layout,
+    type,
+    float1,
+    float2,
+) -> Tuple[bool, Optional[str]]:
+    if input_dtype == ttnn.bfloat8_b or layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Skipped as BFLOAT8_B or ROW_MAJOR_LAYOUT not supported"
+    return False, None
 
 
 def run(
