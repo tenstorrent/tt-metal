@@ -153,7 +153,7 @@ pip install -r tt_metal/python_env/requirements-dev.txt
 
 5. Start coding
 
-You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
+You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/ttnn/latest/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://tenstorrent.github.io/tt-metalium/latest//tt_metal/examples/index.html).
 
 ---
 
