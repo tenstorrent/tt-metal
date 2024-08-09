@@ -78,7 +78,21 @@ void init_sync_registers() {
     }
 }
 
+void flush_icache() {
+#ifdef ARCH_BLACKHOLE
+    // Kernel start instructions on WH are not cached because we apply a 1 cache line (32B) padding
+    //  between FW end and Kernel start.
+    // This works because risc tries to prefetch 1 cache line.
+    // The 32B still get cached but they are never executed
+    #pragma GCC unroll 2048
+    for (int i = 0; i < 2048; i++) {
+        asm("nop");
+    }
+#endif
+}
+
 int main() {
+    disable_lowcache();
     DIRTY_STACK_MEMORY();
     DEBUG_STATUS("I");
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
@@ -127,6 +141,7 @@ int main() {
                 crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
                     mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].crta_offset);
 
+                flush_icache();
                 kernel_init();
                 RECORD_STACK_USAGE();
             //} else {
