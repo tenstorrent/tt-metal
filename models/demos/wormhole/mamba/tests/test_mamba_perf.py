@@ -72,7 +72,9 @@ def test_mamba_e2e_perf(
     profiler.end("pytorch_ref_model_setup")
 
     profiler.start("tt_model_setup")
+    start = time.time()
     tt_model = get_tt_metal_model(model_version, device, cache_dir=get_tt_cache_path(model_version), batch_size=batch)
+    logger.info(f"Finished initializing Mamba (took {time.time() - start:.3f} sec)")
     profiler.end("tt_model_setup")
 
     sequences: torch.Tensor = tokenizer(prompts, return_tensors="pt", padding=True).input_ids
@@ -197,6 +199,8 @@ def test_mamba_prefill_perf_device(
 ):
     model_version = "state-spaces/mamba-2.8b"
     batch_size = 32
+
+    start = time.time()
     model = get_tt_metal_model(
         model_version,
         device,
@@ -206,6 +210,7 @@ def test_mamba_prefill_perf_device(
         seq_len=prefill_chunk_size,
         num_layers=num_layers,
     )
+    logger.info(f"Finished initializing Mamba (took {time.time() - start:.3f} sec)")
 
     model.eval()
     prefill_tokens = ttnn.from_torch(

@@ -267,12 +267,15 @@ class TtMambaSSM(torch.nn.Module):
             ttnn.deallocate(abar2_sharded)
             ttnn.deallocate(bmulx0_sharded)
 
+            # We have to move hidden states results to DRAM or else we don't have enough room for the prev_hidden_state copy
+            hidden_state0 = ttnn.to_memory_config(hidden_states_sharded, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(hidden_states_sharded)
+
             prev_hidden_state = ttnn.to_memory_config(prev_hidden_state, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             self.hidden_state_cache.set(self.configs["current_user"], 0, prev_hidden_state)
             ttnn.deallocate(prev_hidden_state)
 
-            hidden_state0 = ttnn.to_memory_config(hidden_states_sharded, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(hidden_states_sharded)
+            hidden_state0 = ttnn.to_memory_config(hidden_state0, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         # compute C
         C0 = ttnn.linear(
