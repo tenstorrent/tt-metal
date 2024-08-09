@@ -185,6 +185,19 @@ struct ExecuteBinaryRemainder
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
+
+struct ExecuteBinaryEQ
+{
+    static Tensor operator()(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b);
+
+
+    static Tensor operator()(
+        const Tensor& input_tensor,
+        float scalar);
+};
+
 }  // namespace binary
 }  // namespace operations
 
@@ -254,5 +267,8 @@ constexpr auto outer = ttnn::register_operation_with_auto_launch_op<
 constexpr auto polyval = ttnn::register_operation_with_auto_launch_op<
     "ttnn::polyval",
     operations::binary::ExecuteBinaryCompositeOpsPolyval<operations::binary::BinaryCompositeOpType::POLYVAL>>();
+constexpr auto eq_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::eq_",
+    operations::binary::ExecuteBinaryEQ>();
 
 }  // namespace ttnn

@@ -392,4 +392,13 @@ Tensor _polyval(const Tensor& input_a, const std::vector<float>& coeffs, const s
     return final_tensor;
 }
 
+Tensor ExecuteBinaryEQ::operator()(const Tensor& input_a, const Tensor& input_b) {
+    return ttnn::eq(input_a, input_b, std::nullopt, std::nullopt, input_a);
+}
+
+
+Tensor ExecuteBinaryEQ::operator()(const Tensor& input, float scalar) {
+    return ttnn::eq(input, scalar, std::nullopt, std::nullopt, input);
+}
+
 } // namespace ttnn::operations::binary
