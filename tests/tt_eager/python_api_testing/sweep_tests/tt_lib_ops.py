@@ -1823,7 +1823,7 @@ def reduce_min_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_min_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.min(t0, [2, 3], True, memory_config=output_mem_config)
+    t1 = ttnn.min(t0, [2, 3], True, output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1835,7 +1835,7 @@ def reduce_min_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 def sum(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     assert dim >= 0 and dim <= 3
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.sum(t0, dim, True, output_mem_config=output_mem_config)
+    t1 = ttnn.sum(t0, dim, True, output_mem_config)
 
     output = tt2torch_tensor(t1)
 
