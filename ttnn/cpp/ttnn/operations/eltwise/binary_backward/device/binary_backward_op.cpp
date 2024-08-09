@@ -378,10 +378,10 @@ std::vector<Tensor> _concat_bw(
     if (dim == 0) {
         start_index_2 = {input.get_legacy_shape()[0], 0, 0, 0};
     } else if (dim == 1) {
-        start_index_2 = {input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1], 0, 0};
+        start_index_2 = {0, input.get_legacy_shape()[1], 0, 0};
     } else if (dim == 2) {
         start_index_2 = {
-            input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1] - 1, input.get_legacy_shape()[2], 0};
+            0, 0, input.get_legacy_shape()[2], 0};
     } else if (dim == 3) {
         start_index_2 = {0, 0, 0, input.get_legacy_shape()[3]};
     }

@@ -687,6 +687,32 @@ def shapes_and_datagen(
             ):
                 yield shapes, datagen_funcs, test_args
 
+        elif method == "concat_bw":
+
+            def _gen_concat_bw_shapes(shape):
+                shape1 = []
+                shape2 = []
+                grad_shape = []
+
+                num_dims = len(shape)
+
+                dim = random.randint(0, num_dims - 1)
+
+                for i in range(num_dims):
+                    shape1.append(shape[i])
+                    shape2.append(shape[i])
+                    if i == dim:
+                        grad_shape.append(shape1[i] + shape2[i])
+                    else:
+                        grad_shape.append(shape[i])
+
+                return [grad_shape, shape1, shape2]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
+                start_shape, end_shape, interval, _gen_concat_bw_shapes
+            ):
+                yield shapes, datagen_funcs, test_args
+
         else:
             raise NotImplementedError("Method {method} is not a valid choice")
 

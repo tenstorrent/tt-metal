@@ -31,7 +31,7 @@ def test_bw_concat(input_shapes, input_shapes_2, dimension, device):
 
     other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True)
 
-    pyt_y = torch.cat((in_data, other_data), dim=dimension)
+    pyt_y = torch.concat((in_data, other_data), dim=dimension)
 
     grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True)
 
@@ -56,7 +56,7 @@ def test_bw_concat_Default(input_shapes, input_shapes_2, device):
 
     other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True)
 
-    pyt_y = torch.cat((in_data, other_data))
+    pyt_y = torch.concat((in_data, other_data))
 
     grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True)
 
