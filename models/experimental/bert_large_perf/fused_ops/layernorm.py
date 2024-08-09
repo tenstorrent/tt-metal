@@ -141,7 +141,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
             H_ = overrideH
 
         # first compute the mean (m)
-        means = ttnn.sum(x, 3, True, None, None, 1.0 / W)  # -> NCH1
+        means = ttnn.sum(x, 3, scalar=1.0 / W)  # -> NCH1
         x_minus_mean = tensor.bcast(x, means, BCSUB, BCW)  # need to blank out the H for non-multiple of 32
         if False and refx is not None:
             ry, rmean, rvar, rstd, rinvstd, ry1 = ref_ln(refx, refgamma, refbeta)
@@ -178,7 +178,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         W = x.get_legacy_shape()[3]
 
         # first compute the mean (m)
-        redW = ttnn.sum(x, 3, True, None, None, 1.0 / W)  # -> NCH1
+        redW = ttnn.sum(x, 3, scalar=1.0 / W)  # -> NCH1
         mean = ttnn.sum(redW, 2)  # -> NC11 (HW reduce doesn't behave well with small scaler)
         x_minus_mean0 = tensor.bcast(x, mean, BCSUB, BCHW)  # need to blank out the H for non-multiple of 32
 

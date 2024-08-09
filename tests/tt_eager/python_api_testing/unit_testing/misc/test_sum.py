@@ -32,7 +32,7 @@ def test_sum_for_dim_hw(device, use_program_cache, shape_dim):
     # print(f"x.sum = {value}")
 
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
-    tt_npu = ttnn.sum(dev_x, dim, True)
+    tt_npu = ttnn.sum(dev_x, dim)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev[0, 0, 0, 0], torch.Tensor([value]).bfloat16()[0])
 
@@ -60,6 +60,6 @@ def test_sum_global(device, use_program_cache, shape):
     value = x.sum()
 
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
-    tt_npu = ttnn.sum(dev_x, None, True)
+    tt_npu = ttnn.sum(dev_x)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev[0, 0, 0, 0].bfloat16(), torch.Tensor([value]).bfloat16()[0])

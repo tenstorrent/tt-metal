@@ -26,12 +26,11 @@ template <ReduceType reduce_type>
 struct Reduce {
     static Tensor operator()(
         const Tensor& input_tensor_arg,
-        const std::optional<std::variant<int, std::vector<int>>>& dim_arg,
-        const bool keepdim,
+        const std::optional<std::variant<int, std::vector<int>>>& dim_arg = std::nullopt,
+        const bool = true,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-        float scalar = 1.0f,
-        bool reshape = true);
+        float scalar = 1.0f);
 };
 
 }  // namespace operations::reduction

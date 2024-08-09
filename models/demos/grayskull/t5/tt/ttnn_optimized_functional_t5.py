@@ -91,11 +91,7 @@ def t5_layer_norm(config, hidden_states, *, weight):
     # return ttnn.rms_norm(hidden_states, weight, epsilon=config.layer_norm_epsilon)
 
     squared_hidden_states = ttnn.pow(hidden_states, 2)
-    averaged_squared_hidden_states = ttnn.mean(
-        squared_hidden_states,
-        dim=-1,
-        keepdim=True,
-    )
+    averaged_squared_hidden_states = ttnn.mean(squared_hidden_states, dim=-1)
 
     variance = averaged_squared_hidden_states + config.layer_norm_epsilon
     std = ttnn.rsqrt(variance)

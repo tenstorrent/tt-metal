@@ -66,12 +66,12 @@ def test_min_max_for_dim_hw(device, use_program_cache, shape_dim, kind, layout):
 
     dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(layout).to(device)
     if kind == "max":
-        tt_npu = ttnn.max(dev_x, None, True)
+        tt_npu = ttnn.max(dev_x)
     elif kind == "min":
-        tt_npu = ttnn.min(dev_x, None, True)
+        tt_npu = ttnn.min(dev_x)
     else:
         assert kind == "mean"
-        tt_npu = ttnn.mean(dev_x, None, True)
+        tt_npu = ttnn.mean(dev_x)
 
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
