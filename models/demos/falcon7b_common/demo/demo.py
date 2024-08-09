@@ -430,8 +430,8 @@ def run_falcon_demo_kv(
         N_decode = 30
         N_warmup_decode = N_warmup_iter["inference_decode"]
     print_per_generated_token = (
-        expected_greedy_output_path is None
-    )  # print per generated token if not verifying outputs
+        expected_greedy_output_path is None and num_devices == 1
+    )  # print per generated token if not verifying outputs and single device
     for output_token_index in (
         range(N_decode) if print_per_generated_token else tqdm(range(N_decode), desc="Generating tokens")
     ):
