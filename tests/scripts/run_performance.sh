@@ -13,7 +13,9 @@ run_perf_models_other() {
 
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/ttnn_resnet/tests -m $test_marker
 
-    env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
+    env pytest tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
+
+    env pytest models/experimental/functional_squeezebert/tests/test_performance.py -m $test_marker
 
     env pytest -n auto models/demos/ttnn_falcon7b/tests -m $test_marker
 
@@ -75,6 +77,8 @@ run_device_perf_models() {
         env pytest models/demos/bert/tests -m $test_marker
 
         env pytest models/demos/resnet/tests -m $test_marker
+
+        env pytest models/experimental/functional_squeezebert/tests/test_perf_device_squeezebert.py -m $test_marker
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
