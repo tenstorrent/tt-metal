@@ -5,7 +5,6 @@
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/move/move_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/repeat/repeat_op.hpp"
@@ -117,76 +116,6 @@ namespace tt::tt_metal::detail{
                 "Y", "Y dim of output tensor", "int", "", "Yes"
                 "X", "X dim of output tensor", "int", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-        m_tensor.def("untilize", &untilize,
-            py::arg("input").noconvert(),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("use_multicore").noconvert() = true,
-            py::arg("use_pack_untilize").noconvert() = true,
-            R"doc(
-            Changes data layout of input tensor to ROW_MAJOR.
-
-            Input tensor must be on TT accelerator device, in TILE, and have BFLOAT16 data type.
-
-            Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X] where Y%32=0 and X%32=0", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is true", "No"
-                "use_pack_untilize", "Whether to use pack untilize", "bool", "Default is true", "No"
-        )doc");
-
-        m_tensor.def(
-            "untilize_with_halo_v2",
-            &untilize_with_halo_v2,
-            py::arg("input_tensor").noconvert(),
-            py::arg("padding_config").noconvert(),
-            py::arg("local_config").noconvert(),
-            py::arg("remote_config").noconvert(),
-            py::arg("pad_val").noconvert(),
-            py::arg("ncores_height").noconvert(),
-            py::arg("max_out_nsticks_per_core").noconvert(),
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("remote_read").noconvert() = false,
-            py::arg("transpose_mcast").noconvert() = true,
-            R"doc(
-                Untilizes input tiled data to row major format and constructs halo'd output shards.
-            )doc");
-
-        m_tensor.def("untilize_with_halo", &untilize_with_halo,
-            py::arg("input").noconvert(),
-            py::arg("pad_val"),
-            py::arg("in_b").noconvert(),
-            py::arg("in_h").noconvert(),
-            py::arg("in_w").noconvert(),
-            py::arg("stride") = 1,
-            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            R"doc(
-                Untilizes input tiled data to row major format.
-            )doc");
-
-        m_tensor.def("untilize_with_unpadding", &untilize_with_unpadding,
-            py::arg("input").noconvert(), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            py::arg("use_multicore").noconvert() = false, py::arg("use_pack_untilize").noconvert() = true,
-            R"doc(
-            Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
-
-            Input tensor must be on TT accelerator device, in TILE, and have BFLOAT16 data type.
-
-            Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X] where Y%32=0 and X%32=0", "Yes"
-                "output_tensor_end", "End indices of input tensor in output tensor", "List[int[4]]", "Values along each dim must be < input_tensor_shape[i]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is false", "No"
-                "use_pack_untilize", "Whether to use pack untilize", "bool", "Default is true", "No"
         )doc");
 
         m_tensor.def("fold", &fold,
