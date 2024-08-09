@@ -266,13 +266,6 @@ ttnn.attach_golden_function(
 )
 
 ttnn.attach_golden_function(
-    ttnn.eq_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.eq, grad, a, b, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
     ttnn.assign_bw,
     golden_function=lambda grad, a, b=None, *args, **kwargs: _golden_function_backward_overload(
         torch.clone, grad, a, b, *args, **kwargs
@@ -287,13 +280,6 @@ ttnn.attach_golden_function(
 )
 
 ttnn.attach_golden_function(
-    ttnn.le_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.le, grad, a, b, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
     ttnn.rsub_bw,
     golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
         torch.rsub, grad, a, b, *args, **kwargs
@@ -304,34 +290,6 @@ ttnn.attach_golden_function(
     ttnn.bias_gelu_bw,
     golden_function=lambda grad, a, b, value="none", *args, **kwargs: _golden_function_backward_with_string(
         "bias_gelu_bw", grad, a, b, value, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
-    ttnn.gt_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.gt, grad, a, b, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
-    ttnn.lt_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.gt, grad, a, b, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
-    ttnn.ne_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.ne, grad, a, b, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
-    ttnn.ge_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.ge, grad, a, b, *args, **kwargs
     ),
 )
 

@@ -9,8 +9,11 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/common/constants.hpp"
 
 namespace ttnn {
 namespace decorators {
@@ -176,29 +179,60 @@ static const std::string python_fully_qualified_name(const std::string& cpp_full
 
 }  // namespace detail
 
-template <auto id, reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t, bool auto_launch_op>
+// Primitive operations map directly to device operations
+template <typename concrete_operation_t>
+concept PrimitiveOperation = requires { typename concrete_operation_t::device_operation_t; };
+
+
+// Composite operation allows any code to be executed
+template<typename concrete_operation_t>
+concept CompositeOperation = !PrimitiveOperation<concrete_operation_t>;
+
+template <reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t, bool auto_launch_op>
 struct operation_t {
+    static constexpr auto is_primitive = PrimitiveOperation<concrete_operation_t>;
+
+    // Get "add" from "ttnn::add"
+    const std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
+
+    // Convert "ttnn::add" to "add_t"
+    const std::string class_name() const { return detail::class_name(std::string{cpp_fully_qualified_name}); }
+
+    // Convert "ttnn::add" to "ttnn.add"
+    const std::string python_fully_qualified_name() const {
+        return detail::python_fully_qualified_name(std::string{cpp_fully_qualified_name});
+    }
+
+    template <typename... args_t>
+    requires PrimitiveOperation<concrete_operation_t>
+    auto invoke(uint8_t queue_id, args_t&&... args) const {
+        ZoneScopedN("Run primitive ttnn operation");
+        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
+        using device_operation_t = typename concrete_operation_t::device_operation_t;
+        auto [operation_attributes, tensors_args] = concrete_operation_t::map_args_to_device_operation(std::forward<decltype(args)>(args)...);
+        return ttnn::device_operation::run<device_operation_t>(queue_id, operation_attributes, tensors_args);
+    }
+
+    template <typename... args_t>
+    requires(PrimitiveOperation<concrete_operation_t>)
+    auto invoke(args_t&&... args) const {
+        return operator()(DefaultQueueId, std::forward<args_t>(args)...);
+    }
+
+
     template <typename... args_t>
         requires(not auto_launch_op)
-    auto operator()(args_t&&... args) const {
-        ZoneScopedN("Run ttnn operation ");
+    auto invoke_composite(args_t&&... args) const {
+        ZoneScopedN("Run composite ttnn operation ");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
-        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-
-        // #8479: Fix and re-enable logging in cpp operation decorator
-        // detail::log("Arguments: ", std::forward<args_t>(args)...);
-
-        auto output = concrete_operation_t::operator()(std::forward<decltype(args)>(args)...);
-        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        return output;
+        return concrete_operation_t::operator()(std::forward<decltype(args)>(args)...);
     }
 
     template <typename... args_t>
         requires(auto_launch_op)
-    auto operator()(args_t&&... args) const {
-        ZoneScopedN("Run ttnn operation (using auto async)");
+    auto invoke_composite(args_t&&... args) const {
+        ZoneScopedN("Run composite ttnn operation (using auto async)");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
-        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
 
         // #8479: Fix and re-enable logging in cpp operation decorator
         // detail::log("Arguments: ", std::forward<args_t>(args)...);
@@ -238,7 +272,6 @@ struct operation_t {
             optional_output_tensors,
             enable_autoformat);
 
-        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
 
         if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
             return output_tensors.at(0);
@@ -255,26 +288,101 @@ struct operation_t {
         }
     }
 
-    // Get "add" from "ttnn::add"
-    const std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
+    template <typename... args_t>
+    requires(CompositeOperation<concrete_operation_t>)
+    auto invoke(args_t&&... args) const {
+        return invoke_composite(std::forward<args_t>(args)...);
+    }
 
-    // Convert "ttnn::add" to "add_t"
-    const std::string class_name() const { return detail::class_name(std::string{cpp_fully_qualified_name}); }
+    template <typename... args_t>
+    auto operator()(args_t&&... args) const {
+        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        auto output = invoke(std::forward<args_t>(args)...);
+        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        return output;
+    }
 
-    // Convert "ttnn::add" to "ttnn.add"
-    const std::string python_fully_qualified_name() const {
-        return detail::python_fully_qualified_name(std::string{cpp_fully_qualified_name});
+    // Methods for querying properties of the primitive operation
+    template <typename... args_t>
+    requires(PrimitiveOperation<concrete_operation_t>)
+    auto select_program_factory(args_t&&... args) const {
+        using device_operation_t = typename concrete_operation_t::device_operation_t;
+        auto [operation_attributes, tensors_args] = concrete_operation_t::map_args_to_device_operation(std::forward<decltype(args)>(args)...);
+        return device_operation_t::select_program_factory(operation_attributes, tensors_args);
+    }
+
+    template <typename... args_t>
+    requires(PrimitiveOperation<concrete_operation_t>)
+    void validate_on_program_cache_miss(args_t&&... args) const {
+        using device_operation_t = typename concrete_operation_t::device_operation_t;
+        auto [operation_attributes, tensors_args] = concrete_operation_t::map_args_to_device_operation(std::forward<decltype(args)>(args)...);
+        device_operation_t::validate_on_program_cache_miss(operation_attributes, tensors_args);
+    }
+
+    template <typename... args_t>
+    requires(PrimitiveOperation<concrete_operation_t>)
+    void validate_on_program_cache_hit(args_t&&... args) const {
+        using device_operation_t = typename concrete_operation_t::device_operation_t;
+        auto [operation_attributes, tensors_args] = concrete_operation_t::map_args_to_device_operation(std::forward<decltype(args)>(args)...);
+        device_operation_t::validate_on_program_cache_hit(operation_attributes, tensors_args);
+    }
+
+    template <typename... args_t>
+    requires(PrimitiveOperation<concrete_operation_t>)
+    auto compute_output_shapes(args_t&&... args) const {
+        using device_operation_t = typename concrete_operation_t::device_operation_t;
+        auto [operation_attributes, tensors_args] = concrete_operation_t::map_args_to_device_operation(std::forward<decltype(args)>(args)...);
+        return device_operation_t::compute_output_shapes(operation_attributes, tensors_args);
+    }
+
+    template <typename... args_t>
+    requires(PrimitiveOperation<concrete_operation_t>)
+    auto create_output_tensors(args_t&&... args) const {
+        using device_operation_t = typename concrete_operation_t::device_operation_t;
+        auto [operation_attributes, tensors_args] = concrete_operation_t::map_args_to_device_operation(std::forward<decltype(args)>(args)...);
+        return device_operation_t::create_output_tensors(operation_attributes, tensors_args);
+    }
+
+};
+
+template<reflect::fixed_string cpp_fully_qualified_name>
+struct operation_name_key_t{
+    friend consteval auto get(operation_name_key_t<cpp_fully_qualified_name>);
+};
+
+template<typename concrete_operation_t>
+struct operation_key_t{
+    friend consteval auto get(operation_key_t<concrete_operation_t>);
+};
+
+template<reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t, auto operation>
+struct set_operation_t : std::true_type {
+    friend consteval auto get(operation_key_t<concrete_operation_t>) {
+        return operation;
+    }
+    friend consteval auto get(operation_name_key_t<cpp_fully_qualified_name>) {
+        return operation;
     }
 };
 
+template <reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t, bool auto_launch_op>
+constexpr auto register_operation_impl() {
+    constexpr auto operation = operation_t<cpp_fully_qualified_name, concrete_operation_t, auto_launch_op>{};
+    static_assert(not requires(operation_name_key_t<cpp_fully_qualified_name> key) { get(key); }, "Operation with this `cpp_fully_qualified_name` was already registered. Please use a different name.");
+    static_assert(not requires(operation_key_t<concrete_operation_t> key) { get(key); }, "Operation with this `concrete_operation_t` was already registered. Please use a different type.");
+    static_assert(set_operation_t<cpp_fully_qualified_name, concrete_operation_t, operation>::value);
+    return operation;
+}
+
+
 template <reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t>
 constexpr auto register_operation() {
-    return operation_t<__COUNTER__, cpp_fully_qualified_name, concrete_operation_t, false>{};
+    return register_operation_impl<cpp_fully_qualified_name, concrete_operation_t, false>();
 }
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename concrete_operation_t>
 constexpr auto register_operation_with_auto_launch_op() {
-    return operation_t<__COUNTER__, cpp_fully_qualified_name, concrete_operation_t, true>{};
+    return register_operation_impl<cpp_fully_qualified_name, concrete_operation_t, true>();
 }
 
 namespace detail {

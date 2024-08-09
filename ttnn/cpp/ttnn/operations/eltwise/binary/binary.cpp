@@ -4,12 +4,57 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary.hpp"
+
 #include "device/binary_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn::operations::binary {
+
+template <BinaryOpType binary_op_type, bool in_place>
+std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t>
+PrimitiveBinaryOperation<binary_op_type, in_place>::map_args_to_device_operation(
+    const Tensor &input_tensor_a_arg,
+    const Tensor &input_tensor_b_arg,
+    const std::optional<const DataType> &output_dtype,
+    const std::optional<MemoryConfig> &memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    std::optional<unary::FusedActivations> activations,
+    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    if (output_dtype.has_value() && optional_output_tensor.has_value()) {
+        TT_FATAL(
+            output_dtype.value() == optional_output_tensor.value().get_dtype(),
+            "If both output dtype and output tensor provided dtype should match");
+    }
+
+    return {
+        BinaryDeviceOperation::operation_attributes_t{
+            binary_op_type,
+            in_place,
+            activations,
+            input_tensor_a_activation,
+            memory_config.value_or(input_tensor_a_arg.memory_config()),
+            output_dtype.value_or(input_tensor_a_arg.get_dtype()),
+            std::nullopt},
+        BinaryDeviceOperation::tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor}};
+}
+
+
+template struct PrimitiveBinaryOperation<BinaryOpType::ADD, false>;
+template struct PrimitiveBinaryOperation<BinaryOpType::ADD, true>;
+template struct PrimitiveBinaryOperation<BinaryOpType::SUB, false>;
+template struct PrimitiveBinaryOperation<BinaryOpType::SUB, true>;
+template struct PrimitiveBinaryOperation<BinaryOpType::MUL, false>;
+template struct PrimitiveBinaryOperation<BinaryOpType::MUL, true>;
+template struct PrimitiveBinaryOperation<BinaryOpType::LOGICAL_AND, false>;
+template struct PrimitiveBinaryOperation<BinaryOpType::LOGICAL_OR, false>;
+template struct PrimitiveBinaryOperation<BinaryOpType::LDEXP, false>;
+template struct PrimitiveBinaryOperation<BinaryOpType::LOGADDEXP, false>;
+template struct PrimitiveBinaryOperation<BinaryOpType::LOGADDEXP2, false>;
+template struct PrimitiveBinaryOperation<BinaryOpType::SQUARED_DIFFERENCE, false>;
+template struct PrimitiveBinaryOperation<BinaryOpType::DIV_FAST, false>;
+template struct PrimitiveBinaryOperation<BinaryOpType::BIAS_GELU, false>;
 
 namespace detail {
 
@@ -108,12 +153,9 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
     std::optional<Tensor> optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-    if(output_dtype.has_value() && optional_output_tensor.has_value()){
-        TT_FATAL(output_dtype.value() == optional_output_tensor.value().get_dtype(), "If both output dtype and output tensor provided dtype should match");
-    }
 
     auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg, const auto &input_tensor_b_arg) {
-        if (detail::is_associative(binary_op_type)) {
+        if constexpr (detail::is_associative(binary_op_type)) {
             const auto input_shape_a = input_tensor_a_arg.get_shape();
             const auto input_shape_b = input_tensor_b_arg.get_shape();
             // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
@@ -124,38 +166,34 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
         return std::make_tuple(input_tensor_a_arg, input_tensor_b_arg);
     }(input_tensor_a_arg, input_tensor_b_arg);
 
-    auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
-
     // TODO(arakhmati): #7731 - remove this!
-    auto repeat_smaller = [&output_memory_config](const auto& first, auto& second){
+    auto repeat_smaller = [](const auto &first, auto &second) {
         const auto first_shape = first.get_shape();
         const auto second_shape = second.get_shape();
 
         // repeats second if it is smaller
-        if (first_shape.rank() == 4 and second_shape.rank() == 4 and
-            first_shape[0] > second_shape[0] and
-            first_shape[-1] == second_shape[-1] and
-            first_shape[-2] == second_shape[-2] and
+        if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[0] > second_shape[0] and
+            first_shape[-1] == second_shape[-1] and first_shape[-2] == second_shape[-2] and
             first_shape[-3] == second_shape[-3]) {
-
             tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
             Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
-            second = ttnn::repeat(second, repeats, output_memory_config);
+            second = ttnn::repeat(second, repeats);
         }
     };
     repeat_smaller(input_tensor_a, input_tensor_b);
     repeat_smaller(input_tensor_b, input_tensor_a);
 
-    DataType dtype = output_dtype.value_or(input_tensor_a.get_dtype());
-    if(optional_output_tensor.has_value()) {
-        dtype = optional_output_tensor.value().get_dtype();
-    }
-
-    return ttnn::device_operation::run<BinaryDeviceOperation>(
+    constexpr auto primitive_operation =
+        get(ttnn::decorators::operation_key_t<PrimitiveBinaryOperation<binary_op_type, in_place>>{});
+    return primitive_operation(
         queue_id,
-        BinaryDeviceOperation::operation_attributes_t{
-            binary_op_type, in_place, activations, input_tensor_a_activation, output_memory_config, dtype, std::nullopt},
-        BinaryDeviceOperation::tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor});
+        input_tensor_a,
+        input_tensor_b,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        activations,
+        input_tensor_a_activation);
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
@@ -190,7 +228,14 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     return BinaryOperation::operator()(
-        DefaultQueueId, input_tensor_a, scalar, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
+        DefaultQueueId,
+        input_tensor_a,
+        scalar,
+        dtype,
+        memory_config,
+        optional_output_tensor,
+        activations,
+        input_tensor_a_activation);
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
@@ -214,9 +259,14 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
     Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
     // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
     return BinaryOperation::operator()(
-        input_tensor_a, scalar_tensor_device, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
+        input_tensor_a,
+        scalar_tensor_device,
+        dtype,
+        memory_config,
+        optional_output_tensor,
+        activations,
+        input_tensor_a_activation);
 }
-
 
 template <BinaryOpType binary_op_type, bool in_place>
 Tensor RelationalBinary<binary_op_type, in_place>::operator()(
@@ -235,7 +285,7 @@ Tensor RelationalBinary<binary_op_type, in_place>::operator()(
     }
 
     auto &&[input_tensor_a, input_tensor_b] = [](const auto &input_tensor_a_arg, const auto &input_tensor_b_arg) {
-        if (detail::is_associative(binary_op_type)) {
+        if constexpr (detail::is_associative(binary_op_type)) {
             const auto input_shape_a = input_tensor_a_arg.get_shape();
             const auto input_shape_b = input_tensor_b_arg.get_shape();
             // Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
@@ -273,7 +323,13 @@ Tensor RelationalBinary<binary_op_type, in_place>::operator()(
     return ttnn::device_operation::run<BinaryDeviceOperation>(
         queue_id,
         BinaryDeviceOperation::operation_attributes_t{
-            binary_op_type, in_place, activations, input_tensor_a_activation, output_memory_config, dtype, std::nullopt},
+            binary_op_type,
+            in_place,
+            activations,
+            input_tensor_a_activation,
+            output_memory_config,
+            dtype,
+            std::nullopt},
         BinaryDeviceOperation::tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor});
 }
 

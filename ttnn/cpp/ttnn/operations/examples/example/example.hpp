@@ -9,20 +9,16 @@
 
 namespace ttnn::operations::examples {
 
-// This is the main operation that will be called by the user
 struct ExampleOperation {
-    // This how the user can call the operation
-    static Tensor operator()(uint8_t queue_id, const Tensor &input_tensor) {
-        return ttnn::device_operation::run<ExampleDeviceOperation>(
-            queue_id,
-            ExampleDeviceOperation::operation_attributes_t{.attribute = true, .some_other_attribute = 42},
-            ExampleDeviceOperation::tensor_args_t{input_tensor});
+    // Map API arguments to the device operation
+    using device_operation_t = ExampleDeviceOperation;
+
+    static std::tuple<ExampleDeviceOperation::operation_attributes_t, ExampleDeviceOperation::tensor_args_t> map_args_to_device_operation(const Tensor& input_tensor) {
+        return {
+            ExampleDeviceOperation::operation_attributes_t{true, 42},
+            ExampleDeviceOperation::tensor_args_t{input_tensor}
+        };
     }
-
-    // This how the user can call the operation
-    static Tensor operator()(const Tensor &input_tensor) { return operator()(0, input_tensor); }
-
-    // operator() can be overloaded as many times as needed to provide all desired APIs
 };
 
 }  // namespace ttnn::operations::examples
@@ -36,4 +32,25 @@ constexpr auto example = ttnn::register_operation<"ttnn::example", operations::e
 // Alternatively, the operation can be registered as asynchronous
 // constexpr auto example = ttnn::register_operation_with_auto_launch_op<"ttnn::example", operations::examples::ExampleOperation>();
 
+}  // namespace ttnn
+
+
+namespace ttnn::operations::examples {
+
+// A composite operation is an operation that calls multiple operations in sequence
+// It is written using operator() and can be used to call multiple primitive and/or composite operations
+struct CompositeExampleOperation {
+    // Map API arguments to the device operation
+
+    static Tensor operator()(const Tensor& input_tensor) {
+        auto copy = example(input_tensor);
+        auto another_copy = example(copy);
+        return another_copy;
+    }
+};
+
+}  // namespace ttnn::operations::examples
+
+namespace ttnn {
+constexpr auto composite_example = ttnn::register_operation<"ttnn::composite_example", operations::examples::CompositeExampleOperation>();
 }  // namespace ttnn
