@@ -314,6 +314,7 @@ Pointwise Binary
    ttnn/le
    ttnn/eq
    ttnn/ne
+   ttnn/ne_
    ttnn/isclose
    ttnn/nextafter
    ttnn/maximum
