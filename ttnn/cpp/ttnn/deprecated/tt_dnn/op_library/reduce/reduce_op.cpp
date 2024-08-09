@@ -5,12 +5,8 @@
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/run_operation.hpp"
-
-#include "ttnn/operations/core/core.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -201,138 +197,6 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
     }
     return output_tensors.at(0);
 }
-Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return mean(input_tensor,2,output_mem_config, compute_kernel_config);
-}
-Tensor global_mean(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    float inv_volume = 1.0f/input_tensor.volume();
-    return ttnn::mul_sfpu( inv_volume, global_sum(input_tensor,output_mem_config), output_mem_config);
-}
-Tensor mean(const Tensor& input_tensor,uint aggregate_dims /* = 2 */, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    tt::tt_metal::Shape shape = input_tensor.get_legacy_shape();
-
-    TT_FATAL( aggregate_dims >= 2 && aggregate_dims <= 4, "mean aggregate dimensions should be [HW],[CHW] or [NCHW]");
-    switch( aggregate_dims ) {
-        case 4:
-        case 3:
-            {
-                Tensor result = mean(reshape(input_tensor,1,1,shape[0]*shape[1]*shape[2],shape[3],output_mem_config),2,output_mem_config);
-                return reshape(result,shape[0],shape[1],shape[2],shape[3],output_mem_config);
-            }
-        default:
-            break;
-    }
-
-    float inv_scale_hw = 1.0f/(shape[3]*shape[2]);
-    Tensor scaled_sum_hw = reduce(input_tensor,ReduceOpMath::SUM,ReduceOpDim::HW,inv_scale_hw,output_mem_config, std::nullopt, compute_kernel_config);
-    return scaled_sum_hw;
-}
-
-template <ReduceOpMath OpKind>
-Tensor reduce_on_dim(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
-    constexpr float scaler1 = 1.0;
-
-    if ( dim == 3 ) {
-        return reduce(input_tensor, OpKind, ReduceOpDim::W, scaler1, output_mem_config, std::nullopt, compute_kernel_config);
-    } else if ( dim == 2 ) {
-        return reduce(input_tensor, OpKind, ReduceOpDim::H, scaler1, output_mem_config, std::nullopt, compute_kernel_config);
-    }
-
-    // Other sum dims will autoformat first before doing composite operations
-    Device * device;
-
-    // Get the device
-    if (input_tensor.storage_type() != StorageType::DEVICE) {
-        device = AutoFormat::GetDefaultDevice();
-        TT_FATAL(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = input_tensor.device();
-    }
-
-    // @tt-aho TODO: Profile/determine which is more performant
-    // reduce sum on h
-    // 1 extra transpose wh and reduce sum on w
-    // Fused tranpose cw and reduce sum on w
-    if ( dim == 1 ) {
-        // Pad before running the op to only pay cost of formatting once
-        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape(), true);
-        auto out_shape = input_tensor.get_legacy_shape();
-        out_shape[1] = 1;
-
-        auto formatted_input_tensor = input_tensor;
-        float pad_value = (OpKind == ReduceOpMath::MAX) ? -std::numeric_limits<float>::infinity() : (OpKind == ReduceOpMath::MIN) ? std::numeric_limits<float>::infinity() : 0;
-
-        if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
-        }
-        Tensor output = ttnn::transpose(formatted_input_tensor, 1, -2, output_mem_config);
-        output = reduce_on_dim<OpKind>(output, 2, output_mem_config, compute_kernel_config);
-        output = ttnn::transpose(output, 1, -2, output_mem_config);
-        return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
-    } else {
-        // Pad before running the op to only pay cost of formatting once
-        auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape(), false, true);
-        auto out_shape = input_tensor.get_legacy_shape();
-        out_shape[0] = 1;
-
-        auto formatted_input_tensor = input_tensor;
-        if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-            formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
-        }
-        Tensor output = ttnn::transpose(input_tensor, 0, -2, output_mem_config);
-        output = reduce_on_dim<OpKind>(output, 2, output_mem_config, compute_kernel_config);
-        output = ttnn::transpose(output, 0, -2, output_mem_config);
-        return AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
-    }
-}
-
-
-Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
-    return reduce_on_dim<ReduceOpMath::SUM>(input_tensor, dim, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, compute_kernel_config);
-}
-
-Tensor min(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
-    return reduce_on_dim<ReduceOpMath::MIN>(input_tensor, dim, output_mem_config, compute_kernel_config);
-}
-
-Tensor max(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    TT_FATAL( dim >= 0 && dim <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
-    return reduce_on_dim<ReduceOpMath::MAX>(input_tensor, dim, output_mem_config, compute_kernel_config);
-}
-
-
-using ReduceFnT = Tensor(*)(const Tensor&,unsigned int, const MemoryConfig&, const std::optional<DeviceComputeKernelConfig>&);
-Tensor global_reduce(ReduceFnT f,const Tensor& val, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    Tensor result = val;
-    for(int rank = val.get_legacy_shape().rank()-1; rank >=0; rank--) {
-        result = f(result, rank, output_mem_config, compute_kernel_config);
-    }
-
-    std::array<std::uint32_t, 4> intended_shape_array = {};
-    intended_shape_array.fill(1);
-    std::array<std::uint32_t, 4> padded_shape_array = {};
-    padded_shape_array.fill(1);
-    padded_shape_array[padded_shape_array.size()-1] = 32;
-    padded_shape_array[padded_shape_array.size()-2] = 32;
-    result = ttnn::reshape(result, ttnn::Shape{intended_shape_array, padded_shape_array});
-    return result;
-}
-
-Tensor global_sum(const Tensor& val, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return global_reduce(sum,val,output_mem_config, compute_kernel_config);
-}
-
-Tensor global_max(const Tensor& val, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return global_reduce(max,val,output_mem_config, compute_kernel_config);
-}
-
-Tensor global_min(const Tensor& val, const MemoryConfig& output_mem_config, const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return global_reduce(min,val,output_mem_config, compute_kernel_config);
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt

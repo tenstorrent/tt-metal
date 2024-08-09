@@ -11,7 +11,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/repeat/repeat_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/reduce/common.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
@@ -20,7 +20,6 @@ namespace tt::tt_metal::detail{
 
     void TensorModuleDMOPs( py::module & m_tensor)
     {
-
         // reduce enums
         detail::export_enum<ReduceOpMath>(m_tensor);
 

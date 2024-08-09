@@ -7,7 +7,6 @@
 
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "tt_metal/host_api.hpp"
 
 #include "ttnn/operation.hpp"
 
@@ -44,44 +43,6 @@ Tensor reduce(
     float scaler = 1.0f,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::optional<DataType>& output_dtype = std::nullopt,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
-Tensor sum(
-    const Tensor& input_tensor,
-    uint dim,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
-Tensor max(
-    const Tensor& input_tensor,
-    uint dim,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
-Tensor min(
-    const Tensor& input_tensor,
-    uint dim,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
-Tensor mean(
-    const Tensor& input_tensor,
-    uint aggregate_dims = 2,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
-Tensor mean_hw(
-    const Tensor& input_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
-Tensor global_mean(
-    const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor global_sum(
-    const Tensor& input_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
-Tensor global_max(
-    const Tensor& val,
-    const MemoryConfig& output_mem_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
-Tensor global_min(
-    const Tensor& val,
-    const MemoryConfig& output_mem_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
 }  // namespace tt_metal

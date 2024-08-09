@@ -67,8 +67,8 @@ class TtDistributedLayernormDLNP1:
             total_count += count_local
             counts.append(count_local)
 
-            meanx_local = ttl.tensor.reduce(
-                xs[i], ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
+            meanx_local = ttnn.sum(
+                xs[i], dim=3, keepdim=True, memory_config=None, compute_kernel_config=None, scaler=1.0 / counts[i]
             )
             meanxs.append(meanx_local)
 
@@ -76,8 +76,8 @@ class TtDistributedLayernormDLNP1:
         meanx2s = []
         for i in range(num_devices):
             x2_local = ttnn.pow(xs[i], 2)
-            meanx2_local = ttl.tensor.reduce(
-                x2_local, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
+            meanx2_local = ttnn.sum(
+                x2_local, dim=3, keepdim=True, memory_config=None, compute_kernel_config=None, scaler=1.0 / counts[i]
             )
             meanx2s.append(meanx2_local)
 

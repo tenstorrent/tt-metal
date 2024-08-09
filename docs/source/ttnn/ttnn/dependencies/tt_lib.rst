@@ -300,15 +300,6 @@ Broadcast and Reduce
 
 .. autofunction:: tt_lib.tensor.bcast
 
-.. autofunction:: tt_lib.tensor.reduce
-
-.. autofunction:: tt_lib.tensor.global_min
-
-.. autofunction:: tt_lib.tensor.global_max
-
-.. autofunction:: tt_lib.tensor.global_sum
-
-.. autofunction:: tt_lib.tensor.global_mean
 
 
 Fallback Operations

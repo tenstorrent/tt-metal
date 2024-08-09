@@ -28,7 +28,8 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
             py::arg("keepdim") = true,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("scalar") = 1.0f});
+            py::arg("scalar") = 1.0f,
+            py::arg("reshape") = true});
 }
 
 }  // namespace ttnn::operations::reduction::detail
