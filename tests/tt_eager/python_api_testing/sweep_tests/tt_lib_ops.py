@@ -3001,12 +3001,12 @@ def interleaved_to_sharded_partial(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             t1,
             t2,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     returned_res = tt2torch_tensor(t2)
@@ -3054,12 +3054,12 @@ def interleaved_to_sharded_partial_coregrid(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             t1,
             t2,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     returned_res = tt2torch_tensor(t2)

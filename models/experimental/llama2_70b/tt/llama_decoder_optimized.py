@@ -248,12 +248,12 @@ class TtLlamaDecoder_optimized:
                 compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
             )
 
-            tt_lib.tensor.sharded_to_interleaved_partial(
+            ttnn.sharded_to_interleaved_partial(
                 xs_slice,
                 xs_output_cat,
                 num_slices,
                 slice_i,
-                self.model_config["DRAM_MEMCFG"],
+                memory_config=self.model_config["DRAM_MEMCFG"],
             )
             xs_slice.deallocate(True)
         return xs_output_cat

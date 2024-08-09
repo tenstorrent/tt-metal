@@ -199,10 +199,6 @@ namespace tt::tt_metal::detail{
          py::arg("input"), py::arg("grid"), py::arg("shard_shape"), py::arg("num_slices"), py::arg("slice_index"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
             R"doc(Converts a part of tensor from interleaved to sharded memory layout)doc");
 
-        m_tensor.def("sharded_to_interleaved_partial", &sharded_to_interleaved_partial,
-            py::arg("input"), py::arg("cache_tensor"), py::arg("num_slices"), py::arg("slice_index"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
-            R"doc(Converts a partial tensor from sharded_to_interleaved memory layout)doc"
-        );
 
     }
 

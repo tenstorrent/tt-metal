@@ -478,12 +478,12 @@ def test_falcon7b_attnention_sliced(
             compute_kernel_config=compute_kernel_config,
         )
 
-        ttnn.experimental.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             attn_out_slice,
             attention_output_concatenated,
             num_slices,
             i,
-            dram_interleaved_memory_config,
+            memory_config=dram_interleaved_memory_config,
         )
 
         slice.deallocate()
@@ -747,12 +747,12 @@ def test_falcon7b_attention_softmax_sequence(
             compute_kernel_config=compute_kernel_config,
         )
 
-        ttnn.experimental.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             attn_out_slice,
             attention_output_concatenated,
             num_slices,
             i,
-            dram_interleaved_memory_config,
+            memory_config=dram_interleaved_memory_config,
         )
 
         slice.deallocate()
@@ -931,8 +931,8 @@ def test_softmax(device, num_cores, seq_len):
             compute_kernel_config=compute_kernel_config,
         )
 
-        ttnn.experimental.tensor.sharded_to_interleaved_partial(
-            input_slice, tt_output_sharded_softmax, num_slices, i, dram_interleaved_memory_config
+        ttnn.sharded_to_interleaved_partial(
+            input_slice, tt_output_sharded_softmax, num_slices, i, memory_config=dram_interleaved_memory_config
         )
         input_slice.deallocate()
 

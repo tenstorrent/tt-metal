@@ -296,12 +296,12 @@ def test_sharded_partial_op(device, H, num_cores, num_slices, enable_async):
         )
         assert in0_t_slice.is_sharded()
 
-        ttnn.experimental.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             in0_t_slice,
             out_tt_tensor,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     pt_out = in0

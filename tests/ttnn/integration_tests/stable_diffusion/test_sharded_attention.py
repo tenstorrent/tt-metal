@@ -222,12 +222,12 @@ def test_time_sharded_attnention_hwb(
         )
         v_slice.deallocate()
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             mm_slice,
             mm_out,
             num_slices,
             i,
-            dram_interleaved_memory_config,
+            memory_config=dram_interleaved_memory_config,
         )
 
         mm_slice.deallocate()
@@ -401,12 +401,12 @@ def test_time_sharded_attnention(
         )
         v_slice.deallocate()
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             mm_slice,
             mm_out,
             num_slices,
             i,
-            dram_interleaved_memory_config,
+            memory_config=dram_interleaved_memory_config,
         )
 
         mm_slice.deallocate()

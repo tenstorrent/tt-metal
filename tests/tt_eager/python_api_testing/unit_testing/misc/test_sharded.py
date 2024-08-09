@@ -536,17 +536,17 @@ def test_sharded_partial_op(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             in0_t_slice,
             out_tt_tensor,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     pt_out = in0
 
-    tt_out = tt2torch_tensor(out_tt_tensor)
+    tt_out = ttnn.to_torch(out_tt_tensor)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -607,17 +607,17 @@ def test_block_sharded_partial_op(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             in0_t_slice,
             out_tt_tensor,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     pt_out = in0
 
-    tt_out = tt2torch_tensor(out_tt_tensor)
+    tt_out = ttnn.to_torch(out_tt_tensor)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -776,17 +776,17 @@ def test_width_sharded_partial_op(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
-            in0_t_slice,
-            out_tt_tensor,
+        ttnn.sharded_to_interleaved_partial(
+            ttnn.Tensor(in0_t_slice),
+            ttnn.Tensor(out_tt_tensor),
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     pt_out = in0
 
-    tt_out = tt2torch_tensor(out_tt_tensor)
+    tt_out = ttnn.to_torch(out_tt_tensor)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -879,17 +879,13 @@ def test_partial_sharded_op_binary(
         )
 
         sliced_tensor = ttnn.add(in0_t_slice, in1_t_slice, memory_config=output_mem_config, dtype=output_dtype)
-        ttl.tensor.sharded_to_interleaved_partial(
-            sliced_tensor,
-            out_tt_tensor,
-            num_slices,
-            slice_index,
-            interleaved_mem_config,
+        ttnn.sharded_to_interleaved_partial(
+            sliced_tensor, out_tt_tensor, num_slices, slice_index, memory_config=interleaved_mem_config
         )
 
     pt_out = in0 + in1
 
-    tt_out = tt2torch_tensor(out_tt_tensor)
+    tt_out = ttnn.to_torch(out_tt_tensor)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)

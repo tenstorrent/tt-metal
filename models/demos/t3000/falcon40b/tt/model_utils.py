@@ -356,12 +356,12 @@ def partial_layernorm(
                 memory_config=memconfig,
                 program_config=pgmconfig,
             )
-            ttnn.experimental.tensor.sharded_to_interleaved_partial(
+            ttnn.sharded_to_interleaved_partial(
                 xs_slice,
                 xs_output_cat,
                 num_slices,
                 slice_i,
-                get_dram_memcfg(),
+                memory_config=get_dram_memcfg(),
             )
         xs_slice.deallocate(True)
     else:
@@ -495,12 +495,12 @@ def fused_partial_layernorm(
                 output_mem_config=memconfig,
             )
 
-            ttnn.experimental.tensor.sharded_to_interleaved_partial(
+            ttnn.sharded_to_interleaved_partial(
                 xs_output_slice_1,
                 out_tensor_1,
                 num_slices,
                 slice_i,
-                dram_memcfg,
+                memory_config=dram_memcfg,
             )
             xs_output_slice_1.deallocate(True)
 
@@ -520,12 +520,12 @@ def fused_partial_layernorm(
                 output_mem_config=memconfig,
             )
 
-            ttnn.experimental.tensor.sharded_to_interleaved_partial(
+            ttnn.sharded_to_interleaved_partial(
                 xs_slice,
                 out_tensor_2,
                 num_slices,
                 slice_i,
-                dram_memcfg,
+                memory_config=dram_memcfg,
             )
             xs_slice.deallocate(True)
 

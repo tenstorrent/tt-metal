@@ -184,12 +184,12 @@ class TtFalconMLP:
                 overwrite_subblock_h=1,
             )
 
-            ttnn.experimental.tensor.sharded_to_interleaved_partial(
+            ttnn.sharded_to_interleaved_partial(
                 hidden_states_slice,
                 self.output,
                 mlp_num_slices,
                 slice_idx,
-                self.model_config["DEFAULT_MEMCFG"],
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
             )
             hidden_states_slice.deallocate()
 
