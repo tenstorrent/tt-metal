@@ -8,7 +8,8 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-
+#include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
 namespace ttnn::operations::binary {
 
 namespace detail {
@@ -217,6 +218,21 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
         input_tensor_a, scalar_tensor_device, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
 }
 
+template <BinaryOpType binary_op_type, bool in_place>
+ComplexTensor BinaryOperation<binary_op_type, in_place>::operator()(
+    const ComplexTensor &input_a,
+    const ComplexTensor &input_b,
+    const ttnn::MemoryConfig &output_mem_config) {
+    if constexpr(binary_op_type == BinaryOpType::ADD) {
+        return ComplexTensor({ ttnn::add(input_a[0], input_b[0], std::nullopt, output_mem_config),
+             ttnn::add(input_a[1], input_b[1], std::nullopt, output_mem_config) });
+    }else if constexpr(binary_op_type == BinaryOpType::SUB) {
+        return ComplexTensor({ ttnn::subtract(input_a[0], input_b[0], std::nullopt, output_mem_config),
+             ttnn::subtract(input_a[1], input_b[1], std::nullopt, output_mem_config) });
+    }else {
+        TT_THROW("Unsupported operation (expected MUL or DIV_FAST or ADD or SUB)");
+    }
+}
 
 template <BinaryOpType binary_op_type, bool in_place>
 Tensor RelationalBinary<binary_op_type, in_place>::operator()(
