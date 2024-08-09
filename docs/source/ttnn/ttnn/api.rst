@@ -393,6 +393,9 @@ Data Movement
    ttnn/tilize_with_val_padding
    ttnn/fill_rm
    ttnn/fill_ones_rm
+   ttnn/untilize
+   ttnn/untilize_with_unpadding
+   ttnn/untilize_with_halo_v2
 
 Normalization
 =============
