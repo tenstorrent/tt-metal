@@ -91,7 +91,7 @@ std::vector<Device*> DeviceMesh::get_devices() const
 
 Device* DeviceMesh::get_device(int row_idx, int col_idx) const {
     if (not is_galaxy_) {
-        TT_THROW("#10419: Current device mesh does not support indexing by row or col indices.");
+        TT_THROW("Non-galaxy device mesh does not currently support indexing over rows and columns of a logical 2D mesh.");
     }
 
     TT_FATAL(
@@ -105,14 +105,14 @@ Device* DeviceMesh::get_device(int row_idx, int col_idx) const {
 
 std::vector<Device*> DeviceMesh::get_devices_on_row(int row_idx) const {
     if (not is_galaxy_) {
-        TT_THROW("#10419: Current device mesh does not support indexing by row or col indices.");
+        TT_THROW("Non-galaxy device mesh does not currently support indexing over rows and columns of a logical 2D mesh.");
     }
     return this->view->get_devices_on_row(row_idx);
 }
 
 std::vector<Device*> DeviceMesh::get_devices_on_column(int col_idx) const {
     if (not is_galaxy_) {
-        TT_THROW("#10419: Current device mesh does not support indexing by row or col indices.");
+        TT_THROW("Non-galaxy device mesh does not currently support indexing over rows and columns of a logical 2D mesh.");
     }
     return this->view->get_devices_on_column(col_idx);
 }
@@ -158,20 +158,18 @@ DeviceGrid DeviceMesh::shape() const
     return this->device_grid;
 }
 
-std::optional<Coordinate> DeviceMesh::find_device(int device_id) const {
-    auto it = std::find_if(mesh_devices.begin(), mesh_devices.end(),
-                           [device_id](const auto& pair) { return pair.first == device_id; });
-    if (it != mesh_devices.end()) {
-        int index = std::distance(mesh_devices.begin(), it);
-        return Coordinate{static_cast<int>(index / num_cols()), static_cast<int>(index % num_cols())};
-    }
-    return std::nullopt;
-}
-
 void DeviceMesh::close_devices() {
     tt::tt_metal::detail::CloseDevices(managed_devices);
     mesh_devices.clear();
     managed_devices.clear();
+}
+
+const DeviceMeshView* DeviceMesh::get_view() const {
+    return this->view.get();
+}
+
+DeviceMeshView* DeviceMesh::get_view() {
+    return this->view.get();
 }
 
 bool validate_worker_modes(const std::vector<Device*>& workers) {

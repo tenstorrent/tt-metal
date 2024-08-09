@@ -15,8 +15,8 @@ from ttnn import (
     ShardTensor2dMesh,
     ReplicateTensorToMesh,
     ConcatMeshToTensor,
+    ConcatMesh2dToTensor,
     ListMeshToTensor,
-    TensorToMesh,
     MeshToTensor,
 )
 from models.utility_functions import nearest_32
@@ -69,57 +69,8 @@ def test_galaxy_matmul_1d_fracture(device_mesh):
     assert out_pass
 
 
-class CustomShardTensor2dMesh(TensorToMesh):
-    def __init__(self, device_mesh, dims, cluster_shape):
-        super().__init__(device_mesh)
-        self.dims = dims
-        self.cluster_shape = cluster_shape
-
-    def map(self, tensor: torch.tensor):
-        # Returns list of tensors to map to row-major ordering of chips in cluster
-        tensors_grid_y = None
-        if self.dims[1] == None:  # None means we replicate along this dimension
-            tensors_grid_y = [tensor.clone() for _ in range(self.cluster_shape[1])]
-        else:
-            tensors_grid_y = torch.chunk(tensor, self.cluster_shape[1], dim=self.dims[1])
-
-        tensors_grid_all = None
-        if self.dims[0] == None:  # None means we replicate along this dimension
-            tensors_grid_all = [t.clone() for t in tensors_grid_y for _ in range(self.cluster_shape[0])]
-        else:
-            tensors_grid_all = [
-                tt for t in tensors_grid_y for tt in torch.chunk(t, self.cluster_shape[0], dim=self.dims[0])
-            ]
-
-        return list(tensors_grid_all)
-
-    def config(self):
-        return {
-            "strategy": "shard",
-            "shard_dim": f"{self.dims[0] if self.dims[0] else self.dims[1]}",
-        }
-
-
-class ConcatMesh2DToTensor(MeshToTensor):
-    def __init__(self, device_mesh, dims, cluster_shape):
-        self.dims = dims
-        self.cluster_shape = cluster_shape
-        self.device_mesh = device_mesh
-
-    def compose(self, tensor: ttnn.Tensor) -> torch.Tensor:
-        tt_shards = [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
-
-        row_concat = []
-        for cluster_row in range(self.cluster_shape[1]):
-            start = cluster_row * self.cluster_shape[0]
-            end = start + self.cluster_shape[0]
-            row_concat.append(torch.cat(tt_shards[start:end], dim=self.dims[0]))
-        all_concat = torch.cat(row_concat, dim=self.dims[1])
-        return all_concat
-
-
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
+    "mesh_shape, device_mesh", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, K, N, weights_dtype",
@@ -145,17 +96,17 @@ class ConcatMesh2DToTensor(MeshToTensor):
     ],
 )
 # Llama FF1, FF2, FF3 in MLP with dram interleaved weights
-def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device_mesh):
+def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, mesh_shape, device_mesh):
     act_pt = torch.randn(1, 1, M, K)
     weights_pt = torch.randn(1, 1, K, N)
 
     # If K < N it's FF1, else FF2
-    act_shard_dim = (3, None) if K < N else (None, 3)  # None means to replicate along this dim
-    weight_shard_dim = (2, 3) if K < N else (3, 2)
-    concat_dim = (1, 3) if K < N else (3, 1)  # dim 1 for reduce, dim 3 for concatenating fractures
+    act_shard_dim = (None, 3) if K < N else (3, None)  # None means to replicate along this dim
+    weight_shard_dim = (3, 2) if K < N else (2, 3)
+    concat_dim = (3, 1) if K < N else (1, 3)  # dim 1 for reduce, dim 3 for concatenating fractures
 
-    K = K // cluster_shape[0] if K < N else K // cluster_shape[1]
-    N = N // cluster_shape[1] if K < N else N // cluster_shape[0]
+    K = K // mesh_shape[1] if K < N else K // mesh_shape[0]
+    N = N // mesh_shape[0] if K < N else N // mesh_shape[1]
 
     core_grid = ttnn.CoreGrid(y=1, x=8)
     act_mem_config = ttnn.create_sharded_memory_config(
@@ -172,14 +123,14 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device
         layout=ttnn.TILE_LAYOUT,
         memory_config=act_mem_config if M == 32 else ttnn.DRAM_MEMORY_CONFIG,
         device=device_mesh,
-        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=act_shard_dim, cluster_shape=cluster_shape),
+        mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=mesh_shape, dims=act_shard_dim),
     )
     weights = ttnn.from_torch(
         weights_pt,
         dtype=weights_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
-        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=weight_shard_dim, cluster_shape=cluster_shape),
+        mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=mesh_shape, dims=weight_shard_dim),
     )
 
     gt = act_pt @ weights_pt
@@ -199,9 +150,7 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device
         memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if M == 32 else ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    out = ttnn.to_torch(
-        out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=concat_dim, cluster_shape=cluster_shape)
-    )
+    out = ttnn.to_torch(out, mesh_composer=ConcatMesh2dToTensor(device_mesh, mesh_shape=mesh_shape, dims=concat_dim))
     out = torch.sum(out, dim=1, keepdim=True)
 
     out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99)
@@ -211,7 +160,7 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device
 
 @pytest.mark.skip("See GH #10673: DRAM-SHARDED Matmuls gives ND PCC on TG")
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
+    "mesh_shape, device_mesh", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, K, N, weights_dtype",
@@ -221,7 +170,7 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, cluster_shape, device
     ],
 )
 # Llama FF1, FF2, FF3 in MLP with dram sharded weights
-def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_shape, device_mesh):
+def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, mesh_shape, device_mesh):
     act_pt = torch.randn(1, 1, M, K)
     weights_pt = torch.randn(1, 1, K, N)
 
@@ -231,8 +180,8 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_
     weight_shard_dim = (2, 3) if K == 8192 else (3, 2)
     concat_dim = (1, 3) if K == 8192 else (3, 1)
 
-    K = K // cluster_shape[0] if K == 8192 else K // cluster_shape[1]
-    N = N // cluster_shape[1] if N == 32768 else N // cluster_shape[0]
+    K = K // mesh_shape[1] if K == 8192 else K // mesh_shape[0]
+    N = N // mesh_shape[0] if N == 32768 else N // mesh_shape[1]
 
     act_mem_config = ttnn.create_sharded_memory_config(
         shape=(M, K // 8),
@@ -247,7 +196,7 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
         memory_config=act_mem_config,
-        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=act_shard_dim, cluster_shape=cluster_shape),
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=act_shard_dim, mesh_shape=mesh_shape),
     )
 
     compute_kernel_lofi = ttnn.WormholeComputeKernelConfig(
@@ -277,7 +226,7 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
         memory_config=weight_mem_config,
-        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=weight_shard_dim, cluster_shape=cluster_shape),
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=weight_shard_dim, mesh_shape=mesh_shape),
     )
 
     DRAM_SHARDED_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -296,9 +245,7 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_
         memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
     )
 
-    out = ttnn.to_torch(
-        out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=concat_dim, cluster_shape=cluster_shape)
-    )
+    out = ttnn.to_torch(out, mesh_composer=ConcatMesh2dToTensor(device_mesh, dims=concat_dim, mesh_shape=mesh_shape))
     out = torch.sum(out, dim=1, keepdim=True)
 
     out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99)
@@ -307,7 +254,7 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_
 
 
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
+    "mesh_shape, device_mesh", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, N",
@@ -320,7 +267,7 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, cluster_
     ],
 )
 # Llama FF1 * FF3 in MLP
-def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
+def test_galaxy_eltwise_mul_2d_fracture(M, N, mesh_shape, device_mesh):
     FF1_pt = torch.randn(1, 1, M, N)
     FF3_pt = torch.randn(1, 1, M, N)
 
@@ -329,7 +276,7 @@ def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
-        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(3, None), mesh_shape=mesh_shape),
     )
 
     FF3 = ttnn.from_torch(
@@ -337,7 +284,7 @@ def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
-        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(3, None), mesh_shape=mesh_shape),
     )
 
     gt = FF1_pt * FF3_pt
@@ -348,7 +295,7 @@ def test_galaxy_eltwise_mul_2d_fracture(M, N, cluster_shape, device_mesh):
         dtype=ttnn.bfloat16,
     )
 
-    out = ttnn.to_torch(out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 3), cluster_shape=cluster_shape))
+    out = ttnn.to_torch(out, mesh_composer=ConcatMesh2dToTensor(device_mesh, dims=(3, 1), mesh_shape=mesh_shape))
     out = out[:, 0:1, :, :]  # select the first column
 
     out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99999)
@@ -430,7 +377,7 @@ def test_galaxy_eltwise_add(M, N, device_mesh):
 
 
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
+    "mesh_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, N, head_dim, num_heads",
@@ -448,7 +395,7 @@ def test_galaxy_eltwise_add(M, N, device_mesh):
     ],
 )
 # Llama attention matmuls
-def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mesh):
+def test_galaxy_attn_matmul(M, N, head_dim, num_heads, mesh_shape, device_mesh):
     act_pt = torch.randn(1, 1, M, N)
     weights_pt = torch.randn(1, 1, N, head_dim * num_heads)
 
@@ -465,7 +412,7 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device_mesh,
-        mesh_mapper=CustomShardTensor2dMesh(device_mesh, dims=(None, 3), cluster_shape=cluster_shape),
+        mesh_mapper=ShardTensor2dMesh(device_mesh, dims=(None, 3), mesh_shape=mesh_shape),
     )
 
     compute_kernel_attn = ttnn.WormholeComputeKernelConfig(
@@ -496,7 +443,7 @@ def test_galaxy_attn_matmul(M, N, head_dim, num_heads, cluster_shape, device_mes
 
     gt = act_pt @ weights_pt
 
-    out = ttnn.to_torch(out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 3), cluster_shape=cluster_shape))
+    out = ttnn.to_torch(out, mesh_composer=ConcatMesh2dToTensor(device_mesh, dims=(1, 3), mesh_shape=mesh_shape))
     out = out[:, 0:1, :, :]  # select the first column
 
     out_pass, out_pcc = comp_pcc(gt, out, pcc=0.99)
@@ -766,11 +713,11 @@ class TestUpdateCache:
 
             compute_grid_size = device_mesh.get_device(0).compute_with_storage_grid_size()
             num_cores = min(seq_len // 32 * num_heads, 32)  # Always use max 32 cores for testing
-            shard_grid = ttnn.CoreRangeSet(
+            mesh_shape = ttnn.CoreRangeSet(
                 ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
             )
             input_shard_spec = ttnn.ShardSpec(
-                shard_grid,
+                mesh_shape,
                 [
                     xt.numel() // xt.shape[-1] // num_cores,
                     xt.shape[-1],
@@ -840,11 +787,11 @@ class TestUpdateCache:
         xt = x_new.permute(2, 1, 0, 3)
         compute_grid_size = device_mesh.get_device(0).compute_with_storage_grid_size()
         num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
-        shard_grid = ttnn.CoreRangeSet(
+        mesh_shape = ttnn.CoreRangeSet(
             ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
         )
         input_shard_spec = ttnn.ShardSpec(
-            shard_grid,
+            mesh_shape,
             [
                 xt.numel() // xt.shape[-1] // num_cores,
                 xt.shape[-1],
@@ -946,8 +893,8 @@ def run_test_sdpa_decode_single_iter(
     )
     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
-    shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
+    mesh_shape = ttnn.CoreRangeSet({num_to_corerange(b)})
+    shard_spec = ttnn.ShardSpec(mesh_shape, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -1078,12 +1025,12 @@ def test_galaxy_nlp_concat_heads_decode(
 ):
     concat_head_input = torch.rand(seq_len, batch, padded_local_heads, head_dim)
 
-    shard_grid = ttnn.CoreRangeSet({num_to_corerange(batch)})
+    mesh_shape = ttnn.CoreRangeSet({num_to_corerange(batch)})
     CONCAT_HEADS_INPUT_MEMCFG = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            shard_grid,
+            mesh_shape,
             [
                 padded_local_heads,  # Each core has padded_local_heads
                 head_dim,  # head dim
@@ -1222,7 +1169,7 @@ def test_device_submesh(device_mesh):
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
 
     ttnn_tensor = ttnn.from_torch(
-        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, shard_grid=(rows, cols), shard_dimensions=(-2, -1))
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
 
@@ -1243,7 +1190,7 @@ def test_device_line_all_gather_1x4(device_mesh):
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
 
     ttnn_tensor = ttnn.from_torch(
-        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, shard_grid=(rows, cols), shard_dimensions=(-2, -1))
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
     ttnn_tensor = ttnn.line_all_gather(ttnn_tensor, dim=3, num_links=1)
@@ -1261,7 +1208,7 @@ def test_device_line_all_gather_8x1(device_mesh):
     full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
 
     ttnn_tensor = ttnn.from_torch(
-        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, shard_grid=(rows, cols), shard_dimensions=(-2, -1))
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
     ttnn_tensor = ttnn.line_all_gather(ttnn_tensor, dim=2, cluster_axis=0, device_mesh=device_mesh, num_links=1)
@@ -1301,7 +1248,7 @@ def test_device_line_all_gather_8x4_data(device_mesh, cluster_axis: int, dim: in
         full_tensor[0, 0, i * tile_size : (i + 1) * tile_size, :] = torch.full((tile_size, tile_size * cols), i + 1.0)
 
     ttnn_tensor = ttnn.from_torch(
-        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, shard_grid=(rows, cols), shard_dimensions=(-2, -1))
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=(-2, -1))
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
     ttnn_tensor = ttnn.line_all_gather(
@@ -1336,3 +1283,85 @@ def test_device_line_all_gather_8x4_data(device_mesh, cluster_axis: int, dim: in
 @pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_visualize_device_mesh(device_mesh):
     ttnn.visualize_device_mesh(device_mesh)
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_concat_device_mesh_2d(device_mesh):
+    (rows, cols), tile_size = device_mesh.shape, 32
+    full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=(-2, -1))
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    read_back_tensor = ttnn.to_torch(
+        ttnn_tensor, mesh_composer=ConcatMesh2dToTensor(device_mesh, mesh_shape=(rows, cols), dims=(-2, -1))
+    )
+    assert torch.allclose(read_back_tensor, full_tensor, atol=1e-3)
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "dims",
+    [
+        pytest.param((0, 1), id="shard_batch_and_channel"),
+        pytest.param((2, 3), id="shard_height_and_width"),  # TODO(jchu):per device shards can be less than 32?
+    ],
+)
+def test_shard_and_concat_2d_various_dims(device_mesh, dims):
+    rows, cols = device_mesh.shape
+    batch, channels, height, width = 16, 64, 128, 128
+    full_tensor = torch.rand((batch, channels, height, width), dtype=torch.float32)
+
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=dims)
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+
+    read_back_tensor = ttnn.to_torch(
+        ttnn_tensor, mesh_composer=ConcatMesh2dToTensor(device_mesh, mesh_shape=(rows, cols), dims=dims)
+    )
+
+    assert torch.allclose(read_back_tensor, full_tensor, atol=1e-6)
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "tensor_shape",
+    [
+        pytest.param((32, 64, 128, 128), id="standard_shape"),
+        pytest.param((1, 1, 256, 256), id="single_batch_channel"),
+        pytest.param((64, 3, 224, 224), id="imagenet_like"),
+    ],
+)
+def test_shard_and_concat_2d_various_shapes(device_mesh, tensor_shape):
+    rows, cols = device_mesh.shape
+    full_tensor = torch.rand(tensor_shape, dtype=torch.float32)
+
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=(2, 3))
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+
+    read_back_tensor = ttnn.to_torch(
+        ttnn_tensor, mesh_composer=ConcatMesh2dToTensor(device_mesh, mesh_shape=(rows, cols), dims=(2, 3))
+    )
+
+    assert torch.allclose(read_back_tensor, full_tensor, atol=1e-6)
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_shard_and_concat_2d_non_divisible(device_mesh):
+    rows, cols = device_mesh.shape
+    # Create a tensor with dimensions not perfectly divisible by the mesh shape
+    full_tensor = torch.rand((30, 62, 130, 126), dtype=torch.float32)
+
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=(2, 3))
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+
+    read_back_tensor = ttnn.to_torch(
+        ttnn_tensor, mesh_composer=ConcatMesh2dToTensor(device_mesh, mesh_shape=(rows, cols), dims=(2, 3))
+    )
+
+    assert torch.allclose(read_back_tensor, full_tensor, atol=1e-6)
