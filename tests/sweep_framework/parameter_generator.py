@@ -109,7 +109,7 @@ def export_suite_vectors(module_name, suite_name, vectors):
 def generate_tests(module_name):
     if not module_name:
         for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
-            module_name = str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3]
+            module_name = str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3].replace("/", ".")
             print(f"SWEEPS: Generating test vectors for module {module_name}.")
             generate_vectors(module_name)
             print(f"SWEEPS: Finished generating test vectors for module {module_name}.\n\n")

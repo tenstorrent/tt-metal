@@ -77,8 +77,8 @@ def summary(ctx):
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
 
     if ctx.obj["module_name"] is None:
-        for file in sorted(sweeps_path.glob("*.py")):
-            module_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3]
+        for file in sorted(sweeps_path.glob("**/*.py")):
+            module_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
             results_index = RESULT_INDEX_PREFIX + module_name
             if not client.indices.exists(index=results_index):
                 continue
