@@ -6,7 +6,6 @@ import json
 import pytest
 import torch
 from loguru import logger
-import tt_lib
 import transformers
 import ttnn
 import evaluate
@@ -15,8 +14,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
 )
-from models.demos.bert.tt import ttnn_bert
-from models.demos.bert.tt import ttnn_optimized_bert
+from models.demos.bert.tt import ttnn_bert, ttnn_optimized_bert
 
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from ttnn.model_preprocessing import (
@@ -41,6 +39,12 @@ def load_inputs(input_path, batch):
             question.append(input_data[i]["question"])
 
         return context, question
+
+
+def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_length=0):
+    mask = input_ids.ne(padding_idx).int()
+    incremental_indices = (torch.cumsum(mask, dim=1).type_as(mask) + past_key_values_length) * mask
+    return incremental_indices.long() + padding_idx
 
 
 def run_roberta_question_and_answering_inference(
@@ -106,10 +110,14 @@ def run_roberta_question_and_answering_inference(
 
     profiler.start(f"preprocessing_input")
 
+    position_ids = create_position_ids_from_input_ids(
+        input_ids=roberta_input.input_ids, padding_idx=config.pad_token_id
+    )
     ttnn_roberta_inputs = bert.preprocess_inputs(
         roberta_input["input_ids"],
         roberta_input["token_type_ids"],
-        torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None,
+        position_ids,
+        roberta_input["attention_mask"],
         device=device,
     )
     profiler.end(f"preprocessing_input")
@@ -209,10 +217,14 @@ def run_roberta_question_and_answering_inference_squad_v2(
             if i < n_iterations:
                 batch_data = batch[0]
                 curr_batch_size = batch_data["input_ids"].shape[0]
+                position_ids = create_position_ids_from_input_ids(
+                    input_ids=batch_data.input_ids, padding_idx=config.pad_token_id
+                )
                 ttnn_roberta_inputs = bert.preprocess_inputs(
                     batch_data["input_ids"],
                     batch_data["token_type_ids"],
-                    torch.zeros(1, sequence_size) if bert == ttnn_optimized_bert else None,
+                    position_ids,
+                    batch_data["attention_mask"],
                     device=device,
                 )
 
@@ -255,7 +267,7 @@ def run_roberta_question_and_answering_inference_squad_v2(
 
 
 @pytest.mark.parametrize("model_name", ["deepset/roberta-large-squad2"])
-@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
+@pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert])
 def test_demo(
     input_path,
     model_name,
@@ -278,7 +290,7 @@ def test_demo(
 
 
 @pytest.mark.parametrize("model_name", ["deepset/roberta-large-squad2"])
-@pytest.mark.parametrize("bert", [ttnn_bert, ttnn_optimized_bert])
+@pytest.mark.parametrize("bert", [ttnn_optimized_bert, ttnn_bert])
 @pytest.mark.parametrize(
     "n_iterations",
     ((3),),
