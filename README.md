@@ -117,3 +117,39 @@ print(output)
 ## Getting started
 
 Get started with [simple kernels](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
+
+## Git contribution rules and guidelines
+- Please stick to the [Best Practices](./best_practices.md)
+
+- Any commit message must be accompanied with an appropriate GitHub issue
+  number with a colon and following message. The message must start with an
+  imperative verb and descripton of what was done. Preferably a reason is
+  included. Ex.
+  ```
+  #41: Fix data format error in Gelu op.
+  ```
+
+- The following is not allowed in commit messages:
+  - Commit messages which state that a code review or comments are being
+    addressed. You must explicitly state what you are doing in each commit even
+    if it's just cosmetic.
+
+- If you are working on a branch and would like to skip the Git commit hooks,
+  you may delete the `git_hooks` Makefile directive in `/module.mk` before your
+  first build. However, you are responsible for making sure your final
+  submission follows the contribution guidelines. Failure to do so constitutes
+  a violation of these contribution guidelines.
+
+- Merge commits are not allowed in our main branch. We enforce a linear
+  history.
+
+- You can use either of the following methods to merge your branch on the
+  GitHub UI:
+  - Squash and merge
+  - Rebase and merge
+
+  If you use squashing, when GitHub asks you to enter a new commit message,
+  ensure that your commit message follows our required format as outlined above
+  in this section. Failure to do so is a violation of our standards.
+
+  If you are using 'Rebase and merge' please make sure all your commits are well formed.

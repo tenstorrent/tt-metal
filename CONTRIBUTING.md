@@ -27,7 +27,6 @@ Table of Contents
     - [CI/CD Principles](#cicd-principles)
     - [Using CI/CD for development](#using-cicd-for-development)
     - [Documentation](#documentation)
-    - [Git rules and guidelines](#git-rules-and-guidelines)
     - [Code reviews](#code-reviews)
     - [New feature and design specifications](#new-feature-and-design-specifications)
     - [Release flows](#release-flows)
@@ -440,7 +439,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   scripts. For Python files, we are to use this convention:
 
   ```
-  # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+  # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
   # SPDX-License-Identifier: Apache-2.0
   ```
@@ -449,7 +448,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   convention:
 
   ```
-  // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+  // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
   //
   // SPDX-License-Identifier: Apache-2.0
   ```
@@ -508,39 +507,6 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 ### Documentation
 
 - Any API changes must be accompanied with appropriate documentation changes.
-
-### Git rules and guidelines
-
-- Any commit message must be accompanied with an appropriate GitHub issue
-  number with a colon and following message. The message must start with an
-  imperative verb and descripton of what was done. Preferably a reason is
-  included. Ex.
-  ```
-  #41: Fix data format error in Gelu op.
-  ```
-
-- The following is not allowed in commit messages:
-  - Commit messages which state that a code review or comments are being
-    addressed. You must explicitly state what you are doing in each commit even
-    if it's just cosmetic.
-
-- If you are working on a branch and would like to skip the Git commit hooks,
-  you may delete the `git_hooks` Makefile directive in `/module.mk` before your
-  first build. However, you are responsible for making sure your final
-  submission follows the contribution guidelines. Failure to do so constitutes
-  a violation of these contribution guidelines.
-
-- Merge commits are not allowed in our main branch. We enforce a linear
-  history.
-
-- You can use either of the following methods to merge your branch on the
-  GitHub UI:
-  - Squash and merge
-  - Rebase and merge
-
-  If you use squashing, when GitHub asks you to enter a new commit message,
-  ensure that your commit message follows our required format as outlined above
-  in this section. Failure to do so is a violation of our standards.
 
 ### Code reviews
 
