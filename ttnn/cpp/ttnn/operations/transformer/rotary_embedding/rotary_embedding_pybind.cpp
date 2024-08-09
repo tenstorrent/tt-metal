@@ -28,15 +28,15 @@ void py_bind_rotary_embedding(pybind11::module& module) {
                 * :attr:`input_tensor`: Input Tensor
                 * :attr:`cos_cache`: Cosine Cache Tensor
                 * :attr:`sin_cache`: Sine Cache Tensor
-                * :attr:`token_index`: Token Index
-                * :attr:`memory_config`: Memory Config of the output tensor
+                * :attr:`token_index`: Token Index = None
+                * :attr:`memory_config`: Memory Config of the output tensor = None
                 * :attr:`compute_kernel_config`: Optional[DeviceComputeKernelConfig] = None
         )doc",
         ttnn::pybind_arguments_t {
             py::arg("input_tensor"),
             py::arg("cos_cache"),
             py::arg("sin_cache"),
-            py::arg("token_index"),
+            py::arg("token_index") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
 }

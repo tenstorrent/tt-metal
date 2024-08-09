@@ -16,7 +16,7 @@ namespace operations::transformer {
         const Tensor& input_tensor,
         const Tensor& cos_cache,
         const Tensor& sin_cache,
-        const Tensor trans_mat,
+        const Tensor& trans_mat,
         const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
  };

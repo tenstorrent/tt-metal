@@ -12,7 +12,7 @@ Tensor RotaryEmbeddingLlamaOperation::operator()(
     const Tensor &input_tensor,
     const Tensor &cos,
     const Tensor &sin,
-    const Tensor trans_mat,
+    const Tensor& trans_mat,
     const MemoryConfig &output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
 
