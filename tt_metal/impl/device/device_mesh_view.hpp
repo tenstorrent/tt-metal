@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <tuple>
 #include <vector>
 #include <unordered_map>
 #include <optional>
@@ -16,11 +17,24 @@ namespace tt::tt_metal {
 
 // Forward declaration of DeviceMesh
 class DeviceMesh;
+using DeviceGrid = std::pair<int, int>;
 
 struct Coordinate {
-    int row;
-    int col;
+    std::size_t row;
+    std::size_t col;
     auto operator<=>(const Coordinate&) const = default;
+
+    // Add support for structured bindings
+    template <std::size_t I>
+    decltype(auto) get() const {
+        if constexpr (I == 0) return row;
+        else if constexpr (I == 1) return col;
+        else static_assert(I < 2, "Index out of bounds for Coordinate");
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const Coordinate& coord) {
+        return os << "Coord(" << coord.row << ", " << coord.col << ")";
+    }
 };
 
 /**
@@ -49,13 +63,18 @@ public:
 
     DeviceMeshView(const DeviceMesh& mesh);
     DeviceMeshView(const DeviceMesh& mesh, Coordinate top_left, Coordinate bottom_right);
-    DeviceMeshView(const DeviceMesh& global_mesh, const std::vector<device_pointer>& devices);
     DeviceMeshView(std::vector<device_pointer> devices, CoordinateMapper mapper);
 
     [[nodiscard]] device_pointer get_device(int row, int col);
     [[nodiscard]] const_device_pointer get_device(int row, int col) const;
 
     [[nodiscard]] const std::vector<device_pointer>& get_devices() const;
+
+    // Get devices spanning the rectangular region defined by the top-left and bottom-right coordinates
+    // devices are returned in row-major order with start/end coordinates inclusive
+    [[nodiscard]] DeviceView get_devices(const Coordinate& start, const Coordinate& end);
+    [[nodiscard]] DeviceView get_devices(const DeviceGrid& shape);
+
     [[nodiscard]] DeviceView get_devices_on_row(int row) const;
     [[nodiscard]] DeviceView get_devices_on_column(int col) const;
 
@@ -76,15 +95,16 @@ public:
     auto begin() const { return devices_.begin(); }
     auto end() const { return devices_.end(); }
 
-    [[nodiscard]] int num_rows() const { return bottom_right_.row - top_left_.row + 1; }
-    [[nodiscard]] int num_cols() const { return bottom_right_.col - top_left_.col + 1; }
-    [[nodiscard]] int num_devices() const { return devices_.size(); }
+    [[nodiscard]] std::size_t num_rows() const { return bottom_right_.row - top_left_.row + 1; }
+    [[nodiscard]] std::size_t num_cols() const { return bottom_right_.col - top_left_.col + 1; }
+    [[nodiscard]] std::size_t num_devices() const { return devices_.size(); }
 
-    [[nodiscard]] std::optional<Coordinate> find_device(int device_id) const;
+    [[nodiscard]] Coordinate find_device(chip_id_t device_id) const;
+    [[nodiscard]] chip_id_t find_device_id(const Coordinate& coord) const;
 
 private:
     std::vector<device_pointer> devices_;
-    std::unordered_map<int, Coordinate> device_coordinates_;
+    std::unordered_map<chip_id_t, Coordinate> device_coordinates_;
     Coordinate top_left_;
     Coordinate bottom_right_;
 
@@ -98,3 +118,11 @@ inline DeviceMeshView make_device_mesh_view(std::vector<Device*> devices, Device
 }
 
 } // namespace tt::tt_metal
+
+// Specializations to enable structured bindings
+namespace std {
+    template<> struct tuple_size<tt::tt_metal::Coordinate> : std::integral_constant<std::size_t, 2> {};
+    template<std::size_t I> struct tuple_element<I, tt::tt_metal::Coordinate> {
+        using type = std::size_t;
+    };
+} // namespace std

@@ -4,7 +4,7 @@
 
 import contextlib
 
-from typing import List, Dict
+from typing import List, Dict, Optional, Callable, Tuple
 
 import ttnn
 
@@ -189,34 +189,158 @@ class ShardTensorToMesh(TensorToMesh):
 
 
 class ShardTensor2dMesh(TensorToMesh):
-    def __init__(self, device_mesh, shard_grid, shard_dimensions):
-        super().__init__(device_mesh)
-        self.shard_grid = shard_grid  # defines shape of 2D grid of shards
-        self.shard_dimensions = shard_dimensions  # defines which dimensions to shard
+    """
+    Shard a tensor across a 2D mesh of devices.
 
-    def map(self, tensor):
+    This class implements a strategy for distributing a tensor across a 2D grid of devices,
+    allowing for efficient parallel processing in distributed computing environments.
+    """
+
+    def __init__(self, device_mesh: DeviceMesh, mesh_shape: Tuple[int, int], dims: Tuple[Optional[int], Optional[int]]):
+        """
+        Initialize the ShardTensor2dMesh.
+
+        Args:
+            device_mesh: The target device mesh for distributing the tensor.
+            mesh_shape: The shape of the 2D mesh as (rows, cols).
+            dims: The dimensions to shard along, specified as (row_dim, col_dim).
+
+        The `dims` tuple determines how the tensor is sharded across the 2D mesh:
+        - row_dim: The dimension to shard across mesh rows (or None for replication).
+        - col_dim: The dimension to shard across mesh columns (or None for replication).
+
+        Examples:
+        1. dims=(2, 3) for a tensor of shape (A, B, C, D):
+           - Shard along dimension 2 (C) across mesh rows
+           - Shard along dimension 3 (D) across mesh columns
+
+        2. dims=(None, 3):
+           - Replicate across mesh rows
+           - Shard along dimension 3 (D) across mesh columns
+
+        3. dims=(None, None):
+           - Fully replicate the tensor across all devices
+        """
+        super().__init__(device_mesh)
+        self.mesh_shape: Tuple[int, int] = mesh_shape
+        self.dims: Tuple[Optional[int], Optional[int]] = dims
+
+        device_mesh_rows, device_mesh_cols = self.device_mesh.shape
+        if mesh_shape[0] > device_mesh_rows or mesh_shape[1] > device_mesh_cols:
+            raise ValueError("ShardTensor2dMesh: Device mesh shape does not match the provided mesh shape.")
+
+    def map(self, tensor: "torch.Tensor") -> List["torch.Tensor"]:
+        """
+        Map the input tensor to a list of sharded tensors.
+
+        Args:
+            tensor: The input tensor to be sharded.
+
+        Returns:
+            A list of sharded tensors, one for each device in the mesh.
+
+        Raises:
+            ValueError: If the number of sharding dimensions is not 2.
+        """
         import torch
 
-        Y, X = self.shard_dimensions
-        # Returns list of tensors to map to row-major ordering of chips in shard grid
-        if self.shard_dimensions[Y] is None:
-            row_tensors = [tensor.clone() for _ in range(self.shard_grid[Y])]
-        else:
-            row_tensors = torch.chunk(tensor, self.shard_grid[Y], dim=self.shard_dimensions[Y])
+        if len(self.dims) != 2:
+            raise ValueError("ShardTensor2dMesh only supports 2D shard dimensions")
 
-        if self.shard_dimensions[X] is None:
-            tensor_2d_shards = [row_tensor.clone() for row_tensor in row_tensors for _ in range(self.shard_grid[X])]
-        else:
-            tensor_2d_shards = [
-                tt for t in row_tensors for tt in torch.chunk(t, self.shard_grid[X], dim=self.shard_dimensions[X])
-            ]
-        return tensor_2d_shards
+        rows, cols = self.mesh_shape
+        row_dim, col_dim = self.dims
 
-    def config(self):
+        # Shard along rows
+        row_tensors = (
+            [tensor.clone() for _ in range(rows)] if row_dim is None else torch.chunk(tensor, rows, dim=row_dim)
+        )
+
+        # Shard along columns
+        if col_dim is None:
+            return [t.clone() for t in row_tensors for _ in range(cols)]
+        tensor_shards = [tt for t in row_tensors for tt in torch.chunk(t, cols, dim=col_dim)]
+
+        if len(tensor_shards) != rows * cols:
+            raise ValueError(
+                "ShardTensor2dMesh: Sharding failed. Number of shards should match the product of the mesh dimensions."
+            )
+
+        return tensor_shards
+
+    def config(self) -> Dict[str, str]:
+        """
+        Provide the configuration of the sharding strategy.
+
+        Returns:
+            A dictionary containing the sharding strategy and dimensions.
+        """
         return {
-            "strategy": "shard",
-            "shard_dim": f"{self.shard_dimensions[0] if self.shard_dimensions[0] else self.shard_dimensions[1]}",
+            "strategy": "shard_2d",
+            "mesh_shape_y": str(self.mesh_shape[0]),
+            "mesh_shape_x": str(self.mesh_shape[1]),
         }
+
+
+class ConcatMesh2dToTensor(MeshToTensor):
+    """
+    Concatenate tensors from a 2D mesh back into a single tensor.
+
+    This class implements the inverse operation of ShardTensor2dMesh, combining
+    sharded tensors from a 2D device mesh back into a single tensor.
+    """
+
+    def __init__(self, device_mesh: DeviceMesh, mesh_shape: Tuple[int, int], dims: Tuple[int, int]):
+        """
+        Initialize the ConcatMesh2dToTensor.
+
+        Args:
+            device_mesh: The source device mesh containing the sharded tensors.
+            mesh_shape: The shape of the 2D mesh as (rows, cols).
+            dims: A tuple of two integers specifying the dimensions along which to concatenate the tensors.
+                  The first element (row_dim) indicates the dimension for concatenating tensors from different rows.
+                  The second element (col_dim) indicates the dimension for concatenating tensors from different columns.
+                  Both dimensions must be specified and different from each other.
+                  These dimensions correspond to the tensor dimensions, not the mesh dimensions.
+                  For example, if the original tensor was 4D with shape (batch, channel, height, width),
+                  and it was sharded across height and width, dims might be (-2, -1) or (2, 3).
+
+        Raises:
+            ValueError: If either dimension in 'dims' is None or if both dimensions are the same.
+        """
+        self.device_mesh = device_mesh
+        self.mesh_shape = mesh_shape
+        self.dims = dims
+        if self.dims[0] == self.dims[1]:
+            raise ValueError("Both dimensions in 'dims' must be different")
+
+    def compose(self, tensor: ttnn.Tensor) -> "torch.Tensor":
+        """
+        Compose the sharded tensors back into a single tensor.
+
+        Args:
+            tensor: A ttnn.Tensor object containing the sharded tensors distributed across multiple devices.
+
+        Returns:
+            A single torch.Tensor that combines all the sharded tensors from all devices.
+
+        This method first concatenates the shards along the column dimension within each row,
+        then concatenates the resulting tensors along the row dimension to form the final tensor.
+        """
+        import torch
+
+        device_shards = [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
+
+        rows, cols = self.mesh_shape
+        row_dim, col_dim = self.dims
+
+        # Reshape the list of shards into a 2D list representing the device mesh
+        device_grid = [device_shards[i : i + cols] for i in range(0, len(device_shards), cols)]
+
+        # Concatenate along columns first (within each row)
+        row_concatenated = [torch.cat(row, dim=col_dim) for row in device_grid]
+
+        # Then concatenate the resulting tensors along rows
+        return torch.cat(row_concatenated, dim=row_dim)
 
 
 class ReplicateTensorToMesh(TensorToMesh):

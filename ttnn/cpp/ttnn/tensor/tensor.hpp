@@ -122,7 +122,10 @@ struct Tensor {
 
     // Constructor to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
     // handles in async mode.
-    Tensor(std::vector<Device *> workers, uint32_t num_buffers = 0) :
+    Tensor(
+        const std::vector<Device *>& workers,
+        uint32_t num_buffers = 0,
+        std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt) :
         tensor_id(std::nullopt),
         tensor_attributes(std::make_shared<TensorAttributes>()),
         workers(workers),
@@ -164,6 +167,10 @@ struct Tensor {
             } else {
                 this->tensor_attributes->storage = MultiDeviceHostStorage();
                 // Preallocate buffer and shape vector for MultiDeviceHostStorage
+                if (distributed_tensor_config.has_value()) {
+                    std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).strategy =
+                        distributed_tensor_config.value();
+                }
                 std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).buffers =
                     std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
                 std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).shapes =
@@ -433,6 +440,9 @@ Tensor allocate_tensor_on_device(
     DeviceMesh *device_mesh,
     const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
 void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id = 0);
+
+// Maps a tensor to the set of devices in the device-mesh that the shards will be distributed across.
+std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, DeviceMesh& device_mesh);
 
 }  // namespace tt_metal
 
