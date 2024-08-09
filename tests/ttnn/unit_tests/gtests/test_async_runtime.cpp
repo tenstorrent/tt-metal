@@ -167,10 +167,15 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     // Inside the loop, initialize a buffer with limited lifetime.
     // This will asynchronously allocate the buffer, wait for the allocation to complete (address to be assigned to the buffer), destroy the buffer (which will asynchronously
     // deallocate the buffer) in a loop
+    uint32_t address = 0;
     for (int loop = 0; loop < 100000; loop++) {
         {
             auto input_buffer_dummy = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
-            device->synchronize();
+            if (loop == 0) {
+                address = input_buffer_dummy->address();
+            } else {
+                EXPECT_EQ(input_buffer_dummy->address(), address);
+            }
         }
     }
 }

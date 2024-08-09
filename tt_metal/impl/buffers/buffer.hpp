@@ -175,7 +175,7 @@ class Buffer {
 
     void set_size(uint64_t size) { size_ = size; }
     // Returns address of buffer in the first bank
-    uint32_t address() const { return static_cast<uint32_t>(address_); }
+    virtual uint32_t address() const { return static_cast<uint32_t>(address_); }
 
     void set_address(uint64_t addr) { address_ = addr; }
 
