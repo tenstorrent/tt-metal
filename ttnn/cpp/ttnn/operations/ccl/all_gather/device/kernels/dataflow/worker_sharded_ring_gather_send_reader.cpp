@@ -15,7 +15,7 @@ void kernel_main() {
     ShardAddrGen<shard_type> output_tensor_shard_reader;
 
     uint32_t arg_index = 0;
-    volatile tt_l1_ptr uint32_t* local_semaphore_address = get_arg_val<volatile tt_l1_ptr uint32_t*>(arg_index++);
+    volatile tt_l1_ptr uint32_t* local_semaphore_address = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_index++)));
     uint32_t const num_shards_per_transfer = get_arg_val<uint32_t>(arg_index++);
     uint32_t const shards_per_eth_l1_buffer = get_arg_val<uint32_t>(arg_index++);
     uint32_t const half_cb_n_pages = get_arg_val<uint32_t>(arg_index++);

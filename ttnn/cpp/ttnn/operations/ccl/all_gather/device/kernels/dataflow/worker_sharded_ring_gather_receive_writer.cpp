@@ -14,7 +14,7 @@ void kernel_main() {
     uint32_t arg_index = 0;
     uint32_t const remote_sender_worker_x = get_arg_val<uint32_t>(arg_index++);
     uint32_t const remote_sender_worker_y = get_arg_val<uint32_t>(arg_index++);
-    uint32_t const remote_sender_reader_semaphore_addres = get_arg_val<uint32_t>(arg_index++);
+    uint32_t const remote_sender_reader_semaphore_addres = get_semaphore(get_arg_val<uint32_t>(arg_index++));
     uint32_t const max_shards_per_eth_buffer = get_arg_val<uint32_t>(arg_index++);
     uint32_t const num_transfers = get_arg_val<uint32_t>(arg_index++);
     uint32_t const shards_per_transfer = get_arg_val<uint32_t>(arg_index++);

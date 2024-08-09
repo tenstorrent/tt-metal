@@ -21,7 +21,7 @@ void kernel_main() {
     const uint32_t eth_receiver_noc_y = get_arg_val<uint32_t>(arg_index++);
     const uint32_t eth_receiver_l1_base_addr = get_arg_val<uint32_t>(arg_index++);
     const uint32_t eth_receiver_l1_semaphore_addr = get_arg_val<uint32_t>(arg_index++);
-    const uint32_t receiver_read_sem_addr = get_arg_val<uint32_t>(arg_index++);
+    const uint32_t receiver_read_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_index++));
     const uint32_t input_shards_per_eth_buffer = get_arg_val<uint32_t>(arg_index++);
     const uint32_t num_transfers = get_arg_val<uint32_t>(arg_index++);
     const uint32_t half_cb_n_pages = get_arg_val<uint32_t>(arg_index++);

@@ -340,13 +340,13 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             CBHandle cb_src0_receiver_workers = CreateCircularBuffer(program, receiver_workers, cb_src0_config);
 
             // This semaphore is used by the receiver core to tell workers that data is available to read
-            auto receiver_worker_semaphore_addr = CreateSemaphore(program, receiver_workers, 0);
+            auto receiver_worker_semaphore_id = CreateSemaphore(program, receiver_workers, 0);
             // This semaphore is used by the receiver core to tell the worker sender writer that sender buffer is available to write to
-            auto sender_worker_writer_semaphore_addr = CreateSemaphore(program, sender_workers, 0);
+            auto sender_worker_writer_semaphore_id = CreateSemaphore(program, sender_workers, 0);
             // This semaphore is used by the worker receiver writer to tell the worker sender reader that data has been committed to memory
             // This is currently a running counter of how many chunks were committed since the sender worker never decrements this buffer
             // Potentially avoid overflow by having it actually decrement (using noc atomic inc with value of -1)
-            auto sender_worker_reader_semaphore_addr = CreateSemaphore(program, sender_workers, 0);
+            auto sender_worker_reader_semaphore_id = CreateSemaphore(program, sender_workers, 0);
 
             // Rename this the _channel
             std::vector<uint32_t> pages_per_buffer;
@@ -513,7 +513,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     auto &sender_edm_builder = is_buffer_in_clockwise_direction(b) ? clockwise_edm_builders.at(i) : counter_clockwise_edm_builders.at(i);
                     log_trace(tt::LogOp, "Adding sender EDM channel");
                     EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =
-                        sender_edm_builder.add_sender_channel(sender_worker_writer_semaphore_addr, clockwise_link_buffer_num_messages_to_send.at(b), sender_worker_coords);
+                        sender_edm_builder.add_sender_channel(sender_worker_writer_semaphore_id, clockwise_link_buffer_num_messages_to_send.at(b), sender_worker_coords);
                     if (is_channel_shrinkable.at(b) && largest_packets_per_channel.at(b) > 0) {
                         TT_ASSERT(largest_packets_per_channel.at(b) > 0);
                         log_trace(tt::LogOp, "\tsetting channel_max_size to {} for channel {}", largest_packets_per_channel.at(b), b);
@@ -528,7 +528,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                     auto &receiver_edm_builder = is_buffer_in_clockwise_direction(b) ? counter_clockwise_edm_builders.at(i) : clockwise_edm_builders.at(i);
                     log_trace(tt::LogOp, "Adding receiver EDM channel");
                     EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
-                        receiver_edm_builder.add_receiver_channel(receiver_worker_semaphore_addr, counter_clockwise_link_buffer_num_messages_to_send.at(b), receiver_worker_coords);
+                        receiver_edm_builder.add_receiver_channel(receiver_worker_semaphore_id, counter_clockwise_link_buffer_num_messages_to_send.at(b), receiver_worker_coords);
                     if (is_channel_shrinkable.at(b) && largest_packets_per_channel.at(b) > 0) {
                         TT_ASSERT(largest_packets_per_channel.at(b) > 0);
                         log_trace(tt::LogOp, "\tsetting channel_max_size to {} for channel {}", largest_packets_per_channel.at(b), b);
@@ -593,7 +593,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(last_output_addr_offset),
                                 static_cast<uint32_t>(tensor_slicer.output_addr_offset),
                                 static_cast<uint32_t>(ring_index),
-                                static_cast<uint32_t>(sender_worker_reader_semaphore_addr),
+                                static_cast<uint32_t>(sender_worker_reader_semaphore_id),
                                 static_cast<uint32_t>(is_clockwise_direction ? 1 : 0),
                                 static_cast<uint32_t>(cb_num_pages / 2),
                                 static_cast<uint32_t>(ring_size)
@@ -622,7 +622,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\tlast_output_addr_offset: {}", last_output_addr_offset);
                             log_trace(tt::LogOp, "\toutput_addr_offset: {}", tensor_slicer.output_addr_offset);
                             log_trace(tt::LogOp, "\tring_index: {}", ring_index);
-                            log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_addr: {}", sender_worker_reader_semaphore_addr);
+                            log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_id: {}", sender_worker_reader_semaphore_id);
                             log_trace(tt::LogOp, "\tis_clockwise_direction: {}", is_clockwise_direction ? 1 : 0);
 
                             return worker_reader_sender_ct_args;
@@ -682,7 +682,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             auto const& output_shard_addr_generator_args = output_tensor_shard_arg_generator.generate();
                             std::vector<uint32_t> worker_send_reader_rt_args;
                             worker_send_reader_rt_args.reserve(2 + input_shard_addr_generator_args.size() + output_shard_addr_generator_args.size());
-                            worker_send_reader_rt_args.push_back(sender_worker_reader_semaphore_addr);
+                            worker_send_reader_rt_args.push_back(sender_worker_reader_semaphore_id);
                             worker_send_reader_rt_args.push_back(pages_per_buffer.at(b));
                             worker_send_reader_rt_args.push_back(pages_per_eth_l1_buffer.at(b));
                             worker_send_reader_rt_args.push_back(cb_num_pages / 2);
@@ -690,7 +690,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             std::copy(output_shard_addr_generator_args.begin(), output_shard_addr_generator_args.end(), std::back_inserter(worker_send_reader_rt_args));
 
                             log_trace(tt::LogOp, "---worker_send_reader_rt_args.size()={}-----", worker_send_reader_rt_args.size());
-                            log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_addr: {}", sender_worker_reader_semaphore_addr);
+                            log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_id: {}", sender_worker_reader_semaphore_id);
                             log_trace(tt::LogOp, "\tinput_shard_addr_generator_args:");
                             input_tensor_shard_arg_generator.dump_to_log();
                             log_trace(tt::LogOp, "\toutput_tensor_shard_arg_generator:");
@@ -756,7 +756,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(ring_index),
 
                                 // worker local L1 address of semaphore
-                                static_cast<uint32_t>(sender_worker_writer_semaphore_addr),
+                                static_cast<uint32_t>(sender_worker_writer_semaphore_id),
                                 static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).x),
                                 static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).y),
                                 static_cast<uint32_t>(cb_num_pages / 2),
@@ -779,7 +779,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\tnum_rows: {}", tensor_slicer.num_rows);
                             log_trace(tt::LogOp, "\tnum_cols: {}", tensor_slicer.num_cols);
                             log_trace(tt::LogOp, "\tring_index: {}", ring_index);
-                            log_trace(tt::LogOp, "\tsender_worker_writer_semaphore_addr: {}", sender_worker_writer_semaphore_addr);
+                            log_trace(tt::LogOp, "\tsender_worker_writer_semaphore_id: {}", sender_worker_writer_semaphore_id);
                             log_trace(tt::LogOp, "\tethernet_core_x: {}", device->ethernet_core_from_logical_core(worker_eth_sender_core).x);
                             log_trace(tt::LogOp, "\tethernet_core_y: {}", device->ethernet_core_from_logical_core(worker_eth_sender_core).y);
                             log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", cb_num_pages / 2);
@@ -845,7 +845,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).x), // eth_sender_noc_x
                                 static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).y), // eth_sender_noc_y
                                 static_cast<uint32_t>(pages_per_eth_l1_buffer.at(b)), //output_tensor_shard_arg_generator.args_struct.num_dest_cores),//pages_per_eth_l1_buffer.at(b)),
-                                static_cast<uint32_t>(sender_worker_writer_semaphore_addr), // writer_send_sem_addr
+                                static_cast<uint32_t>(sender_worker_writer_semaphore_id), // writer_send_sem_addr
                                 static_cast<uint32_t>(sender_worker_num_transfers.at(i).at(b)),
                                 static_cast<uint32_t>(input_tensor_shard_arg_generator.args_struct.num_dest_cores),
                                 static_cast<uint32_t>(cb_num_pages / 2),
@@ -861,7 +861,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\teth_sender_noc_x: {}", device->ethernet_core_from_logical_core(worker_eth_sender_core).x);
                             log_trace(tt::LogOp, "\teth_sender_noc_y: {}", device->ethernet_core_from_logical_core(worker_eth_sender_core).y);
                             log_trace(tt::LogOp, "\tpages_per_eth_l1_buffer: {}", pages_per_eth_l1_buffer.at(b));
-                            log_trace(tt::LogOp, "\twriter_send_sem_addr: {}", sender_worker_writer_semaphore_addr);
+                            log_trace(tt::LogOp, "\twriter_send_sem_id: {}", sender_worker_writer_semaphore_id);
                             log_trace(tt::LogOp, "\tnum_transfers: {}", sender_worker_num_transfers.at(i).at(b));
                             output_tensor_shard_arg_generator.dump_to_log();
 
@@ -967,7 +967,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).x),
                                 static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).y),
                                 static_cast<uint32_t>(receiver_eth_sem_addrs.at(b)),
-                                static_cast<uint32_t>(receiver_worker_semaphore_addr),
+                                static_cast<uint32_t>(receiver_worker_semaphore_id),
                                 static_cast<uint32_t>(cb_num_pages / 2)
                             };
 
@@ -980,7 +980,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\tethernet_core_x: {}", device->ethernet_core_from_logical_core(worker_eth_receiver_core).x);
                             log_trace(tt::LogOp, "\tethernet_core_y: {}", device->ethernet_core_from_logical_core(worker_eth_receiver_core).y);
                             log_trace(tt::LogOp, "\treceiver_eth_sem_addrs: {}", receiver_eth_sem_addrs.at(b));
-                            log_trace(tt::LogOp, "\treceiver_worker_semaphore_addr: {}", receiver_worker_semaphore_addr);
+                            log_trace(tt::LogOp, "\treceiver_worker_semaphore_id: {}", receiver_worker_semaphore_id);
                             log_trace(tt::LogOp, "\thalf_cb_num_pages : {}", cb_num_pages / 2);
                             return worker_receiver_reader_ct_args;
                         }
@@ -1028,7 +1028,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             worker_reader_receiver_rt_args.push_back(static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).y)); // eth_receiver_noc_y
                             worker_reader_receiver_rt_args.push_back(receiver_eth_buffer_addrs.at(b)); // eth_receiver_l1_base_addr
                             worker_reader_receiver_rt_args.push_back(static_cast<uint32_t>(receiver_eth_sem_addrs.at(b))); // eth_receiver_l1_semaphore_addr
-                            worker_reader_receiver_rt_args.push_back(receiver_worker_semaphore_addr); // local_receiver_read_sem_addr
+                            worker_reader_receiver_rt_args.push_back(receiver_worker_semaphore_id); // local_receiver_read_sem_addr
                             worker_reader_receiver_rt_args.push_back(pages_per_eth_l1_buffer.at(b)), //output_tensor_shard_arg_generator.args_struct.num_dest_cores), //pages_per_eth_l1_buffer.at(b)); // num_shards_per_eth_buf
                             worker_reader_receiver_rt_args.push_back(receiver_worker_num_transfers.at(i).at(b)); // local_receiver_read_sem_addr
                             worker_reader_receiver_rt_args.push_back(static_cast<uint32_t>(cb_num_pages / 2)); // local_receiver_read_sem_addr
@@ -1039,7 +1039,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\teth_receiver_noc_y: {}", static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).y));
                             log_trace(tt::LogOp, "\teth_receiver_l1_base_addr: {}", receiver_eth_buffer_addrs.at(b));
                             log_trace(tt::LogOp, "\teth_receiver_l1_semaphore_addr: {}", static_cast<uint32_t>(receiver_eth_sem_addrs.at(b)));
-                            log_trace(tt::LogOp, "\tlocal_receiver_read_sem_addr: {}", receiver_worker_semaphore_addr);
+                            log_trace(tt::LogOp, "\tlocal_receiver_read_sem_id: {}", receiver_worker_semaphore_id);
                             log_trace(tt::LogOp, "\tnum_shards_per_eth_buf: {}", pages_per_eth_l1_buffer.at(b));
 
                             input_tensor_shard_arg_generator.dump_to_log();
@@ -1108,7 +1108,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                                 static_cast<uint32_t>(last_output_addr_offset),
                                 static_cast<uint32_t>(tensor_slicer.output_addr_offset),
                                 static_cast<uint32_t>(receiver_ring_index),
-                                static_cast<uint32_t>(sender_worker_reader_semaphore_addr),
+                                static_cast<uint32_t>(sender_worker_reader_semaphore_id),
                                 static_cast<uint32_t>(is_clockwise_direction ? 1 : 0),
                                 static_cast<uint32_t>(cb_num_pages / 2),
                                 static_cast<uint32_t>(ring_size)
@@ -1135,7 +1135,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             log_trace(tt::LogOp, "\tlast_output_addr_offset: {}", last_output_addr_offset);
                             log_trace(tt::LogOp, "\toutput_addr_offset: {}", tensor_slicer.output_addr_offset);
                             log_trace(tt::LogOp, "\treceiver_ring_index: {}", receiver_ring_index);
-                            log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_addr: {}", sender_worker_reader_semaphore_addr);
+                            log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_id: {}", sender_worker_reader_semaphore_id);
                             log_trace(tt::LogOp, "\tis_clockwise_direction ? 1 : 0: {}", is_clockwise_direction ? 1 : 0);
                             log_trace(tt::LogOp, "\thalf_cb_num_pages: {}", cb_num_pages / 2);
                             log_trace(tt::LogOp, "\tring_size: {}", ring_size);
@@ -1178,7 +1178,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             worker_receive_writer_rt_args.reserve(5 + output_shard_addr_generator_args.size());
                             worker_receive_writer_rt_args.push_back(static_cast<uint32_t>(worker_sender_reader.x));
                             worker_receive_writer_rt_args.push_back(static_cast<uint32_t>(worker_sender_reader.y));
-                            worker_receive_writer_rt_args.push_back(sender_worker_reader_semaphore_addr);
+                            worker_receive_writer_rt_args.push_back(sender_worker_reader_semaphore_id);
 
                             worker_receive_writer_rt_args.push_back(output_tensor_shard_arg_generator.args_struct.num_dest_cores), //pages_per_eth_l1_buffer.at(b));
                             worker_receive_writer_rt_args.push_back(receiver_worker_num_transfers.at(i).at(b));
@@ -1189,7 +1189,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             std::copy(output_shard_addr_generator_args.begin(), output_shard_addr_generator_args.end(), std::back_inserter(worker_receive_writer_rt_args));
 
                             log_trace(tt::LogOp, "----worker_receive_writer_rt_args size={}", worker_receive_writer_rt_args.size());
-                            log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_addr: {}", sender_worker_reader_semaphore_addr);
+                            log_trace(tt::LogOp, "\tsender_worker_reader_semaphore_id: {}", sender_worker_reader_semaphore_id);
                             output_tensor_shard_arg_generator.dump_to_log();
 
                             return worker_receive_writer_rt_args;

@@ -17,7 +17,7 @@ void kernel_main() {
     const uint32_t eth_sender_noc_x = get_arg_val<uint32_t>(arg_index++);
     const uint32_t eth_sender_noc_y = get_arg_val<uint32_t>(arg_index++);
     const uint32_t shards_per_eth_l1_buffer = get_arg_val<uint32_t>(arg_index++);
-    const uint32_t writer_send_sem_addr = get_arg_val<uint32_t>(arg_index++);
+    const uint32_t writer_send_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_index++));
     const uint32_t num_transfers = get_arg_val<uint32_t>(arg_index++);
     const uint32_t num_input_shards_from_local_ring_index = get_arg_val<uint32_t>(arg_index++);
     const uint32_t half_cb_n_shards = get_arg_val<uint32_t>(arg_index++);
