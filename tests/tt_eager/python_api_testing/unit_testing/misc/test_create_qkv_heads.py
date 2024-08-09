@@ -9,6 +9,7 @@ import tt_lib as ttl
 from models.utility_functions import tt2torch_tensor, comp_pcc
 from models.utility_functions import is_grayskull
 import torch
+import ttnn
 
 
 def run_create_qkv_heads_test(
@@ -69,12 +70,12 @@ def run_create_qkv_heads_test(
     out_mem_config = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, out_shard_spec
     )
-    q, k, v = ttl.tensor.create_qkv_heads(
+    q, k, v = ttnn.experimental.create_qkv_heads(
         in0_t,
-        num_q_heads=num_q_heads,
+        num_heads=num_q_heads,
         num_kv_heads=num_kv_heads,
         transpose_k_heads=transpose_k,
-        output_mem_config=out_mem_config,
+        memory_config=out_mem_config,
     )
 
     assert list(q.get_legacy_shape()) == [batch, num_q_heads, seq_len, head_dim]

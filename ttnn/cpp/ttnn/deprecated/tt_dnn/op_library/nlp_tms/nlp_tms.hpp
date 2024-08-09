@@ -17,29 +17,7 @@ namespace tt_metal {
 // expectation for both interleaved and sharded implementation is that each q, k and v vector are concatenated across
 // the last dimension (|q_i k_i v_i| is each row of the tensor)
 
-// operation::ProgramWithCallbacks multi_core_create_qkv_heads_interleaved(const Tensor &input_tensor_qkv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size);
-operation::ProgramWithCallbacks multi_core_create_qkv_heads_sharded(const Tensor &input_tensor_qkv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_create_q_and_kv_heads_sharded(const Tensor &input_tensor_q, const Tensor &input_tensor_kv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size);
-
-struct CreateQKVHeads {
-    uint32_t num_q_heads;
-    uint32_t num_kv_heads;
-    uint32_t head_dim;
-    bool transpose_k_heads;
-    MemoryConfig output_mem_config;
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-};
-
-inline std::tuple<Tensor, Tensor, Tensor> create_qkv_heads(const Tensor &input_tensor, const uint32_t num_q_heads, const std::optional<uint32_t> num_kv_heads, const bool transpose_k_heads, const MemoryConfig& output_mem_config) {
-    const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_q_heads);
-    TT_FATAL(input_tensor.get_legacy_shape()[3] % (num_q_heads + (2 * num_kv_heads_val)) == 0, fmt::format("Flattened hidden dimension {} must be a multiple of the combined Q {}, K {} and V {} heads", input_tensor.get_legacy_shape()[3], num_q_heads, num_kv_heads_val, num_kv_heads_val));
-    const uint32_t head_dim = input_tensor.get_legacy_shape()[3] / (num_q_heads + (2 * num_kv_heads_val));
-    auto output_tensors = operation::run(CreateQKVHeads{num_q_heads, num_kv_heads_val, head_dim, transpose_k_heads, output_mem_config}, {input_tensor});
-    return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
-}
 
 struct CreateQKVHeadsSeparateTensors {
     uint32_t num_q_heads;
@@ -64,8 +42,6 @@ inline std::tuple<Tensor, Tensor, Tensor> create_qkv_heads_from_separate_tensors
 
 operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_falcon7b(const Tensor &input_tensor_a, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Tensor &input_tensor, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size);
-operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_sharded(const Tensor &input_tensor, std::optional<const Tensor> input_tensor_kv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size);
-operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &input_tensor, std::optional<const Tensor> input_tensor_kv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &input_tensor_a, Tensor &output, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(const Tensor &input_tensor_a, Tensor &output, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);

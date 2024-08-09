@@ -124,7 +124,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_concat_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_concat_heads_decode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_kv_cache_load_slice.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/multi_core_create_q_and_kv_heads_separate/multi_core_create_q_and_kv_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rotate_half/single_core/rotate_half_op_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rotate_half/rotate_half_op.cpp
