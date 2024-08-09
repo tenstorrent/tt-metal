@@ -17,6 +17,8 @@ run_perf_models_other() {
 
     env pytest -n auto models/demos/ttnn_falcon7b/tests -m $test_marker
 
+    env pytest models/experimental/functional_distilbert/tests/test_perf_distilbert.py -m $test_marker
+
     env pytest -n auto models/demos/resnet/tests/test_perf_resnet.py -m $test_marker
 
     env pytest -n auto tests/ttnn/integration_tests/whisper/test_performance.py -m $test_marker
@@ -62,6 +64,8 @@ run_device_perf_models() {
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/ttnn_resnet/tests -m $test_marker
 
     env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
+
+    env pytest models/experimental/functional_distilbert/tests -m $test_marker
 
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
