@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "rotary_embedding.hpp"
 #include "device/rotary_embedding_device_operation.hpp"
 
 namespace ttnn::operations::transformer {
