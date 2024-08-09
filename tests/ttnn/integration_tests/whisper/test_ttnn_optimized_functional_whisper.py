@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.experimental.functional_whisper.reference import torch_functional_whisper
-from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
+from models.demos.whisper.reference import torch_functional_whisper
+from models.demos.whisper.tt import ttnn_optimized_functional_whisper
 import transformers
 from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
 from datasets import load_dataset
@@ -13,12 +13,10 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import skip_for_wormhole_b0
 
 MODEL_NAME = "openai/whisper-base"
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -82,7 +80,6 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
     assert_with_pcc(torch_output, output, 0.98)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -119,7 +116,6 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -166,13 +162,12 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
     input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
     input_embeds = ttnn.to_device(input_embeds, device)
 
-    output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
+    output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters, device=device)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, 0.968)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -229,7 +224,6 @@ def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     assert_with_pcc(torch_output, output, 0.97)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -301,7 +295,6 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
-@skip_for_wormhole_b0()
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 def test_ttnn_whisper(tmp_path, device, ttnn_model):

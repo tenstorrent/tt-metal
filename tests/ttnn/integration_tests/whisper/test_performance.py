@@ -3,13 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.experimental.functional_whisper.tt import ttnn_functional_whisper, ttnn_optimized_functional_whisper
+from models.demos.whisper.tt import ttnn_functional_whisper, ttnn_optimized_functional_whisper
 from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
 from datasets import load_dataset
 import torch
 from ttnn.model_preprocessing import preprocess_model_parameters
 from loguru import logger
-from models.utility_functions import skip_for_wormhole_b0
 from models.perf.perf_utils import prep_perf_report
 import time
 import ttnn
@@ -17,12 +16,11 @@ import ttnn
 
 def get_expected_times(functional_whisper):
     return {
-        ttnn_functional_whisper: (11, 4.16),
-        ttnn_optimized_functional_whisper: (1.2, 1.35),
+        ttnn_functional_whisper: (14.9, 4.16),
+        ttnn_optimized_functional_whisper: (1.7, 1.35),
     }[functional_whisper]
 
 
-@skip_for_wormhole_b0(reason_str="Not tested on single WH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["openai/whisper-base"])
@@ -75,6 +73,7 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
             decoder_hidden_states,
             decoder_attention_mask=decoder_attention_mask,
             parameters=parameters,
+            device=device,
         )
         tt_output = ttnn.to_torch(tt_output)
         end = time.time()
