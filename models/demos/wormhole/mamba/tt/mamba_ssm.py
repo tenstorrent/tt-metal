@@ -267,7 +267,6 @@ class TtMambaSSM(torch.nn.Module):
             ttnn.deallocate(abar2_sharded)
             ttnn.deallocate(bmulx0_sharded)
 
-            prev_hidden_state = ttnn.to_memory_config(prev_hidden_state, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             self.hidden_state_cache.set(self.configs["current_user"], 0, prev_hidden_state)
             ttnn.deallocate(prev_hidden_state)
 
