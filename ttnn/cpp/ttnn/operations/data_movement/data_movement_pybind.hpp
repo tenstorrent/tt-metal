@@ -4,6 +4,7 @@
 
 #pragma once
 
+
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -22,6 +23,7 @@
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding_pybind.hpp"
 #include "ttnn/operations/data_movement/untilize_with_halo_v2/untilize_with_halo_v2_pybind.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices_pybind.hpp"
+#include "ttnn/operations/data_movement/fill_rm/fill_rm_pybind.hpp"
 
 
 namespace py = pybind11;
@@ -77,6 +79,7 @@ void py_module(py::module& module) {
     detail::bind_untilize_with_unpadding(module);
     detail::bind_untilize_with_halo_v2(module);
     bind_non_zero_indices(module);
+    bind_fill_rm(module);
 }
 
 }  // namespace data_movement

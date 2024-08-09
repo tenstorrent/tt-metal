@@ -4,6 +4,7 @@
 
 import torch
 
+import ttnn
 import tt_lib
 from models.utility_functions import print_diff_argmax
 from models.utility_functions import is_wormhole_b0
@@ -37,7 +38,7 @@ def test_fill_rm(device):
         .to(tt_lib.tensor.Layout.TILE)
         .to(device)
     )
-    xtt = tt_lib.tensor.fill_ones_rm(N, C, H, W, fillH, fillW, xt)
+    xtt = ttnn.fill_ones_rm(N, C, H, W, fillH, fillW, xt)
     assert list(xtt.get_legacy_shape()) == [N, C, H, W]
 
     tt_got_back = xtt.cpu().to_torch()
