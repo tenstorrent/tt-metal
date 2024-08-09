@@ -99,8 +99,10 @@ def _golden_function_backward_with_dim(
 ):
     import torch
 
-    input_tensor_a.requires_grad = True
-    input_tensor_b.requires_grad = True
+    if input_tensor_a.requires_grad is False:
+        input_tensor_a.requires_grad = True
+    if input_tensor_b.requires_grad is False:
+        input_tensor_b.requires_grad = True
 
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
