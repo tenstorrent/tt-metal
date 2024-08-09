@@ -32,8 +32,9 @@ import tt_lib
 @pytest.mark.parametrize(
     "kv_cache_len, expected_compile_time, expected_inference_time",
     (
-        (32, 6, 0.105),
-        (1024, 6, 0.225),
+        (32, 6, 0.135),
+        (128, 6, 0.155),
+        (1024, 6, 0.215),
     ),
 )
 def test_llama_model_perf(
@@ -49,7 +50,7 @@ def test_llama_model_perf(
     profiler.clear()
 
     profiler.start("weight_loading")
-    state_dict = torch.load(model_args.consolidated_weights_path)
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     state_dict = {
         k: v
         for k, v in state_dict.items()
@@ -111,10 +112,9 @@ def test_llama_model_perf(
     run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos, generation_length)
     profiler.end(f"end_to_end_inference")
     profiler.print()
-    iter_time = profiler.get("model_run_for_inference_0")
+    iter_time = profiler.get("end_to_end_inference")
 
     comment = f"kv_cache_len={kv_cache_len}_num_layers={model_args.n_layers}"
-    iter_time = profiler.get("model_run_for_inference_0")
 
     prep_perf_report(
         model_name=f"Llama_31_8B_{comment}",

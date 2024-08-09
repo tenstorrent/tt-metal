@@ -35,11 +35,9 @@ class TtModelArgs:
     kv_seq_len = 8192
 
     # Default folder location for weights and cached files
-    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/")
-    DEFAULT_TOKENIZER_PATH = os.getenv(
-        "LLAMA_TOKENIZER_PATH", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
-    )
-    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/")
+    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
+    DEFAULT_TOKENIZER_PATH = os.getenv("LLAMA_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
+    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
 
     OP_KEYS = (
         # Embedding
@@ -63,19 +61,20 @@ class TtModelArgs:
         "ATTN_W_LAYOUT",
         # Decoder
         "DEC_SKIP_OUTPUT",
+        "OUTPUT_MM",
     )
 
     def __init__(self, device, instruct=False):
         # Assert if all folders and files exist
         assert os.path.exists(
             self.DEFAULT_CKPT_DIR
-        ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export MISTRAL_CKPT_DIR=..."
+        ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export LLAMA_CKPT_DIR=..."
         assert os.path.isfile(
             self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-        ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export MISTRAL_TOKENIZER_PATH=..."
+        ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export LLAMA_TOKENIZER_PATH=..."
         assert os.path.exists(
             self.DEFAULT_CACHE_PATH
-        ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export MISTRAL_CACHE_PATH=..."
+        ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export LLAMA_CACHE_PATH=..."
         # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
         assert os.path.isfile(
             self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
