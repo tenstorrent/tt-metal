@@ -54,11 +54,14 @@ void copy_sticks_async(
     uint32_t const out_base_l1_addr) {
     int i = 0;
     int length = config_data[i + 2];
+
+
     while (length) {
         uint16_t noc_x = is_block_sharded && !is_col_major ? my_noc_x : config_data[i + 0];
         uint16_t noc_y = is_block_sharded && is_col_major ? my_noc_y : config_data[i + 1];
         length = config_data[i + 2];
         i += 3;
+        DPRINT<<"NOC "<<my_noc_x<<" "<<my_noc_y<<"  "<<noc_x<<" "<<noc_y<<" "<<length<<ENDL();
 
         const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
         for (uint16_t j = 0; j < length; j += 3) {
@@ -68,7 +71,7 @@ void copy_sticks_async(
             uint32_t size = nsticks * stick_nbytes;
             uint32_t dst_offset = dst_local_idx * stick_nbytes;
             uint32_t src_offset = src_local_idx * stick_nbytes;
-
+            DPRINT<<src_local_idx<<" "<<dst_local_idx<<" "<<nsticks<<ENDL();
             if constexpr (is_read) {
                 uint32_t dst_addr = out_base_l1_addr + dst_offset;
                 uint64_t src_addr = base_addr + src_offset;
@@ -133,7 +136,7 @@ void kernel_main() {
             }
         }
     }
-
+    DPRINT<<"Local "<<local_config_cb_id<<" Remote "<<remote_config_cb_id<<ENDL();
     // input shards
     if constexpr (local_config_cb_id) {
         cb_reserve_back(src_cb_id, in_nsticks);
@@ -141,7 +144,6 @@ void kernel_main() {
     }
 
     cb_wait_front(in_cb_id, in_nsticks);    // make sure untilized data is available
-
     if constexpr (remote_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);

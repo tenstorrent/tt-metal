@@ -724,6 +724,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             ttnn::operations::core::deallocate(halo_output);
             halo_output = move_output;
         }
+
         // call conv micro op
         std::vector<int> conv_params = {
             (int)kernel_size[0], (int)kernel_size[1], (int)stride[0], (int)stride[1], (int)padding[0], (int)padding[1], (int)groups};
@@ -748,8 +749,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.enable_split_reader,
             conv_config.enable_subblock_padding);
         // halo_output.deallocate();
-        ttnn::operations::core::deallocate(halo_output);
-        return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        // ttnn::operations::core::deallocate(halo_output);
+        return {conv_output, output_height, output_width, halo_output, bias_tensor_on_device};
     } else {
         // run conv as matmul
         uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);

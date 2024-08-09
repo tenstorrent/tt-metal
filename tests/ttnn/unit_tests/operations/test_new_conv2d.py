@@ -310,6 +310,7 @@ def run_conv_with_split(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, ncores, act_block_w_div",
     (
+        (128, 128, 8, 8, 3, 3, 1, 1, 1, 1, 4, 1),
         (128, 128, 10, 10, 3, 3, 1, 1, 0, 0, 4, 1),
         (128, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4, 1),
         (128, 256, 10, 10, 3, 3, 1, 1, 0, 0, 4, 2),
@@ -325,13 +326,29 @@ def run_conv_with_split(
         (1280, 1280, 10, 10, 3, 3, 1, 1, 0, 0, 40, 1),
         (1280, 2560, 10, 10, 3, 3, 1, 1, 0, 0, 40, 1),
         (1280, 2560, 18, 18, 3, 3, 1, 1, 0, 0, 40, 2),
-        # (1280, 1280, 32, 32, 3, 3, 1, 1, 0, 0,  40,2),
-        # (1280, 1920, 18, 18, 3, 3, 1, 1, 0, 0,  20,2), Doesn't fit in L1
+        (128, 128, 8, 8, 3, 3, 1, 1, 1, 1, 4, 1),
+        (128, 256, 8, 8, 3, 3, 1, 1, 1, 1, 4, 1),
+        (128, 256, 8, 8, 3, 3, 1, 1, 1, 1, 4, 2),
+        (256, 256, 8, 8, 3, 3, 1, 1, 1, 1, 4, 1),
+        (256, 2048, 8, 8, 3, 3, 1, 1, 1, 1, 8, 2),
+        (512, 2048, 8, 8, 3, 3, 1, 1, 1, 1, 8, 8),
+        (512, 2048, 16, 16, 3, 3, 1, 1, 1, 1, 8, 8),
+        (512, 2048, 16, 16, 3, 3, 2, 2, 0, 0, 8, 8),
+        (768, 768, 16, 16, 3, 3, 1, 1, 1, 1, 12, 2),
+        (768, 768, 16, 16, 3, 3, 1, 1, 1, 1, 24, 1),
+        (1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, 40, 1),
+        (1280, 1280, 16, 16, 3, 3, 2, 2, 0, 0, 40, 1),
+        (1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, 40, 1),
+        (1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, 40, 1),
+        (1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, 40, 2),
     ),
 )
 @pytest.mark.parametrize(
     "has_bias",
-    [True, False],
+    [
+        True,
+        # False
+    ],
 )
 def test_conv_ws(
     device,
@@ -352,10 +369,6 @@ def test_conv_ws(
 ):
     batch_size = 2
     weights_dtype = ttnn.bfloat16
-    print(f"Input = {(input_height,input_width,input_channels)}")
-    output_height = ttnn.get_conv_output_dim(input_height, filter_height, stride_h, pad_h)
-    output_width = ttnn.get_conv_output_dim(input_width, filter_width, stride_w, pad_w)
-    print(f"Output = {(output_height,output_width,output_channels)}")
     fp32_accum = False
     packer_l1_acc = False
     deallocate_activation = False
@@ -369,11 +382,11 @@ def test_conv_ws(
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw =  torch.tensor(range(0, batch_size * input_height * input_width, 1)).reshape([batch_size, 1, input_height, input_width])
-    # torch_input_tensor_nchw = torch.tensor(range(input_channels)).reshape([1, input_channels, 1, 1]) / 128
+    # torch_input_tensor_nchw = torch.tensor(range(input_channels)).reshape([1, input_channels, 1, 1])
     # torch_input_tensor_nchw = torch.tensor([-1,0,1,0]*(input_channels//4)).reshape([1, input_channels, 1, 1])
     # torch_input_tensor_nchw =  torch.tensor([-1,0,1,0]*((batch_size * input_height * input_width)//4)).reshape([batch_size, 1, input_height, input_width])
 
-    # torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
+    torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
 
     # torch_input_tensor_nchw += (
     #     torch.tensor(range(0, batch_size * input_height * input_width))
@@ -385,7 +398,7 @@ def test_conv_ws(
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()/256
+    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()/128
     # torch_weight_tensor = (
     #     torch.tensor(range(input_channels), dtype=torch.bfloat16).reshape(1, input_channels, 1, 1).float()
     # )
@@ -424,7 +437,6 @@ def test_conv_ws(
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
     )
-    # ncores = 4
     shard_grid = get_shard_grid_from_num_cores(ncores, device)
     shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
     shard_spec = ttnn.experimental.tensor.ShardSpec(
@@ -458,7 +470,6 @@ def test_conv_ws(
     # tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=height_shard_mem_config)
 
     tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
-
     # breakpoint()
     conv_config = ttnn.Conv2dConfig(
         dtype=ttnn.bfloat16,
@@ -496,14 +507,6 @@ def test_conv_ws(
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-
-    # if enable_auto_formatting:
-    #     torch_output_tensor = torch.split(torch_output_tensor, output_channels, 3)[0]
-    #     torch_output_tensor = torch.reshape(torch_output_tensor, output_shape_nhwc)
-    # else:
-    #     tt_output_tensor = conv.copy_output_from_device(tt_output_tensor_on_device)
-    #     assert tt_output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-    #     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW

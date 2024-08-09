@@ -399,6 +399,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t stride_w = (uint32_t)conv_params[3];
     uint32_t pad_h = (uint32_t)conv_params[4];
     uint32_t pad_w = (uint32_t)conv_params[5];
+    uint32_t input_size_h = conv_act_size_h + (pad_h*2);
+    uint32_t input_size_w = conv_act_size_w + (pad_w*2);
+
 
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
@@ -700,7 +703,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)0, // Never in DRAM
         (uint32_t)stride_h,
         (uint32_t)stride_w,
-        (uint32_t)conv_act_size_w,
+        (uint32_t)input_size_w,
         (uint32_t)conv_output_size_w,  // conv_output_w_last_index
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)weight_size_h, //Input filter window height

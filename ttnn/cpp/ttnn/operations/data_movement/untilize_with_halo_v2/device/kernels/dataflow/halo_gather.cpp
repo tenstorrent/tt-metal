@@ -108,7 +108,7 @@ void kernel_main() {
     const uint16_t my_noc_y = NOC_Y(my_y[noc_index]);
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
-
+    DPRINT<<"Halo Kernel"<<ENDL();
     if constexpr (padding_config_cb_id) {
         // construct the pad stick in its buffer
         cb_reserve_back(pad_cb_id, 1);
@@ -134,7 +134,7 @@ void kernel_main() {
             }
         }
     }
-
+    DPRINT<<"Halo asdfasdfasdfasdf"<<ENDL();
     // input shards
     if constexpr (local_config_cb_id) {
         cb_reserve_back(src_cb_id, in_nsticks);
