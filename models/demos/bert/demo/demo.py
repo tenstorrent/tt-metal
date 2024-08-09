@@ -8,7 +8,6 @@ import torch
 from loguru import logger
 
 import transformers
-import tt_lib
 import ttnn
 from models.utility_functions import (
     disable_compilation_reports,
