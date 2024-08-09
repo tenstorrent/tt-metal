@@ -80,6 +80,9 @@ namespace blackhole {
 
 static constexpr uint32_t NUM_PORTS_PER_DRAM_CHANNEL = 3;
 static constexpr uint32_t NUM_DRAM_CHANNELS = 8;
+// Values taken from blackhole.py in `src/t6ifc/t6py/packages/tenstorrent/chip/blackhole.py`
+static constexpr uint32_t ETH_STATIC_TLB_START = 0;
+static constexpr uint32_t TENSIX_STATIC_TLB_START = 38;
 
 int32_t get_static_tlb_index(CoreCoord target) {
     bool is_eth_location =
@@ -104,25 +107,19 @@ int32_t get_static_tlb_index(CoreCoord target) {
         return tt::umd::blackhole::TLB_BASE_INDEX_4G + (dram_index / NUM_PORTS_PER_DRAM_CHANNEL);
     }
 
-
-    if (is_eth_location) {
-        // TODO: Uplift this
-        return -1;
-    } else if (is_tensix_location) {
-        // BH worker cores are starting from x = 1, y = 2
-        target.y-=2;
-        target.x--;
-
-        if (target.x >= 8) {
-            target.x -= 2;
-        }
-
-        int flat_index = target.y * 14 + target.x;
-        int tlb_index = 38 /*is this TLB_4G_OFFSET.y_end? */ + flat_index;
-        return tlb_index;
-    } else {
-        return -1;
+    // One row of BH ethernet cores starting at x = 1, y = 1
+    //  and BH tensix cores are starting from x = 1, y = 2
+    target.y--;
+    target.x--;
+    if (target.x >= 8) {
+        target.x -= 2;
     }
+
+    TT_ASSERT(is_eth_location or is_tensix_location);
+    int y = is_eth_location ? target.y : (target.y - 1);
+    int flat_index = y * 14 + target.x;
+    int tlb_index = (is_eth_location ? ETH_STATIC_TLB_START : TENSIX_STATIC_TLB_START) + flat_index;
+    return tlb_index;
 }
 
 // Returns last port of dram channel passed as the argument to align with dram_preferred_worker_endpoint
@@ -172,11 +169,8 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
     }
 
     auto statically_mapped_cores = sdesc.workers;
-    // TODO (#9933): Remove workaround for BH
-    if (arch != tt::ARCH::BLACKHOLE) {
-        statically_mapped_cores.insert(
-            statically_mapped_cores.end(), sdesc.ethernet_cores.begin(), sdesc.ethernet_cores.end());
-    }
+    statically_mapped_cores.insert(
+        statically_mapped_cores.end(), sdesc.ethernet_cores.begin(), sdesc.ethernet_cores.end());
     std::int32_t address = 0;
 
     // Setup static TLBs for all worker cores
