@@ -119,8 +119,6 @@ operation::ProgramWithCallbacks Softmax::create_program(
     // bool causal_mask = mask.has_value() ? mask.value().get_legacy_shape()[-2] == mask.value().get_legacy_shape()[-1] : false;
     bool causal_mask = this->is_causal_mask;
 
-    std::cout << "here 2 here 2";
-
     return std::visit(
         [&](const auto& program_config) -> operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;

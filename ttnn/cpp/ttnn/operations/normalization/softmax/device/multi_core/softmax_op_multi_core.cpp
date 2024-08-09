@@ -37,20 +37,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     bool numeric_stable
 ) {
 
-    std::cout << "scale mask softmax multi core" << std::endl;
-
-    if (mask.has_value()) {
-        std::cout << "mask has value" << std::endl;
-    } else {
-        std::cout << "mask no value" << std::endl;
-    }
-
-    if (scale.has_value()) {
-        std::cout << "scale has value" << std::endl;
-    } else {
-        std::cout << "scale no value" << std::endl;
-    }
-
     const auto shape = input_tensor.get_legacy_shape();
     uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H*W;
@@ -96,14 +82,14 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_cb_data_format);
 
-    tt::log_info("in0_cb_data_format: {}", in0_cb_data_format);
-    tt::log_info("out0_cb_data_format: {}", out0_cb_data_format);
-    tt::log_info("mask_cb_data_format: {}", mask_cb_data_format);
-    tt::log_info("im_cb_data_format: {}", im_cb_data_format);
-    tt::log_info("math_fidelity: {}", math_fidelity);
-    tt::log_info("math_approx_mode: {}", math_approx_mode);
-    tt::log_info("fp32_dest_acc_en: {}", fp32_dest_acc_en);
-    tt::log_info("causal mask {}", causal_mask);
+    tt::log_debug("in0_cb_data_format: {}", in0_cb_data_format);
+    tt::log_debug("out0_cb_data_format: {}", out0_cb_data_format);
+    tt::log_debug("mask_cb_data_format: {}", mask_cb_data_format);
+    tt::log_debug("im_cb_data_format: {}", im_cb_data_format);
+    tt::log_debug("math_fidelity: {}", math_fidelity);
+    tt::log_debug("math_approx_mode: {}", math_approx_mode);
+    tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    tt::log_debug("causal mask {}", causal_mask);
 
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();

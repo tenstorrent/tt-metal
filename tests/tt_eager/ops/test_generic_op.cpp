@@ -917,18 +917,30 @@ void test_numerically() {
     // softmax original and generic test
     // from test_softmax_op.cpp
     {
-        std::cout << "Starting original softmax test" << std::endl;
+
+        // Softmax original test
+
+        tt::log_info(tt::LogTest, "Running original softmax test");
         const Shape softmax_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
         Tensor input_tensor_generic = tt::numpy::random::random(softmax_shape);
         Tensor input_tensor_original = input_tensor_generic;
         input_tensor_original = input_tensor_original.to(Layout::TILE).to(device);
         Tensor device_output_tensor_original = ttnn::softmax_in_place(input_tensor_original);
         Tensor output_tensor_original = device_output_tensor_original.cpu();
-        std::cout << "Finished original softmax test" << std::endl;
 
         // Softmax generic test
 
-        std::cout << "Starting generic softmax test" << std::endl;
+        tt::log_info(tt::LogTest, "Running generic softmax test");
+
+        // Copy paste arguments from original softmax call so we can compare the results.
+        std::optional<const Tensor> mask = nullopt;
+        std::optional<float> scale = std::nullopt;
+        bool causal_mask = false;
+
+        // Compute kernel configuration parameters copied from original test.
+        MathFidelity math_fidelity = MathFidelity::HiFi4;
+        bool math_approx_mode = true;
+        bool fp32_dest_acc_en = false;
 
         input_tensor_generic = input_tensor_generic.to(Layout::TILE).to(device);
 
@@ -940,11 +952,6 @@ void test_numerically() {
             input_tensor_generic.memory_config());
 
         auto input_tensor = ttnn::unsqueeze_to_4D(input_tensor_generic);
-
-         // TODO(pjanevski): Copy paste arguments from original softmax call.
-        std::optional<const Tensor> mask = nullopt;
-        std::optional<float> scale = std::nullopt;
-        bool causal_mask = false;
 
         const auto shape = input_tensor.get_legacy_shape();
         uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
@@ -974,11 +981,6 @@ void test_numerically() {
         tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
         uint32_t in0_tile_size = tt::tt_metal::detail::TileSize(in0_cb_data_format);
 
-        // Copied from original softmax call
-        MathFidelity math_fidelity = MathFidelity::HiFi4;
-        bool math_approx_mode = true;
-        bool fp32_dest_acc_en = false;
-
         tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
         uint32_t scalar_tile_size = tt::tt_metal::detail::TileSize(scalar_cb_data_format);
 
@@ -991,13 +993,13 @@ void test_numerically() {
         tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_cb_data_format);
 
-        tt::log_info("in0_cb_data_format: {}", in0_cb_data_format);
-        tt::log_info("out0_cb_data_format: {}", out0_cb_data_format);
-        tt::log_info("mask_cb_data_format: {}", mask_cb_data_format);
-        tt::log_info("im_cb_data_format: {}", im_cb_data_format);
-        tt::log_info("math_fidelity: {}", math_fidelity);
-        tt::log_info("math_approx_mode: {}", math_approx_mode);
-        tt::log_info("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+        tt::log_debug("in0_cb_data_format: {}", in0_cb_data_format);
+        tt::log_debug("out0_cb_data_format: {}", out0_cb_data_format);
+        tt::log_debug("mask_cb_data_format: {}", mask_cb_data_format);
+        tt::log_debug("im_cb_data_format: {}", im_cb_data_format);
+        tt::log_debug("math_fidelity: {}", math_fidelity);
+        tt::log_debug("math_approx_mode: {}", math_approx_mode);
+        tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
         auto src0_buffer = input_tensor.buffer();
         auto out0_buffer = device_output_tensor.buffer();
@@ -1062,8 +1064,6 @@ void test_numerically() {
         if (causal_mask) {
             softmax_defines["CAUSAL_MASK"] = "1";
         }
-
-        // TODO(pjanevski): if mask is not nullopt we need to add more circular buffers
 
        ttnn::operations::generic::GenericOpDeviceOperation::operation_attributes_t program_attributes =
         {
@@ -1155,8 +1155,6 @@ void test_numerically() {
             },
         };
 
-        std::cout << "Finished creating program attributes" << std::endl;
-
         uint32_t src_addr = src0_buffer->address();
         uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;
         uint32_t out_addr = out0_buffer->address();
@@ -1207,7 +1205,6 @@ void test_numerically() {
             curr_row += num_tile_rows_per_core;
         }
 
-        std::cout << "Running softmax generic op" << std::endl;
         ttnn::generic_op(std::vector<Tensor>{input_tensor}, device_output_tensor, program_attributes);
 
         auto reshaped_device_output_tensor = ttnn::reshape(device_output_tensor, input_tensor_generic.get_shape());
@@ -1217,50 +1214,41 @@ void test_numerically() {
         auto allclose = tt::numpy::allclose<bfloat16>(output_tensor_original, output_tensor);
 
         TT_FATAL(allclose);
-
-        std::cout << "Finished softmax generic test" << std::endl;
     }
 
     // =================
     // Matmul original and generic test
     {
-        std::cout << "Running matmul original test" << std::endl;
+        // Matmul original
+        tt::log_info(tt::LogTest, "Running matmul original test");
         uint32_t Mt_original = 10;
         uint32_t Kt_original = 2;
         uint32_t Nt_original = 4;
         uint32_t B_original = 3;
+
         Shape shapea = {B_original, 1, Mt_original*TILE_HEIGHT, Kt_original*TILE_WIDTH};
         Shape shapeb = {B_original, 1, Kt_original*TILE_HEIGHT, Nt_original*TILE_WIDTH};
-        // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a_original = tt::numpy::random::random(shapea);
         Tensor b_original = tt::numpy::random::random(shapeb);
+
+        Tensor a = a_original;
+        Tensor b = b_original;
+
+        a_original = a_original.to(Layout::TILE).to(device);
+        b_original = b_original.to(Layout::TILE).to(device);
+
+        Tensor mm = tt::operations::primary::matmul(a_original, b_original);
+
+        // Matmul generic
+
+        tt::log_info(tt::LogTest, "Running matmul generic test");
 
         // Parameters for matmul call - copy paste from matmul_multi_core in
         // bmm_op_multi_core.cpp
         bool bcast_batch = false;
-        Tensor a = a_original;
-        Tensor b = b_original;
 
         a = a.to(Layout::TILE).to(device);
         b = b.to(Layout::TILE).to(device);
-
-        a_original = a_original.to(Layout::TILE).to(device);
-        b_original = b_original.to(Layout::TILE).to(device);
-        // Tensor mm = tt::operations::primary::matmul(a_original, b_original, /*bias=*/std::nullopt,
-        //         tt::operations::primary::Matmul{/*program_config=*/std::nullopt, /*bcast_batch=*/std::nullopt,operation::DEFAULT_OUTPUT_MEMORY_CONFIG, /*output_dtype=*/std::nullopt, /*compute_kernel_config=*/std::nullopt, /*untilize_out=*/false, /*user_core_coord=*/std::nullopt, /*user_fused_activation=*/std::nullopt, /*user_run_batched=*/true}).cpu();
-
-        Tensor mm = tt::operations::primary::matmul(a_original, b_original);
-
-        auto tensor_mm_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(mm.cpu());
-
-        for (int index = 0; index < 10; index++) {
-            std::cout << tensor_mm_buffer[index].to_float() << " ";
-        }
-        std::cout << std::endl;
-
-        std::cout << "Finished original matmul test" << std::endl;
-
-        std::cout << "Running generic matmul test" << std::endl;
 
         const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
@@ -1290,7 +1278,6 @@ void test_numerically() {
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
-        std::cout << num_cores_x << " " << num_cores_y << std::endl;
         uint32_t c_batch_size = get_batch_size(cshape);
         auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
         auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
@@ -1386,10 +1373,7 @@ void test_numerically() {
             num_output_tiles_per_core_group_1 // Nt
         }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
-        // TODO(pjanevski): assert that we have both core group 1 and 2, this is the point of the test
-
         if (!core_group_2.ranges().empty()) {
-            std::cout << "core group 2 not empty generic" << std::endl;
             vector<uint32_t> compute_args_group_2 = {
                 1, // B
                 1, // Mt
@@ -1417,7 +1401,9 @@ void test_numerically() {
             };
 
         } else {
-            // TODO(pjanevski): assert that we don't hit this
+            TT_FATAL(false,
+                     "Core group 2 for matmul generic test is empty. Purpose of the test is to test generic op "
+                     "with multiple core groups, so we should never hit this case.");
         }
 
 
@@ -1480,31 +1466,13 @@ void test_numerically() {
             num_tiles_written += num_output_tiles_per_core;
         }
 
-        std::cout << "Running matmul generic op" << std::endl;
         ttnn::generic_op(std::vector<Tensor>{a, b}, output, program_attributes);
 
         auto output_tensor = output.cpu();
 
-        auto tensor_output_buffer = tt::tt_metal::owned_buffer::get_as<bfloat16>(output_tensor);
-
-        for (int index = 0; index < 10; index++) {
-            std::cout << tensor_output_buffer[index].to_float() << " ";
-        }
-        std::cout << std::endl;
-
         auto allclose = tt::numpy::allclose<bfloat16>(mm.cpu(), output_tensor);
 
         TT_FATAL(allclose);
-
-        std::cout << "a buffer " << a.buffer()->address() << std::endl;
-
-        std::cout << "b buffer " << b.buffer()->address() << std::endl;
-
-        std::cout << "output buffer " << output.buffer()->address() << std::endl;
-
-        std::cout << "mm buffer " << mm.buffer()->address() << std::endl;
-
-        std::cout << "Finished matmul generic test" << std::endl;
     }
 
     TT_FATAL(tt::tt_metal::CloseDevice(device));
