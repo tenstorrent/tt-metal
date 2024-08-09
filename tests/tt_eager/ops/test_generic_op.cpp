@@ -592,7 +592,7 @@ void test_numerically() {
                         .core_spec = all_cores,
                         .total_size = 2 * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
                         .page_size = tt::tt_metal::detail::TileSize(input_b_cb_data_format),
-                        .data_format = input_b_cb_data_format,
+                        .data_format = output_cb_data_format,
                     }
                 }
             },
