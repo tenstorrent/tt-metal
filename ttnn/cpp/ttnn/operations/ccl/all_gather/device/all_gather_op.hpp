@@ -154,6 +154,21 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology);
+operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    const std::optional<chip_id_t> receiver_device_id,
+    const std::optional<chip_id_t> sender_device_id,
+    all_gather_op::Topology topology,
+    const std::optional<std::vector<CoreCoord>> datacopy_cores = {},
+    const std::optional<std::vector<uint32_t>> datacopy_signal_semaphore_addr = {},
+    const CoreCoord core_grid_offset = CoreCoord(0, 0));
+
 
 
 namespace operations {
