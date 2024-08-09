@@ -90,6 +90,7 @@ def test_reproduce_matmul_2d_hang(
 
     A = torch.randn(a_shape)
     B = torch.randn(b_shape)
+    O = A @ B
 
     a_t = []
     b_t = []
@@ -164,6 +165,11 @@ def test_reproduce_matmul_2d_hang(
             else:
                 print("Start single device sync:")
             ttl.device.Synchronize(devices[device_idx])
+            out_h = tt2torch_tensor(out[device_idx])
+            num_mismatch = ref_out[device_idx].numel() - torch.count_nonzero(torch.eq(ref_out[device_idx], out_h))
+            print(f"Max Diff: {torch.amax(torch.abs(ref_out[device_idx] - out_h))}")
+            print(f"Num Mismatch: {num_mismatch}")
+            # assert(num_mismatch == 0)
             if num_devices != 1:
                 if num_devices == 2:
                     print("End sync logicalDeviceID: ", device_idx)
