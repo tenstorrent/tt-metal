@@ -901,4 +901,12 @@ op_map = {
         "tt_op": ttnn_ops.concat_bw,
         "pytorch_op": ttnn_pytorch_ops.concat_bw,
     },
+    "eltwise-div_no_nan": {
+        "tt_op": ttnn_ops.eltwise_div_no_nan,
+        "pytorch_op": pytorch_ops.div_no_nan,
+    },
+    "eltwise-unary_div_no_nan": {
+        "tt_op": ttnn_ops.eltwise_unary_div_no_nan,
+        "pytorch_op": pytorch_ops.unary_div_no_nan,
+    },
 }
