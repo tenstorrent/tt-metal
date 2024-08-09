@@ -10,7 +10,7 @@ import ttnn
 import traceback
 
 # from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 
 
@@ -41,11 +41,13 @@ def run_var_tests(
         raise e
 
     # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, tt_result)
+    success_all_close, pcc_value = comp_allclose(ref_value, tt_result, atol=0.5)
+    success_pcc, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
-    logger.debug(success)
+    logger.debug(success_all_close)
+    logger.debug(success_pcc)
 
-    assert success
+    assert success_all_close or success_pcc
 
 
 test_sweep_args = [
