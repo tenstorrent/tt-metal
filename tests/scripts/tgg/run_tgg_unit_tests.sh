@@ -4,7 +4,7 @@ set -eo pipefail
 
 run_tgg_tests() {
 
-  echo "LOG_METAL: Fill me!"
+  echo "LOG_METAL: running run_tgg_unit_tests"
 
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_galaxy --gtest_filter="GalaxyFixture.*:TGGFixture.*"
   ./build/test/tt_metal/unit_tests_galaxy --gtest_filter="GalaxyFixture.*:TGGFixture.*"
