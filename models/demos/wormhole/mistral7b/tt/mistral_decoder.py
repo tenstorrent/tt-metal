@@ -26,7 +26,6 @@ class TtTransformerBlock(torch.nn.Module):
         self.dim = args.dim
         self.max_batch_size = args.max_batch_size
         self.n_kv_heads = args.n_kv_heads
-        self.current = 0
         self.sliding_window = args.sliding_window
         self.model_config = args.get_model_config()
 
