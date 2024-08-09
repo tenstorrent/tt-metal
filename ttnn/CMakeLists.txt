@@ -170,7 +170,7 @@ set(TTNN_PRECOMPILED_HEADERS
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy/public/tracy/Tracy.hpp
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt/fmt/core.h
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt/fmt/format.h
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/device_api.h
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/device_api_metal.h
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/tt_device.h
     <functional>
     <map>

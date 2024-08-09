@@ -156,6 +156,7 @@ inline std::ostream& operator<<(std::ostream& os, const RISCV& riscv) {
         case RISCV::TRISC0: os << "TRISC0"; break;
         case RISCV::TRISC1: os << "TRISC1"; break;
         case RISCV::TRISC2: os << "TRISC2"; break;
+        case RISCV::ERISC: os << "ERISC"; break;
         case RISCV::COMPUTE: os << "COMPUTE"; break;
         default: throw std::invalid_argument("Unknown format");
     }

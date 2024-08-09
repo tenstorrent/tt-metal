@@ -66,11 +66,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
 }
 
 inline int get_tt_npu_clock(tt::tt_metal::Device *device) {
-    int ai_clk = 0;
-#ifdef TT_METAL_VERSIM_DISABLED
-    ai_clk = tt::Cluster::instance().get_device_aiclk(device->id());
-#endif
-    return ai_clk;
+    return tt::Cluster::instance().get_device_aiclk(device->id());
 }
 
 template <typename T>

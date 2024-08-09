@@ -112,7 +112,7 @@ using AttributeName = std::string;
 
 struct Attribute final {
     static constexpr std::size_t ALIGNMENT = 32;
-    using storage_t = std::array<std::byte, 256>;
+    using storage_t = std::array<std::byte, 1312>;
 
     const std::string to_string() const { return this->implementations.to_string_impl_(this->type_erased_storage); }
     const std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
@@ -282,7 +282,7 @@ Attributes get_attributes(const T& object) {
                 ...);
         }(std::make_index_sequence<num_attributes>{});
         return attributes;
-    } else {
+    } else if constexpr (tt::stl::concepts::Reflectable<std::decay_t<T>>) {
         tt::stl::reflection::Attributes attributes;
         reflect::for_each(
             [&object, &attributes](auto I) {
@@ -292,6 +292,8 @@ Attributes get_attributes(const T& object) {
             },
             object);
         return attributes;
+    } else {
+        return object.attributes();
     }
 }
 
@@ -444,7 +446,7 @@ template <typename T>
 struct visit_object_of_type_t;
 
 template <typename object_t, typename T>
-void visit_object_of_type(auto&& callback, T&& object) { return visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object); }
+void visit_object_of_type(auto&& callback, T&& object) { visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object); }
 
 template<typename T>
 requires (not tt::stl::concepts::Reflectable<std::decay_t<T>>) and (not  requires { std::decay_t<T>::attribute_names; })
@@ -578,6 +580,158 @@ struct visit_object_of_type_t<T> {
     void operator()(auto&& callback, const T& object) const {
         reflect::for_each(
             [&callback, &object](auto I) { visit_object_of_type<object_t>(callback, reflect::get<I>(object)); }, object);
+    }
+};
+
+template <typename T>
+struct transform_object_of_type_t;
+
+template <typename object_t, typename T>
+auto transform_object_of_type(auto&& callback, T&& object) { return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object); }
+
+template<typename T>
+requires (not tt::stl::concepts::Reflectable<std::decay_t<T>>) and (not  requires { std::decay_t<T>::attribute_names; })
+struct transform_object_of_type_t<T> {
+
+    template<typename object_t>
+    requires std::same_as<std::decay_t<T>, object_t>
+    T operator()(auto&& callback, T&& value) const {
+        return callback(value);
+    }
+
+    template<typename object_t>
+    requires (not std::same_as<std::decay_t<T>, object_t>)
+    T operator()(auto&& callback, T&& value) const {
+        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported transform of object of type");
+    }
+
+    template<typename object_t>
+    requires std::same_as<std::decay_t<T>, object_t>
+    T operator()(auto&& callback, const T& value) const {
+        return callback(value);
+    }
+
+    template<typename object_t>
+    requires (not std::same_as<std::decay_t<T>, object_t>)
+    T operator()(auto&& callback, const T& value) const {
+        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported transform of object of type");
+    }
+};
+
+template<typename T>
+struct transform_object_of_type_t<std::optional<T>> {
+
+    template<typename object_t>
+    std::optional<T> operator()(auto&& callback, const std::optional<T>& value) const {
+        if (value.has_value()) {
+            return transform_object_of_type<object_t>(callback, value.value());
+        }
+        return std::nullopt;
+    }
+};
+
+template<typename T>
+struct transform_object_of_type_t<std::vector<T>> {
+
+    template<typename object_t>
+    std::vector<T> operator()(auto&& callback, const std::vector<T>& value) const {
+        std::vector<T> return_value;
+        for (auto& tensor : value) {
+            return_value.emplace_back(transform_object_of_type<object_t>(callback, tensor));
+        }
+        return return_value;
+    }
+};
+
+template<typename T, auto N>
+struct transform_object_of_type_t<std::array<T, N>> {
+
+    template<typename object_t>
+    std::array<T, N> operator()(auto&& callback, const std::array<T, N>& value) const {
+        std::array<T, N> return_value;
+        for (auto index = 0; index < value.size(); index++) {
+            return_value[index] = transform_object_of_type<object_t>(callback, value[index]);
+        }
+        return return_value;
+    }
+};
+
+template<typename... Ts>
+struct transform_object_of_type_t<std::tuple<Ts...>> {
+
+    template<typename object_t>
+    std::tuple<Ts...> operator()(auto&& callback, const std::tuple<Ts...>& value) const {
+        return std::apply(
+            [&callback]<typename... args_t>(args_t&&... args) {
+                return std::make_tuple(transform_object_of_type<object_t>(callback, std::forward<args_t>(args))...);
+            },
+            value);
+    }
+};
+
+template<typename T>
+requires requires { std::decay_t<T>::attribute_names; }
+struct transform_object_of_type_t<T> {
+
+    template<typename object_t>
+    requires std::same_as<std::decay_t<T>, object_t>
+    T operator()(auto&& callback, T&& value) const {
+        return callback(value);
+    }
+
+    template<typename object_t>
+    requires(not std::same_as<std::decay_t<T>, object_t>)
+    T operator()(auto&& callback, T&& object) const {
+        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported transform of object of type");
+    }
+
+    template<typename object_t>
+    requires std::same_as<std::decay_t<T>, object_t>
+    T operator()(auto&& callback, const T& value) const {
+        return callback(value);
+    }
+
+    template<typename object_t>
+    requires(not std::same_as<std::decay_t<T>, object_t>)
+    T operator()(auto&& callback, const T& object) const {
+        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported transform of object of type");
+    }
+};
+
+template<typename T>
+requires tt::stl::concepts::Reflectable<std::decay_t<T>>
+struct transform_object_of_type_t<T> {
+
+    template<typename object_t>
+    requires std::same_as<std::decay_t<T>, object_t>
+    T operator()(auto&& callback, T&& value) const {
+        return callback(value);
+    }
+
+    template<typename object_t>
+    requires(not std::same_as<std::decay_t<T>, object_t>)
+    T operator()(auto&& callback, T&& object) const {
+        return std::apply(
+            [&callback](auto&&... args) {
+                return T{transform_object_of_type<object_t>(callback, std::forward<decltype(args)>(args))...};
+            },
+            reflect::to<std::tuple>(object));
+    }
+
+    template<typename object_t>
+    requires std::same_as<std::decay_t<T>, object_t>
+    T operator()(auto&& callback, const T& value) const {
+        return callback(value);
+    }
+
+    template<typename object_t>
+    requires(not std::same_as<std::decay_t<T>, object_t>)
+    T operator()(auto&& callback, const T& object) const {
+        return std::apply(
+            [&callback](auto&&... args) {
+                return T{transform_object_of_type<object_t>(callback, std::forward<decltype(args)>(args))...};
+            },
+            reflect::to<std::tuple>(object));
     }
 };
 
