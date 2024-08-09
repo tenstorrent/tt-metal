@@ -12,17 +12,12 @@
 
 #include "noc/noc_parameters.h"
 
-#define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
-    ((uint64_t) & (((mailboxes_t *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
-#define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((uint64_t) & (((mailboxes_t *)MEM_IERISC_MAILBOX_BASE)->x))
+// TODO: move these to processor specific files
 #if defined(COMPILE_FOR_ERISC)
-#define GET_MAILBOX_ADDRESS_HOST(x) GET_ETH_MAILBOX_ADDRESS_HOST(x)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 #elif defined(COMPILE_FOR_IDLE_ERISC)
-#define GET_MAILBOX_ADDRESS_HOST(x) GET_IERISC_MAILBOX_ADDRESS_HOST(x)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_IERISC_MAILBOX_BASE)->x))
 #else
-#define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t) & (((mailboxes_t *)MEM_MAILBOX_BASE)->x))
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr *)MEM_MAILBOX_BASE)->x))
 #endif
 
@@ -193,11 +188,16 @@ struct debug_ring_buf_msg_t {
 };
 
 constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204; // per thread
+// TODO: when device specific headers specify number of processors
+// (and hal abstracts them on host), get these from there
 #if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
 constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 1;
 #else
 constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
 #endif
+
+// TODO: w/ the hal, this can come from core specific defines
+constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
 
 struct dprint_buf_msg_t {
     uint8_t data[DPRINT_BUFFERS_COUNT][DPRINT_BUFFER_SIZE];
@@ -215,11 +215,9 @@ enum watcher_enable_msg_t {
     WatcherEnabled = 3,
 };
 
-constexpr int num_riscv_per_core = 5;
-
 struct watcher_msg_t {
     volatile uint32_t enable;
-    struct debug_status_msg_t debug_status[num_riscv_per_core];
+    struct debug_status_msg_t debug_status[MAX_RISCV_PER_CORE];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[NUM_NOCS];
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
@@ -231,7 +229,7 @@ struct watcher_msg_t {
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct slave_sync_msg_t slave_sync;
-    volatile uint32_t l1_barrier;
+    uint32_t pad;
     struct launch_msg_t launch;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;

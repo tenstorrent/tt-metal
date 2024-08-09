@@ -7,7 +7,6 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/dprint_server.hpp"
@@ -19,6 +18,7 @@
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "tt_metal/impl/device/device_pool.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt {
 
@@ -292,7 +292,8 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
     //This is an initialization launch message.
     //Clears launch message fields to 0 in target core L1.
     //Sets launch.run to RUN_MSG_INIT.
-    llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
+    llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg,
+        this->get_dev_addr(phys_core, HalMemAddrType::HAL_L1_MEM_ADDR_LAUNCH));
 }
 
 void Device::reset_cores() {
@@ -308,8 +309,9 @@ void Device::reset_cores() {
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
         std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+        DeviceAddr launch_addr = hal.get_dev_addr(HalDispatchCoreType::HAL_CORE_TYPE_ACTIVE_ETH, HalMemAddrType::HAL_L1_MEM_ADDR_LAUNCH);
         data = tt::llrt::read_hex_vec_from_core(
-            this->id(), physical_core, GET_ETH_MAILBOX_ADDRESS_HOST(launch), sizeof(launch_msg_t));
+            this->id(), physical_core, launch_addr, sizeof(launch_msg_t));
         launch_msg_t *launch_msg = (launch_msg_t *)(&data[0]);
         if (kernel_still_running(launch_msg)) {
             log_info(
@@ -319,7 +321,7 @@ void Device::reset_cores() {
                 physical_core.str(),
                 this->id());
             launch_msg->kernel_config.exit_erisc_kernel = 1;
-            llrt::write_launch_msg_to_core(this->id(), physical_core, launch_msg, false);
+            llrt::write_launch_msg_to_core(this->id(), physical_core, launch_msg, launch_addr, false);
             device_to_early_exit_cores[this->id()].insert(physical_core);
         }
     }
@@ -333,8 +335,9 @@ void Device::reset_cores() {
             if (llrt::is_ethernet_core(phys_core, id_and_cores.first)) {
                 // Ethernet cores won't be reset, so just signal the dispatch cores to early exit.
                 std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+                DeviceAddr launch_addr = hal.get_dev_addr(HalDispatchCoreType::HAL_CORE_TYPE_IDLE_ETH, HalMemAddrType::HAL_L1_MEM_ADDR_LAUNCH);
                 data = tt::llrt::read_hex_vec_from_core(
-                    id_and_cores.first, phys_core, GET_IERISC_MAILBOX_ADDRESS_HOST(launch), sizeof(launch_msg_t));
+                    id_and_cores.first, phys_core, launch_addr, sizeof(launch_msg_t));
                 launch_msg_t *launch_msg = (launch_msg_t *)(&data[0]);
                 if (kernel_still_running(launch_msg)) {
                     log_info(
@@ -344,7 +347,7 @@ void Device::reset_cores() {
                         phys_core.str(),
                         id_and_cores.first);
                     launch_msg->kernel_config.exit_erisc_kernel = 1;
-                    llrt::write_launch_msg_to_core(id_and_cores.first, phys_core, launch_msg, false);
+                    llrt::write_launch_msg_to_core(id_and_cores.first, phys_core, launch_msg, launch_addr, false);
                     device_to_early_exit_cores[id_and_cores.first].insert(phys_core);
                 }
             }
@@ -1838,7 +1841,8 @@ void Device::init_command_queue_device() {
         for (const auto &[core_type, logical_dispatch_cores] : command_queue_program.logical_cores()) {
             for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
                 launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, core_type)->launch_msg;
-                tt::llrt::write_launch_msg_to_core(this->id(), this->physical_core_from_logical_core(logical_dispatch_core, core_type), &msg);
+                CoreCoord phys_core = this->physical_core_from_logical_core(logical_dispatch_core, core_type);
+                tt::llrt::write_launch_msg_to_core(this->id(), phys_core, &msg, this->get_dev_addr(phys_core, HalMemAddrType::HAL_L1_MEM_ADDR_LAUNCH));
             }
         }
     }
@@ -1851,7 +1855,8 @@ void Device::init_command_queue_device() {
             for (const auto &[core_type, logical_dispatch_cores] : mmio_command_queue_program.logical_cores()) {
                 for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
                     launch_msg_t msg = mmio_command_queue_program.kernels_on_core(logical_dispatch_core, core_type)->launch_msg;
-                    tt::llrt::write_launch_msg_to_core(mmio_device_id, mmio_device->physical_core_from_logical_core(logical_dispatch_core, core_type), &msg);
+                    CoreCoord phys_core = mmio_device->physical_core_from_logical_core(logical_dispatch_core, core_type);
+                    tt::llrt::write_launch_msg_to_core(mmio_device_id, phys_core, &msg, mmio_device->get_dev_addr(phys_core, HalMemAddrType::HAL_L1_MEM_ADDR_LAUNCH));
                 }
             }
         }
@@ -1875,6 +1880,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
     log_info(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
+    hal.initialize(this->arch());
     this->using_fast_dispatch = false;
     this->num_hw_cqs_ = num_hw_cqs;
     constexpr uint32_t harvesting_map_bits = 12;
@@ -2320,6 +2326,23 @@ std::shared_ptr<TraceBuffer> Device::get_trace(const uint32_t tid) {
     } else {
         return nullptr;
     }
+}
+
+DeviceAddr Device::get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) {
+
+    HalDispatchCoreType dispatch_core_type = HalDispatchCoreType::HAL_CORE_TYPE_TENSIX;;
+
+    if (tt::llrt::is_ethernet_core(phys_core, this->id_)) {
+        // Eth pcores have a different address, but only active ones.
+        CoreCoord logical_core = this->logical_core_from_ethernet_core(phys_core);
+        if (this->is_active_ethernet_core(logical_core)) {
+            dispatch_core_type = HalDispatchCoreType::HAL_CORE_TYPE_ACTIVE_ETH;
+        } else {
+            dispatch_core_type = HalDispatchCoreType::HAL_CORE_TYPE_IDLE_ETH;
+        }
+    }
+
+    return hal.get_dev_addr(dispatch_core_type, addr_type);
 }
 
 }  // namespace tt_metal

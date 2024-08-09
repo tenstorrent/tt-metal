@@ -9,7 +9,7 @@
 #include "tensix_functions.h"
 #include "risc_attribs.h"
 #include "compile_time_args.h"
-#include "hostdevcommon/common_runtime_address_map.h"
+#include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
 
 extern uint32_t __ldm_bss_start[];
