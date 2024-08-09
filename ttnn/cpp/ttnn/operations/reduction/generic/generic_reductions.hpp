@@ -147,7 +147,7 @@ struct Reduce {
         }
 
         output_tensor =
-            ttnn::reshape(output_tensor, ttnn::Shape{tt::tt_metal::Shape{output_shape, padded_output_shape}});
+            ttnn::reshape(output_tensor, ttnn::Shape{tt::tt_metal::Shape{output_shape, padded_output_shape}}, memory_config);
 
         return output_tensor;
     }

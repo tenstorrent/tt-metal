@@ -96,7 +96,8 @@ Tensor to_layout_impl(
             tensor,
             ttnn::Shape(
                 std::vector<std::uint32_t>{1, intended_shape[0]},
-                std::vector<std::uint32_t>{1, tensor_arg.get_shape().with_tile_padding()[0]}));
+                std::vector<std::uint32_t>{1, tensor_arg.get_shape().with_tile_padding()[0]}),
+            memory_config);
     }
     for (auto index = 0; index < intended_shape.rank(); ++index) {
         output_shape.push_back(intended_shape[index]);
@@ -146,7 +147,7 @@ Tensor to_layout_impl(
 
             tensor =
                 ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
-            return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}));
+            return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}), memory_config);
 
         } else if (layout == ttnn::TILE_LAYOUT) {
             std::vector<uint32_t> padded_output_shape;
@@ -161,7 +162,7 @@ Tensor to_layout_impl(
             tensor = ttnn::tilize_with_val_padding(
                 tensor, padded_output_shape, 0, output_memory_config, dtype, use_multicore_tilize);
 
-            return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape, padded_output_shape}));
+            return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape, padded_output_shape}), memory_config);
 
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
@@ -173,7 +174,7 @@ Tensor to_layout_impl(
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
             tensor = tensor.unpad_from_tile(tensor.get_shape().value.without_padding());
-            return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}));
+            return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape}), memory_config);
         } else if (layout == ttnn::TILE_LAYOUT) {
             std::vector<uint32_t> padded_output_shape;
             std::vector<uint32_t> padded_input_start;
@@ -187,7 +188,7 @@ Tensor to_layout_impl(
             }
             tensor = tensor.pad(padded_output_shape, padded_input_start, 0);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
-            return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape, padded_output_shape}));
+            return reshape(tensor, ttnn::Shape(tt::tt_metal::Shape{output_shape, padded_output_shape}), memory_config);
 
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);

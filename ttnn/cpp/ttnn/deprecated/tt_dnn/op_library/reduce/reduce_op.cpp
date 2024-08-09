@@ -317,7 +317,7 @@ Tensor global_reduce(ReduceFnT f,const Tensor& val, const MemoryConfig& output_m
     padded_shape_array.fill(1);
     padded_shape_array[padded_shape_array.size()-1] = 32;
     padded_shape_array[padded_shape_array.size()-2] = 32;
-    result = ttnn::reshape(result, ttnn::Shape{intended_shape_array, padded_shape_array});
+    result = ttnn::reshape(result, ttnn::Shape{intended_shape_array, padded_shape_array}, output_mem_config);
     return result;
 }
 

@@ -19,51 +19,57 @@ namespace core {
 void py_module(py::module& module) {
     module.def(
         "reshape",
-        [](const ttnn::Tensor& tensor, const ttnn::Shape& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
+        [](const ttnn::Tensor& tensor, const ttnn::Shape& shape, const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return ttnn::reshape(tensor, shape, memory_config);
         },
         py::arg("tensor"),
-        py::arg("shape"));
+        py::arg("shape"),
+        py::arg("memory_config") = std::nullopt);
 
     module.def(
         "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 1>& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
+        [](const ttnn::Tensor& tensor, const std::array<int32_t, 1>& shape, const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return ttnn::reshape(tensor, shape, memory_config);
         },
         py::arg("tensor"),
-        py::arg("shape"));
+        py::arg("shape"),
+        py::arg("memory_config") = std::nullopt);
 
     module.def(
         "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 2>& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
+        [](const ttnn::Tensor& tensor, const std::array<int32_t, 2>& shape, const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return ttnn::reshape(tensor, shape, memory_config);
         },
         py::arg("tensor"),
-        py::arg("shape"));
+        py::arg("shape"),
+        py::arg("memory_config") = std::nullopt);
 
     module.def(
         "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 3>& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
+        [](const ttnn::Tensor& tensor, const std::array<int32_t, 3>& shape, const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return ttnn::reshape(tensor, shape, memory_config);
         },
         py::arg("tensor"),
-        py::arg("shape"));
+        py::arg("shape"),
+        py::arg("memory_config") = std::nullopt);
 
     module.def(
         "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 4>& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
+        [](const ttnn::Tensor& tensor, const std::array<int32_t, 4>& shape, const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return ttnn::reshape(tensor, shape, memory_config);
         },
         py::arg("tensor"),
-        py::arg("shape"));
+        py::arg("shape"),
+        py::arg("memory_config") = std::nullopt);
 
     module.def(
         "reshape",
-        [](const ttnn::Tensor& tensor, const std::array<int32_t, 5>& shape) -> ttnn::Tensor {
-            return ttnn::reshape(tensor, shape);
+        [](const ttnn::Tensor& tensor, const std::array<int32_t, 5>& shape, const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
+            return ttnn::reshape(tensor, shape, memory_config);
         },
         py::arg("tensor"),
-        py::arg("shape"));
+        py::arg("shape"),
+        py::arg("memory_config") = std::nullopt);
 
     module.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, py::arg("tensor"));
 

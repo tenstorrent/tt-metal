@@ -29,11 +29,11 @@ struct ExecuteSoftmax {
         if (dim == rank - 1) {
             auto output_tensor = ttnn::operations::normalization::softmax(
                 input_tensor_4D, memory_config.value_or(input_tensor.memory_config()), compute_kernel_config);
-            return ttnn::reshape(output_tensor, input_shape);
+            return ttnn::reshape(output_tensor, input_shape, memory_config);
         } else {
             auto dim_4D = dim + 4 - rank;
             auto output_tensor = tt::operations::primary::moreh_softmax(input_tensor_4D, dim_4D);
-            return ttnn::reshape(output_tensor, input_shape);
+            return ttnn::reshape(output_tensor, input_shape, memory_config);
         }
     }
 };
@@ -52,7 +52,7 @@ struct ExecuteScaleMaskSoftmax {
         auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
         auto output_tensor =
             ttnn::operations::normalization::scale_mask_softmax(input_tensor_4D, scale, mask, memory_config.value_or(input_tensor.memory_config()), is_causal_mask, compute_kernel_config);
-        return ttnn::reshape(output_tensor, input_shape);
+        return ttnn::reshape(output_tensor, input_shape, memory_config);
     }
 };
 

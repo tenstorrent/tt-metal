@@ -150,11 +150,11 @@ ttnn::Tensor ExecutePad::operator()(
         remove_first_elements(shape, rank_diff);
         remove_first_elements(padded_shape, rank_diff);
         auto squeezedShape = ttnn::Shape(tt::tt_metal::Shape(shape, padded_shape));
-        output_tensor = ttnn::reshape(output_tensor, squeezedShape);
+        output_tensor = ttnn::reshape(output_tensor, squeezedShape, memory_config_arg);
     }
 
     // Padding always turns the intended shape to the shape with tile padding. For simplicity of the operation
-    output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
+    output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape), memory_config_arg);
 
     return output_tensor;
 }
