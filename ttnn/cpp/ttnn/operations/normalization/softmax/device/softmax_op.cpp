@@ -146,8 +146,6 @@ tt::tt_metal::operation::ProgramWithCallbacks Softmax::create_program(
     // : false;
     bool causal_mask = this->is_causal_mask;
 
-    std::cout << "here 2 here 2";
-
     return std::visit(
         [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
