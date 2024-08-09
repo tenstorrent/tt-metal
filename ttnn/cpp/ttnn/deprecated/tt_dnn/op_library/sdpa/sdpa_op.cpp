@@ -433,22 +433,22 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionGQADecode::create_progr
     }
 
     // TODO: get this from program_config
-    std::size_t q_chunk_size;
-    std::size_t k_chunk_size;
+    // std::size_t q_chunk_size;
+    // std::size_t k_chunk_size;
 
-    std::visit(
-        [&](const auto& program_config) {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<
-                              ProgramConfigType,
-                              tt::operations::primary::transformers::SDPAMultiCoreProgramConfig>) {
-                q_chunk_size = program_config.q_chunk_size;
-                k_chunk_size = program_config.k_chunk_size;
-            } else {
-                q_chunk_size = k_chunk_size = 32;
-            }
-        },
-        this->program_config);
+    // std::visit(
+    //     [&](const auto& program_config) {
+    //         using ProgramConfigType = std::decay_t<decltype(program_config)>;
+    //         if constexpr (std::is_same_v<
+    //                           ProgramConfigType,
+    //                           tt::operations::primary::transformers::SDPAMultiCoreProgramConfig>) {
+    //             q_chunk_size = program_config.q_chunk_size;
+    //             k_chunk_size = program_config.k_chunk_size;
+    //         } else {
+    //             q_chunk_size = k_chunk_size = 32;
+    //         }
+    //     },
+    //     this->program_config);
 
     return sdpa_decode_multi_core(
         input_tensor_q,

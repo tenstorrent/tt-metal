@@ -109,8 +109,8 @@ def run_test_sdpa_decode_single_iter(
     K = fa_rand(b, nkv, s, d)
     V = fa_rand(b, nkv, s, d)
 
-    tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
-    tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
+    tt_K = ttnn.as_tensor(K, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
+    tt_V = ttnn.as_tensor(V, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
 
     start_indices = [s // 2 for _ in range(b * nkv)] if start_indices is None else start_indices
     max_start_idx = max(start_indices)
