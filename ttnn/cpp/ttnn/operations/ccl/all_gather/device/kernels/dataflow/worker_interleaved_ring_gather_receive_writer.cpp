@@ -159,7 +159,7 @@ void kernel_main() {
     uint32_t curr_receiver_worker_noc_y;
     uint32_t curr_worker_is_master;
     volatile tt_l1_ptr uint32_t* curr_worker_l1_semaphore_addr_ptr = nullptr;
-    uint64_t worker_sem_noc_addrs[global_num_workers] = {0}; // First one is for master
+    uint64_t worker_sem_noc_addrs[global_num_workers]; // First one is for master
     uint64_t signal_op_sem_noc_addr = 0;
 
 

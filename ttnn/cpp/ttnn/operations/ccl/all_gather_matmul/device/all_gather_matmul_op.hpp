@@ -23,6 +23,8 @@
 /* Fusion includes */
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+
 
 namespace ttnn {
 
