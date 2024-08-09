@@ -2,17 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
+#include "rotate_half_program_factory.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
+namespace ttnn::operations::transformer::detail {
+
+using namespace tt;
 using namespace tt::constants;
-
-namespace tt {
-
-namespace tt_metal {
 
 operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Tensor &output) {
     Program program{};
@@ -22,7 +21,7 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    tt::DataFormat scalar_cb_data_format = DataFormat::Float16_b;
+    tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t scalar_single_tile_size = tt_metal::detail::TileSize(scalar_cb_data_format);
 
     uint32_t num_tiles = input.volume() / TILE_HW;
@@ -80,13 +79,13 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/rotate_half/kernels/dataflow/reader_rotate_half_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/rotate_half/device/kernels/dataflow/reader_rotate_half_interleaved_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/rotate_half/kernels/dataflow/writer_rotate_half_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/rotate_half/device/kernels/dataflow/writer_rotate_half_interleaved_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -165,6 +164,4 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
     return {std::move(program), override_runtime_args_callback};
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}

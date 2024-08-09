@@ -2,44 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
+#include "device/rotary_embedding_device_operation.hpp"
 
-#include <functional>
+namespace ttnn::operations::transformer {
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
-
-namespace tt {
-
-namespace tt_metal {
-
-enum class RotaryEmbeddingOpParallelizationStrategy { MULTI_CORE };
-
-operation::ProgramWithCallbacks rotary_embedding_multi_core(
-    const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output, std::optional<uint32_t> token_idx, DeviceComputeKernelConfig compute_kernel_config);
-
-struct RotaryEmbedding {
-    const uint32_t seq_len;
-    std::optional<uint32_t> token_idx;
-    const MemoryConfig output_mem_config;
-    const DeviceComputeKernelConfig compute_kernel_config;
-
-    RotaryEmbeddingOpParallelizationStrategy get_parallelization_strategy(
-        const std::vector<Tensor> &input_tensors) const;
-
-    void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-
-    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
-};
-
-inline Tensor rotary_embedding(
+namespace {
+Tensor rotary_embedding(
     const Tensor &input_tensor,
     const Tensor &cos,
     const Tensor &sin,
@@ -69,11 +37,11 @@ inline Tensor rotary_embedding(
             auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
             auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
-            Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+            tt::tt_metal::Shape input_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
             FormatParams input_format_params = {.pad_shape = input_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-            Shape cos_pad_shape = AutoFormat::pad_to_tile_shape(cos.get_legacy_shape());
+            tt::tt_metal::Shape cos_pad_shape = AutoFormat::pad_to_tile_shape(cos.get_legacy_shape());
             FormatParams cos_format_params = {.pad_shape = cos_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-            Shape sin_pad_shape = AutoFormat::pad_to_tile_shape(sin.get_legacy_shape());
+            tt::tt_metal::Shape sin_pad_shape = AutoFormat::pad_to_tile_shape(sin.get_legacy_shape());
             FormatParams sin_format_params = {.pad_shape = sin_pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
             return operation::run_with_autoformat(
                     RotaryEmbedding{seq_len, token_idx, output_mem_config, kernel_config_val},
@@ -83,7 +51,29 @@ inline Tensor rotary_embedding(
         }, {input_tensor, cos, sin}, output_tensors);
     return output_tensors.at(0);
 }
+}
 
-}  // namespace tt_metal
+ttnn::Tensor RotaryEmbeddingOperation::operator()(
+    const Tensor& input_tensor,
+    const Tensor& cos_cache,
+    const Tensor& sin_cache,
+    const std::optional<uint32_t> token_index,
+    const std::optional<MemoryConfig> memory_config,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
 
-}  // namespace tt
+    uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
+    uint32_t B = input_tensor.get_legacy_shape()[0];
+    uint32_t X = input_tensor.get_legacy_shape()[-1];
+
+    auto arch = input_tensor.device()->arch();
+    auto kernel_config_val =
+        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+
+    return operation::run(
+                tt::tt_metal::RotaryEmbedding{
+                    seq_len, token_index, memory_config.value_or(input_tensor.memory_config()), kernel_config_val},
+                {input_tensor, cos_cache, sin_cache})
+        .at(0);
+}
+
+}

@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_llama_op.hpp"
+#include "rotary_embedding_llama_program_factory.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -188,13 +189,13 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/rotary_embedding/kernels/dataflow/reader_rotary_embedding_llama_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/rotary_embedding_llama/device/kernels/dataflow/reader_rotary_embedding_llama_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/rotary_embedding/kernels/dataflow/writer_rotary_embedding_llama_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/rotary_embedding_llama/device/kernels/dataflow/writer_rotary_embedding_llama_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
@@ -215,7 +216,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     auto rotary_embedding_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/rotary_embedding/kernels/compute/rotary_embedding_llama.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = kernel_defines});
 
