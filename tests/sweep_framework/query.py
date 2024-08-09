@@ -108,7 +108,9 @@ def summary(ctx):
             else:
                 row = []
                 for status in TestStatus:
-                    row.append(client.count(index=results_index, query={"match": {"status": str(status)}})["count"])
+                    row.append(
+                        client.count(index=results_index, query={"match": {"status.keyword": str(status)}})["count"]
+                    )
 
             table.rows.append(row, module_name)
     elif ctx.obj["suite_name"] is None:

@@ -8,6 +8,74 @@ Sweep test module files are placed in the `tests/sweep_framework/sweeps/` folder
 
 **LIMITATION: The suites must be made up of a maximum of 10,000 individual permutations. If you wish to test on more than 10,000 vectors, split the inputs into more than one suite.**
 
+**LIMITATION: All parameters should be top level. Do not nest ttnn parameters in tuples or dictionaries, or any ttnn types within will not be serialized correctly. Instead, make them top level. If you require nested data because you want to avoid the cross-product of all individual parameters, split them into separate suites, and add in general parameters after.**
+
+#### Example (INCORRECT, nested ttnn types in dicts/tuples, no separate suites):
+```
+parameters = {
+    "default": {
+        "matmul_specs": [
+            # mcast 2d
+            (
+                (2, 3),
+                (1600, 224, 896),
+                False,
+                dict(core_grid=ttnn.CoreGrid(y=5, x=7), strategy=ttnn.ShardStrategy.BLOCK),
+                None,
+            ),
+            # mcast 2d transposed
+            (
+                (2, 3),
+                (1600, 224, 896),
+                False,
+                dict(core_grid=ttnn.CoreGrid(y=5, x=7), strategy=ttnn.ShardStrategy.BLOCK, orientation=ttnn.ShardOrientation.COL_MAJOR),
+                None,
+            )
+        ],
+        "compute_kernel_config": [None],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.TILE_LAYOUT],
+    }
+}
+```
+
+#### Example (CORRECT,  ttnn types are top level, and more sensible suite definitions are used):
+```
+# Matmul specific parameters
+parameters = {
+    "mcast_2d": {
+        "batch_sizes": [(2, 3)],
+        "input_shapes": [(1600, 224, 896)],
+        "batch_matrix_multiply": [False],
+        "input_a_sharded_core_grid": [ttnn.CoreGrid(y=5, x=7)],
+        "input_a_sharded_strategy": [ttnn.ShardStrategy.BLOCK],
+        "input_b_sharded_memory_config_specs": [None]
+    },
+    "mcast_2d_transposed": {
+        "batch_sizes": [(2, 3)],
+        "input_shapes": [(1600, 224, 896)],
+        "batch_matrix_multiply": [False],
+        "input_a_sharded_core_grid": [ttnn.CoreGrid(y=5, x=7)],
+        "input_a_sharded_strategy": [ttnn.ShardStrategy.BLOCK],
+        "input_a_sharded_orientation": [ttnn.ShardOrientation.COL_MAJOR],
+        "input_b_sharded_memory_config_specs": [None]
+    }
+}
+
+# Add general parameters
+general = {
+    "compute_kernel_config": [None],
+    "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "input_layout": [ttnn.TILE_LAYOUT]
+}
+for p in parameters.values():
+    p.update(general)
+```
+
 #### Example
 ```
 parameters = {
@@ -460,3 +528,36 @@ $ python3 tests/sweep_framework/query.py --elastic http://172.18.0.2:9200 --modu
 Elasticsearch instance shared with DevInfra hosted on yyz-elk.
 
 Access credentials to be shared separately.
+
+
+## FAQ / Troubleshooting
+
+- If you see an error like the following, it means you did not set the `ELASTIC_USERNAME` and/or `ELASTIC_PASSWORD` environment variables:
+```
+Traceback (most recent call last):
+  File "tests/sweep_framework/parameter_generator.py", line 136, in <module>
+    generate_tests(args.module_name)
+  File "tests/sweep_framework/parameter_generator.py", line 114, in generate_tests
+    generate_vectors(module_name)
+  File "tests/sweep_framework/parameter_generator.py", line 39, in generate_vectors
+    export_suite_vectors(module_name, suite, suite_vectors)
+  File "tests/sweep_framework/parameter_generator.py", line 56, in export_suite_vectors
+    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
+  File "/proj_sw/user_dev/jdesousa/tt-metal/python_env/lib/python3.8/site-packages/elasticsearch/_sync/client/__init__.py", line 423, in __init__
+    self._headers = resolve_auth_headers(
+  File "/proj_sw/user_dev/jdesousa/tt-metal/python_env/lib/python3.8/site-packages/elasticsearch/_sync/client/_base.py", line 132, in resolve_auth_headers
+    f"Basic {_base64_auth_header(resolved_basic_auth)}"
+  File "/proj_sw/user_dev/jdesousa/tt-metal/python_env/lib/python3.8/site-packages/elasticsearch/_sync/client/utils.py", line 251, in _base64_auth_header
+    return base64.b64encode(to_bytes(":".join(auth_value))).decode("ascii")
+TypeError: sequence item 0: expected str instance, NoneType found
+```
+
+- If you see an error like the following, it means you did not re-create your environment using the `create_venv.sh` script. Either re-create your python environment, or manually install the dependencies using `pip install elasticsearch beautifultable termcolor`:
+```
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+ModuleNotFoundError: No module named 'elasticsearch'
+```
+
+- TTNN class pybinds need to use the `tt_pybind_class` wrapper to enable serialization/deserialization within this framework. There is a template in `tt_lib_bindings_tensor.cpp` which should replace `py::class_` and automatically add these bindings to your type. (TODO: Move the template from this location to a common location.)
+- Enum types do not need these pybinds.

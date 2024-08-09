@@ -63,6 +63,9 @@ def gen_func_with_cast_tt(gen_func, dtype):
         elif dtype == ttl.tensor.DataType.UINT32:
             x = x.to(torch.int32)
 
+        elif dtype == ttl.tensor.DataType.INT32:
+            x = x.to(torch.int32)
+
         else:
             logger.warning(f"Unknown dtype {dtype} passed to gen_func_with_cast_tt")
 
@@ -2206,3 +2209,31 @@ def gen_matmul_coregrid_args(
         ycoregrid,
         do_sanitize_args,
     )
+
+
+def gen_bitwise_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1,
+    high=10,
+    dtype=torch.int32,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "value",
+        low,
+        high,
+        dtype,
+        do_sanitize_args=do_sanitize_args,
+        coregrid=coregrid,
+    ):
+        input_info.update({"value": random.randint(low, high) for _ in range(5)})
+
+        yield input_info

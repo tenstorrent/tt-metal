@@ -49,27 +49,26 @@ Cluster::Cluster() {
 }
 
 void Cluster::detect_arch_and_target() {
-#ifdef TT_METAL_VERSIM_DISABLED
-    this->target_type_ = TargetDevice::Silicon;
-    std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
-    this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
-    for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
-        chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
-        tt::ARCH detected_arch = detect_arch(device_id);
-        TT_FATAL(
-            this->arch_ == detected_arch,
-            "Expected all devices to be {} but device {} is {}",
-            get_arch_str(this->arch_),
-            device_id,
-            get_arch_str(detected_arch));
+    if(std::getenv("TT_METAL_SIMULATOR_EN")) {
+        this->target_type_ = TargetDevice::Simulator;
+        auto arch_env = getenv("ARCH_NAME");
+        TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
+        this->arch_ = tt::get_arch_from_string(arch_env);
+    }else {
+        this->target_type_ = TargetDevice::Silicon;
+        std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
+        this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
+        for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
+            chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
+            tt::ARCH detected_arch = detect_arch(device_id);
+            TT_FATAL(
+                this->arch_ == detected_arch,
+                "Expected all devices to be {} but device {} is {}",
+                get_arch_str(this->arch_),
+                device_id,
+                get_arch_str(detected_arch));
+        }
     }
-#else
-    this->target_type_ = TargetDevice::Versim;
-    auto arch_env = getenv("ARCH_NAME");
-    TT_FATAL(arch_env, "arch_env needs to be set for versim (ARCH_NAME=)");
-    this->arch_ = tt::get_arch_from_string(arch_env);
-#endif
-
 #ifdef ARCH_GRAYSKULL
     TT_FATAL(
         this->arch_ == tt::ARCH::GRAYSKULL,
@@ -89,7 +88,7 @@ void Cluster::detect_arch_and_target() {
         get_string(this->arch_));
 #endif
 
-    TT_FATAL(this->target_type_ == TargetDevice::Versim or this->target_type_ == TargetDevice::Silicon);
+    TT_FATAL(this->target_type_ == TargetDevice::Silicon or this->target_type_ == TargetDevice::Simulator);
 }
 
 std::filesystem::path get_cluster_desc_yaml() {
@@ -140,8 +139,13 @@ void Cluster::generate_cluster_descriptor() {
     // create-eth-map not available for Blackhole bring up
     if (this->arch_ == tt::ARCH::GRAYSKULL or this->arch_ == tt::ARCH::BLACKHOLE) {
         // Cannot use tt_SiliconDevice::detect_available_device_ids because that returns physical device IDs
-        std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
+        std::vector<chip_id_t> physical_mmio_device_ids;
         std::set<chip_id_t> logical_mmio_device_ids;
+        if (this->target_type_ == TargetDevice::Simulator) {
+            physical_mmio_device_ids = tt_SimulationDevice::detect_available_device_ids();
+        } else{
+            physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids();
+        }
         for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size();
              logical_mmio_device_id++) {
             logical_mmio_device_ids.insert(logical_mmio_device_id);
@@ -159,9 +163,9 @@ void Cluster::generate_cluster_descriptor() {
     }
 
     // Use cluster descriptor to map MMIO device id to all devices on the same card (including the MMIO device)
-    if (this->target_type_ == TargetDevice::Versim) {
-        std::set<chip_id_t> dummy_versim_card = {0};
-        this->devices_grouped_by_assoc_mmio_device_[0] = dummy_versim_card;
+    if (this->target_type_ == TargetDevice::Simulator) {
+        std::set<chip_id_t> dummy_card = {0};
+        this->devices_grouped_by_assoc_mmio_device_[0] = dummy_card;
         this->device_to_mmio_device_[0] = 0;
     } else {
         for (chip_id_t device_id : this->cluster_desc_->get_all_chips()) {
@@ -200,10 +204,6 @@ void Cluster::initialize_device_drivers() {
         this->open_driver(mmio_device_id, controlled_devices);
 
         tt_device_params default_params;
-        if (getenv("TT_METAL_VERSIM_DUMP_CORES")) {
-            std::string dump_cores_string = getenv("TT_METAL_VERSIM_DUMP_CORES");
-            default_params.vcd_dump_cores = tt::utils::strsplit(dump_cores_string, ',');
-        }
         this->start_driver(mmio_device_id, default_params);
     }
 }
@@ -276,8 +276,8 @@ void Cluster::open_driver(
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
         // that is later expected to be populated by unrelated APIs
         TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1);
-    } else if (this->target_type_ == TargetDevice::Versim) {
-        device_driver = std::make_unique<tt_VersimDevice>(sdesc_path, this->cluster_desc_path_);
+    } else if (this->target_type_ == TargetDevice::Simulator) {
+        device_driver = std::make_unique<tt_SimulationDevice>(sdesc_path);
     }
     device_driver->set_device_dram_address_params(dram_address_params);
     device_driver->set_device_l1_address_params(l1_address_params);
@@ -302,7 +302,6 @@ void Cluster::start_driver(chip_id_t mmio_device_id, tt_device_params &device_pa
 
 Cluster::~Cluster() {
     log_info(tt::LogDevice, "Closing user mode device drivers");
-
     for (const auto &[mmio_device_id, device_driver] : this->mmio_device_id_to_driver_) {
         device_driver->close_device();
     }
@@ -333,7 +332,7 @@ const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {
 }
 
 uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
-    if (this->target_type_ == TargetDevice::Versim) {
+    if (this->target_type_ == TargetDevice::Simulator) {
         return 0;
     } else {
         return this->get_driver(chip).harvested_rows_per_target.at(chip);
@@ -791,6 +790,10 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
 std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     chip_id_t chip_id, bool skip_reserved_tunnel_cores) const {
     std::unordered_set<CoreCoord> active_ethernet_cores;
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+        // TODO (abhullar): Uplift with #9823
+        return active_ethernet_cores;
+    }
     const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
     for (const auto &[other_chip_id, eth_cores] : connected_chips) {
         for (const auto &eth_core : eth_cores) {
@@ -807,6 +810,10 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
 std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chip_id) const {
     std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
     std::unordered_set<CoreCoord> inactive_ethernet_cores;
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+        // TODO (abhullar): Uplift with #9823
+        return inactive_ethernet_cores;
+    }
     std::unordered_set<int> channels_to_skip = {};
     // UMD routing FW uses these cores for base routing
     // channel 15 is used by syseng tools.

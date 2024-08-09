@@ -62,7 +62,7 @@ def test_indexed_slice(seed, B, b, tt_dtype, device):
 
     mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
 
-    num_indices_tt, indices_tt = ttl.tensor.nonzero(input_tt, mem_config)
+    num_indices_tt, indices_tt = ttnn.nonzero(input_tt, memory_config=mem_config, queue_id=0)
     torch_num_indices = num_indices_tt.cpu().to_torch()
     torch_indices = indices_tt.cpu().to_torch()
 

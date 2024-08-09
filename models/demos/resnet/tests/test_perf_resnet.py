@@ -366,11 +366,12 @@ def test_perf_bare_metal(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "batch_size, enable_async, expected_inference_time, expected_compile_time",
+    "batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
     (
         (20, True, 0.0064, 19),
         (20, False, 0.0064, 19),
     ),
+    indirect=["enable_async_mode"],
 )
 def test_perf_trace_bare_metal(
     device,
@@ -379,11 +380,10 @@ def test_perf_trace_bare_metal(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    enable_async,
+    enable_async_mode,
     model_location_generator,
 ):
-    device.enable_async(enable_async)
-    mode = "async" if enable_async else "sync"
+    mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
         batch_size,
         expected_inference_time,
@@ -393,7 +393,6 @@ def test_perf_trace_bare_metal(
         f"resnet50_trace_{mode}",
         model_location_generator,
     )
-    device.enable_async(False)
 
 
 @skip_for_wormhole_b0(reason_str="Not tested on single WH")

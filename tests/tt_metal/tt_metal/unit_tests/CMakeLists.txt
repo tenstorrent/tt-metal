@@ -19,6 +19,7 @@ set(UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_single_core_binary_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_single_core_matmul_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_sfpu_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_dropout_sfpu_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_tilize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_transpose.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_adjacent.cpp

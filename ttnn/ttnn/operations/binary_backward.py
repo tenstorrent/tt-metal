@@ -99,12 +99,18 @@ def _golden_function_backward_with_dim(
 ):
     import torch
 
+    if input_tensor_a.requires_grad is False:
+        input_tensor_a.requires_grad = True
+    if input_tensor_b.requires_grad is False:
+        input_tensor_b.requires_grad = True
+
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
+
     if dimension == None:
-        pyt_y = torch.cat((input_tensor_a, input_tensor_b))
+        pyt_y = torch.concat((input_tensor_a, input_tensor_b))
     else:
-        pyt_y = torch.cat((input_tensor_a, input_tensor_b), dim=dimension)
+        pyt_y = torch.concat((input_tensor_a, input_tensor_b), dim=dimension)
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
     return golden_tensor
@@ -275,8 +281,8 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.concat_bw,
-    golden_function=lambda grad, a, b, dimension=None, *args, **kwargs: _golden_function_backward_with_dim(
-        torch.cat, grad, a, b, dimension, *args, **kwargs
+    golden_function=lambda grad, a, b, dim=None, *args, **kwargs: _golden_function_backward_with_dim(
+        torch.concat, grad, a, b, dim, *args, **kwargs
     ),
 )
 
