@@ -114,6 +114,9 @@ if (NOT NUMA_LIBRARY)
     message(FATAL_ERROR "NUMA library not found")
 endif()
 
+# Bring in UMD and all it's dependencies
+add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd)
+
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
@@ -126,7 +129,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     if(NOT LIBC++ OR NOT LIBC++ABI)
         message(FATAL_ERROR "libc++ or libc++abi not found. Make sure you have libc++ and libc++abi installed and in your PATH")
     endif()
-    
+
     target_link_libraries(stdlib INTERFACE ${LIBC++} ${LIBC++ABI})
     target_compile_options(stdlib INTERFACE -stdlib=libc++)
 else()
@@ -166,21 +169,21 @@ target_compile_options(compiler_flags INTERFACE -DARCH_${ARCH_NAME_DEF})
 
 add_library(metal_header_directories INTERFACE)
 target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
-target_include_directories(metal_header_directories SYSTEM INTERFACE ${reflect_SOURCE_DIR} ${flatbuffers_SOURCE_DIR}/include ${nanomsg_SOURCE_DIR}/include)
+target_include_directories(metal_header_directories SYSTEM INTERFACE ${reflect_SOURCE_DIR} ${flatbuffers_include_dir} ${nng_include_dir})
 foreach(lib ${BoostPackages})
     target_include_directories(metal_header_directories INTERFACE ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()
 
 if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
     target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc/wormhole
-        tt_metal/hw/inc/wormhole/wormhole_b0_defines
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
         ${UMD_HOME}/device/wormhole
         ${UMD_HOME}/src/firmware/riscv/wormhole
     )
 else()
     target_compile_options(compiler_flags INTERFACE -DDISABLE_ISSUE_3487_FIX)
     target_include_directories(metal_header_directories INTERFACE
-        tt_metal/hw/inc/$ENV{ARCH_NAME}
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}
         ${UMD_HOME}/device/$ENV{ARCH_NAME}
         ${UMD_HOME}/src/firmware/riscv/$ENV{ARCH_NAME}
     )
@@ -203,10 +206,6 @@ if(ENABLE_TRACY)
     include(${PROJECT_SOURCE_DIR}/cmake/tracy.cmake)
 endif()
 
-# Build umd_device
-include(${PROJECT_SOURCE_DIR}/cmake/umd_device.cmake)
-
-add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/hw)
 add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal)
 add_subdirectory(${PROJECT_SOURCE_DIR}/ttnn)
 
