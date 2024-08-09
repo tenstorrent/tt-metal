@@ -900,8 +900,9 @@ op_map = {
     "concat-bw": {
         "tt_op": ttnn_ops.concat_bw,
         "pytorch_op": ttnn_pytorch_ops.concat_bw,
+    },
     "fill-bw": {
         "tt_op": ttnn_ops.fill_bw,
-        "pytorch_op": pytorch_ops.fill_bw,      
+        "pytorch_op": ttnn_pytorch_ops.fill_bw,
     },
 }
