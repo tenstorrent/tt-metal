@@ -29,6 +29,12 @@ jobs:
 #     with:
 #       profiler-build: true
 #     secrets: inherit
+  umd-unit-tests:
+    secrets: inherit
+    uses: ./.github/workflows/umd-unit-tests.yaml
+    with:
+      arch: blackhole
+      runner-label: BH
   sd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml

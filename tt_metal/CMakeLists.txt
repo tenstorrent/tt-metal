@@ -1,4 +1,6 @@
 
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hw)
+
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/common)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/jit_build)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llrt)
@@ -18,7 +20,7 @@ set(TT_METAL_OBJECTS
 
 add_library(tt_metal ${TT_METAL_OBJECTS})
 
-target_link_libraries(tt_metal PUBLIC umd_device metal_common_libs)
+target_link_libraries(tt_metal PUBLIC metal_header_directories umd_device metal_common_libs)
 
 target_precompile_headers(tt_metal PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/magic_enum/magic_enum.hpp
@@ -33,8 +35,7 @@ target_precompile_headers(tt_metal PRIVATE
     <vector>
 )
 
-target_link_libraries(tt_metal PUBLIC compiler_flags linker_flags metal_header_directories $<$<BOOL:${ENABLE_TRACY}>:TracyClient>)  # linker_flags = -rdynamic if tracy enabled
-target_link_directories(tt_metal PUBLIC ${PROJECT_BINARY_DIR}/lib)    # required so tt_metal can find device library
+target_link_libraries(tt_metal PUBLIC compiler_flags linker_flags $<$<BOOL:${ENABLE_TRACY}>:TracyClient>)  # linker_flags = -rdynamic if tracy enabled
 target_include_directories(tt_metal PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
