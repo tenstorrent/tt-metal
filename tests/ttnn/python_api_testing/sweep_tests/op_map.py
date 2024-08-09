@@ -873,4 +873,32 @@ op_map = {
         "tt_op": ttnn_ops.normalize_hw,
         "pytorch_op": pytorch_ops.normalize_hw,
     },
+    "erf-bw": {
+        "tt_op": ttnn_ops.erf_bw,
+        "pytorch_op": pytorch_ops.erf_bw,
+    },
+    "erfc-bw": {
+        "tt_op": ttnn_ops.erfc_bw,
+        "pytorch_op": pytorch_ops.erfc_bw,
+    },
+    "erfinv-bw": {
+        "tt_op": ttnn_ops.erfinv_bw,
+        "pytorch_op": pytorch_ops.erfinv_bw,
+    },
+    "expm1-bw": {
+        "tt_op": ttnn_ops.expm1_bw,
+        "pytorch_op": pytorch_ops.expm1_bw,
+    },
+    "bitwise-and": {
+        "tt_op": ttnn_ops.eltwise_bitwise_and,
+        "pytorch_op": pytorch_ops.bitwise_and,
+    },
+    "bitwise-or": {
+        "tt_op": ttnn_ops.eltwise_bitwise_or,
+        "pytorch_op": pytorch_ops.bitwise_or,
+    },
+    "concat-bw": {
+        "tt_op": ttnn_ops.concat_bw,
+        "pytorch_op": ttnn_pytorch_ops.concat_bw,
+    },
 }

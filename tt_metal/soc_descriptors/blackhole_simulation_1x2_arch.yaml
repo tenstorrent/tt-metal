@@ -1,0 +1,55 @@
+grid:
+  x_size: 2
+  y_size: 2
+
+arc:
+  []
+
+pcie:
+  []
+
+dram:
+  [[1-0]]
+
+dram_preferred_eth_endpoint:
+  [ 1-0 ]
+
+dram_preferred_worker_endpoint:
+  [ 1-0 ]
+
+dram_address_offsets:
+  [ 0 ]
+
+eth:
+  []
+
+functional_workers:
+  [0-1, 1-1]
+  
+harvested_workers:
+  []
+
+router_only:
+  [0-0]
+
+worker_l1_size:
+  1499136
+
+dram_bank_size:
+  1073741824
+
+eth_l1_size:
+  0
+
+arch_name: BLACKHOLE
+
+features:
+  unpacker:
+    version: 1
+    inline_srca_trans_without_srca_trans_instr: False
+  math:
+    dst_size_alignment: 32768
+  packer:
+    version: 1
+  overlay:
+    version: 1

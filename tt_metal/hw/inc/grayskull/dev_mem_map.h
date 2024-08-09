@@ -53,7 +53,7 @@
 
 #define MEM_BOOT_CODE_BASE 0
 #define MEM_MAILBOX_BASE 16
-#define MEM_MAILBOX_END (MEM_MAILBOX_BASE + 1312)
+#define MEM_MAILBOX_END (MEM_MAILBOX_BASE + 1344)
 #define MEM_IERISC_MAILBOX_BASE 0
 #define MEM_IERISC_MAILBOX_END 0
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
@@ -89,6 +89,7 @@
 // Increasing the stack size comes at the expense of less local memory for globals
 #define MEM_BRISC_STACK_SIZE 752
 #define MEM_NCRISC_STACK_SIZE 752
+#define MEM_IERISC_STACK_SIZE 0 // Unused, but define it
 #define MEM_TRISC0_STACK_SIZE 256
 #define MEM_TRISC1_STACK_SIZE 256
 #define MEM_TRISC2_STACK_SIZE 768

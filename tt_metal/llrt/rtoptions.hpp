@@ -99,6 +99,8 @@ class RunTimeOptions {
     bool validate_kernel_binaries = false;
     unsigned num_hw_cqs = 1;
 
+    bool enable_dispatch_data_collection = false;
+
    public:
     RunTimeOptions();
 
@@ -126,6 +128,7 @@ class RunTimeOptions {
     inline bool watcher_assert_disabled() { return watcher_feature_disabled(watcher_assert_str); }
     inline bool watcher_pause_disabled() { return watcher_feature_disabled(watcher_pause_str); }
     inline bool watcher_ring_buffer_disabled() { return watcher_feature_disabled(watcher_ring_buffer_str); }
+    inline bool watcher_stack_usage_disabled() { return watcher_feature_disabled(watcher_stack_usage_str); }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -238,7 +241,10 @@ class RunTimeOptions {
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
     inline uint32_t get_watcher_debug_delay() { return watcher_debug_delay; }
-    void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
+    inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
+
+    inline bool get_dispatch_data_collection_enabled() { return enable_dispatch_data_collection; }
+    inline void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
 
    private:
     // Helper functions to parse feature-specific environment vaiables.
@@ -258,6 +264,7 @@ class RunTimeOptions {
     const std::string watcher_assert_str = "ASSERT";
     const std::string watcher_pause_str = "PAUSE";
     const std::string watcher_ring_buffer_str = "RING_BUFFER";
+    const std::string watcher_stack_usage_str = "STACK_USAGE";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string &name) {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();

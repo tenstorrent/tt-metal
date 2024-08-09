@@ -26,6 +26,7 @@
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
@@ -311,12 +312,9 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
 }
 
-void EnqueueProgramCommand::assemble_preamble_commands(
-    uint32_t tensix_l1_config_base,
-    uint32_t eth_l1_config_base) {
-
+void EnqueueProgramCommand::assemble_preamble_commands(uint32_t tensix_l1_config_base, uint32_t eth_l1_config_base) {
     constexpr uint32_t uncached_cmd_sequence_sizeB =
-        CQ_PREFETCH_CMD_BARE_MIN_SIZE;   // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_SET_WRITE_OFFSET
+        CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_SET_WRITE_OFFSET
 
     this->cached_program_command_sequences[program.id].preamble_command_sequence =
         HostMemDeviceCommand(uncached_cmd_sequence_sizeB);
@@ -326,9 +324,7 @@ void EnqueueProgramCommand::assemble_preamble_commands(
         0, tensix_l1_config_base, eth_l1_config_base);
 }
 
-void EnqueueProgramCommand::assemble_stall_commands(
-    bool prefetch_stall) {
-
+void EnqueueProgramCommand::assemble_stall_commands(bool prefetch_stall) {
     if (prefetch_stall) {
         // Wait command so previous program finishes
         // Wait command with barrier for binaries to commit to DRAM
@@ -345,9 +341,8 @@ void EnqueueProgramCommand::assemble_stall_commands(
         // Wait Noc Write Barrier, wait for binaries to be written to worker cores
         // Stall to allow binaries to commit to DRAM first
         // TODO: this can be removed for all but the first program run
-        this->cached_program_command_sequences[program.id]
-            .stall_command_sequence.add_dispatch_wait_with_prefetch_stall(
-                true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
+        this->cached_program_command_sequences[program.id].stall_command_sequence.add_dispatch_wait_with_prefetch_stall(
+            true, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed);
     } else {
         // Wait command so previous program finishes
         constexpr uint32_t cached_cmd_sequence_sizeB =
@@ -492,8 +487,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     // TODO: provide this at a lower level
     static vector<CoreType> core_types = {CoreType::WORKER, CoreType::ETH};
 
-    CoreType dispatch_core_type =
-        dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
 
     // Note: each sub_cmd contain data for multiple kernels (DM*, COMPUTE)
@@ -530,7 +524,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     for (CoreType core_type : core_types) {
         for (auto& kg : program.get_kernel_groups(core_type)) {
             if (kg.total_rta_size != 0) {
-                for (const CoreRange &core_range : kg.core_ranges.ranges()) {
+                for (const CoreRange& core_range : kg.core_ranges.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                             CoreCoord core_coord(x, y);
@@ -572,9 +566,13 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                     max_prefetch_command_size,
                     packed_write_max_unicast_sub_cmds,
                     false,
-                    core_type == CoreType::WORKER ?
-                        DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE :
-                        DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+                    core_type == CoreType::WORKER ? DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE
+                                                  : DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+                for (auto &data_per_kernel : unique_rt_data_and_sizes) {
+                    for (auto &data_and_sizes : data_per_kernel) {
+                        RecordDispatchData(program, DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
+                    }
+                }
                 unique_sub_cmds.clear();
                 unique_rt_data_and_sizes.clear();
                 unique_rt_args_data.clear();
@@ -649,14 +647,18 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                             max_prefetch_command_size,
                             packed_write_max_unicast_sub_cmds,
                             true,
-                            core_type == CoreType::WORKER ?
-                                DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE :
-                                DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+                            core_type == CoreType::WORKER ? DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE
+                                                          : DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
                         sub_cmds.clear();
                     },
                     common_sub_cmds);
             }
 
+            for (auto& data_per_kernel : common_rt_data_and_sizes) {
+                for (auto& data_and_sizes : data_per_kernel) {
+                    RecordDispatchData(program, DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
+                }
+            }
             common_rt_data_and_sizes.clear();
             common_rt_args_data.clear();
         }
@@ -671,10 +673,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
 }
 
 void EnqueueProgramCommand::assemble_device_commands(
-    bool is_cached,
-    uint32_t tensix_l1_kernel_config_base,
-    uint32_t eth_l1_kernel_config_base) {
-
+    bool is_cached, uint32_t tensix_l1_kernel_config_base, uint32_t eth_l1_kernel_config_base) {
     auto& cached_program_command_sequence = this->cached_program_command_sequences[this->program.id];
     if (not is_cached) {
         // Calculate size of command and fill program indices of data to update
@@ -828,99 +827,100 @@ void EnqueueProgramCommand::assemble_device_commands(
         const uint32_t max_length_per_sub_cmd = dispatch_constants::get(this->dispatch_core_type).scratch_db_size() / 2;
         const uint32_t max_paged_length_per_sub_cmd =
             max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
-        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
-            const auto& kg_transfer_info = program.program_transfer_info.kernel_bins[buffer_idx];
-            for (int kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
-                for (const pair<transfer_info_cores, uint32_t>& dst_noc_info : kg_transfer_info.dst_noc_info) {
-                    bool write_linear;
-                    uint32_t noc_encoding;
-                    std::visit(
-                        [&](auto&& cores) {
-                            using T = std::decay_t<decltype(cores)>;
-                            if constexpr (std::is_same_v<T, CoreRange>) {
-                                noc_encoding = this->device->get_noc_multicast_encoding(this->noc_index, cores);
-                                write_linear = false;
-                            } else {
-                                noc_encoding = this->device->get_noc_unicast_encoding(this->noc_index, cores);
-                                write_linear = true;
-                            }
-                        },
-                        dst_noc_info.first);
-                    if (write_linear) {
-                        kernel_bins_unicast_cmds.emplace_back(2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE);
-                        cmd_sequence_sizeB += 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-                        kernel_bins_unicast_cmds.back().add_dispatch_write_linear(
-                            false,                // flush_prefetch
-                            dst_noc_info.second,  // num_mcast_dests
-                            noc_encoding,         // noc_xy_addr
-                            kg_transfer_info.dst_base_addrs[kernel_idx],
-                            kg_transfer_info.lengths[kernel_idx]);
-                        // Difference between prefetch total relayed pages and dispatch write linear
-                        uint32_t relayed_bytes =
-                            align(kg_transfer_info.lengths[kernel_idx], HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
-                        // length_adjust needs to be aligned to NOC_DRAM_ALIGNMENT
-                        uint16_t length_adjust = uint16_t(relayed_bytes - kg_transfer_info.lengths[kernel_idx]);
-
-                        uint32_t base_address, page_offset;
-                        if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
-                            const uint32_t num_banks =
-                                this->device->num_banks(this->program.kg_buffers[buffer_idx]->buffer_type());
-                            page_offset = kg_transfer_info.page_offsets[kernel_idx] % num_banks;
-                            uint32_t num_full_pages_written_per_bank =
-                                kg_transfer_info.page_offsets[kernel_idx] / num_banks;
-                            base_address =
-                                this->program.kg_buffers[buffer_idx]->address() +
-                                num_full_pages_written_per_bank * this->program.kg_buffers[buffer_idx]->page_size();
-                        } else {
-                            base_address = this->program.kg_buffers[buffer_idx]->address();
-                            page_offset = kg_transfer_info.page_offsets[kernel_idx];
-                        }
-
-                        kernel_bins_unicast_cmds.back().add_prefetch_relay_paged(
-                            true,  // is_dram
-                            page_offset,
-                            base_address,
-                            this->program.kg_buffers[buffer_idx]->page_size(),
-                            relayed_bytes / this->program.kg_buffers[buffer_idx]->page_size(),
-                            length_adjust);
+        for (const auto& [cores, num_mcast_dests, kg_transfer_info] : program.program_transfer_info.kernel_bins) {
+            bool write_linear;
+            uint32_t noc_encoding;
+            std::visit(
+                [&](auto&& cores) {
+                    using T = std::decay_t<decltype(cores)>;
+                    if constexpr (std::is_same_v<T, CoreRange>) {
+                        noc_encoding = this->device->get_noc_multicast_encoding(this->noc_index, cores);
+                        write_linear = false;
                     } else {
-                        uint32_t base_address = this->program.kg_buffers[buffer_idx]->address();
-                        uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
-                        uint32_t dst_addr = kg_transfer_info.dst_base_addrs[kernel_idx];
-                        uint32_t aligned_length = align(kg_transfer_info.lengths[kernel_idx], DRAM_ALIGNMENT);
-                        uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
-                        while (aligned_length != 0) {
-                            if (kernel_bins_dispatch_subcmds.empty() ||
-                                kernel_bins_dispatch_subcmds.back().size() ==
-                                    CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) {
-                                kernel_bins_dispatch_subcmds.push_back({});
-                                kernel_bins_prefetch_subcmds.push_back({});
-                                kernel_bins_write_packed_large_data_aligned_sizeB.push_back(0);
-                            }
-                            uint32_t write_length, read_length;
-                            if (aligned_length <= max_length_per_sub_cmd) {
-                                read_length = aligned_length;
-                                write_length = read_length - padding;
-                            } else {
-                                read_length = max_paged_length_per_sub_cmd;
-                                write_length = read_length;
-                            }
-                            kernel_bins_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
-                                .noc_xy_addr = noc_encoding,
-                                .addr = dst_addr,
-                                .length = (uint16_t)write_length,
-                                .num_mcast_dests = (uint16_t)dst_noc_info.second});
-                            dst_addr += write_length;
+                        noc_encoding = this->device->get_noc_unicast_encoding(this->noc_index, cores);
+                        write_linear = true;
+                    }
+                },
+                cores);
+            for (uint32_t kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
+                if (write_linear) {
+                    kernel_bins_unicast_cmds.emplace_back(2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+                    cmd_sequence_sizeB += 2 * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+                    kernel_bins_unicast_cmds.back().add_dispatch_write_linear(
+                        false,            // flush_prefetch
+                        num_mcast_dests,  // num_mcast_dests
+                        noc_encoding,     // noc_xy_addr
+                        kg_transfer_info.dst_base_addrs[kernel_idx],
+                        kg_transfer_info.lengths[kernel_idx]);
+                    RecordDispatchData(
+                        program,
+                        DISPATCH_DATA_BINARY,
+                        kg_transfer_info.lengths[kernel_idx],
+                        kg_transfer_info.riscvs[kernel_idx]);
+                    // Difference between prefetch total relayed pages and dispatch write linear
+                    uint32_t relayed_bytes =
+                        align(kg_transfer_info.lengths[kernel_idx], HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
+                    uint16_t length_adjust = uint16_t(relayed_bytes - kg_transfer_info.lengths[kernel_idx]);
 
-                            kernel_bins_prefetch_subcmds.back().emplace_back(CQPrefetchRelayPagedPackedSubCmd{
-                                .start_page = (uint16_t)page_offset,
-                                .log_page_size = (uint16_t)HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE,
-                                .base_addr = base_address,
-                                .length = read_length});
-                            page_offset += read_length / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
-                            aligned_length -= read_length;
-                            kernel_bins_write_packed_large_data_aligned_sizeB.back() += read_length;
+                    uint32_t base_address, page_offset;
+                    if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
+                        const uint32_t num_banks = this->device->num_banks(this->program.kernels_buffer->buffer_type());
+                        page_offset = kg_transfer_info.page_offsets[kernel_idx] % num_banks;
+                        uint32_t num_full_pages_written_per_bank =
+                            kg_transfer_info.page_offsets[kernel_idx] / num_banks;
+                        base_address = this->program.kernels_buffer->address() +
+                                       num_full_pages_written_per_bank * this->program.kernels_buffer->page_size();
+                    } else {
+                        base_address = this->program.kernels_buffer->address();
+                        page_offset = kg_transfer_info.page_offsets[kernel_idx];
+                    }
+
+                    kernel_bins_unicast_cmds.back().add_prefetch_relay_paged(
+                        true,  // is_dram
+                        page_offset,
+                        base_address,
+                        this->program.kernels_buffer->page_size(),
+                        relayed_bytes / this->program.kernels_buffer->page_size(),
+                        length_adjust);
+                } else {
+                    uint32_t base_address = this->program.kernels_buffer->address();
+                    uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
+                    uint32_t dst_addr = kg_transfer_info.dst_base_addrs[kernel_idx];
+                    uint32_t aligned_length = align(kg_transfer_info.lengths[kernel_idx], DRAM_ALIGNMENT);
+                    uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
+                    while (aligned_length != 0) {
+                        if (kernel_bins_dispatch_subcmds.empty() ||
+                            kernel_bins_dispatch_subcmds.back().size() ==
+                                CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) {
+                            kernel_bins_dispatch_subcmds.push_back({});
+                            kernel_bins_prefetch_subcmds.push_back({});
+                            kernel_bins_write_packed_large_data_aligned_sizeB.push_back(0);
                         }
+                        uint32_t write_length, read_length;
+                        if (aligned_length <= max_length_per_sub_cmd) {
+                            read_length = aligned_length;
+                            write_length = read_length - padding;
+                        } else {
+                            read_length = max_paged_length_per_sub_cmd;
+                            write_length = read_length;
+                        }
+                        kernel_bins_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
+                            .noc_xy_addr = noc_encoding,
+                            .addr = dst_addr,
+                            .length = (uint16_t)write_length,
+                            .num_mcast_dests = (uint16_t)num_mcast_dests});
+                        RecordDispatchData(
+                            program, DISPATCH_DATA_BINARY, write_length, kg_transfer_info.riscvs[kernel_idx]);
+                        dst_addr += write_length;
+
+                        kernel_bins_prefetch_subcmds.back().emplace_back(CQPrefetchRelayPagedPackedSubCmd{
+                            .start_page = (uint16_t)page_offset,
+                            .log_page_size = (uint16_t)HostMemDeviceCommand::LOG2_PROGRAM_PAGE_SIZE,
+                            .base_addr = base_address,
+                            .length = read_length});
+                        page_offset += read_length / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
+                        aligned_length -= read_length;
+                        kernel_bins_write_packed_large_data_aligned_sizeB.back() += read_length;
                     }
                 }
             }
@@ -1025,6 +1025,9 @@ void EnqueueProgramCommand::assemble_device_commands(
                     this->packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+                for (auto &data_and_size : multicast_sem_data[i]) {
+                    RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
+                }
             }
         }
 
@@ -1042,6 +1045,9 @@ void EnqueueProgramCommand::assemble_device_commands(
                     this->packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+                for (auto &data_and_size : unicast_sem_data[i]) {
+                    RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
+                }
             }
         }
 
@@ -1061,7 +1067,11 @@ void EnqueueProgramCommand::assemble_device_commands(
                     multicast_cb_config_data,
                     this->packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
+                for (auto &data_and_size : multicast_cb_config_data) {
+                    RecordDispatchData(program, DISPATCH_DATA_CB_CONFIG, data_and_size.second);
+                }
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+                RecordDispatchData(program, DISPATCH_DATA_CB_CONFIG, mcast_cb_payload_sizeB);
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
                      align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT)) /
@@ -1184,7 +1194,6 @@ void EnqueueProgramCommand::assemble_device_commands(
 }
 
 void EnqueueProgramCommand::process() {
-
     bool is_cached = true;
     if (not program.is_finalized()) {
         program.finalize();
@@ -1196,8 +1205,8 @@ void EnqueueProgramCommand::process() {
     bool stall_first = reservation.first.need_sync;
     // Note: since present implementation always stalls, we always free up to "now"
     this->manager.get_config_buffer_mgr().free(reservation.first.sync_count);
-    this->manager.get_config_buffer_mgr().alloc(this->expected_num_workers_completed +
-                                                program.program_transfer_info.num_active_cores);
+    this->manager.get_config_buffer_mgr().alloc(
+        this->expected_num_workers_completed + program.program_transfer_info.num_active_cores);
     uint32_t tensix_l1_write_offset = reservation.second[0].addr;
     uint32_t eth_l1_write_offset = reservation.second[1].addr;
 
@@ -1209,6 +1218,11 @@ void EnqueueProgramCommand::process() {
         this->assemble_stall_commands(true);
         // Runtime Args Command Sequence
         this->assemble_runtime_args_commands();
+
+        // Record kernel groups in this program, only need to do it once.
+        for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+            RecordKernelGroups(program, core_type, program.get_kernel_groups(core_type));
+        }
     } else {
         static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
         static constexpr uint32_t tensix_l1_write_offset_offset =
@@ -1227,6 +1241,7 @@ void EnqueueProgramCommand::process() {
         this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
             eth_l1_write_offset_offset, &eth_l1_write_offset, sizeof(uint32_t));
     }
+    RecordProgramRun(program);
 
     // Main Command Sequence
     this->assemble_device_commands(is_cached, tensix_l1_write_offset, eth_l1_write_offset);
@@ -1244,8 +1259,7 @@ void EnqueueProgramCommand::process() {
     uint32_t total_fetch_size_bytes =
         stall_fetch_size_bytes + preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
 
-    CoreType dispatch_core_type =
-        dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     if (total_fetch_size_bytes <= dispatch_constants::get(dispatch_core_type).max_prefetch_command_size()) {
         this->manager.issue_queue_reserve(total_fetch_size_bytes, this->command_queue_id);
         uint32_t write_ptr = this->manager.get_issue_queue_write_ptr(this->command_queue_id);
@@ -1399,11 +1413,9 @@ void EnqueueRecordEventCommand::process() {
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
         tt_cxy_pair dispatch_location;
         if (device->is_mmio_capable()) {
-            dispatch_location =
-                dispatch_core_manager::instance().dispatcher_core(this->device->id(), channel, cq_id);
+            dispatch_location = dispatch_core_manager::instance().dispatcher_core(this->device->id(), channel, cq_id);
         } else {
-            dispatch_location =
-                dispatch_core_manager::instance().dispatcher_d_core(this->device->id(), channel, cq_id);
+            dispatch_location = dispatch_core_manager::instance().dispatcher_d_core(this->device->id(), channel, cq_id);
         }
 
         CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, core_type);
@@ -1554,9 +1566,7 @@ void EnqueueTerminateCommand::process() {
 
 // HWCommandQueue section
 HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
-    manager(device->sysmem_manager()),
-    completion_queue_thread{} {
-
+    manager(device->sysmem_manager()), completion_queue_thread{} {
     ZoneScopedN("CommandQueue_constructor");
     this->device = device;
     this->id = id;
@@ -1574,11 +1584,9 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
 
     CoreCoord enqueue_program_dispatch_core;
     if (device->is_mmio_capable()) {
-        enqueue_program_dispatch_core =
-            dispatch_core_manager::instance().dispatcher_core(device->id(), channel, id);
+        enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_core(device->id(), channel, id);
     } else {
-        enqueue_program_dispatch_core =
-            dispatch_core_manager::instance().dispatcher_d_core(device->id(), channel, id);
+        enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_d_core(device->id(), channel, id);
     }
     CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     this->physical_enqueue_program_dispatch_core =
@@ -1653,8 +1661,7 @@ void HWCommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blockin
 
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
-    CoreType dispatch_core_type =
-        dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
 
     uint32_t padded_page_size = buffer.aligned_page_size();
     uint32_t pages_to_read = buffer.num_pages();
@@ -1802,8 +1809,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
     uint32_t padded_page_size = buffer.aligned_page_size();
 
     const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->id);
-    CoreType dispatch_core_type =
-        dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
     uint32_t max_data_sizeB =
         max_prefetch_command_size - ((sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) * 2);  // * 2 to account for issue
@@ -1993,23 +1999,20 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
     if (not program.is_finalized()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing should only be used when programs have been cached");
-        TT_ASSERT(program.program_transfer_info.kernel_bins.size() == program.kg_buffers.size());
-        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
+        if (program.kernels_buffer != nullptr) {
             this->enqueue_write_buffer(
-                *program.kg_buffers[buffer_idx],
-                program.program_transfer_info.kernel_bins[buffer_idx].data.data(),
-                false);
+                *program.kernels_buffer, program.program_transfer_info.binary_data.data(), false);
         }
     }
 #ifdef DEBUG
     if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
-        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
-            const auto& buffer = program.kg_buffers[buffer_idx];
+        if (program.kernels_buffer != nullptr) {
+            const auto& buffer = program.kernels_buffer;
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
-            this->enqueue_read_buffer(*buffer, read_data.data(), true);
+            this->enqueue_read_buffer(*program.kernels_buffer, read_data.data(), true);
             TT_FATAL(
-                program.program_transfer_info.kernel_bins[buffer_idx].data == read_data,
+                program.program_transfer_info.binary_data == read_data,
                 "Binary for program to be executed is corrupted. Another program likely corrupted this binary");
         }
     }
@@ -2034,21 +2037,22 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         expected_workers_completed);
     this->enqueue_command(command, blocking);
 
-    if (program.has_multi_device_dependencies() and not this->device->is_mmio_capable() and tt::Cluster::instance().is_galaxy_cluster() and not this->tid.has_value()) {
+    if (program.has_multi_device_dependencies() and not this->device->is_mmio_capable() and
+        tt::Cluster::instance().is_galaxy_cluster() and not this->tid.has_value()) {
         // Issue #19078 - Temporary workaround to avoid deadlocks on Galaxy, until Ethernet Routing Fabric supports VCs:
         // For programs that require syncs between devices (ex: CCLs), it must be ensured that all devices in a tunnel
-        // receive the full set of program commands. Due to demux being a shared resource (it has a single input queue) and cannot
-        // toggle its output queue id, until a txn is completed (prefetch_d corresponding to the current packet is unblocked), it
-        // is possible that all devices do not get the program commands and enter a deadlock (dispatch_d gets blocked waiting for
-        // the multi-device program to complete, causing prefetch_d to backpressure, as its picked up other commands -> demux has
-        // CCL program commands for other devices in its queue, but is blocked sending a downstream command to the backpressured
-        // prefetch_d).
-        // To resolve this, prefetch_h for all devices involved in the multi-device program will stall sending commands, until
-        // dispatch_d has notified prefetch_h that workers have completed execution (all chips got the program commands, and there
+        // receive the full set of program commands. Due to demux being a shared resource (it has a single input queue)
+        // and cannot toggle its output queue id, until a txn is completed (prefetch_d corresponding to the current
+        // packet is unblocked), it is possible that all devices do not get the program commands and enter a deadlock
+        // (dispatch_d gets blocked waiting for the multi-device program to complete, causing prefetch_d to
+        // backpressure, as its picked up other commands -> demux has CCL program commands for other devices in its
+        // queue, but is blocked sending a downstream command to the backpressured prefetch_d). To resolve this,
+        // prefetch_h for all devices involved in the multi-device program will stall sending commands, until dispatch_d
+        // has notified prefetch_h that workers have completed execution (all chips got the program commands, and there
         // is no further scope of a deadlock).
-        // This pipeline flush does not need to be issued when using trace, since prefetch_h will stall sending pages to prefetch_d
-        // until it has been notified of trace completion (due to cmddat_q reuse). Additionally, events can currently not be traced,
-        // thus this is skipped during trace capture.
+        // This pipeline flush does not need to be issued when using trace, since prefetch_h will stall sending pages to
+        // prefetch_d until it has been notified of trace completion (due to cmddat_q reuse). Additionally, events can
+        // currently not be traced, thus this is skipped during trace capture.
         std::shared_ptr<Event> event = std::make_shared<Event>();
         this->enqueue_record_event(event);
         this->enqueue_wait_for_event(event);
@@ -2057,12 +2061,12 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
 #ifdef DEBUG
     if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
-        for (int buffer_idx = 0; buffer_idx < program.program_transfer_info.kernel_bins.size(); buffer_idx++) {
-            const auto& buffer = program.kg_buffers[buffer_idx];
+        if (program.kernels_buffer != nullptr) {
+            const auto& buffer = program.kernels_buffer;
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
-            this->enqueue_read_buffer(*buffer, read_data.data(), true);
+            this->enqueue_read_buffer(*program.kernels_buffer, read_data.data(), true);
             TT_FATAL(
-                program.program_transfer_info.kernel_bins[buffer_idx].data == read_data,
+                program.program_transfer_info.binary_data == read_data,
                 "Binary for program that executed is corrupted. This program likely corrupted its own binary.");
         }
     }

@@ -8,13 +8,11 @@
 #include "ttnn/deprecated/tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/fill_rm/fill_rm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/repeat/repeat_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/non_zero_indices/non_zero_indices_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 
@@ -253,7 +251,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("reduce", &reduce,
-            py::arg("input").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("scaler"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
+            py::arg("input").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("scaler"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
             Perform a reduction of input tensor ``input`` using mathematical operation ``math_op`` on dimension ``dim``.
 
             For ``arg2=ReduceOpDim::W`` reduce is done on dimension X.
@@ -274,74 +272,6 @@ namespace tt::tt_metal::detail{
                 "dim", "Dimension on which reduction is performed", "ReduceOpDim", "W, H, HW", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_dtype", "DataType of output tensor", "DataType", "Default is None (use input dtype)", "No"
-        )doc");
-
-        // *** experimental operations ***
-        m_tensor.def("fill_rm", &fill_rm,
-            py::arg("N"), py::arg("C"), py::arg("H"), py::arg("W"), py::arg("hOnes"), py::arg("wOnes"), py::arg("any").noconvert(), py::arg("val_hi"), py::arg("val_lo"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Generates an NCHW row-major tensor and fill it with high values up to
-            hOnes, wOnes in each HW tile with the rest padded with high values. So
-            for H=2, W=3, hFill=1, wFill=2 the following tensor will be generated:
-
-            .. code-block::
-
-                +------------> W
-                | hi hi lo
-                | lo lo lo
-                |
-                v H
-
-            H, W are expected to be multiples of 32.
-
-            The 'any' Tensor arg is only used to pass the device and resulting
-            tensor dtype.
-
-            val_hi/lo are expected to be floats.
-
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | Argument | Description                                                           | Data type             | Valid range            | Required |
-            +==========+=======================================================================+=======================+========================+==========+
-            | N        | Batch count of output tensor                                          | int                   | N > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | C        | Channel count of output tensor                                        | int                   | C > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | H        | Height count of output tensor                                         | int                   | H > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | W        | Width count of output tensor                                          | int                   | W > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | hOnes    | Height of high values region                                          | int                   | hOnes <= H             | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | wOnes    | Width of high values region                                           | int                   | wOnes <= W             | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | any      | Any input tensor with desired device and data types for output tensor | tt_lib.tensor.Tensor  |                        | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | val_hi   | High value to use                                                     | float                 |                        | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | val_lo   | Low value to use                                                      | float                 |                        | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-        )doc");
-        m_tensor.def("fill_ones_rm", &fill_ones_rm,
-            py::arg("N"), py::arg("C"), py::arg("H"), py::arg("W"), py::arg("hOnes"), py::arg("wOnes"), py::arg("any").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Same as ``fill_rm``, but ``val_hi`` is set to ``1`` and ``val_lo`` is
-            ``0``.
-
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | Argument | Description                                                           | Data type             | Valid range            | Required |
-            +==========+=======================================================================+=======================+========================+==========+
-            | N        | Batch count of output tensor                                          | int                   | N > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | C        | Channel count of output tensor                                        | int                   | C > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | H        | Height count of output tensor                                         | int                   | H > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | W        | Width count of output tensor                                          | int                   | W > 0                  | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | hOnes    | Height of high values region                                          | int                   | hOnes <= H             | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | wOnes    | Width of high values region                                           | int                   | wOnes <= W             | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | any      | Any input tensor with desired device and data types for output tensor | tt_lib.tensor.Tensor  |                        | Yes      |
-            +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
         )doc");
 
         m_tensor.def("move", &move,
@@ -396,10 +326,6 @@ namespace tt::tt_metal::detail{
         m_tensor.def("indexed_fill", &indexed_fill,
             py::arg("batch_id"), py::arg("input_a"), py::arg("input_b"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("dim") = 0,
             R"doc(Replaces batch of input in input_b denoted by batch_ids into input_a)doc"
-        );
-        m_tensor.def("nonzero", &non_zero_indices,
-            py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            R"doc(Returns the number of elements (N) that are non-zero as well as a tensor of the same shape as input where the first N elements are the indices of non-zero elements )doc"
         );
 
 

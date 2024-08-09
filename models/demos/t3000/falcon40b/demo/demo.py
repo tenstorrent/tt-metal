@@ -33,6 +33,22 @@ END_OF_TEXT = 11
 SPACE = 204
 
 
+# Used for debugging non-deterministic outputs of prefill stage
+def save_kv_cache_to_file(device_mesh, kv_cache, kv_cache_path):
+    # generate tensor of 60 layers and key and value tensors for each layer where there is 60 layers, key and value and tensor shape (32, 1, 128, 64)
+    final_tensor = torch.zeros(60, 2, 32, 1, 128, 512)
+    for layer in range(60):
+        for type in range(len(kv_cache[layer])):
+            # get key tensor from device
+            tensor = ttnn.to_torch(
+                kv_cache[layer][type], device=device_mesh, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=-1)
+            )
+            # save tensor to file
+            final_tensor[layer][type] = tensor
+
+    torch.save(final_tensor, kv_cache_path)
+
+
 # load from jason, return as a list
 def load_inputs(user_input, batch):
     if isinstance(user_input, str):
@@ -408,7 +424,7 @@ def run_falcon_demo_kv(
 
             # untilize data first
             if tt_logits.get_layout() == ttnn.TILE_LAYOUT:
-                tt_logits = ttnn.experimental.tensor.untilize(tt_logits, use_multicore=False)
+                tt_logits = ttnn.untilize(tt_logits, use_multicore=False)
 
             logits = ttnn.to_torch(
                 tt_logits, device=device_mesh, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=-1)
@@ -473,7 +489,7 @@ def run_falcon_demo_kv(
             if tt_logits.memory_config().is_sharded():
                 tt_logits = ttnn.experimental.tensor.sharded_to_interleaved(tt_logits)
 
-            tt_logits = ttnn.experimental.tensor.untilize(tt_logits, use_multicore=False)
+            tt_logits = ttnn.untilize(tt_logits, use_multicore=False)
 
         logits = ttnn.to_torch(
             tt_logits, device=device_mesh, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=-1)

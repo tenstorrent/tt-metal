@@ -6,7 +6,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
 #include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
@@ -110,14 +109,14 @@ Tensor AutoFormat::format_input_tensor(
     // Host side conversions
     if (pad_input) {
         if (formatted_input.get_layout() != Layout::ROW_MAJOR) {
-            formatted_input = layout_conversion_on_host(formatted_input, Layout::ROW_MAJOR);
+            formatted_input = formatted_input.to(Layout::ROW_MAJOR);
             convert_layout = formatted_input.get_layout() != target_layout;
         }
         formatted_input = ttnn::pad((const ttnn::Tensor)formatted_input, padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), pad_value);
     }
 
     if (convert_layout) {
-        formatted_input = layout_conversion_on_host(formatted_input, target_layout);
+        formatted_input = formatted_input.to(target_layout);
     }
 
     return AutoFormat::move_tensor_to_device(formatted_input, device, mem_config);
@@ -205,7 +204,7 @@ Tensor AutoFormat::format_output_tensor(
     if (unpad_output) {
         // Requires RM for unpad
         if (formatted_output.get_layout() != Layout::ROW_MAJOR) {
-            formatted_output = layout_conversion_on_host(formatted_output, Layout::ROW_MAJOR);
+            formatted_output = formatted_output.to(Layout::ROW_MAJOR);
             convert_layout = formatted_output.get_layout() != target_layout;
         }
         formatted_output =
@@ -216,10 +215,10 @@ Tensor AutoFormat::format_output_tensor(
         // Default to RM layout if we can't match the formatted_input layout
         if (target_layout == Layout::TILE && !AutoFormat::legal_tile_shape(formatted_output.get_legacy_shape())) {
             if (formatted_output.get_layout() != Layout::ROW_MAJOR) {
-                formatted_output = layout_conversion_on_host(formatted_output, Layout::ROW_MAJOR);
+                formatted_output = formatted_output.to(Layout::ROW_MAJOR);
             }
         } else {
-            formatted_output = layout_conversion_on_host(formatted_output, target_layout);
+            formatted_output = formatted_output.to(target_layout);
         }
     }
 

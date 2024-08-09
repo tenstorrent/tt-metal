@@ -82,7 +82,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             #        x = x.view(new_x_shape)
             #        return x.permute(0, 2, 1, 3)
 
-            untilized_x = ttl.tensor.untilize(x)
+            untilized_x = ttnn.untilize(x)
             reshaped_unt = ttl.tensor.reshape(
                 untilized_x,
                 x.get_legacy_shape()[0],

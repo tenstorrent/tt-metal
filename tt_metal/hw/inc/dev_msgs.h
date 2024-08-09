@@ -204,27 +204,41 @@ struct dprint_buf_msg_t {
     uint32_t pad; // to 1024 bytes
 };
 
+struct debug_stack_usage_t {
+    volatile uint16_t max_usage[DebugNumUniqueRiscs];
+    volatile uint16_t watcher_kernel_id[DebugNumUniqueRiscs];
+    volatile uint16_t pad[16 - DebugNumUniqueRiscs * 2];
+};
+
 enum watcher_enable_msg_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
 };
 
 constexpr int num_riscv_per_core = 5;
+
+struct watcher_msg_t {
+    volatile uint32_t enable;
+    struct debug_status_msg_t debug_status[num_riscv_per_core];
+    struct debug_sanitize_noc_addr_msg_t sanitize_noc[NUM_NOCS];
+    struct debug_assert_msg_t assert_status;
+    struct debug_pause_msg_t pause_status;
+    struct debug_stack_usage_t stack_usage;
+    struct debug_insert_delays_msg_t debug_insert_delays;
+    struct debug_ring_buf_msg_t debug_ring_buf;
+};
+
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct slave_sync_msg_t slave_sync;
     volatile uint32_t l1_barrier;
     struct launch_msg_t launch;
-    volatile uint32_t watcher_enable;
-    struct debug_status_msg_t debug_status[num_riscv_per_core];
-    struct debug_sanitize_noc_addr_msg_t sanitize_noc[NUM_NOCS];
-    struct debug_assert_msg_t assert_status;
-    struct debug_pause_msg_t pause_status;
-    struct debug_insert_delays_msg_t debug_insert_delays;
-    struct debug_ring_buf_msg_t debug_ring_buf;
+    struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
 };
 
+// Watcher struct needs to be 32b-divisible, since we need to write it from host using write_hex_vec_to_core().
+static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 
 #ifndef TENSIX_FIRMWARE

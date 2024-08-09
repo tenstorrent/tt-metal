@@ -333,7 +333,7 @@ void TensorModule(py::module& m_tensor) {
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
         .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc);
 
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "mean_hw",
         tt::tt_metal::mean_hw,
@@ -343,31 +343,31 @@ void TensorModule(py::module& m_tensor) {
         "global_mean",
         tt::tt_metal::global_mean,
         R"doc(  Returns a new tensor with the mean of the input tensor ``{0}`` on all axes.)doc");
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "global_sum",
         tt::tt_metal::global_sum,
         R"doc(  Returns a new tensor with the sum of the input tensor ``{0}`` on all axes.)doc");
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "global_max",
         tt::tt_metal::global_max,
         R"doc(  Returns a new tensor with the max of the input tensor ``{0}`` on all axes.)doc");
-    detail::bind_unary_op(
+    detail::bind_unary_op<true, false, true>(
         m_tensor,
         "global_min",
         tt::tt_metal::global_min,
         R"doc(  Returns a new tensor with the min of the input tensor ``{0}`` on all axes.)doc");
 
-    detail::bind_unary_op_with_param(
+    detail::bind_unary_op_with_param<true, false, true>(
         m_tensor,
         "sum",
         &sum,
         py::arg("dim"),
-        R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``; input tensor in TILE LAYOUT.)doc",
-        R"doc("dimension along which to apply sum", "int", "0, 1, 2, or 3")doc");
+        R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``;
+        input tensor in TILE LAYOUT.)doc", R"doc("dimension along which to apply sum", "int", "0, 1, 2, or 3")doc");
 
-    detail::bind_unary_op_with_param(
+    detail::bind_unary_op_with_param<true, false, true>(
         m_tensor,
         "max",
         tt::tt_metal::max,

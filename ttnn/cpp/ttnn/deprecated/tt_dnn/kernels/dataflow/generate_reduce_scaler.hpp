@@ -33,5 +33,6 @@ FORCE_INLINE void generate_reduce_scaler(const uint32_t cb_id, const uint32_t sc
             }
         }
     }
+
     cb_push_back(cb_id, 1);
 }

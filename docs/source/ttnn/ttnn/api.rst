@@ -383,6 +383,7 @@ Data Movement
    :maxdepth: 1
 
    ttnn/concat
+   ttnn/nonzero
    ttnn/pad
    ttnn/permute
    ttnn/reshape
@@ -390,6 +391,8 @@ Data Movement
    ttnn/repeat_interleave
    ttnn/tilize
    ttnn/tilize_with_val_padding
+   ttnn/fill_rm
+   ttnn/fill_ones_rm
 
 Normalization
 =============

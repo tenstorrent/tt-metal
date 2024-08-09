@@ -65,7 +65,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
             if output_plus_bias.get_layout() != tensor.Layout.ROW_MAJOR:
                 assert output_plus_bias.get_layout() == tensor.Layout.TILE
                 assert output_plus_bias.storage_type() == tensor.StorageType.DEVICE
-                output_plus_bias = tensor.untilize(output_plus_bias, output_plus_bias.memory_config())
+                output_plus_bias = ttnn.untilize(output_plus_bias, memory_config=output_plus_bias.memory_config())
                 assert output_plus_bias.get_layout() == tensor.Layout.ROW_MAJOR
             return output_plus_bias
 

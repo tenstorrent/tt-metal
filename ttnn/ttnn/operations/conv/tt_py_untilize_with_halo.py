@@ -45,17 +45,17 @@ class TTPyUntilizeWithHalo(TTPyOp):
         utwh_kernel_configs = halo_reader_patterns_cache[sliding_window_op_params_hash]
 
         def utwh_(activation):
-            return ttl.tensor.untilize_with_halo_v2(
+            return ttnn.untilize_with_halo_v2(
                 activation,
                 utwh_kernel_configs["padding_config"],
                 utwh_kernel_configs["local_config"],
                 utwh_kernel_configs["remote_config"],
-                pad_val,
-                self.sliding_window_op_params.num_cores_nhw,
-                utwh_kernel_configs["max_out_nsticks_per_core"],
-                utwh_kernel_configs["out_mem_config"],
-                utwh_kernel_configs["remote_read"],
-                self.transpose_mcast,
+                pad_val=pad_val,
+                ncores_nhw=self.sliding_window_op_params.num_cores_nhw,
+                max_out_nsticks_per_core=utwh_kernel_configs["max_out_nsticks_per_core"],
+                memory_config=utwh_kernel_configs["out_mem_config"],
+                remote_read=utwh_kernel_configs["remote_read"],
+                transpose_mcast=self.transpose_mcast,
             )
 
         self.utwh = utwh_

@@ -73,10 +73,10 @@ def run_test_FalconCausalLM_end_to_end(
     use_global_cos_sin_cache = True
 
     if True:
-        model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
+        model_input = torch.randint(0, seq_len * batch, (batch, seq_len))
     else:
         # batch identical sequences for debugging
-        model_input = torch.stack([torch.arange(seq_len)] * batch).reshape(batch, seq_len)
+        model_input = torch.stack([torch.randint(0, seq_len)] * batch).reshape(batch, seq_len)
 
     # Generate dummy kv_cache --------------------------------------------------------------
     if llm_mode == "prefill":

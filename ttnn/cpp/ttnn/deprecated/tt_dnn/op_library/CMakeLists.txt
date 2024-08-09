@@ -2,7 +2,6 @@
 # We do not use GLOB here since build system won't be able to pick up changes to the file list generated
 set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/layout_conversion/layout_conversion_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/sharded_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/multi_core/sharded_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/sharded_op_partial.cpp
@@ -18,9 +17,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/halo_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/indexed_fill/multi_core/indexed_fill_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/indexed_fill/indexed_fill_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/non_zero_indices/single_core/non_zero_indices_op_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/non_zero_indices/non_zero_indices_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fill_rm/fill_rm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/reduce_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/single_core_hw/reduce_op_single_core_hw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_h/reduce_op_multi_core_h.cpp
@@ -128,7 +124,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/transformer_tms.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_attn_matmul/multi_core_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_group_attn_matmul/multi_core_group_attn_matmul.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_eltwise_mul/multi_core_ssm_eltwise_mul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_1d_sum_reduce/multi_core_ssm_1d_sum_reduce.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/repeat/multi_core/repeat_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/repeat/repeat_op.cpp

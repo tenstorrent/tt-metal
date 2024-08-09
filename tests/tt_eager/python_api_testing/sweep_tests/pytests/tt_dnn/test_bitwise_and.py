@@ -63,10 +63,5 @@ class TestBitwiseAnd:
         comparison_func = comparison_funcs.comp_equal
 
         run_single_pytorch_test(
-            "eltwise-bitwise_and",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
+            "bitwise-and", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
         )

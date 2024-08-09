@@ -1010,42 +1010,6 @@ def eltwise_bitwise_not(
 
 
 @setup_host_and_device
-def eltwise_bitwise_and(
-    x,
-    *args,
-    value,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.bitwise_and(t0, value, memory_config=output_mem_config, queue_id=0)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def eltwise_bitwise_or(
-    x,
-    *args,
-    value,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.bitwise_or(t0, value, memory_config=output_mem_config, queue_id=0)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def eltwise_right_shift(
     x,
     *args,
@@ -2041,7 +2005,7 @@ def untilize(x, *args, device, dtype, layout, input_mem_config, output_mem_confi
             input_mem_config[0],
         )
 
-    t1 = ttl.tensor.untilize(t0, output_mem_config=output_mem_config)
+    t1 = ttnn.untilize(t0, memory_config=output_mem_config)
     return t1.cpu().to_torch()
 
 
@@ -2074,7 +2038,7 @@ def untilize_with_unpadding(
             input_mem_config[0],
         )
 
-    t1 = ttl.tensor.untilize_with_unpadding(t0, output_tensor_end, output_mem_config=output_mem_config)
+    t1 = ttnn.untilize_with_unpadding(t0, output_tensor_end=output_tensor_end, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

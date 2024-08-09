@@ -29,13 +29,14 @@
 #define MEM_L1_SIZE (1464 * 1024)
 
 #define MEM_ETH_BASE 0x0
-#define MEM_ETH_SIZE (256 * 1024)
+// -32 for ETH barrier, see comment in eth_l1_address_map
+#define MEM_ETH_SIZE (256 * 1024 - 32)
 
 #define MEM_LOCAL_BASE 0xFFB00000
-#define MEM_BRISC_LOCAL_SIZE (4 * 1024)
-#define MEM_NCRISC_LOCAL_SIZE (4 * 1024)
+#define MEM_BRISC_LOCAL_SIZE (8 * 1024)
+#define MEM_NCRISC_LOCAL_SIZE (8 * 1024)
 #define MEM_IERISC_LOCAL_SIZE (4 * 1024)
-#define MEM_TRISC_LOCAL_SIZE (2 * 1024)
+#define MEM_TRISC_LOCAL_SIZE (4 * 1024)
 
 /////////////
 // Firmware/kernel code holes
@@ -50,7 +51,7 @@
 
 #define MEM_BOOT_CODE_BASE 0
 #define MEM_MAILBOX_BASE 16
-#define MEM_MAILBOX_END (MEM_MAILBOX_BASE + 1312)
+#define MEM_MAILBOX_END (MEM_MAILBOX_BASE + 1344)
 #define MEM_IERISC_MAILBOX_BASE 1024
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + 128)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
