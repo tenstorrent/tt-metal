@@ -1049,7 +1049,7 @@ def test_galaxy_nlp_concat_heads_decode(
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
 
-    concat_head_output = ttnn.experimental.tensor.nlp_concat_heads_decode(
+    concat_head_output = ttnn.experimental.nlp_concat_heads_decode(
         concat_head_input_tt,
         num_heads=n_local_heads,
     )  # (seqlen, 1, batch, hidden_size)

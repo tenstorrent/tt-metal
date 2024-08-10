@@ -288,7 +288,7 @@ class TtLlamaAttention_optimized:
         attn_output,
     ):
         # ATTENTION SELFOUT
-        attn_output = ttnn.experimental.tensor.nlp_concat_heads_decode(
+        attn_output = ttnn.experimental.nlp_concat_heads_decode(
             attn_output,
             num_heads=self.n_local_heads,
         )  # seqlen, 1, batch, hidden_size

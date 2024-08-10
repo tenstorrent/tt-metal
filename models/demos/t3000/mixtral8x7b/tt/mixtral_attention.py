@@ -252,7 +252,7 @@ class TtMixtralAttention(LightweightModule):
             output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
         )
 
-        attn_output_11BH = ttnn.experimental.tensor.nlp_concat_heads_decode(
+        attn_output_11BH = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_1B4D,
             num_heads=4,
         )

@@ -427,7 +427,7 @@ class TtLlamaAttention_galaxy:
         # ATTENTION SELFOUT
         # breakpoint()
         # (1, 8, 8(32), 128) - > (1, 1, 8(32), 1024) ->(1, 1, 32, 1024)
-        attn_output = ttnn.experimental.tensor.nlp_concat_heads_decode(
+        attn_output = ttnn.experimental.nlp_concat_heads_decode(
             attn_output,
             num_heads=self.n_local_heads,
         )

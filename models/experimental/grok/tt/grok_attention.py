@@ -296,7 +296,7 @@ class TtGrokAttention(LightweightModule):
 
         # value_output = ttnn.to_torch(attn_output_1B4D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
 
-        attn_output_11BH = ttnn.experimental.tensor.nlp_concat_heads_decode(
+        attn_output_11BH = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_1B4D,
             num_heads=6,
         )

@@ -160,7 +160,7 @@ def run_test_concat_head2(
         device=devices[0], mem_config=SCORES_BATCHED_MM_OUTPUT_MEMCFG
     )
 
-    concat_head_output = ttl.tensor.nlp_concat_heads_decode(
+    concat_head_output = ttnn.experimental.nlp_concat_heads_decode(
         concat_head_input_tt,
         num_heads=n_local_heads,
     )  # seqlen, 1, batch, hidden_size
