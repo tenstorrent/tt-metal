@@ -27,16 +27,6 @@ using binary_tensor_op_t = Tensor(const Tensor& a, const Tensor& b);
 // Note: inline doesn't allow pybind to work well so we keep few function not inlined.
 
 
-Tensor unary_rdiv_trunc(
-    float value,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-Tensor rfloor_div(
-    float value,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 }  // namespace tt_metal
 
 }  // namespace tt

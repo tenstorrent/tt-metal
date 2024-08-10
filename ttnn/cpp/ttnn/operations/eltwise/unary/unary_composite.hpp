@@ -119,10 +119,9 @@ struct ExecuteRdiv {
         uint8_t queue_id,
         const Tensor& input_tensor,
         float value,
+        const std::string& round_mode = "None",
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return OpHandler<UnaryCompositeOpType::RDIV>::handle(queue_id, input_tensor, value, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
-    }
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 }  // namespace unary

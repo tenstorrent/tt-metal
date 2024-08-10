@@ -764,3 +764,28 @@ def test_unary_celu(input_shapes, param, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "param",
+    {random.uniform(0, 100) for _ in range(5)},
+)
+@pytest.mark.parametrize("round_mode", ["None", "trunc", "floor"])
+def test_unary_rdiv(input_shapes, param, round_mode, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+
+    output_tensor = ttnn.rdiv(input_tensor, param, round_mode=round_mode)
+    golden_function = ttnn.get_golden_function(ttnn.rdiv)
+    golden_tensor = golden_function(in_data, param, round_mode=round_mode)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
