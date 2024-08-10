@@ -4,6 +4,7 @@
 
 #include "data_collection.hpp"
 #include "llrt/rtoptions.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 using namespace tt;
 
