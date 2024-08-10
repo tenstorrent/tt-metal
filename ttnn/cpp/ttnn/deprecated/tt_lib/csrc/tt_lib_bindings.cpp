@@ -13,6 +13,7 @@
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
+#include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "type_caster.hpp"
 

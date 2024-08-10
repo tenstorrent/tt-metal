@@ -23,6 +23,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
+#include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"

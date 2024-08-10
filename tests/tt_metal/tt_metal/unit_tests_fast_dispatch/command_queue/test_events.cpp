@@ -9,6 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/watcher_server.hpp"
+#include "tt_metal/impl/event/event.hpp"
 
 using namespace tt::tt_metal;
 
