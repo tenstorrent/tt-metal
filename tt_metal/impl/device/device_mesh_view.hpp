@@ -17,7 +17,7 @@ namespace tt::tt_metal {
 
 // Forward declaration of DeviceMesh
 class DeviceMesh;
-using DeviceGrid = std::pair<int, int>;
+using DeviceGrid = std::pair<size_t, size_t>;
 
 struct Coordinate {
     std::size_t row;
