@@ -4429,7 +4429,7 @@ def eltwise_unary_div_no_nan(
     output_mem_config,
     **kwargs,
 ):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.div_no_nan(t0, value, memory_config=output_mem_config)
 
-    return tt2torch_tensor(t1)
+    return ttnn_tensor_to_torch(t1)
