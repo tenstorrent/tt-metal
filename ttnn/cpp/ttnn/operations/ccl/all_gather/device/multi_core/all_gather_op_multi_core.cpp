@@ -257,9 +257,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     } else {
         worker_defines["INTERLEAVED_MEM_LAYOUT"] = "1";
     }
-    if (fuse_op) {
-        worker_defines["OVERLAP_OP"] = "1";
-    }
 
     bool full_send_both_directions =
         (topology == all_gather_op::Topology::Linear ||
@@ -923,7 +920,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(sender_worker_reader_semaphore_id),
                             static_cast<uint32_t>(is_clockwise_direction ? 1 : 0),
                             static_cast<uint32_t>(cb_num_pages / 2),
-                            static_cast<uint32_t>(ring_size)
+                            static_cast<uint32_t>(ring_size),
+                            static_cast<bool>(fuse_op)
                         };
 
                         if (is_sharded) {

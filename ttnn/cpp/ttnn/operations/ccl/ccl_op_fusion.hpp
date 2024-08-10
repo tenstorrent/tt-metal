@@ -62,7 +62,6 @@ struct AllGatherFusedOpSignaler {
         uint32_t curr_worker_index
     ) {
 
-        ct_args.push_back(static_cast<bool>(true));
         ct_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
         ct_args.push_back(static_cast<uint32_t>(curr_worker_index));
         ct_args.push_back(static_cast<uint32_t>(this->all_gather_worker_sync_semaphore));
