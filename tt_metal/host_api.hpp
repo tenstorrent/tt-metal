@@ -6,10 +6,7 @@
 
 #include <variant>
 #include <vector>
-#include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/program/program.hpp"
-// #include "tt_metal/impl/buffers/buffer.hpp"
-// #include "tt_metal/impl/event/event.hpp"
 
 /** @file */
 
@@ -22,6 +19,9 @@
  * resource for generating Markdown tables, refer to
  * https://www.tablesgenerator.com/markdown_tables
  * */
+
+class CoreRange;
+class CoreRangeSet;
 
 namespace tt {
 
