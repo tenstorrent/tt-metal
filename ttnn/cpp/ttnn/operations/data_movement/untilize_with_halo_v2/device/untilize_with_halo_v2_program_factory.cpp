@@ -8,12 +8,11 @@
 
 #include "tt_dnn/op_library/cb_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
-#include "ttnn/operation.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-
-#define MAX_PACK_UNTILIZE_WIDTH 8  // pack untilize currently does not support > 8 width
+#include "ttnn/common/constants.hpp"
+#include "ttnn/operation.hpp"
 
 using namespace tt::constants;
 
@@ -126,15 +125,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         // compute kernel
         std::vector<uint32_t> compute_ct_args = {input_nblocks_per_core, ntiles_per_block};
         std::string compute_kernel(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/compute/pack_untilize.cpp");
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
         if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
             log_debug(
                 tt::LogOp,
                 "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
                 ntiles_per_block,
                 MAX_PACK_UNTILIZE_WIDTH);
-            compute_kernel =
-                "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/compute/untilize.cpp";
+            compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
         }
         KernelHandle untilize_kernel_id =
             CreateKernel(program, compute_kernel, all_cores, ComputeConfig{.compile_args = compute_ct_args});

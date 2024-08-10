@@ -2,7 +2,7 @@
 ## How to Run
 
 To run the demo, make sure to build the project, activate the environment, and set the appropriate environment variables.
-For more information, refer [installation and build guide](https://tenstorrent.github.io/tt-metal/latest/get_started/get_started.html#install-and-build).
+For more information, refer [installation and build guide](https://tenstorrent.github.io/tt-metalium/latest/get_started/get_started.html#install-and-build).
 
 Use `pytest --disable-warnings models/experimental/functional_unet/demo/demo.py::test_unet_demo` to run all variants of the demo.
 

@@ -256,12 +256,7 @@ Enums
 Tensor elementwise operations
 =============================
 
-.. autofunction:: tt_lib.tensor.unary_rdiv_trunc
-
 .. autofunction:: tt_lib.tensor.assign
-
-.. autofunction:: tt_lib.tensor.rfloor_div
-
 
 Tensor manipulation operations
 -=============================
@@ -270,10 +265,6 @@ These operations change the tensor shape in some way, giving it new dimensions
 but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.reshape
-
-.. autofunction:: tt_lib.tensor.untilize
-
-.. autofunction:: tt_lib.tensor.untilize_with_unpadding
 
 .. autofunction:: tt_lib.tensor.clone
 

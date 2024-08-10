@@ -371,7 +371,6 @@ typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t ind
     return tt::stl::reflection::transform_object_of_type<Tensor>(get_shard, tensor_args);
 }
 
-// TODO: support all output types
 static Tensor make_tensor_return_value_from_shards(auto& old_storage, std::vector<Tensor>& output_shards) {
     return create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.strategy);
 }
@@ -410,6 +409,12 @@ static std::vector<std::optional<Tensor>> make_tensor_return_value_from_shards(a
         output.push_back(make_tensor_return_value_from_shards(old_storage, tensors));
     }
     return output;
+}
+
+template<typename T>
+static T make_tensor_return_value_from_shards(auto& old_storage, std::vector<T>& output_shards) {
+    // TODO: add logic to handle all types we want to support generically
+    TT_THROW("make_tensor_return_value_from_shards is not implemented for this type. Please add an overload");
 }
 
 template <DeviceOperationConcept device_operation_t>
