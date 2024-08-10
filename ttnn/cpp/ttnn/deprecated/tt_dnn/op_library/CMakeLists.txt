@@ -126,9 +126,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/paged_update_cache/multi_core/paged_update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/paged_update_cache/paged_update_cache_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fold/fold_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fold/single_core/fold_op_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fold/multi_core/fold_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp

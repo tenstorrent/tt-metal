@@ -6,7 +6,6 @@
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/move/move_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
@@ -100,22 +99,6 @@ namespace tt::tt_metal::detail{
                 "Y", "Y dim of output tensor", "int", "", "Yes"
                 "X", "X dim of output tensor", "int", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-        m_tensor.def("fold", &fold,
-            py::arg("input").noconvert(), py::arg("stride_h"), py::arg("stride_w"), py::arg("use_transpose_as_fold")=false, py::arg("output_shape")=std::nullopt, py::arg("pad_c")=0, py::arg("pad_h")=0, py::arg("pad_w")=0, R"doc(
-            Fold TT Tensor.
-
-            Input tensor must be on TT accelerator device, in ROW_MAJOR.
-
-            Output tensor will be on TT accelerator device, in ROW_MAJOR.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "Tensor of shape [N, H, W, C]", "Yes"
-                "stride_h", "Stride along the H-dimension", "int", "", "Yes"
-                "stride_w", "Stride along the W-dimension", "int", "", "Yes"
         )doc");
 
         // *** broadcast and reduce ***

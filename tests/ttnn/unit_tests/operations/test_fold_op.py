@@ -7,22 +7,13 @@ import torch
 
 import ttnn
 
-import tt_lib as ttl
-from tt_lib import tensor as tt
-
-from models.utility_functions import skip_for_wormhole_b0, torch2tt_tensor, tt2torch_tensor
-
-from tt_lib.utils import (
-    tilize_to_list,
-    tilize,
-    untilize,
-    _nearest_32,
-    _nearest_y,
-    convert_weights_2d_matrix,
-)
 from models.utility_functions import (
     pad_and_fold_conv_activation_for_unity_stride,
     pad_and_fold_conv_filters_for_unity_stride,
+    _nearest_y,
+    skip_for_wormhole_b0,
+    torch2tt_tensor,
+    tt2torch_tensor,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
@@ -123,14 +114,14 @@ def pad_and_fold_with_permute_and_reshape_on_device(
     activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     # reshape
     n, w, c, h = activation_pyt_padded.shape
-    activation_pyt_padded = ttl.tensor.reshape(
+    activation_pyt_padded = ttnn.tt_lib.tensor.reshape(
         activation_pyt_padded, n, w // stride_w, c * stride_w, h, output_mem_config=ttnn.L1_MEMORY_CONFIG
     )
     # transpose
     activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
     # reshape
     n, w, h, c = activation_pyt_padded.shape
-    activation_pyt_padded = ttl.tensor.reshape(
+    activation_pyt_padded = ttnn.tt_lib.tensor.reshape(
         activation_pyt_padded, n, w, h // stride_h, c * stride_h, output_mem_config=ttnn.L1_MEMORY_CONFIG
     )
     # transpose
@@ -174,7 +165,7 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor_padded, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    tt_output_tensor = ttl.tensor.fold(
+    tt_output_tensor = ttnn.fold(
         tt_input_tensor,
         stride_h,
         stride_w,
@@ -188,7 +179,7 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
 
 
-@skip_for_wormhole_b0()
+# @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "act_shape,stride_h,stride_w",
     [
@@ -213,11 +204,11 @@ def test_fold(act_shape, stride_h, stride_w, device):
     tt_input = torch2tt_tensor(
         torch_input,
         device,
-        tt.Layout.ROW_MAJOR,
-        tt_memory_config=tt.MemoryConfig(tt.TensorMemoryLayout.INTERLEAVED, tt.BufferType.L1),
+        ttnn.ROW_MAJOR_LAYOUT,
+        tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     )
 
-    tt_out = tt.fold(tt_input, stride_h, stride_w)
+    tt_out = ttnn.fold(tt_input, stride_h, stride_w)
     actual = tt2torch_tensor(tt_out)
 
     torch.testing.assert_allclose(actual, expected)
@@ -237,29 +228,29 @@ def test_fold_sharded(device):
     expected = fold_torch(torch_input, stride_h, stride_w)
     expected = expected.reshape(1, 1, -1, expected.shape[-1])
 
-    shard_grid = tt.CoreRangeSet(
+    shard_grid = ttnn.CoreRangeSet(
         {
-            tt.CoreRange(
-                tt.CoreCoord(0, 0),
-                tt.CoreCoord(11, 7),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(11, 7),
             ),
-            tt.CoreRange(
-                tt.CoreCoord(0, 8),
-                tt.CoreCoord(3, 8),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 8),
+                ttnn.CoreCoord(3, 8),
             ),
         }
     )
     n_cores = 100
 
-    shard_spec = tt.ShardSpec(shard_grid, [N * H * W // n_cores, C], tt.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
 
     tt_input = torch2tt_tensor(
         torch_input,
         device,
-        tt.Layout.ROW_MAJOR,
-        tt_memory_config=tt.MemoryConfig(tt.TensorMemoryLayout.HEIGHT_SHARDED, tt.BufferType.L1, shard_spec),
+        ttnn.ROW_MAJOR_LAYOUT,
+        tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
     )
-    tt_out = tt.fold(tt_input, stride_h, stride_w)
+    tt_out = ttnn.fold(tt_input, stride_h, stride_w)
     actual = tt2torch_tensor(tt_out)
 
     torch.testing.assert_allclose(actual, expected)

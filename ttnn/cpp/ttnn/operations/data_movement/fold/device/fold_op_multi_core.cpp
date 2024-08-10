@@ -2,11 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
+
+#include "fold_device_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 
-namespace tt::tt_metal {
-operation::ProgramWithCallbacks fold_multi_core(
+namespace ttnn::operations::data_movement {
+
+cached_program_t fold_multi_core(
     const Tensor& input, const Tensor& output, uint8_t stride_h, uint8_t stride_w) {
     Program program = CreateProgram();
     Device* device = output.device();
@@ -49,7 +55,7 @@ operation::ProgramWithCallbacks fold_multi_core(
     // Setup kernel
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/fold/kernels/dataflow/writer_cb2s_row_major.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
         all_cores,
         WriterDataMovementConfig({cb_src0_index, cb_dst0_index}));
 
@@ -73,22 +79,39 @@ operation::ProgramWithCallbacks fold_multi_core(
             pixels_per_dst_row * aligned_pixel_size,
         });
 
-    auto override_runtime_args_callback = [writer_kernel_id, stride_h, stride_w, cb_src0, cb_dst0](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto shard_shape = input_tensors[0].shard_spec()->shape;
-        auto all_cores = input_tensors[0].shard_spec()->grid;
+    return { std::move(program), {writer_kernel_id, stride_h, stride_w, cb_src0, cb_dst0} };
+}
 
-        DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensors[0].get_dtype());
+cached_program_t Fold::MultiCore::create(const operation_attributes_t& operation_attributes,
+                                         const tensor_args_t& tensor_args,
+                                         tensor_return_value_t& output_tensor) {
+    return fold_multi_core(tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
+}
 
-        uint32_t pixel_size = shard_shape[1] * input_tensors[0].element_size();
+void Fold::MultiCore::override_runtime_arguments(cached_program_t& cached_program,
+                                                const operation_attributes_t& operation_attributes,
+                                                const tensor_args_t& tensor_args,
+                                                tensor_return_value_t& output_tensor) {
+
+        auto writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+        auto stride_h = cached_program.shared_variables.stride_h;
+        auto stride_w = cached_program.shared_variables.stride_w;
+        auto cb_src0 = cached_program.shared_variables.cb_src0;
+        auto cb_dst0 = cached_program.shared_variables.cb_dst0;
+
+        auto program = cached_program.program;
+        auto input_tensor = tensor_args.input_tensor;
+
+        auto shard_shape = input_tensor.shard_spec()->shape;
+        auto all_cores = input_tensor.shard_spec()->grid;
+
+        DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
+
+        uint32_t pixel_size = shard_shape[1] * input_tensor.element_size();
         uint32_t num_pixels = shard_shape[0];
         uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
 
-        uint32_t width = input_tensors[0].get_legacy_shape()[2];
+        uint32_t width = input_tensor.get_legacy_shape()[2];
         uint32_t chunk_size = stride_w * pixel_size;
         uint32_t row_size = width * pixel_size;
         uint32_t dst_pixel_size = stride_h * chunk_size;
@@ -99,8 +122,8 @@ operation::ProgramWithCallbacks fold_multi_core(
         uint32_t aligned_pixel_size = round_up_to_mul32(pixel_size);
         uint32_t aligned_dst_pixel_size = round_up_to_mul32(dst_pixel_size);
 
-        auto src_buffer = input_tensors[0].buffer();
-        auto dst_buffer = output_tensors[0].buffer();
+        auto src_buffer = input_tensor.buffer();
+        auto dst_buffer = output_tensor.buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         UpdateDynamicCircularBufferAddress(program, cb_dst0, *dst_buffer);
@@ -123,8 +146,6 @@ operation::ProgramWithCallbacks fold_multi_core(
                 width / stride_w,
                 cb_pages_per_dst_row,
             });
-    };
-
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
-}  // namespace tt::tt_metal
+
+}  // namespace ttnn::operations::data_movement
