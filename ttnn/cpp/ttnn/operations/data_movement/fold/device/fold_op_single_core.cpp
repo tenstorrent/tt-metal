@@ -2,11 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/fold/fold_op.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
+
+#include "fold_device_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 
-namespace tt::tt_metal {
-operation::ProgramWithCallbacks fold_single_core(
+namespace ttnn::operations::data_movement {
+
+cached_program_t fold_single_core(
     const Tensor &input, const Tensor &output, uint8_t stride_h, uint8_t stride_w) {
     Program program = CreateProgram();
 
@@ -83,7 +89,7 @@ operation::ProgramWithCallbacks fold_single_core(
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/fold/kernels/dataflow/writer_unary_stick_layout_concatenate_rows_interleaved.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_unary_stick_layout_concatenate_rows_interleaved.cpp"
         core,
         WriterDataMovementConfig(writer_compile_time_args));
 
@@ -107,18 +113,29 @@ operation::ProgramWithCallbacks fold_single_core(
 
     SetRuntimeArgs(program, writer_kernel_id, core, writer_kernel_args);
 
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
-        Buffer *src_buffer = input_buffers.at(0);
-        Buffer *dst_buffer = output_buffers.at(0);
-
-        CoreCoord core = {0, 0};
-        GetRuntimeArgs(program, reader_kernel_id, core)[0] = src_buffer->address();
-        GetRuntimeArgs(program, writer_kernel_id, core)[0] = dst_buffer->address();
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return { std::move(program), {reader_kernel_id, writer_kernel_id} };
 }
-}  // namespace tt::tt_metal
+
+cached_program_t Fold::SingleCore::create(const operation_attributes_t& operation_attributes,
+                                const tensor_args_t& tensor_args,
+                                tensor_return_value_t& output_tensor) {
+    return fold_single_core(tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
+}
+
+void Fold::SingleCore::override_runtime_arguments(cached_program_t& cached_program,
+                                        const operation_attributes_t& operation_attributes,
+                                        const tensor_args_t& tensor_args,
+                                        tensor_return_value_t& output_tensor) {
+
+    Buffer *src_buffer = tensor_args.input_tensor.buffer();
+    Buffer *dst_buffer = output_tensor.buffer();
+    auto reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
+    auto writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    auto program = cached_program.program;
+
+    CoreCoord core = {0, 0};
+    GetRuntimeArgs(program, reader_kernel_id, core)[0] = src_buffer->address();
+    GetRuntimeArgs(program, writer_kernel_id, core)[0] = dst_buffer->address();
+}
+
+} // namespace ttnn::operations::data_movement
