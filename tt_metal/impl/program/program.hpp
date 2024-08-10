@@ -11,7 +11,6 @@
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
-#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
 #include "dev_msgs.h"
 
@@ -22,6 +21,7 @@ namespace tt_metal {
 class Buffer;
 class Kernel;
 class CircularBuffer;
+class Device;
 
 // Fwd declares
 namespace detail{
