@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::halo {
 
@@ -134,7 +135,7 @@ Tensor halo_op(const Tensor& input_tensor,
         config.pad_hw_.second==0
     )
     {
-        return input_tensor;
+        return ttnn::operations::core::reallocate(input_tensor, input_tensor.memory_config());
     }
     auto halo_func = [config, pad_val, remote_read, is_block_sharded, transpose_mcast, reshard_num_cores_nhw, output_memory_config, is_out_tiled]
         (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {

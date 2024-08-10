@@ -196,7 +196,7 @@ void py_module(py::module& module) {
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
-            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, bool, bool, TensorMemoryLayout, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
+            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, uint32_t, bool, bool, TensorMemoryLayout, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::HiFi4,
             py::arg("dtype") = DataType::BFLOAT16,

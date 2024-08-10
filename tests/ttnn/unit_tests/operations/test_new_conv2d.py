@@ -309,24 +309,24 @@ def run_conv_with_split(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, ncores, act_block_w_div",
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
     (
-        (128, 128, 8, 8, 3, 3, 1, 1, 4, 1),
-        (128, 256, 8, 8, 3, 3, 1, 1, 4, 1),
-        (128, 256, 8, 8, 3, 3, 1, 1, 4, 1),
-        (128, 256, 8, 8, 3, 3, 1, 1, 4, 2),
-        (256, 256, 8, 8, 3, 3, 1, 1, 4, 1),
-        (256, 2048, 8, 8, 3, 3, 1, 1, 8, 2),
-        (512, 2048, 8, 8, 3, 3, 1, 1, 8, 8),
-        (512, 2048, 16, 16, 3, 3, 1, 1, 16, 4),
-        (512, 2048, 16, 16, 3, 3, 0, 0, 16, 4),
-        (768, 768, 16, 16, 3, 3, 1, 1, 12, 2),
-        (768, 768, 16, 16, 3, 3, 1, 1, 24, 1),
-        (1280, 1280, 16, 16, 3, 3, 1, 1, 40, 1),
-        (1280, 1280, 16, 16, 3, 3, 0, 0, 40, 1),
-        (1280, 1280, 8, 8, 3, 3, 1, 1, 40, 1),
-        (1280, 1280, 8, 8, 3, 3, 1, 1, 8, 5),
-        (1280, 2560, 16, 16, 3, 3, 1, 1, 40, 2),
+        (128, 128, 8, 8, 3, 3, 1, 1, 1),
+        (128, 256, 8, 8, 3, 3, 1, 1, 1),
+        (128, 256, 8, 8, 3, 3, 1, 1, 1),
+        (128, 256, 8, 8, 3, 3, 1, 1, 1),
+        (256, 256, 8, 8, 3, 3, 1, 1, 1),
+        (256, 2048, 8, 8, 3, 3, 1, 1, 8),
+        (512, 2048, 8, 8, 3, 3, 1, 1, 4),
+        (512, 2048, 16, 16, 3, 3, 1, 1, 4),
+        (768, 768, 16, 16, 3, 3, 1, 1, 1),
+        (768, 768, 8, 8, 3, 3, 1, 1, 1),
+        (768, 768, 10, 10, 3, 3, 0, 0, 1),
+        (768, 768, 16, 16, 3, 3, 1, 1, 1),
+        (1280, 1280, 16, 16, 3, 3, 1, 1, 1),
+        (1280, 1280, 8, 8, 3, 3, 1, 1, 1),
+        (1280, 1280, 8, 8, 3, 3, 1, 1, 1),
+        (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
     ),
 )
 @pytest.mark.parametrize(
@@ -347,7 +347,6 @@ def test_conv_ws(
     filter_width,
     pad_h,
     pad_w,
-    ncores,
     act_block_w_div,
     stride,
     has_bias,
@@ -424,6 +423,7 @@ def test_conv_ws(
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
     )
+    ncores = 3
     shard_grid = get_shard_grid_from_num_cores(ncores, device)
     shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
     shard_spec = ttnn.experimental.tensor.ShardSpec(
@@ -432,28 +432,28 @@ def test_conv_ws(
     tensor_memory_layout = ttnn.types.TensorMemoryLayout.WIDTH_SHARDED
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
 
-    compute_grid_size = device.compute_with_storage_grid_size()
+    # compute_grid_size = device.compute_with_storage_grid_size()
 
-    block_shard_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.types.BufferType.L1,
-        ttnn.experimental.tensor.ShardSpec(
-            ttnn.CoreRangeSet(set([ttnn.CoreRange((0, 0), (3, 3))])),
-            (64, input_channels // ncores),
-            shard_orientation,
-            False,
-        ),
-    )
-    height_shard_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.types.BufferType.L1,
-        ttnn.experimental.tensor.ShardSpec(
-            ttnn.CoreRangeSet(set([ttnn.CoreRange((0, 0), (3, 0))])), (64, input_channels), shard_orientation, False
-        ),
-    )
+    # block_shard_mem_config = ttnn.MemoryConfig(
+    #     ttnn.types.TensorMemoryLayout.BLOCK_SHARDED,
+    #     ttnn.types.BufferType.L1,
+    #     ttnn.experimental.tensor.ShardSpec(
+    #         ttnn.CoreRangeSet(set([ttnn.CoreRange((0, 0), (3, 3))])),
+    #         (64, input_channels // ncores),
+    #         shard_orientation,
+    #         False,
+    #     ),
+    # )
+    # height_shard_mem_config = ttnn.MemoryConfig(
+    #     ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+    #     ttnn.types.BufferType.L1,
+    #     ttnn.experimental.tensor.ShardSpec(
+    #         ttnn.CoreRangeSet(set([ttnn.CoreRange((0, 0), (3, 0))])), (64, input_channels), shard_orientation, False
+    #     ),
+    # )
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
     # tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=block_shard_mem_config)
-    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=in_sharded_mem_config)
+    # tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=in_sharded_mem_config)
     # tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=height_shard_mem_config)
 
     tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
@@ -462,7 +462,7 @@ def test_conv_ws(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        height_sharding=False,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         input_channels_alignment=32,
         deallocate_activation=deallocate_activation,
         fp32_dest_acc_enabled=fp32_accum,
@@ -470,7 +470,7 @@ def test_conv_ws(
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
-        reshard_if_not_optimal=False,
+        reshard_if_not_optimal=True,
         act_block_w_div=act_block_w_div,
     )
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(

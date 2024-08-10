@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv2d.hpp"
+#include <sys/types.h>
+#include <cstdint>
 
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
@@ -89,7 +91,14 @@ ParallelConfig determine_parallel_config(
         if (conv_config.is_height_sharded()) {
             CoreRangeSet grid = num_cores_to_core_range_set(num_cores_nhw, device_grid_size_coord, true);
             return grid;
-        } else {
+        } else if(conv_config.is_width_sharded()){
+            uint32_t num_cores_channels = find_closest_common_largest_divisor(
+                conv_out_2d_matrix_width_ntiles, std::ceil((double)input_channels / (double)32), max_num_cores);
+             log_debug(LogOp,"Num cores for Width Sharding : {}",num_cores_channels);
+            CoreRangeSet grid = num_cores_to_core_range_set(num_cores_channels, device_grid_size_coord, true);
+             std::cout<<"Num cores for Width Sharding : "<<num_cores_channels<<" Grid :"<<grid.str()<<std::endl;
+            return grid;
+        } else if(conv_config.is_block_sharded()) {
             uint32_t total_cores_for_channels =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? device_grid_size[1] : device_grid_size[0];
             uint32_t num_cores_channels = find_closest_common_largest_divisor(
@@ -101,12 +110,15 @@ ParallelConfig determine_parallel_config(
             CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
             CoreRangeSet grid = CoreRangeSet({core_range});
             return grid;
+        } else {
+            TT_FATAL("Invalid Shard Layout in Conv Config",conv_config.shard_layout);
+            return CoreRangeSet({});
         }
     };
 
     uint32_t num_cores_nhw = calculate_num_cores_nhw();
     const CoreRangeSet& grid = calculate_grid(num_cores_nhw);
-    auto shard_orientation = conv_config.is_height_sharded() ? ShardOrientation::ROW_MAJOR : block_shard_orientation;
+    auto shard_orientation = conv_config.is_block_sharded()?block_shard_orientation : ShardOrientation::ROW_MAJOR;
     ParallelConfig pconfig = {.grid = grid, .shard_scheme = conv_config.shard_layout, .shard_orientation = shard_orientation};
     return pconfig;
 }
@@ -174,7 +186,11 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     auto shard_orientation = parallel_config.shard_orientation;
 
     uint32_t nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2];
-    uint32_t nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
+    uint32_t nhw_padded = nhw_shape;
+    if(num_cores_nhw>1)
+    {
+        nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
+    }
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
     TT_ASSERT(channels % num_cores_channels == 0, channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
@@ -304,7 +320,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
                 .shard_scheme = input_shard_scheme,
                 .shard_orientation = input_shard_orientation};
             input_tensor_parallel_config = pconfig;
-            if (input_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
+            if (input_shard_scheme != TensorMemoryLayout::BLOCK_SHARDED &&
                 input_shard_orientation != ShardOrientation::ROW_MAJOR) {
                 needs_shard_or_reshard = true;
             }
@@ -357,12 +373,13 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
         if (input_tensor_parallel_config != parallel_config) {
             needs_shard_or_reshard = true;
         }
+        log_debug(LogOp, "Parallel Config for reshard {}: {}", needs_shard_or_reshard, parallel_config);
     }
     if (needs_shard_or_reshard) {
         uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
         // TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
         uint32_t tensor_height = input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2];
-        uint32_t input_tensor_height_snapped_to_tile = tt::round_up(tensor_height, input_num_cores_nhw * 32);
+        uint32_t input_tensor_height_snapped_to_tile = (conv_config.shard_layout==TensorMemoryLayout::WIDTH_SHARDED)? tensor_height : tt::round_up(tensor_height, input_num_cores_nhw * 32);
         TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
         uint32_t tensor_width = input_tensor.get_shape()[3];
         uint32_t input_tensor_width_snapped_to_channels_alignment =
@@ -707,6 +724,10 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             opt_conv_op_parallel_config.num_cores_nhw,
             input_tensor_post_tm.memory_config().shard_spec.value().grid,
             true);
+        bool bypass_halo = (input_tensor.memory_config().memory_layout==TensorMemoryLayout::WIDTH_SHARDED &&
+            sliding_window_config.pad_hw_.first==0 &&
+            sliding_window_config.pad_hw_.second==0
+            );
         auto halo_output = ttnn::operations::halo::halo_op(
             input_tensor_post_tm,
             sliding_window_config,
