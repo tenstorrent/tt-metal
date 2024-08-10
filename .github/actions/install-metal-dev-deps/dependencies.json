@@ -16,6 +16,7 @@
     "libtbb-dev",
     "libcapstone-dev",
     "pkg-config",
-    "ninja-build"
+    "ninja-build",
+    "g++-12"
   ]
 }
