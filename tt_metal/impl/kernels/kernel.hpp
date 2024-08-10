@@ -6,14 +6,12 @@
 
 #include <vector>
 #include <map>
-#include <optional>
 #include <variant>
 #include <type_traits>
 #include <memory>
 
 #include "jit_build/build.hpp"
 #include "common/base_types.hpp"
-#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/llrt/tt_memory.h"
 
@@ -21,6 +19,7 @@ namespace tt {
 
 namespace tt_metal {
 
+class Device;
 constexpr uint32_t max_runtime_args = 256;
 constexpr uint32_t idle_eth_max_runtime_args = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE / sizeof(uint32_t);
 
