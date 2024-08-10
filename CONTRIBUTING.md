@@ -513,7 +513,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 
 - Any commit message must be accompanied with an appropriate GitHub issue
   number with a colon and following message. The message must start with an
-  imperative verb and descripton of what was done. Preferably a reason is
+  imperative verb and description of what was done. Preferably a reason is
   included. Ex.
   ```
   #41: Fix data format error in Gelu op.
