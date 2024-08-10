@@ -9,35 +9,36 @@ jobs:
     strategy:
       matrix:
         build: [
-          {type: Debug, runs-on: ubuntu-20.04},
-          {type: RelWithDebInfo, runs-on: build}
+          {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-20.04},
+          {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-20.04},
+          {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
+          {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
+          {type: Debug, cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04},
+          {type: RelWithDebInfo,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04},
         ]
         arch: [grayskull, wormhole_b0, blackhole]
-        os: [ubuntu-20.04]
     env:
       ARCH_NAME: ${{ matrix.arch }}
       # So we can get all the makefile output we want
       VERBOSE: 1
     runs-on: ${{ matrix.build.runs-on }}
-    name: cmake build ${{ matrix.build.type }} ${{ matrix.arch }}
+    name: cmake ${{ matrix.build.type }} ${{ matrix.build.cxx_compiler }} ${{ matrix.arch }} ${{ matrix.build.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Install dependencies
-        if: ${{ matrix.build.runs-on == 'ubuntu-20.04' }}
         uses: ./.github/actions/install-metal-deps
         with:
-          os: ${{ matrix.os }}
+          os: ${{ matrix.build.runs-on }}
       - name: Install dev dependencies
-        if: ${{ matrix.build.runs-on == 'ubuntu-20.04' }}
         uses: ./.github/actions/install-metal-dev-deps
         with:
-          os: ${{ matrix.os }}
+          os: ${{ matrix.build.runs-on }}
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal libraries
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -G Ninja
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -DCMAKE_CXX_COMPILER=${{ matrix.build.cxx_compiler }} -DCMAKE_C_COMPILER=${{ matrix.build.c_compiler }} -G Ninja
           cmake --build build
       - name: Build tt-metal C++ tests
         run: |
