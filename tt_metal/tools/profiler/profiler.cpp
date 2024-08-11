@@ -14,6 +14,7 @@
 #include "tools/profiler/common.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "llrt/rtoptions.hpp"
+#include "dev_msgs.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
@@ -35,20 +36,14 @@ void DeviceProfiler::readRiscProfilerResults(
     uint32_t coreFlatID = soc_d.physical_routing_to_profiler_flat_id.at(worker_core);
     uint32_t startIndex = coreFlatID * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
-    vector<std::uint32_t> control_buffer;
-
     auto ethCores = soc_d.get_physical_ethernet_cores() ;
 
     std::vector<uint32_t> riscEndIndices;
 
+    profiler_msg_t *profiler_msg;
     if (std::find(ethCores.begin(), ethCores.end(), worker_core) == ethCores.end())
     {
-        control_buffer = tt::llrt::read_hex_vec_from_core(
-            device_id,
-            worker_core,
-            PROFILER_L1_BUFFER_CONTROL,
-            PROFILER_L1_CONTROL_BUFFER_SIZE);
-
+        profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::TENSIX, HalMemAddrType::PROFILER);
         riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_BR);
         riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_NC);
         riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_T0);
@@ -57,14 +52,15 @@ void DeviceProfiler::readRiscProfilerResults(
     }
     else
     {
-        control_buffer = tt::llrt::read_hex_vec_from_core(
-            device_id,
-            worker_core,
-            eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL,
-            PROFILER_L1_CONTROL_BUFFER_SIZE);
-
+        profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::PROFILER);
         riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_ER);
     }
+
+    vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
+        device_id,
+        worker_core,
+        reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+        kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
 
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0) &&
@@ -95,7 +91,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
             uint32_t opTime_H = 0;
             uint32_t opTime_L = 0;
-            for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex); index += PROFILER_L1_MARKER_UINT32_SIZE)
+            for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex); index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE)
             {
                 if (!newRunStart && profile_buffer[index] == 0 && profile_buffer[index + 1] == 0)
                 {
@@ -186,14 +182,15 @@ void DeviceProfiler::readRiscProfilerResults(
         riscNum ++;
     }
 
-    std::vector<uint32_t> control_buffer_reset(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+    std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer->address();
 
+    profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::TENSIX, HalMemAddrType::PROFILER);
     tt::llrt::write_hex_vec_to_core(
             device_id,
             worker_core,
             control_buffer_reset,
-            PROFILER_L1_BUFFER_CONTROL);
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector));
 }
 
 void DeviceProfiler::firstTimestamp(uint64_t timestamp)

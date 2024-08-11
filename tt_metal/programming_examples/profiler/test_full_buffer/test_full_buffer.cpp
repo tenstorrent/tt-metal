@@ -5,6 +5,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/hostdevcommon/profiler_common.h"
 
 using namespace tt;
 
@@ -48,7 +49,7 @@ void RunFillUpAllBuffers(tt_metal::Device *device, int loop_count, bool fast_dis
 
     if (fast_dispatch)
     {
-        for (int i = 0; i < PROFILER_OP_SUPPORT_COUNT * PROFILER_L1_GUARANTEED_MARKER_COUNT / loop_count; i++)
+        for (int i = 0; i < PROFILER_OP_SUPPORT_COUNT * kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT / loop_count; i++)
         {
             EnqueueProgram(device->command_queue(), program, false);
         }
