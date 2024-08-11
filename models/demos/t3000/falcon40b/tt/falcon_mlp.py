@@ -152,7 +152,7 @@ class TtFalconMLP:
 
         mlp_num_slices = self.model_config["MLP_NUM_SLICES"]
         for slice_idx in range(mlp_num_slices):
-            x_slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+            x_slice = ttnn.interleaved_to_sharded_partial(
                 x,
                 self.model_config["MLP_GRID_SIZE"],
                 self.model_config["MLP_INPUT_SHARD_SPEC"],

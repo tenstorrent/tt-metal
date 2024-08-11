@@ -205,7 +205,7 @@ class TtFalconMLPPrefill(nn.Module):
 
             for slice_idx in range(num_slices):
                 slices = [
-                    ttnn.experimental.tensor.interleaved_to_sharded_partial(
+                    ttnn.interleaved_to_sharded_partial(
                         x[device_id],
                         grid_size,
                         [self.seq_len // num_slices // grid_size[1], padded_hidden_size // grid_size[0]],

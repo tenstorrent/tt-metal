@@ -339,7 +339,7 @@ def partial_layernorm(
         xs_output_cat = ln_output_tensors_dict[seq_len]
 
         for slice_i in range(num_slices):
-            xs_slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+            xs_slice = ttnn.interleaved_to_sharded_partial(
                 xs,
                 (layernorm_num_cores_x, layernorm_num_cores_y),
                 [layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim],
@@ -460,7 +460,7 @@ def fused_partial_layernorm(
         out_tensor_2 = out_tensor_dict_2[seq_len]
 
         for slice_i in range(num_slices):
-            xs_slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+            xs_slice = ttnn.interleaved_to_sharded_partial(
                 xs,
                 (layernorm_num_cores_x, layernorm_num_cores_y),
                 [layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim],

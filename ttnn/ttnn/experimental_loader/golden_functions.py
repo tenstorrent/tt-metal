@@ -65,7 +65,7 @@ def _golden_function(tensor, grid_size, shard_spec, num_slices, slice, *args, **
     return tensor
 
 
-ttnn.attach_golden_function(ttnn.experimental.tensor.interleaved_to_sharded_partial, _golden_function)
+ttnn.attach_golden_function(ttnn.interleaved_to_sharded_partial, _golden_function)
 
 
 def _golden_function(in0, in1, op, dir, *args, **kwargs):

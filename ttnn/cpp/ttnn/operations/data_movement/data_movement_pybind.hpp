@@ -26,6 +26,7 @@
 #include "ttnn/operations/data_movement/repeat/repeat_pybind.hpp"
 #include "ttnn/operations/data_movement/fold/fold_pybind.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_pybind.hpp"
+#include "ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_pybind.hpp"
 
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
 
@@ -56,6 +57,7 @@ void py_module(py::module& module) {
     detail::bind_indexed_fill(module);
     bind_fold_operation(module);
     py_bind_sharded_to_interleaved_partial(module);
+    py_bind_interleaved_to_sharded_partial(module);
 }
 
 }  // namespace data_movement

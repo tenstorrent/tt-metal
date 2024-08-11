@@ -462,7 +462,7 @@ class TtFalconAttentionPrefill(nn.Module):
         # Slice inputs and operate on each slice separately
         for i in range(num_slices):
             slices = [
-                ttnn.experimental.tensor.interleaved_to_sharded_partial(
+                ttnn.interleaved_to_sharded_partial(
                     query_layer[device_id],
                     grid_size,
                     mm_activations_height_shard_spec,

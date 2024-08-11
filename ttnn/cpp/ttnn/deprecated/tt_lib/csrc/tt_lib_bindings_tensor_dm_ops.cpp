@@ -10,7 +10,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 
 
 namespace tt::tt_metal::detail{
@@ -194,12 +193,6 @@ namespace tt::tt_metal::detail{
             py::arg("input"), py::arg("output_mem_config").noconvert(), py::arg("output_tensor").noconvert() = std::nullopt,
             R"doc(Converts a tensor sharded one way to another way)doc"
         );
-
-        m_tensor.def("interleaved_to_sharded_partial", py::overload_cast<const Tensor &, const std::variant<CoreCoord, CoreRangeSet>, std::array<uint32_t, 2>, const uint32_t, const uint32_t, const TensorMemoryLayout, const ShardOrientation, const std::optional<const DataType>>(&interleaved_to_sharded_partial),
-         py::arg("input"), py::arg("grid"), py::arg("shard_shape"), py::arg("num_slices"), py::arg("slice_index"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
-            R"doc(Converts a part of tensor from interleaved to sharded memory layout)doc");
-
-
     }
 
 }

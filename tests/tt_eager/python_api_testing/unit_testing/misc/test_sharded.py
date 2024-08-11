@@ -526,7 +526,7 @@ def test_sharded_partial_op(
     height_shard_spec = [H // 2, W]
 
     for slice_index in range(num_slices):
-        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+        in0_t_slice = ttnn.interleaved_to_sharded_partial(
             in0_t,
             grid_size,
             height_shard_spec,
@@ -597,7 +597,7 @@ def test_block_sharded_partial_op(
     num_slices = 2
 
     for slice_index in range(num_slices):
-        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+        in0_t_slice = ttnn.interleaved_to_sharded_partial(
             in0_t,
             grid_size,
             block_shard_spec,
@@ -720,7 +720,7 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
     assert passing
 
 
-@pytest.mark.parametrize("H, W, num_cores, num_slices", [[4 * 32, 32 * 32, 64, 2]])
+@pytest.mark.parametrize("H, W, num_cores, num_slices", [[4 * 32, 32 * 32, 56, 2]])
 @pytest.mark.parametrize(
     "activations_dtype",
     [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
@@ -766,7 +766,7 @@ def test_width_sharded_partial_op(
     width_shard_spec = [H // num_slices, 1 * 32]
 
     for slice_index in range(num_slices):
-        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+        in0_t_slice = ttnn.interleaved_to_sharded_partial(
             in0_t,
             grid_size,
             width_shard_spec,
@@ -777,8 +777,8 @@ def test_width_sharded_partial_op(
         )
 
         ttnn.sharded_to_interleaved_partial(
-            ttnn.Tensor(in0_t_slice),
-            ttnn.Tensor(out_tt_tensor),
+            in0_t_slice,
+            out_tt_tensor,
             num_slices,
             slice_index,
             memory_config=interleaved_mem_config,
@@ -858,7 +858,7 @@ def test_partial_sharded_op_binary(
     height_shard_spec = [32, W]
 
     for slice_index in range(num_slices):
-        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+        in0_t_slice = ttnn.interleaved_to_sharded_partial(
             in0_t,
             grid_size,
             height_shard_spec,
@@ -868,7 +868,7 @@ def test_partial_sharded_op_binary(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        in1_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+        in1_t_slice = ttnn.interleaved_to_sharded_partial(
             in1_t,
             grid_size,
             height_shard_spec,

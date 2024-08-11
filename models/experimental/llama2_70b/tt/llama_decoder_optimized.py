@@ -229,7 +229,7 @@ class TtLlamaDecoder_optimized:
         )
 
         for slice_i in range(num_slices):
-            xs_slice = tt_lib.tensor.interleaved_to_sharded_partial(
+            xs_slice = ttnn.interleaved_to_sharded_partial(
                 xs,
                 (layernorm_num_cores_x, layernorm_num_cores_y),
                 [layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim],
