@@ -1520,7 +1520,7 @@ def swiglu_2(x):
 
 
 def repeat(x):
-    tt_lib.tensor.repeat(x, (1, 1, 1, 4))
+    ttnn.repeat(x, ttnn.Shape((1, 1, 1, 4)))
 
 
 def repeat_interleave_0(x):
@@ -2252,7 +2252,7 @@ all_unary_ops = [
     },
     {
         "op": repeat,
-        "name": "tt_lib.tensor.repeat",
+        "name": "ttnn.repeat",
     },
     {
         "op": repeat_interleave_0,

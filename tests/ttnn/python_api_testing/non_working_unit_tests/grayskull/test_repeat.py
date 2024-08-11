@@ -32,7 +32,7 @@ def run_repeat_tests(
 
         x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
 
-        tt_result = ttnn.repeat(x, ttnn.Shape(shape))
+        tt_result = ttnn.repeat(x, shape)
 
         tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
 
