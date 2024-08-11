@@ -11,13 +11,17 @@
 
 // Called by the master worker to synchronize with the slave workers
 FORCE_INLINE void master_sync_slaves(
-    volatile uint32_t* master_l1_semaphore_addr,
-    const uint32_t num_slaves,
-    const uint64_t* remote_slave_l1_semaphore_addrs,
+    const uint32_t num_workers_to_sync,
+
+    /* Used to get slave worker's sem addrs */
+    const uint32_t* worker_noc_coords,
+    const uint32_t worker_sync_sem_addr,
+
     const uint64_t remote_op_l1_semaphore_addr) {
 
     // Wait for all the slaves to finish their work
-    noc_semaphore_wait(master_l1_semaphore_addr,  num_slaves);
+    volatile tt_l1_ptr uint32_t* master_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
+    noc_semaphore_wait(master_l1_semaphore_addr,  num_workers_to_sync - 1);
     DPRINT << "MASTER SYNCED WITH SLAVES" << ENDL();
 
     // Send signal to op
@@ -28,8 +32,9 @@ FORCE_INLINE void master_sync_slaves(
     noc_semaphore_set(master_l1_semaphore_addr, 0);
 
     // Clear the slave semaphores, so that they can continue processing
-    for (uint32_t i = 0; i < num_slaves; i++) {
-        noc_semaphore_inc(remote_slave_l1_semaphore_addrs[i], 1);
+    for (uint32_t i = 1; i < num_workers_to_sync; i++) { // Skip the first set of coords because they are for master worker
+        uint64_t remote_slave_l1_sem_addr = get_noc_addr(worker_noc_coords[i * 2], worker_noc_coords[i * 2 + 1], worker_sync_sem_addr);
+        noc_semaphore_inc(remote_slave_l1_sem_addr, 1);
         DPRINT << "MASTER CLEAREED A SLAVE SEMAPHORE" << ENDL();
     }
 }
@@ -37,14 +42,16 @@ FORCE_INLINE void master_sync_slaves(
 
 // Called by the slave worker to synchronize with the master worker
 FORCE_INLINE void slave_sync_master(
-    volatile uint32_t* slave_l1_semaphore_addr,
-    const uint64_t remote_master_l1_semaphore_addr) {
+    const uint32_t* worker_noc_coords,
+    const uint32_t worker_sync_sem_addr) {
 
     // Signal the master that the slave has finished its work
+    uint64_t remote_master_l1_semaphore_addr = get_noc_addr(worker_noc_coords[0], worker_noc_coords[1], worker_sync_sem_addr);
     noc_semaphore_inc(remote_master_l1_semaphore_addr, 1);
     DPRINT << "SLAVE SYNCED WITH MASTER" << ENDL();
 
     // Wait for the master to signal that this slave is ready to continue
+    volatile tt_l1_ptr uint32_t* slave_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
     noc_semaphore_wait(slave_l1_semaphore_addr, 1);
     DPRINT << "SLAVE SEMAPHORE CLEARED BY MASTER" << ENDL();
 
@@ -57,6 +64,62 @@ FORCE_INLINE bool is_master(uint32_t master_x, uint32_t master_y, uint32_t worke
     return master_x == worker_x && master_y == worker_y;
 }
 
+uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args=1) {
+    uint32_t old_arg_idx = arg_idx;
+    arg_idx += num_args;
+    return old_arg_idx;
+}
+
+// Used to signal an operation that it can start processing data, resulting in overlapping
+struct OpSignaler {
+    uint32_t num_workers_to_sync;
+    uint32_t* workers_noc_coords; // Worker NOC coordinates [x1, y1, x2, y2...], first one is for master
+    uint32_t worker_sync_sem_addr;
+    uint64_t signal_op_sem_noc_addr;
+    uint32_t curr_worker_is_master;
+    bool initialized = false;
+
+    OpSignaler() {}
+
+    OpSignaler(
+        uint32_t num_workers_to_sync,
+        uint32_t curr_worker_index,
+        uint32_t worker_sync_sem_addr,
+        uint32_t& rt_args_idx) :
+        num_workers_to_sync(num_workers_to_sync),
+        worker_sync_sem_addr(worker_sync_sem_addr) {
+
+        // Runtime args
+        this->workers_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2)); // Skip over the number of workers
+        uint32_t op_worker_noc_x = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+        uint32_t op_worker_noc_y = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+        uint32_t signal_op_sem_addr = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+
+        // Get the remote sem addresses to signal the op
+        this->signal_op_sem_noc_addr = get_noc_addr(op_worker_noc_x, op_worker_noc_y, signal_op_sem_addr);
+
+        uint32_t master_worker_noc_x = this->workers_noc_coords[0];
+        uint32_t master_worker_noc_y = this->workers_noc_coords[1];
+        uint32_t curr_worker_noc_x = this->workers_noc_coords[curr_worker_index * 2];
+        uint32_t curr_worker_noc_y = this->workers_noc_coords[curr_worker_index * 2 + 1];
+        this->curr_worker_is_master = is_master(master_worker_noc_x, master_worker_noc_y, curr_worker_noc_x, curr_worker_noc_y);
+
+        this->initialized = true;
+    }
+
+    void synchronize_workers_and_signal_op() {
+        ASSERT(this->initialized);
+
+        if (this->curr_worker_is_master) {
+            master_sync_slaves(this->num_workers_to_sync, this->workers_noc_coords, this->worker_sync_sem_addr, this->signal_op_sem_noc_addr);
+        } else {
+            slave_sync_master(this->workers_noc_coords, this->worker_sync_sem_addr);
+        }
+    }
+
+};
+
+// Used by datacopy kernel
 FORCE_INLINE void advance_start_page_idx(
     uint32_t& start_page_idx,
     uint32_t& curr_ring_index,
@@ -87,59 +150,3 @@ FORCE_INLINE void advance_start_page_idx(
     }
 
 }
-
-struct OpSignaler {
-    uint32_t num_workers_to_sync;
-    volatile tt_l1_ptr uint32_t* curr_worker_l1_semaphore_addr_ptr;
-    uint64_t worker_sem_noc_addrs[10]; // First one is for master
-    uint64_t signal_op_sem_noc_addr;
-
-    uint32_t curr_worker_is_master;
-    bool initialized = false;
-
-    OpSignaler() {}
-
-    OpSignaler(
-        uint32_t num_workers_to_sync,
-        uint32_t curr_worker_index,
-        uint32_t worker_sync_sem_addr,
-        uint32_t* workers_noc_coords, // Worker NOC coordinates [x1, y1, x2, y2...]
-        uint32_t op_worker_noc_x,
-        uint32_t op_worker_noc_y,
-        uint32_t signal_op_sem_addr)
-        : num_workers_to_sync(num_workers_to_sync) {
-
-        // Get the remote sem addresses to signal the op
-        this->signal_op_sem_noc_addr = get_noc_addr(op_worker_noc_x, op_worker_noc_y, signal_op_sem_addr);
-
-        uint32_t master_worker_noc_x = workers_noc_coords[0];
-        uint32_t master_worker_noc_y = workers_noc_coords[1];
-        uint32_t curr_worker_noc_x = workers_noc_coords[curr_worker_index * 2];
-        uint32_t curr_worker_noc_y = workers_noc_coords[curr_worker_index * 2 + 1];
-        this->curr_worker_is_master = is_master(master_worker_noc_x, master_worker_noc_y, curr_worker_noc_x, curr_worker_noc_y);
-
-        this->curr_worker_l1_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
-
-        // Convert sem addresses into remote sem addresses
-        if (this->curr_worker_is_master) { // If cur is master, skip doing the conversion for the master slot
-            for (uint32_t i = 1; i < this->num_workers_to_sync; i++) {
-                this->worker_sem_noc_addrs[i] = get_noc_addr(workers_noc_coords[i * 2], workers_noc_coords[i * 2 + 1], worker_sync_sem_addr);
-            }
-        } else { // If cur is slave, only do conversion for the master slot
-            this->worker_sem_noc_addrs[0] = get_noc_addr(master_worker_noc_x, master_worker_noc_y, worker_sync_sem_addr);
-        }
-
-        this->initialized = true;
-    }
-
-    void synchronize_workers_and_signal_op() {
-        ASSERT(this->initialized);
-
-        if (this->curr_worker_is_master) {
-            master_sync_slaves(this->curr_worker_l1_semaphore_addr_ptr, this->num_workers_to_sync - 1, this->worker_sem_noc_addrs + 1, this->signal_op_sem_noc_addr);
-        } else {
-            slave_sync_master(this->curr_worker_l1_semaphore_addr_ptr, this->worker_sem_noc_addrs[0]);
-        }
-    }
-
-};
