@@ -242,9 +242,6 @@ void py_module(py::module& module) {
         py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader);
         py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
 
-        py_conv_config.def("is_height_sharded", &Conv2dConfig::is_height_sharded);
-        py_conv_config.def("is_width_sharded", &Conv2dConfig::is_width_sharded);
-        py_conv_config.def("is_block_sharded", &Conv2dConfig::is_block_sharded);
     py::class_<OptimizedConvParallelizationConfig>(module, "OptimizedConvParallelizationConfig")
         .def(
             py::init<CoreCoord, uint32_t, uint32_t, uint32_t>(),

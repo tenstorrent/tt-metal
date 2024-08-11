@@ -540,7 +540,7 @@ def conv2d(
     parallel_config = None
     if conv_config.reshard_if_not_optimal or needs_reshard:
         optimal_parallel_config = determine_parallel_config(
-            conv_config.is_height_sharded(),
+            conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             batch_size,
             in_channels,
             output_height,
@@ -556,7 +556,7 @@ def conv2d(
         else:
             assert config_shard_grid is not None
             grid_size, num_cores_nhw = get_grid_size_and_num_cores_nhw_from_core_grid(
-                conv_config.core_grid, conv_config.conv_config.is_height_sharded()
+                conv_config.core_grid, conv_config.conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             )
 
             shard_orientation = (

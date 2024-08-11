@@ -94,9 +94,6 @@ struct Conv2dConfig {
             std::cref(this->enable_split_reader),
             std::cref(this->enable_subblock_padding));
     }
-    bool is_height_sharded() const;
-    bool is_width_sharded() const;
-    bool is_block_sharded() const;
 };
 
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor);
