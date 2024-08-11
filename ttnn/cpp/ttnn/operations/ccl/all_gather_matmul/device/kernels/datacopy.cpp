@@ -122,7 +122,7 @@ void kernel_main() {
             // DPRINT << "num_pages_to_transfer: " << num_pages_to_transfer << ENDL();
 
             // Read the data from DRAM into cb0
-            read_wrapped_chunk_from_output_tensor( // Use this function assuming that the worker slice is the same as the tensor slice
+            datacopy_read_wrapped_chunk( // Use this function assuming that the worker slice is the same as the tensor slice
                 curr_page_in_idx,
                 offset_into_in_tensor_slice, // Viewing this as offset into the entire tensor slice since there's only one worker
                 offset_worker_slice, // offset_worker_slice is always 0 since there's only one worker
@@ -139,7 +139,7 @@ void kernel_main() {
 
 
             // Write the data from cb0 to DRAM
-            write_wrapped_chunk(
+            datacopy_write_wrapped_chunk(
                 curr_page_out_idx,
                 offset_into_out_tensor_slice, // Viewing this as offset into the entire tensor slice since there's only one worker
                 offset_worker_slice, // offset_worker_slice is always 0 since there's only one worker

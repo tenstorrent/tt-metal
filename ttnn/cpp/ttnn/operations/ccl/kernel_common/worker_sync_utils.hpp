@@ -150,3 +150,82 @@ FORCE_INLINE void advance_start_page_idx(
     }
 
 }
+
+template <typename AddrGen>
+FORCE_INLINE void datacopy_read_wrapped_chunk(
+    uint32_t& curr_page_idx,
+    uint32_t& offset_into_worker_slice,
+    ttnn::ccl::coord_t& offset_worker_slice,
+    const  ttnn::ccl::coord_t& worker_slice_shape,
+
+    // In tiles for tile layout
+    const  ttnn::ccl::coord_t& tensor_shape,
+    const  ttnn::ccl::coord_t& tensor_slice_shape,
+    const uint32_t cb_id,
+    const AddrGen& s,
+    const uint32_t num_pages,
+    const uint32_t page_size,
+    bool& last_page_of_worker,
+    uint32_t local_l1_read_addr) {
+
+    ASSERT(last_page_of_worker == false);
+    cb_reserve_back(cb_id, num_pages);
+    for (uint32_t i = 0; i < num_pages; ++i) {
+        noc_async_read_tile(curr_page_idx, s, local_l1_read_addr);
+
+        // Update the curr_page_idx based on how the worker chunks + tensor slice is laid out in global tensor
+        advance_worker_global_page_interleaved(
+            curr_page_idx, // Updated internally
+            offset_into_worker_slice,
+            offset_worker_slice,
+            worker_slice_shape,
+            tensor_slice_shape,
+            tensor_shape,
+            last_page_of_worker
+        );
+
+        local_l1_read_addr += page_size;
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_id, num_pages);
+}
+
+
+
+template <typename AddrGen>
+FORCE_INLINE void datacopy_write_wrapped_chunk(
+    uint32_t& curr_page_idx,
+    uint32_t& offset_into_worker_slice,
+    ttnn::ccl::coord_t& offset_worker_slice,
+    const  ttnn::ccl::coord_t& worker_slice_shape,
+
+    // In tiles for tile layout
+    const  ttnn::ccl::coord_t& tensor_shape,
+    const  ttnn::ccl::coord_t& tensor_slice_shape,
+    uint32_t cb_id,
+    const AddrGen& d,
+    const uint32_t num_pages,
+    const uint32_t page_size,
+    bool& last_page_of_worker,
+    uint32_t l1_read_addr) {
+
+    cb_wait_front(cb_id, num_pages);
+    for (uint32_t i = 0; i < num_pages; ++i) {
+        noc_async_write_tile(curr_page_idx, d, l1_read_addr);
+
+        // Update the curr_page_idx based on how the worker chunks + tensor slice is laid out in global tensor
+        advance_worker_global_page_interleaved(
+            curr_page_idx, // Updated internally
+            offset_into_worker_slice,
+            offset_worker_slice,
+            worker_slice_shape,
+            tensor_slice_shape,
+            tensor_shape,
+            last_page_of_worker
+        );
+
+        l1_read_addr += page_size;
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_id, num_pages);
+}

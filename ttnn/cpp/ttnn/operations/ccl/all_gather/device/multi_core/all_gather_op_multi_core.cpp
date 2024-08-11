@@ -209,7 +209,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     bool fuse_op = fused_op_signaler.has_value();
     if (fuse_op) {
         all_gather_fused_op_signaler = &fused_op_signaler.value();
-        all_gather_fused_op_signaler->set_fused_op_args(device);
+        all_gather_fused_op_signaler->init_fused_op(device);
     }
     auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, fuse_op);
     auto const& topology_config = ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
@@ -478,7 +478,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
             /* All gather fusion */
             if (fuse_op) {
-                all_gather_fused_op_signaler->set_all_gather_args(program, device, receiver_workers, receiver_worker_cores);
+                all_gather_fused_op_signaler->init_all_gather(program, device, receiver_workers, receiver_worker_cores);
             }
 
             {
