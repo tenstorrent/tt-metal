@@ -211,7 +211,7 @@ void kernel_main() {
 
         // Synchronize if all gather fusion is enabled
         if constexpr(fuse_op) {
-            op_signaler.synchronize();
+            op_signaler.synchronize_workers_and_signal_op();
         }
 
         output_page_idx = output_base_page_idx;
