@@ -1115,9 +1115,9 @@ def repeat(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.repeat(t0, repeat, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
+    t1 = ttnn.repeat(t0, ttnn.Shape(repeat), memory_config=output_mem_config)
+    output_tensor = ttnn.to_torch(t1)
+    return output_tensor
 
 
 @setup_host_and_device

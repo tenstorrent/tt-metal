@@ -219,8 +219,8 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
         attn_masks = ttnn.to_device(attn_masks, llama_decoder_model.device_mesh)
 
         repeat_shape = (1, batch, 1, 1)
-        attn_masks = tt_lib.tensor.repeat(
-            attn_masks, repeat_shape, output_mem_config=llama_decoder_model.model_config["DRAM_MEMCFG"]
+        attn_masks = ttnn.repeat(
+            attn_masks, ttnn.Shape(repeat_shape), memory_config=llama_decoder_model.model_config["DRAM_MEMCFG"]
         )
     return (
         xs,

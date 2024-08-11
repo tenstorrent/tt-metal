@@ -7,7 +7,6 @@
 
 #include "device/complex_binary_op.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/data_movement.hpp"
 
 namespace ttnn {
 

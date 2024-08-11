@@ -278,8 +278,8 @@ class TtLlamaModel_optimized:
             attn_masks = ttnn.to_device(attn_masks, self.device_mesh)
 
             repeat_shape = (1, batch, 1, 1)
-            attn_masks = tt_lib.tensor.repeat(
-                attn_masks, repeat_shape, output_mem_config=self.model_config["DRAM_MEMCFG"]
+            attn_masks = ttnn.repeat(
+                attn_masks, ttnn.Shape(repeat_shape), memory_config=self.model_config["DRAM_MEMCFG"]
             )
             # Put attn_mask on the device with the sharded config
             attention_mask_memconfig = self.model_config["ATTN_MASK_MEMCFG"]
