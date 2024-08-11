@@ -89,27 +89,12 @@ FORCE_INLINE void advance_start_page_idx(
 }
 
 struct OpSignaler {
-    // Compile time args
     uint32_t num_workers_to_sync;
-    uint32_t curr_worker_index;
-    uint32_t worker_sync_sem_addr;
-
-    // Runtime args
-    uint32_t* workers_noc_coords; // Worker NOC coordinates [x1, y1, x2, y2...]
-    uint32_t op_worker_noc_x;
-    uint32_t op_worker_noc_y;
-    uint32_t signal_op_sem_addr;
-
-    uint32_t master_worker_noc_x;
-    uint32_t master_worker_noc_y;
-    uint32_t curr_worker_noc_x;
-    uint32_t curr_worker_noc_y;
-    uint32_t curr_worker_is_master;
-
     volatile tt_l1_ptr uint32_t* curr_worker_l1_semaphore_addr_ptr;
     uint64_t worker_sem_noc_addrs[10]; // First one is for master
     uint64_t signal_op_sem_noc_addr;
 
+    uint32_t curr_worker_is_master;
     bool initialized = false;
 
     OpSignaler() {}
@@ -118,42 +103,36 @@ struct OpSignaler {
         uint32_t num_workers_to_sync,
         uint32_t curr_worker_index,
         uint32_t worker_sync_sem_addr,
-        uint32_t* workers_noc_coords,
+        uint32_t* workers_noc_coords, // Worker NOC coordinates [x1, y1, x2, y2...]
         uint32_t op_worker_noc_x,
         uint32_t op_worker_noc_y,
         uint32_t signal_op_sem_addr)
-        : num_workers_to_sync(num_workers_to_sync),
-          curr_worker_index(curr_worker_index),
-          worker_sync_sem_addr(worker_sync_sem_addr),
-          workers_noc_coords(workers_noc_coords),
-          op_worker_noc_x(op_worker_noc_x),
-          op_worker_noc_y(op_worker_noc_y),
-          signal_op_sem_addr(signal_op_sem_addr) {
+        : num_workers_to_sync(num_workers_to_sync) {
 
         // Get the remote sem addresses to signal the op
-        this->signal_op_sem_noc_addr = get_noc_addr(this->op_worker_noc_x, this->op_worker_noc_y, this->signal_op_sem_addr);
+        this->signal_op_sem_noc_addr = get_noc_addr(op_worker_noc_x, op_worker_noc_y, signal_op_sem_addr);
 
-        this->master_worker_noc_x = this->workers_noc_coords[0];
-        this->master_worker_noc_y = this->workers_noc_coords[1];
-        this->curr_worker_noc_x = this->workers_noc_coords[this->curr_worker_index * 2];
-        this->curr_worker_noc_y = this->workers_noc_coords[this->curr_worker_index * 2 + 1];
-        this->curr_worker_is_master = is_master(this->master_worker_noc_x, this->master_worker_noc_y, this->curr_worker_noc_x, this->curr_worker_noc_y);
+        uint32_t master_worker_noc_x = workers_noc_coords[0];
+        uint32_t master_worker_noc_y = workers_noc_coords[1];
+        uint32_t curr_worker_noc_x = workers_noc_coords[curr_worker_index * 2];
+        uint32_t curr_worker_noc_y = workers_noc_coords[curr_worker_index * 2 + 1];
+        this->curr_worker_is_master = is_master(master_worker_noc_x, master_worker_noc_y, curr_worker_noc_x, curr_worker_noc_y);
 
-        this->curr_worker_l1_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(this->worker_sync_sem_addr);
+        this->curr_worker_l1_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
 
         // Convert sem addresses into remote sem addresses
         if (this->curr_worker_is_master) { // If cur is master, skip doing the conversion for the master slot
             for (uint32_t i = 1; i < this->num_workers_to_sync; i++) {
-                this->worker_sem_noc_addrs[i] = get_noc_addr(this->workers_noc_coords[i * 2], this->workers_noc_coords[i * 2 + 1], this->worker_sync_sem_addr);
+                this->worker_sem_noc_addrs[i] = get_noc_addr(workers_noc_coords[i * 2], workers_noc_coords[i * 2 + 1], worker_sync_sem_addr);
             }
         } else { // If cur is slave, only do conversion for the master slot
-            worker_sem_noc_addrs[0] = get_noc_addr(this->master_worker_noc_x, this->master_worker_noc_y, this->worker_sync_sem_addr);
+            this->worker_sem_noc_addrs[0] = get_noc_addr(master_worker_noc_x, master_worker_noc_y, worker_sync_sem_addr);
         }
 
         this->initialized = true;
     }
 
-    void synchronize() {
+    void synchronize_workers_and_signal_op() {
         ASSERT(this->initialized);
 
         if (this->curr_worker_is_master) {
