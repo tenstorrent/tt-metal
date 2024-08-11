@@ -47,6 +47,15 @@ namespace kernel_profiler{
         PROFILER_DONE,
     };
 
-
+    // TODO: use data types in profile_msg_t rather than addresses/sizes
+    constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
+    constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
+    constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
+    constexpr static std::uint32_t PROFILER_L1_PROGRAM_ID_COUNT = 2;
+    constexpr static std::uint32_t PROFILER_L1_GUARANTEED_MARKER_COUNT = 4;
+    constexpr static std::uint32_t PROFILER_L1_OPTIONAL_MARKER_COUNT = 250;
+    constexpr static std::uint32_t PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT = 2;
+    constexpr static std::uint32_t PROFILER_L1_VECTOR_SIZE = (PROFILER_L1_OPTIONAL_MARKER_COUNT + PROFILER_L1_GUARANTEED_MARKER_COUNT + PROFILER_L1_PROGRAM_ID_COUNT) * PROFILER_L1_MARKER_UINT32_SIZE;
+    constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE * sizeof(uint32_t);
 
 }

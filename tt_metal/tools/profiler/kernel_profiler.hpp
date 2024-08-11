@@ -9,12 +9,19 @@
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC)
 #include "risc_common.h"
 #include "dataflow_api.h"
+extern tt_l1_ptr mailboxes_t* const mailboxes;
 #else
 #include "ckernel.h"
+namespace ckernel {
+    extern tt_l1_ptr mailboxes_t* const mailboxes;
+}
 #endif
 
 #include "hostdevcommon/profiler_common.h"
 #include "risc_attribs.h"
+
+#include "dev_msgs.h"
+
 
 #define DO_PRAGMA(x) _Pragma (#x)
 
@@ -28,6 +35,13 @@
 #if  defined(PROFILE_KERNEL) && ( !defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_NCRISC) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)))
 namespace kernel_profiler{
 
+    constexpr uint32_t PROFILER_BUFFER_BR = 0;
+    constexpr uint32_t PROFILER_BUFFER_ER = 0;
+    constexpr uint32_t PROFILER_BUFFER_NC = 1;
+    constexpr uint32_t PROFILER_BUFFER_T0 = 2;
+    constexpr uint32_t PROFILER_BUFFER_T1 = 3;
+    constexpr uint32_t PROFILER_BUFFER_T2 = 4;
+
     extern uint32_t wIndex;
     extern uint32_t stackSize;
 
@@ -38,33 +52,30 @@ namespace kernel_profiler{
     constexpr int WALL_CLOCK_HIGH_INDEX = 1;
     constexpr int WALL_CLOCK_LOW_INDEX = 0;
 
+    volatile tt_l1_ptr uint32_t *profiler_control_buffer =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(((mailboxes_t *)MEM_MAILBOX_BASE)->profiler.control_vector);
+
 #if defined(COMPILE_FOR_BRISC)
-    constexpr uint32_t profilerBuffer = PROFILER_L1_BUFFER_BR;
+    constexpr uint32_t profilerBuffer = offsetof(mailboxes_t, profiler.buffer[PROFILER_BUFFER_BR]);
     constexpr uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_BR;
-    volatile tt_l1_ptr uint32_t *profiler_control_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
     extern uint16_t core_flat_id;
 #elif defined(COMPILE_FOR_ERISC)
-    constexpr uint32_t profilerBuffer = eth_l1_mem::address_map::PROFILER_L1_BUFFER_ER;
+    constexpr uint32_t profilerBuffer = offsetof(mailboxes_t, profiler.buffer[PROFILER_BUFFER_ER]);
     constexpr uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_ER;
-    volatile tt_l1_ptr uint32_t *profiler_control_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eth_l1_mem::address_map::PROFILER_L1_BUFFER_CONTROL);
     extern uint16_t core_flat_id;
 #elif defined(COMPILE_FOR_NCRISC)
-    constexpr uint32_t profilerBuffer = PROFILER_L1_BUFFER_NC;
+    constexpr uint32_t profilerBuffer = offsetof(mailboxes_t, profiler.buffer[PROFILER_BUFFER_NC]);
     constexpr uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_NC;
-    volatile tt_l1_ptr uint32_t *profiler_control_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
     extern uint16_t core_flat_id;
 #elif COMPILE_FOR_TRISC == 0
-    constexpr uint32_t profilerBuffer = PROFILER_L1_BUFFER_T0;
+    constexpr uint32_t profilerBuffer = offsetof(mailboxes_t, profiler.buffer[PROFILER_BUFFER_T0]);
     constexpr uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_T0;
-    volatile tt_l1_ptr uint32_t *profiler_control_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
 #elif COMPILE_FOR_TRISC == 1
-    constexpr uint32_t profilerBuffer = PROFILER_L1_BUFFER_T1;
+    constexpr uint32_t profilerBuffer = offsetof(mailboxes_t, profiler.buffer[PROFILER_BUFFER_T1]);
     constexpr uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_T1;
-    volatile tt_l1_ptr uint32_t *profiler_control_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
 #elif COMPILE_FOR_TRISC == 2
-    constexpr uint32_t profilerBuffer = PROFILER_L1_BUFFER_T2;
+    constexpr uint32_t profilerBuffer = offsetof(mailboxes_t, profiler.buffer[PROFILER_BUFFER_T2]);
     constexpr uint32_t deviceBufferEndIndex = DEVICE_BUFFER_END_INDEX_T2;
-    volatile tt_l1_ptr uint32_t *profiler_control_buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_CONTROL);
 #endif
 
     constexpr uint32_t Hash32_CT( const char * str, size_t n, uint32_t basis = UINT32_C( 2166136261 ) ) {
@@ -124,11 +135,11 @@ namespace kernel_profiler{
 #endif //ERISC_INIT
 #if  defined(COMPILE_FOR_BRISC)
 
-        volatile tt_l1_ptr uint32_t *briscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_BR);
-        volatile tt_l1_ptr uint32_t *ncriscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_NC);
-        volatile tt_l1_ptr uint32_t *trisc0Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T0);
-        volatile tt_l1_ptr uint32_t *trisc1Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T1);
-        volatile tt_l1_ptr uint32_t *trisc2Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T2);
+        volatile tt_l1_ptr uint32_t *briscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailboxes->profiler.buffer[PROFILER_BUFFER_BR]);
+        volatile tt_l1_ptr uint32_t *ncriscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailboxes->profiler.buffer[PROFILER_BUFFER_NC]);
+        volatile tt_l1_ptr uint32_t *trisc0Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailboxes->profiler.buffer[PROFILER_BUFFER_T0]);
+        volatile tt_l1_ptr uint32_t *trisc1Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailboxes->profiler.buffer[PROFILER_BUFFER_T1]);
+        volatile tt_l1_ptr uint32_t *trisc2Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailboxes->profiler.buffer[PROFILER_BUFFER_T2]);
 
         if (runCounter == 0)
         {
@@ -219,11 +230,11 @@ namespace kernel_profiler{
 #endif
 
 #if  defined(COMPILE_FOR_BRISC)
-        volatile tt_l1_ptr uint32_t *briscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_BR);
-        volatile tt_l1_ptr uint32_t *ncriscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_NC);
-        volatile tt_l1_ptr uint32_t *trisc0Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T0);
-        volatile tt_l1_ptr uint32_t *trisc1Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T1);
-        volatile tt_l1_ptr uint32_t *trisc2Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PROFILER_L1_BUFFER_T2);
+        volatile tt_l1_ptr uint32_t *briscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailboxes->profiler.buffer[PROFILER_BUFFER_BR]);
+        volatile tt_l1_ptr uint32_t *ncriscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailboxes->profiler.buffer[PROFILER_BUFFER_NC]);
+        volatile tt_l1_ptr uint32_t *trisc0Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailboxes->profiler.buffer[PROFILER_BUFFER_T0]);
+        volatile tt_l1_ptr uint32_t *trisc1Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailboxes->profiler.buffer[PROFILER_BUFFER_T1]);
+        volatile tt_l1_ptr uint32_t *trisc2Buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailboxes->profiler.buffer[PROFILER_BUFFER_T2]);
 
         briscBuffer[ID_LL] = (counterValue << 16) | (briscBuffer[ID_LL] & 0xFFFF);
         ncriscBuffer[ID_LL] = (counterValue << 16) | (ncriscBuffer[ID_LL] & 0xFFFF);
@@ -354,7 +365,7 @@ namespace kernel_profiler{
 		    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
                     noc_async_write(
-                            PROFILER_L1_BUFFER_BR + hostIndex * PROFILER_L1_BUFFER_SIZE,
+                            (uint32_t)mailboxes->profiler.buffer[hostIndex],
                             dram_bank_dst_noc_addr,
                             send_size);
                 }

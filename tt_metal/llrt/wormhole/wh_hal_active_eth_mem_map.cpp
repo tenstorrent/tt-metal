@@ -35,6 +35,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[hv(HalMemAddrType::LAUNCH)] = GET_ETH_MAILBOX_ADDRESS_HOST(launch);
     mem_map_bases[hv(HalMemAddrType::WATCHER)] = GET_ETH_MAILBOX_ADDRESS_HOST(watcher);
     mem_map_bases[hv(HalMemAddrType::DPRINT)] = GET_ETH_MAILBOX_ADDRESS_HOST(dprint_buf);
+    mem_map_bases[hv(HalMemAddrType::PROFILER)] = GET_ETH_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[hv(HalMemAddrType::KERNEL_CONFIG)] = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
     mem_map_bases[hv(HalMemAddrType::UNRESERVED)] = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
@@ -44,6 +45,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[hv(HalMemAddrType::LAUNCH)] = sizeof(launch_msg_t);
     mem_map_sizes[hv(HalMemAddrType::WATCHER)] = sizeof(watcher_msg_t);
     mem_map_sizes[hv(HalMemAddrType::DPRINT)] = sizeof(dprint_buf_msg_t);
+    mem_map_sizes[hv(HalMemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     mem_map_sizes[hv(HalMemAddrType::KERNEL_CONFIG)] = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE;
     mem_map_sizes[hv(HalMemAddrType::UNRESERVED)] = eth_l1_mem::address_map::MAX_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 

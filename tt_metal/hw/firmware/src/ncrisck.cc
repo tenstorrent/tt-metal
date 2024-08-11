@@ -28,6 +28,8 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 uint32_t noc_posted_writes_num_issued[NUM_NOCS];
 
+tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
+
 void kernel_launch() {
 
   DeviceZoneScopedMainChildN("NCRISC-KERNEL");
