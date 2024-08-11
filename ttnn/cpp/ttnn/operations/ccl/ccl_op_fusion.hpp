@@ -20,6 +20,8 @@ struct AllGatherFusedOpSignaler {
     std::vector<CoreCoord> all_gather_worker_cores_noc;
     uint32_t all_gather_worker_sync_semaphore;
 
+    uint32_t initialized = 0;
+
     AllGatherFusedOpSignaler(
         std::vector<CoreCoord> fused_op_receiver_cores,
         std::vector<uint32_t> fused_op_receiver_signal_semaphores)
@@ -28,7 +30,7 @@ struct AllGatherFusedOpSignaler {
 
         }
 
-    void set_fused_op_args(
+    void init_fused_op(
         Device const* device
     ) {
         // Get the noc coords for the fused op receiver cores
@@ -36,9 +38,10 @@ struct AllGatherFusedOpSignaler {
         for (const auto& core : this->fused_op_receiver_cores) {
             this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
         }
+        initialized++;
     }
 
-    void set_all_gather_args(
+    void init_all_gather(
         Program& program,
         Device const* device,
 
@@ -53,6 +56,7 @@ struct AllGatherFusedOpSignaler {
         for (const auto& core : all_gather_worker_cores) {
             this->all_gather_worker_cores_noc.push_back(device->worker_core_from_logical_core(core));
         }
+        initialized++;
     }
 
     void emit_all_gather_fused_op_ct_args(
@@ -61,6 +65,7 @@ struct AllGatherFusedOpSignaler {
         uint32_t num_workers_to_sync,
         uint32_t curr_worker_index
     ) {
+        TT_ASSERT(initialized == 2, "AllGatherFusedOpSignaler not initialized fully.");
 
         ct_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
         ct_args.push_back(static_cast<uint32_t>(curr_worker_index));
@@ -74,6 +79,7 @@ struct AllGatherFusedOpSignaler {
 
         bool all_gather_direction
     ) {
+        TT_ASSERT(initialized == 2, "AllGatherFusedOpSignaler not initialized fully.");
 
         // Push the worker core noc coords
         for (const auto& core : this->all_gather_worker_cores_noc) {

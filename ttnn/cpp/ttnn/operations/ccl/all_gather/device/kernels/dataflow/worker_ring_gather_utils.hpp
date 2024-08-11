@@ -364,37 +364,30 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
     const AddrGen& s,
     const uint32_t num_pages,
     const uint32_t page_size,
-    bool& last_page_of_worker,
-    std::optional<uint32_t> local_l1_read_addr = {}) {
+    bool& last_page_of_worker) {
 
     // we expected caller to reset this and the last curr_page_idx when we set it true
     ASSERT(last_page_of_worker == false);
     cb_reserve_back(cb_id, num_pages);
-
-    uint32_t local_l1_ptr;
-    if (local_l1_read_addr.has_value()) {
-        local_l1_ptr = local_l1_read_addr.value();
-    } else {
-        local_l1_ptr = get_write_ptr(cb_id);
-    }
+    uint32_t local_l1_read_addr = get_write_ptr(cb_id);
     for (uint32_t i = 0; i < num_pages; ++i) {
 #ifdef ROW_MAJOR_LAYOUT
   #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t src_noc_addr = get_noc_addr(curr_page_idx, s);
-        noc_async_read(src_noc_addr, local_l1_ptr, page_size);
+        noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
     #elif defined SHARDED_MEM_LAYOUT
         ASSERT(false);  // unimplemented
     #endif
     ASSERT(false);  // unimplemented
 #elif defined TILED_LAYOUT
     #ifdef INTERLEAVED_MEM_LAYOUT
-        noc_async_read_tile(curr_page_idx, s, local_l1_ptr);
+        noc_async_read_tile(curr_page_idx, s, local_l1_read_addr);
         // common with `write_chunk_v2`
     #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = s.get_page_location(curr_page_idx);
         uint64_t src_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, s.bank_base_address + (page_offset * s.page_size) + 0);
-        noc_async_read(src_noc_addr, local_l1_ptr, page_size);
+        noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
     #endif
 
         // Update the curr_page_idx based on how the worker chunks + tensor slice is laid out in global tensor
@@ -407,8 +400,9 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
             tensor_shape,
             last_page_of_worker
         );
+
 #endif
-        local_l1_ptr += page_size;
+        local_l1_read_addr += page_size;
     }
     noc_async_read_barrier();
     cb_push_back(cb_id, num_pages);
@@ -428,21 +422,15 @@ FORCE_INLINE void write_wrapped_chunk(
     const AddrGen& d,
     const uint32_t num_pages,
     const uint32_t page_size,
-    bool& last_page_of_worker,
-    std::optional<uint32_t> l1_read_addr = {}) {
+    bool& last_page_of_worker) {
 
     cb_wait_front(cb_id, num_pages);
-    uint32_t local_l1_ptr;
-    if (l1_read_addr.has_value()) {
-        local_l1_ptr = l1_read_addr.value();
-    } else {
-        local_l1_ptr = get_read_ptr(cb_id);
-    }
+    uint32_t l1_read_addr = get_read_ptr(cb_id);
     for (uint32_t i = 0; i < num_pages; ++i) {
 #ifdef ROW_MAJOR_LAYOUT
     #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t dst_noc_addr = get_noc_addr(curr_page_idx, d);
-        noc_async_write(local_l1_ptr, dst_noc_addr, page_size);
+        noc_async_write(l1_read_addr, dst_noc_addr, page_size);
         ASSERT(false);  // unimplemented
     #elif defined SHARDED_MEM_LAYOUT
         ASSERT(false);  // unimplemented
@@ -450,13 +438,16 @@ FORCE_INLINE void write_wrapped_chunk(
 
 #elif defined TILED_LAYOUT
     #ifdef INTERLEAVED_MEM_LAYOUT
-        noc_async_write_tile(curr_page_idx, d, local_l1_ptr);
+        noc_async_write_tile(curr_page_idx, d, l1_read_addr);
         // Common with `read_chunk_from_output_tensor_v2`
     #elif defined SHARDED_MEM_LAYOUT
         // TODO: Make d.get_noc_addr work on host + device
         auto const&[noc_yx, page_offset] = d.get_page_location(curr_page_idx);
         uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), noc_yx.noc_y, d.bank_base_address + (page_offset * d.page_size) + 0);
+        noc_async_write(l1_read_addr, dst_noc_addr, page_size);
     #endif
+
+        // Update the curr_page_idx based on how the worker chunks + tensor slice is laid out in global tensor
         advance_worker_global_page_interleaved(
             curr_page_idx, // Updated internally
             offset_into_worker_slice,
@@ -467,7 +458,7 @@ FORCE_INLINE void write_wrapped_chunk(
             last_page_of_worker
         );
 #endif
-        local_l1_ptr += page_size;
+        l1_read_addr += page_size;
     }
     noc_async_write_barrier();
     cb_pop_front(cb_id, num_pages);
