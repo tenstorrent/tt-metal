@@ -13,7 +13,7 @@
 #include "core_config.h"
 #include "noc/noc_parameters.h"
 #include "dev_mem_map.h"
-#include "eth_l1_address_map.h"
+#include "hostdevcommon/profiler_common.h"
 
 // TODO: move these to processor specific files
 #if defined(COMPILE_FOR_ERISC)
@@ -195,6 +195,12 @@ struct debug_ring_buf_msg_t {
     uint32_t data[DEBUG_RING_BUFFER_ELEMENTS];
 };
 
+struct debug_stack_usage_t {
+    volatile uint16_t max_usage[DebugNumUniqueRiscs];
+    volatile uint16_t watcher_kernel_id[DebugNumUniqueRiscs];
+    volatile uint16_t pad[16 - DebugNumUniqueRiscs * 2];
+};
+
 constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204; // per thread
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there
@@ -204,24 +210,13 @@ constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 1;
 constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
 #endif
 
-// TODO: w/ the hal, this can come from core specific defines
-constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
-
-struct dprint_buf_msg_t {
-    uint8_t data[DPRINT_BUFFERS_COUNT][DPRINT_BUFFER_SIZE];
-    uint32_t pad; // to 1024 bytes
-};
-
-struct debug_stack_usage_t {
-    volatile uint16_t max_usage[DebugNumUniqueRiscs];
-    volatile uint16_t watcher_kernel_id[DebugNumUniqueRiscs];
-    volatile uint16_t pad[16 - DebugNumUniqueRiscs * 2];
-};
-
 enum watcher_enable_msg_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
 };
+
+// TODO: w/ the hal, this can come from core specific defines
+constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
 
 struct watcher_msg_t {
     volatile uint32_t enable;
@@ -234,6 +229,24 @@ struct watcher_msg_t {
     struct debug_ring_buf_msg_t debug_ring_buf;
 };
 
+struct dprint_buf_msg_t {
+    uint8_t data[DPRINT_BUFFERS_COUNT][DPRINT_BUFFER_SIZE];
+    uint32_t pad; // to 1024 bytes
+};
+
+// TODO: when device specific headers specify number of processors
+// (and hal abstracts them on host), get these from there (same as above for dprint)
+#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+constexpr static std::uint32_t PROFILER_RISC_COUNT = 1;
+#else
+constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
+#endif
+
+struct profiler_msg_t {
+    uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
+    uint32_t buffer[PROFILER_RISC_COUNT][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
+};
+
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct slave_sync_msg_t slave_sync;
@@ -241,6 +254,9 @@ struct mailboxes_t {
     struct launch_msg_t launch;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
+    uint32_t pad1;
+    uint32_t pad2;
+    struct profiler_msg_t profiler;
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_hex_vec_to_core().
@@ -251,6 +267,7 @@ static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 // Validate assumptions on mailbox layout on host compile
 static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % 32 == 0);
 static_assert((eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % 32 == 0);
+static_assert((MEM_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % L1_ALIGNMENT == 0);
 #ifdef NCRISC_HAS_IRAM
 // These are only used in ncrisc-halt.S
 static_assert(MEM_MAILBOX_BASE + offsetof(mailboxes_t, slave_sync.ncrisc) == MEM_SLAVE_RUN_MAILBOX_ADDRESS);
