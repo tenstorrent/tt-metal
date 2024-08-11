@@ -7,12 +7,6 @@
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 
-uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args=1) {
-    uint32_t old_arg_idx = arg_idx;
-    arg_idx += num_args;
-    return old_arg_idx;
-}
-
 void kernel_main() {
     uint32_t arg_idx = 0;
     const uint32_t dst_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -134,16 +128,12 @@ void kernel_main() {
     /* Args for overlapped all gather */
     OpSignaler op_signaler;
 
-    if (fuse_op) {
-        uint32_t num_workers_to_sync = get_compile_time_arg_val(25);
+    if constexpr(fuse_op) {
         op_signaler = OpSignaler(
-            num_workers_to_sync,
+            get_compile_time_arg_val(25),
             get_compile_time_arg_val(26),
             get_compile_time_arg_val(27),
-            (uint32_t*)get_arg_addr(increment_arg_idx(arg_idx, num_workers_to_sync * 2)), // Skip over the number of workers
-            get_arg_val<uint32_t>(increment_arg_idx(arg_idx)),
-            get_arg_val<uint32_t>(increment_arg_idx(arg_idx)),
-            get_arg_val<uint32_t>(increment_arg_idx(arg_idx))
+            arg_idx
         );
     }
 
