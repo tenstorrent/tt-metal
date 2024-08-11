@@ -5,7 +5,6 @@
 from typing import Optional, List, Callable
 import time
 import ttnn
-import tt_lib
 import torch
 import torch.nn as nn
 import math
@@ -75,12 +74,10 @@ hardcoded_matmul_config_linear = {
 def ResnetLinear(
     in_features: int,
     out_features: int,
-    weight: tt_lib.tensor.Tensor,
-    bias: Optional[tt_lib.tensor.Tensor] = None,
+    weight: ttnn.Tensor,
+    bias: Optional[ttnn.Tensor] = None,
     transpose: bool = True,
-    output_mem_config=tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-    ),
+    output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     model_config=None,
     device=None,
     batch_size=None,
@@ -112,12 +109,12 @@ def ResnetLinear(
         matmul_config = hardcoded_matmul_config_linear[batch_size]
 
     if is_grayskull():
-        compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
             math_fidelity=model_config["MATH_FIDELITY"],
             math_approx_mode=True,
         )
     else:
-        compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=model_config["MATH_FIDELITY"],
             math_approx_mode=True,
             fp32_dest_acc_en=False,
@@ -157,17 +154,17 @@ def _nearest_y(x, y):
 def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
     if x.get_layout() == target_layout:
         return x
-    if x.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR and target_layout == tt_lib.tensor.Layout.TILE:
-        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
+    if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT and target_layout == ttnn.TILE_LAYOUT:
+        x_padded_shape = ttnn.experimental.tensor.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
         if x.get_legacy_shape() != x_padded_shape:
-            return tt_lib.tensor.format_input_tensor(
+            return ttnn.experimental.tensor.format_input_tensor(
                 x, device, x_padded_shape, pad_value, target_layout, output_mem_config
             )
         else:
             return ttnn.tilize(x, memory_config=output_mem_config, use_multicore=True)
-    elif x.get_layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
+    elif x.get_layout() == ttnn.TILE_LAYOUT and target_layout == ttnn.ROW_MAJOR_LAYOUT:
         if x.get_legacy_shape() != x.shape_without_padding():
-            return tt_lib.tensor.format_output_tensor(
+            return ttnn.experimental.tensor.format_output_tensor(
                 x, x.shape_without_padding(), device, target_layout, output_mem_config
             )
         else:
@@ -182,8 +179,8 @@ def unpad_from_zero(x, desired_shape):
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
-        if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-            x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            x = x.to(ttnn.ROW_MAJOR_LAYOUT)
         x = x.unpad(
             (0, 0, 0, 0),
             (
@@ -1021,15 +1018,11 @@ class Bottleneck:
         self.conv_halo = conv_halo
         self.model_config = model_config
         if self.storage_in_dram:
-            self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-            )
+            self.memory_config = ttnn.DRAM_MEMORY_CONFIG
         else:
-            self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-            )
+            self.memory_config = ttnn.L1_MEMORY_CONFIG
         if sharded is not None:
-            self.sharded_memory_config = tt_lib.tensor.MemoryConfig(sharded, tt_lib.tensor.BufferType.L1)
+            self.sharded_memory_config = ttnn.MemoryConfig(sharded, ttnn.BufferType.L1)
         else:
             self.sharded_memory_config = self.memory_config
         self.out_memory_config = self.sharded_memory_config if out_sharded else self.memory_config
@@ -1106,7 +1099,7 @@ class Bottleneck:
                 # this downsample conv requires row major input
                 def downsample_conv_op_wrapper(op):
                     def downsample_conv_op_with_formatting(x):
-                        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+                        x = format_tensor(x, ttnn.ROW_MAJOR_LAYOUT, self.device, self.memory_config)
                         x = x.reshape(
                             self.module_input_shape[0],
                             self.module_input_shape[1],
@@ -1128,12 +1121,12 @@ class Bottleneck:
         matmul_config = hardcoded_matmul_config_conv[batch_size][(conv1_as_mm_padded_act_height, inplanes, width)]
         # 1x1 conv with stride 1 padding 0 is run using regular matmul
         if is_grayskull():
-            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
                 math_approx_mode=True,
             )
         else:
-            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
@@ -1151,7 +1144,7 @@ class Bottleneck:
             fuse_relu=True,
             output_mem_config=self.sharded_memory_config,
             weights_dtype=model_config["WEIGHTS_DTYPE"],
-            output_dtype=tt_lib.tensor.DataType.BFLOAT16 if untilize_out else model_config["ACTIVATIONS_DTYPE"],
+            output_dtype=ttnn.bfloat16 if untilize_out else model_config["ACTIVATIONS_DTYPE"],
             compute_kernel_config=compute_kernel_config,
             untilize_out=untilize_out,
         )
@@ -1219,25 +1212,17 @@ class Bottleneck:
                 and self.module_input_shape[3] == 256
             ):
                 move_utwh_output = True
-            tt_tensor_conv_weight = tt_lib.tensor.Tensor(
+            tt_tensor_conv_weight = ttnn.Tensor(
                 conv2_weight.reshape(-1).tolist(),
                 conv2_weight.shape,
-                (
-                    model_config["WEIGHTS_DTYPE"]
-                    if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                    else tt_lib.tensor.DataType.FLOAT32
-                ),
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                (model_config["WEIGHTS_DTYPE"] if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b else ttnn.float32),
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            tt_tensor_conv_bias = tt_lib.tensor.Tensor(
+            tt_tensor_conv_bias = ttnn.Tensor(
                 conv2_bias.tolist(),
                 [1, 1, 1, conv2_bias.shape[-1]],
-                (
-                    model_config["WEIGHTS_DTYPE"]
-                    if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                    else tt_lib.tensor.DataType.FLOAT32
-                ),
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                (model_config["WEIGHTS_DTYPE"] if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b else ttnn.float32),
+                ttnn.ROW_MAJOR_LAYOUT,
             )
             self.conv2 = TTPyCompositeConv(
                 sliding_window_op_params,
@@ -1296,12 +1281,12 @@ class Bottleneck:
             (conv3_as_mm_padded_act_height, width, planes * self.expansion)
         ]
         if is_grayskull():
-            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
                 math_approx_mode=True,
             )
         else:
-            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
@@ -1334,7 +1319,7 @@ class Bottleneck:
                 x.deallocate()
 
         if not self.conv_halo:
-            out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+            out = format_tensor(out, ttnn.ROW_MAJOR_LAYOUT, self.device, self.memory_config)
             out = out.reshape(
                 self.conv1_output_shape[0],
                 self.conv1_output_shape[1],
@@ -1365,7 +1350,7 @@ class Bottleneck:
             output_tensor=out if self.out_in_place else None,
         )
         if self.module_input_shape[0] == 20 and self.module_input_shape[1] == 56 and self.module_input_shape[3] == 64:
-            out = tt_lib.tensor.move_sharded(out)
+            out = ttnn.experimental.tensor.move_sharded(out)
 
         return out
 
@@ -1403,19 +1388,15 @@ class ResNet(nn.Module):
         self.model_config = model_config
         self.reader_patterns_cache = {}
         if self.storage_in_dram:
-            self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-            )
+            self.memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
         else:
-            self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-            )
+            self.memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
         if sharded:
-            self.height_sharded_memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
+            self.height_sharded_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1
             )
-            self.width_sharded_memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED, tt_lib.tensor.BufferType.L1
+            self.width_sharded_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1
             )
         else:
             self.height_sharded_memory_config = self.memory_config
@@ -1496,38 +1477,38 @@ class ResNet(nn.Module):
         self.end_grid_size = (8, 4)
         self.first_conv_num_cores_nhw = 98
         if sharded:
-            self.fold_grid = tt_lib.tensor.CoreRangeSet(
+            self.fold_grid = ttnn.CoreRangeSet(
                 {
-                    tt_lib.tensor.CoreRange(
-                        tt_lib.tensor.CoreCoord(0, 0),
-                        tt_lib.tensor.CoreCoord(10, 7),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(10, 7),
                     ),
-                    tt_lib.tensor.CoreRange(
-                        tt_lib.tensor.CoreCoord(0, 8),
-                        tt_lib.tensor.CoreCoord(3, 8),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 8),
+                        ttnn.CoreCoord(3, 8),
                     ),
                 }
             )
             self.n_fold_cores = 92
 
-            self.shard_grid = tt_lib.tensor.CoreRangeSet(
+            self.shard_grid = ttnn.CoreRangeSet(
                 {
-                    tt_lib.tensor.CoreRange(
-                        tt_lib.tensor.CoreCoord(0, 0),
-                        tt_lib.tensor.CoreCoord(11, 7),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(11, 7),
                     ),
-                    tt_lib.tensor.CoreRange(
-                        tt_lib.tensor.CoreCoord(0, 8),
-                        tt_lib.tensor.CoreCoord(1, 8),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 8),
+                        ttnn.CoreCoord(1, 8),
                     ),
                 }
             )
             self.n_dram_cores = 8
-            self.dram_shard_grid = tt_lib.tensor.CoreRangeSet(
+            self.dram_shard_grid = ttnn.CoreRangeSet(
                 {
-                    tt_lib.tensor.CoreRange(
-                        tt_lib.tensor.CoreCoord(0, 0),
-                        tt_lib.tensor.CoreCoord(7, 0),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 0),
                     )
                 }
             )
@@ -1586,33 +1567,25 @@ class ResNet(nn.Module):
             assert out_block_h == per_core_act_h, "out_block_h != per_core_act_h"
             assert weight_block_w == per_core_weight_w, "weight_block_w != per_core_weight_w"
 
-            tt_tensor_conv_weight = tt_lib.tensor.Tensor(
+            tt_tensor_conv_weight = ttnn.Tensor(
                 conv1_weight.reshape(-1).tolist(),
                 conv1_weight.shape,
-                (
-                    model_config["WEIGHTS_DTYPE"]
-                    if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                    else tt_lib.tensor.DataType.FLOAT32
-                ),
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                (model_config["WEIGHTS_DTYPE"] if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b else ttnn.float32),
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            tt_tensor_conv_bias = tt_lib.tensor.Tensor(
+            tt_tensor_conv_bias = ttnn.Tensor(
                 conv1_bias.tolist(),
                 [1, 1, 1, conv1_bias.shape[-1]],
-                (
-                    model_config["WEIGHTS_DTYPE"]
-                    if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                    else tt_lib.tensor.DataType.FLOAT32
-                ),
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                (model_config["WEIGHTS_DTYPE"] if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b else ttnn.float32),
+                ttnn.ROW_MAJOR_LAYOUT,
             )
             if is_grayskull():
-                compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                     math_fidelity=model_config["MATH_FIDELITY"],
                     math_approx_mode=True,
                 )
             else:
-                compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                     math_fidelity=model_config["MATH_FIDELITY"],
                     math_approx_mode=True,
                     fp32_dest_acc_en=False,
@@ -1710,7 +1683,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.maxpool_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
+            sharded=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
             out_sharded=True,
             conv_halo=True if sharded else False,
             model_config=model_config,
@@ -1725,7 +1698,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer1_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
+            sharded=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
             out_sharded=True,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
             conv_halo=True if sharded else False,
@@ -1741,7 +1714,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer2_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
+            sharded=ttnn.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
             out_sharded=True,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
             model_config=model_config,
@@ -1758,7 +1731,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer3_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
+            sharded=ttnn.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
             out_sharded=True,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
             model_config=model_config,
@@ -1792,19 +1765,19 @@ class ResNet(nn.Module):
 
         fc_weight = pad_weight(state_dict[f"{self.base_address_with_dot}fc.weight"])
         fc_weight = torch.transpose(fc_weight, 3, 2)
-        fc_weight = tt_lib.tensor.Tensor(
+        fc_weight = ttnn.Tensor(
             fc_weight.reshape(-1).tolist(),
             fc_weight.shape,
             model_config["WEIGHTS_DTYPE"],
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        ).to(tt_lib.tensor.Layout.TILE)
+            ttnn.ROW_MAJOR_LAYOUT,
+        ).to(ttnn.TILE_LAYOUT)
         fc_bias = pad_weight(state_dict[f"{self.base_address_with_dot}fc.bias"])
-        fc_bias = tt_lib.tensor.Tensor(
+        fc_bias = ttnn.Tensor(
             fc_bias.reshape(-1).tolist(),
             fc_bias.shape,
             model_config["WEIGHTS_DTYPE"],
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        ).to(tt_lib.tensor.Layout.TILE)
+            ttnn.ROW_MAJOR_LAYOUT,
+        ).to(ttnn.TILE_LAYOUT)
         self.fc = ResnetLinear(
             512 * block.expansion,
             1024,
@@ -1847,7 +1820,7 @@ class ResNet(nn.Module):
         self.downsample_conv_on_tt = None
         self.norm_layer_after_downsample_conv_on_tt = None
         if sharded is not None:
-            self.ds_conv_output_memory_config = tt_lib.tensor.MemoryConfig(sharded, tt_lib.tensor.BufferType.L1)
+            self.ds_conv_output_memory_config = ttnn.MemoryConfig(sharded, ttnn.BufferType.L1)
         else:
             self.ds_conv_output_memory_config = self.memory_config
         if use_downsample_op_and_mm_for_conv1x1_s2:
@@ -1915,12 +1888,12 @@ class ResNet(nn.Module):
             matmul_config = None
 
             if is_grayskull():
-                compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                     math_fidelity=model_config["MATH_FIDELITY"],
                     math_approx_mode=True,
                 )
             else:
-                compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                     math_fidelity=model_config["MATH_FIDELITY"],
                     math_approx_mode=True,
                     fp32_dest_acc_en=False,
@@ -2081,7 +2054,7 @@ class ResNet(nn.Module):
         last_layer_shape = layers[-1].conv3_output_shape
         return layers, last_layer_shape
 
-    def preprocessing(self, x: torch.Tensor) -> tt_lib.tensor:
+    def preprocessing(self, x: torch.Tensor) -> ttnn.Tensor:
         if self.sharded:
             x = pad_and_fold_conv_activation_for_unity_stride(x, 3, 3, 2, 2)
             x = torch.permute(x, (0, 2, 3, 1))
@@ -2094,15 +2067,15 @@ class ResNet(nn.Module):
             input_size_to_shard_evenly = _nearest_y(x.shape[2], self.first_conv_num_cores_nhw * 32)
             x = torch.nn.functional.pad(x, (0, 0, 0, input_size_to_shard_evenly - x.shape[2], 0, 0))
 
-            x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
+            x = ttnn.Tensor(x, ttnn.bfloat16)
         else:
             extra_padding_for_32B_alignment = 25
             x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
             x = torch.permute(x, (0, 2, 3, 1))
-            x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
+            x = ttnn.Tensor(x, ttnn.bfloat16)
         return x
 
-    def preprocessing_with_fold(self, x: torch.Tensor) -> tt_lib.tensor:
+    def preprocessing_with_fold(self, x: torch.Tensor) -> ttnn.Tensor:
         if not self.sharded:
             raise ValueError("Preprocessing is only supported for sharded model")
 
@@ -2122,40 +2095,40 @@ class ResNet(nn.Module):
         NHW = x.shape[0] * x.shape[1] * x.shape[2]
         NHW_even = _nearest_y(NHW // stride_h, self.first_conv_num_cores_nhw * 32)
 
-        shard_spec = tt_lib.tensor.ShardSpec(
+        shard_spec = ttnn.ShardSpec(
             self.fold_grid,
             [NHW // self.n_fold_cores, x.shape[3]],
-            tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         )
         x = torch2tt_tensor(
             x,
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
-            tt_memory_config=tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.BufferType.L1,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
+            tt_memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
                 shard_spec,
             ),
         )
 
         # fold for unity stride on device
-        x = tt_lib.tensor.fold(x, stride_h=stride_h, stride_w=1)
+        x = ttnn.experimental.tensor.fold(x, stride_h=stride_h, stride_w=1)
 
         shard_shape = [
             NHW_even // self.first_conv_num_cores_nhw,
             x.get_legacy_shape()[3],
         ]
 
-        x = tt_lib.tensor.reshard(
+        x = ttnn.experimental.tensor.reshard(
             x,
-            tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.BufferType.L1,
-                tt_lib.tensor.ShardSpec(
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
                     self.shard_grid,
                     shard_shape,
-                    tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
             ),
@@ -2163,7 +2136,7 @@ class ResNet(nn.Module):
 
         return x
 
-    def forward(self, x: tt_lib.tensor, write_event=None, op_event=None, final_out_mem_config=None) -> tt_lib.tensor:
+    def forward(self, x: ttnn.Tensor, write_event=None, op_event=None, final_out_mem_config=None) -> ttnn.Tensor:
         x_in = None
         if not self.sharded:
             original_A_cl_host_shape = x.get_legacy_shape()
@@ -2184,33 +2157,33 @@ class ResNet(nn.Module):
             )
         else:
             x_shape = x.get_legacy_shape()
-            shard_spec = tt_lib.tensor.ShardSpec(
+            shard_spec = ttnn.ShardSpec(
                 self.shard_grid,
                 [
                     x_shape[2] // self.first_conv_num_cores_nhw,
                     x_shape[3],
                 ],
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             )
-            mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.BufferType.L1,
+            mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
                 shard_spec,
             )
             if write_event is not None:
-                ttnn.wait_for_event(self.device, 0, write_event)
-            if x.storage_type() != tt_lib.tensor.StorageType.DEVICE:
+                ttnn.wait_for_event(0, write_event)
+            if x.storage_type() != ttnn.StorageType.DEVICE:
                 x = x.to(self.device, mem_config)
             elif x.memory_config().is_sharded():
                 if x.memory_config() != mem_config:
-                    x = tt_lib.tensor.reshard(x, mem_config)
+                    x = ttnn.experimental.tensor.reshard(x, mem_config)
                 else:
                     x_in = x
             else:
-                x = tt_lib.tensor.interleaved_to_sharded(x, mem_config)
+                x = ttnn.experimental.tensor.interleaved_to_sharded(x, mem_config)
             if op_event is not None:
-                ttnn.record_event(self.device, 0, op_event)
+                ttnn.record_event(0, op_event)
 
         x = self.conv1(x)
         if x_in is not None:
@@ -2218,10 +2191,10 @@ class ResNet(nn.Module):
         # Relu is fused with conv1
 
         if self.batch_size == 20:
-            x = tt_lib.tensor.move_sharded(x)
+            x = ttnn.experimental.tensor.move_sharded(x)
 
         if not self.sharded:
-            x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+            x = format_tensor(x, ttnn.ROW_MAJOR_LAYOUT, self.device, self.memory_config)
             x = x.reshape(
                 self.conv1_output_shape[0],
                 self.conv1_output_shape[1],
@@ -2243,7 +2216,7 @@ class ResNet(nn.Module):
             use_multicore=True,
         )
         if self.batch_size == 20:
-            x = tt_lib.tensor.move_sharded(x)
+            x = ttnn.experimental.tensor.move_sharded(x)
 
         x = self.layer1_module1(x)
         x = self.layer1_module2(x)
@@ -2255,15 +2228,15 @@ class ResNet(nn.Module):
         x = self.layer2_module4(x)
         if self.sharded:
             x_shape = x.get_legacy_shape()
-            reshard_mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                tt_lib.tensor.BufferType.L1,
-                tt_lib.tensor.ShardSpec(
-                    tt_lib.tensor.CoreRangeSet(
+            reshard_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
                         {
-                            tt_lib.tensor.CoreRange(
-                                tt_lib.tensor.CoreCoord(0, 0),
-                                tt_lib.tensor.CoreCoord(self.layer_3_grid_size[0] - 1, self.layer_3_grid_size[1] - 1),
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(self.layer_3_grid_size[0] - 1, self.layer_3_grid_size[1] - 1),
                             )
                         }
                     ),
@@ -2271,11 +2244,11 @@ class ResNet(nn.Module):
                         math.ceil((x_shape[-2] // 32) / self.layer_3_grid_size[0]) * 32,
                         x_shape[-1] // self.layer_3_grid_size[1],
                     ],
-                    tt_lib.tensor.ShardOrientation.COL_MAJOR,
+                    ttnn.ShardOrientation.COL_MAJOR,
                     False,
                 ),
             )
-            x = tt_lib.tensor.reshard(
+            x = ttnn.experimental.tensor.reshard(
                 x,
                 reshard_mem_config,
             )
@@ -2287,15 +2260,15 @@ class ResNet(nn.Module):
         x = self.layer3_module6(x)
         if self.sharded:
             x_shape = x.get_legacy_shape()
-            reshard_mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                tt_lib.tensor.BufferType.L1,
-                tt_lib.tensor.ShardSpec(
-                    tt_lib.tensor.CoreRangeSet(
+            reshard_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
                         {
-                            tt_lib.tensor.CoreRange(
-                                tt_lib.tensor.CoreCoord(0, 0),
-                                tt_lib.tensor.CoreCoord(self.layer_4_grid_size[0] - 1, self.layer_4_grid_size[1] - 1),
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(self.layer_4_grid_size[0] - 1, self.layer_4_grid_size[1] - 1),
                             )
                         }
                     ),
@@ -2303,11 +2276,11 @@ class ResNet(nn.Module):
                         math.ceil((x_shape[-2] // 32) / self.layer_4_grid_size[0]) * 32,
                         x_shape[-1] // self.layer_4_grid_size[1],
                     ],
-                    tt_lib.tensor.ShardOrientation.COL_MAJOR,
+                    ttnn.ShardOrientation.COL_MAJOR,
                     False,
                 ),
             )
-            x = tt_lib.tensor.reshard(
+            x = ttnn.experimental.tensor.reshard(
                 x,
                 reshard_mem_config,
             )
@@ -2317,15 +2290,15 @@ class ResNet(nn.Module):
 
         if self.sharded:
             x_shape = x.get_legacy_shape()
-            reshard_mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-                tt_lib.tensor.BufferType.L1,
-                tt_lib.tensor.ShardSpec(
-                    tt_lib.tensor.CoreRangeSet(
+            reshard_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
                         {
-                            tt_lib.tensor.CoreRange(
-                                tt_lib.tensor.CoreCoord(0, 0),
-                                tt_lib.tensor.CoreCoord(self.end_grid_size[0] - 1, self.end_grid_size[1] - 1),
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(self.end_grid_size[0] - 1, self.end_grid_size[1] - 1),
                             )
                         }
                     ),
@@ -2333,11 +2306,11 @@ class ResNet(nn.Module):
                         x.volume() // x_shape[-1],
                         x_shape[-1] // (self.end_grid_size[0] * self.end_grid_size[1]),
                     ],
-                    tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
             )
-            x = tt_lib.tensor.reshard(
+            x = ttnn.experimental.tensor.reshard(
                 x,
                 reshard_mem_config,
             )
