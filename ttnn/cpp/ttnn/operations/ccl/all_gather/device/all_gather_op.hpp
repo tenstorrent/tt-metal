@@ -135,6 +135,14 @@ struct AllGather {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
+AllGather create_all_gather_struct(
+    const Tensor& input_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::vector<Device*>& devices
+);
+
 // All Gather Variants
 operation::ProgramWithCallbacks all_gather_full_shard_grid(
     const Tensor& input_tensor,
