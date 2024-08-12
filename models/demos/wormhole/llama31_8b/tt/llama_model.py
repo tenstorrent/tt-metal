@@ -80,10 +80,11 @@ class TtTransformer(nn.Module):
         if mode == "prefill":
             return x
         x = self.norm(x)
+
         output = ttnn.linear(
             x,
             self.output_weight,
             compute_kernel_config=self.args.get_compute_kernel_config(),
-            core_grid=self.args.max_grid_size,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         return output

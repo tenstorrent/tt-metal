@@ -325,7 +325,7 @@ class TtLlamaAttention(nn.Module):
                 wo,
                 memory_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"],
                 compute_kernel_config=self.compute_kernel_config,
-                core_grid=self.grid_size,
+                # core_grid=self.grid_size,
             )  # seqlen, 1, batch, hidden_size
 
             ttnn.deallocate(attn_output_cat)
