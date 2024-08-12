@@ -88,7 +88,7 @@ Tensor MaxPoolNewOp::operator()(uint8_t queue_id, const Tensor& input_tensor, ui
     // call the halo uop
     uint32_t neg_inf_pad_val = 0xf7ff;
     auto haloed_tensor = ttnn::halo(
-        DefaultQueueId,
+        queue_id,
         input_tensor_sharded,
         sliding_window_config,
         neg_inf_pad_val,

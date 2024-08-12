@@ -6,13 +6,7 @@
 
 namespace ttnn::operations::sliding_window{
     std::size_t SlidingWindowConfig::get_hash() const {
-        return std::hash<std::string>{}(std::to_string(batch_size_)
-                                        + "_" + std::to_string(std::get<0>(input_hw_)) + "_" + std::to_string(std::get<1>(input_hw_))
-                                        + "_" + std::to_string(std::get<0>(window_hw_)) + "_" + std::to_string(std::get<1>(window_hw_))
-                                        + "_" + std::to_string(std::get<0>(stride_hw_)) + "_" + std::to_string(std::get<1>(stride_hw_))
-                                        + "_" + std::to_string(std::get<0>(pad_hw_)) + "_" + std::to_string(std::get<1>(pad_hw_))
-                                        + "_" + std::to_string(std::get<0>(dilation_hw_)) + "_" + std::to_string(std::get<1>(dilation_hw_))
-                                        + "_" + std::to_string(num_cores_nhw_) + "_" + core_range_set_.str());
+        return std::hash<std::string>{}(to_string());
     }
 
     /**
@@ -462,6 +456,16 @@ namespace ttnn::operations::sliding_window{
         ShardSpec shard_spec(p_config.grid, shard_shape, config_shard_orientation, false);
         MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, shard_spec};
         return config_tensor.to(device, memory_config);
+    }
+
+    std::string SlidingWindowConfig::to_string() const {
+        return std::to_string(batch_size_)
+                + "_" + std::to_string(std::get<0>(input_hw_)) + "_" + std::to_string(std::get<1>(input_hw_))
+                + "_" + std::to_string(std::get<0>(window_hw_)) + "_" + std::to_string(std::get<1>(window_hw_))
+                + "_" + std::to_string(std::get<0>(stride_hw_)) + "_" + std::to_string(std::get<1>(stride_hw_))
+                + "_" + std::to_string(std::get<0>(pad_hw_)) + "_" + std::to_string(std::get<1>(pad_hw_))
+                + "_" + std::to_string(std::get<0>(dilation_hw_)) + "_" + std::to_string(std::get<1>(dilation_hw_))
+                + "_" + std::to_string(num_cores_nhw_) + "_" + core_range_set_.str();
     }
 
 } // namespace ttnn::operations::sliding_window

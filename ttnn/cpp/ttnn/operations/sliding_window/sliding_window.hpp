@@ -62,15 +62,7 @@ namespace ttnn::operations::sliding_window {
 
 
 
-        std::string to_string() const {
-            return std::to_string(batch_size_)
-                    + "_" + std::to_string(std::get<0>(input_hw_)) + "_" + std::to_string(std::get<1>(input_hw_))
-                    + "_" + std::to_string(std::get<0>(window_hw_)) + "_" + std::to_string(std::get<1>(window_hw_))
-                    + "_" + std::to_string(std::get<0>(stride_hw_)) + "_" + std::to_string(std::get<1>(stride_hw_))
-                    + "_" + std::to_string(std::get<0>(pad_hw_)) + "_" + std::to_string(std::get<1>(pad_hw_))
-                    + "_" + std::to_string(std::get<0>(dilation_hw_)) + "_" + std::to_string(std::get<1>(dilation_hw_))
-                    + "_" + std::to_string(num_cores_nhw_) + "_" + core_range_set_.str();
-        }
+        std::string to_string() const;
 
         /**
          * Unique hash val for the sliding window configuration.
