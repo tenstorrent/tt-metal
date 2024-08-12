@@ -11,6 +11,77 @@ from models.utility_functions import is_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+def run_slice_rm_sharded(device, n, c, h, w):
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    n_unpadded = 20
+    c_unpadded = 224
+    h_unpadded = 115
+    torch_output_tensor = torch_input_tensor[:n_unpadded, :c_unpadded, :h_unpadded, :]
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # shard config
+    num_cores_x = 8
+    num_cores_y = 8
+    shard_h = n * c * h // (num_cores_x * num_cores_y)
+    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.COL_MAJOR, False)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
+
+    # output shard config
+    num_cores_x = 8
+    num_cores_y = 8
+    shard_h = n_unpadded * c_unpadded * h_unpadded // (num_cores_x * num_cores_y)
+    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.COL_MAJOR, False)
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+
+    tt_output_tensor = ttnn.slice(
+        tt_input_tensor,
+        (0, 0, 0, 0),
+        (n_unpadded - 1, c_unpadded - 1, h_unpadded - 1, w - 1),
+        memory_config=output_mem_config,
+    )
+    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("n", [20])
+@pytest.mark.parametrize("c", [224])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [16])
+def test_slice_rm_sharded_with_program_cache(device, n, c, h, w, use_program_cache):
+    for _ in range(2):
+        run_slice_rm_sharded(device, n, c, h, w)
+        # dummy tensor to change tensor alloc
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttnn.from_torch(
+            py_dummy_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    assert device.num_program_cache_entries() == 3
+
+
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
