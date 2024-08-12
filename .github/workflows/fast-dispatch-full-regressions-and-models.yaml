@@ -19,14 +19,97 @@ jobs:
       matrix:
         test-group:
           [
-            { name: "Common models GS", arch: grayskull, cmd: tests/scripts/single_card/nightly/run_common_models.sh, timeout: 40 },
-            { name: "Common models N300 WH B0", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_common_models.sh, timeout: 40 },
-            { name: "GS-only ttnn nightly", arch: grayskull, cmd: tests/scripts/single_card/nightly/run_ttnn.sh, timeout: 40 },
-            { name: "GS-only models", arch: grayskull, cmd: tests/scripts/single_card/nightly/run_gs_only.sh, timeout: 40 },
-            { name: "N300 WH-only models", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh, timeout: 50 },
-            { name: "API tests GS", arch: grayskull, cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast, timeout: 40 },
-            { name: "API tests N300 WH B0", arch: wormhole_b0, cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast, timeout: 40 },
-            { name: "[Unstable] N300 models", arch: wormhole_b0, cmd: tests/scripts/single_card/nightly/run_wh_b0_unstable.sh, timeout: 45 },
+            {
+              name: "Common models GS",
+              arch: grayskull,
+              runs-on: ["cloud-virtual-machine", "arch-grayskull", "E150", "in-service", "mount-cloud-weka"],
+              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
+              timeout: 40
+            },
+            {
+              name: "Common models N300 WH B0",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300", "in-service", "mount-cloud-weka"],
+              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
+              timeout: 40,
+            },
+            {
+              name: "Common models N150 WH BO",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N150", "in-service", "mount-cloud-weka"],
+              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
+              timeout: 40,
+            },
+            {
+              name: "GS ttnn nightly",
+              arch: grayskull,
+              runs-on: ["cloud-virtual-machine", "arch-grayskull", "E150", "in-service", "mount-cloud-weka"],
+              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
+              timeout: 40
+            },
+            {
+              name: "WH N150 ttnn nightly",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N150", "in-service", "mount-cloud-weka"],
+              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
+              timeout: 70
+            },
+            {
+              name: "WH N300 ttnn nightly",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300", "in-service", "mount-cloud-weka"],
+              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
+              timeout: 70
+            },
+            {
+              name: "GS-only models",
+              arch: grayskull,
+              runs-on: ["cloud-virtual-machine", "arch-grayskull", "E150", "in-service", "mount-cloud-weka"],
+              cmd: tests/scripts/single_card/nightly/run_gs_only.sh,
+              timeout: 40
+            },
+            {
+              name: "N300 WH-only models",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300", "in-service", "mount-cloud-weka"],
+              cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
+              timeout: 80
+            },
+            {
+              name: "N150 WH-only models",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N150", "in-service", "mount-cloud-weka"],
+              cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
+              timeout: 80
+            },
+            {
+              name: "API tests GS",
+              arch: grayskull,
+              runs-on: ["cloud-virtual-machine", "arch-grayskull", "E150", "in-service", "mount-cloud-weka"],
+              cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast,
+              timeout: 40
+            },
+            {
+              name: "API tests N300 WH B0",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300", "in-service", "mount-cloud-weka"],
+              cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
+              timeout: 40
+            },
+            {
+              name: "API tests N150 WH B0",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N150", "in-service", "mount-cloud-weka"],
+              cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
+              timeout: 40
+            },
+            {
+              name: "[Unstable] N300 models",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300", "in-service", "mount-cloud-weka"],
+              cmd: tests/scripts/single_card/nightly/run_wh_b0_unstable.sh,
+              timeout: 45
+            },
           ]
     name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:
@@ -34,15 +117,15 @@ jobs:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: model-runner-${{ matrix.test-group.arch }}
+    runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Ensure weka mount is active
-        timeout-minutes: 3
-        run: |
-          sudo systemctl restart mnt-MLPerf.mount
-          sudo /etc/rc.local
-          ls -al /mnt/MLPerf/bit_error_tests
+      - uses: ./.github/actions/retry-command
+        with:
+          timeout-seconds: 100
+          max-retries: 10
+          backoff-seconds: 60
+          command: ./.github/scripts/cloud_utils/mount_weka.sh
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
