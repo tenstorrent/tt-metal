@@ -101,25 +101,8 @@ std::vector <ttnn::Tensor> all_gather_matmul(
 
             const auto& input_tensor = input_tensors[0];
             const auto& weight_tensor = input_tensors[1];
-            uint32_t num_devices = devices.size();
 
-            /* All Gather stuff */
-            uint32_t device_index = 0; // Initialize device index
-            uint32_t receiver_device_id = 0; // Initialize receiver device ID
-            uint32_t sender_device_id = 0; // Initialize sender device ID
-
-            for (uint32_t i = 0; i < num_devices; ++i) {
-                if (devices[i] == input_tensor.device()) {
-                    device_index = i;
-                    receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
-                    sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
-                    break;
-                }
-            }
-
-            ttnn::AllGather all_gather_struct{
-                dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config())};
-
+            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config, devices);
 
             /* Matmul stuff */
             auto arch = input_tensor.device()->arch();

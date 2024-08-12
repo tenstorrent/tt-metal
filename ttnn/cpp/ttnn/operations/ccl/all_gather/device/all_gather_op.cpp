@@ -13,6 +13,32 @@
 
 namespace ttnn {
 
+AllGather create_all_gather_struct(
+    const Tensor& input_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::vector<Device*>& devices
+) {
+    uint32_t num_devices = devices.size();
+
+    uint32_t device_index = 0; // Initialize device index
+    uint32_t receiver_device_id = 0; // Initialize receiver device ID
+    uint32_t sender_device_id = 0; // Initialize sender device ID
+
+    for (uint32_t i = 0; i < num_devices; ++i) {
+        if (devices[i] == input_tensor.device()) {
+            device_index = i;
+            receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
+            sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
+            break;
+        }
+    }
+
+    return ttnn::AllGather{
+        dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config())};
+}
+
 
 AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor const& input_tensor, bool fuse_op) {
     if (fuse_op) {
@@ -166,24 +192,9 @@ Tensor all_gather(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
             const auto& input_tensor = input_tensors.at(0);
-            uint32_t num_devices = devices.size();
-
-            uint32_t device_index = 0; // Initialize device index
-            uint32_t receiver_device_id = 0; // Initialize receiver device ID
-            uint32_t sender_device_id = 0; // Initialize sender device ID
-
-            for (uint32_t i = 0; i < num_devices; ++i) {
-                if (devices[i] == input_tensor.device()) {
-                    device_index = i;
-                    receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
-                    sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
-                    break;
-                }
-            }
 
             return operation::run(
-                ttnn::AllGather{
-                    dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config())},
+                create_all_gather_struct(input_tensor, dim, num_links, memory_config, devices),
                 {input_tensor});
         },
         {input_tensor},
