@@ -539,7 +539,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
 
-MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
+ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
     tt::tt_metal::OptimizedConvParallelizationConfig conv_parallelization_config,
     tt::tt_metal::OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
@@ -547,7 +547,7 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
     bool transpose_mcast,
     uint32_t grid_size_along_c) {
     if (height_sharded) {
-        MatmulMultiCoreReuseMultiCast1DProgramConfig matmul_config = {
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig matmul_config = {
             .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
             .in0_block_w = conv_blocking_config.act_block_w_ntiles,
             .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
@@ -562,7 +562,7 @@ MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
         return matmul_config;
     } else {
         TT_ASSERT(conv_blocking_config.act_block_w_ntiles % grid_size_along_c == 0);
-        MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
+        ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
             .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
             .in0_block_w = conv_blocking_config.act_block_w_ntiles / grid_size_along_c,
             .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
@@ -753,7 +753,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             matmul_input,
             weight_tensor_on_device,
             bias_tensor_on_device,
-            tt::operations::primary::Matmul{
+            ttnn::operations::matmul::Matmul{
             matmul_program_config,
             /*bcast_batch=*/std::nullopt,
             conv_out_memory_config,

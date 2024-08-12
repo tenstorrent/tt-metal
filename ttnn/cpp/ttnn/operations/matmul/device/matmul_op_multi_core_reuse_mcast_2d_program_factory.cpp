@@ -1191,9 +1191,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
 }  // namespace reuse_mcast_optimized_helpers
 
-namespace tt {
+namespace ttnn {
 
-namespace tt_metal {
+namespace operations {
+
+namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     const Tensor& a,
@@ -1395,6 +1397,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
         untilize_out);
 }
 
-}  // namespace tt_metal
+}  // namespace matmul
 
-}  // namespace tt
+}  // namespace operations
+
+}  // namespace ttnn
