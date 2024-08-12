@@ -15,6 +15,7 @@ def serialize(object, warnings=[]):
             f"SWEEPS: Warning: pybinded ttnn class detected without a to_json method. Your type may need to pybind the to_json and from_json methods in C++, see the FAQ in the sweeps README for instructions. The type is {type(object)}. You can ignore this if this is an enum type."
         )
         warnings.append(type(object))
+        return str(object)
     else:
         return str(object)
 
