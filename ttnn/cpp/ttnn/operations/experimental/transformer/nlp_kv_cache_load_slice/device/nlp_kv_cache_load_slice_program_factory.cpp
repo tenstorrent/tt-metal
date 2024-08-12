@@ -2,24 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "optional"
-#include "tt_dnn/op_library/math.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include "nlp_kv_cache_load_slice_device_operation.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
+
+namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
-
-namespace tt {
-
-namespace tt_metal {
+using namespace tt;
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_runtime_args_tile_sharded(
     const Tensor &input_tensor,
     Tensor &output_tensor,
-    const Shape &output_tensor_start,
+    const tt::tt_metal::Shape &output_tensor_start,
     uint32_t num_cores_total,
     uint32_t num_cores_x,
     uint32_t num_tiles_per_core) {
@@ -30,7 +28,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    uint32_t start_id = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, ttnn::Shape(output_tensor_start));
+    uint32_t start_id = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, Shape(output_tensor_start));
     const uint32_t num_tiles_shifted_per_core = input_shape[-2] * input_shape[-1] / TILE_HW;
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
@@ -51,9 +49,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
 }
 
 operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
-    const Tensor &a, Tensor &output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
-    const Shape output_shape = output.get_legacy_shape();
-    const Shape input_shape = a.get_legacy_shape();
+    const Tensor &a, Tensor &output, const tt::tt_metal::Shape &output_tensor_start, const tt::tt_metal::Shape &output_tensor_end) {
+    const tt::tt_metal::Shape output_shape = output.get_legacy_shape();
+    const tt::tt_metal::Shape input_shape = a.get_legacy_shape();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -105,8 +103,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
                                                       (std::uint32_t)num_cores_total};
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/"
-        "reader_unary_unpad_dims_interleaved_start_id_shard_optimized.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id_shard_optimized.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -168,6 +165,4 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // ttnn::operations::experimental::transformer

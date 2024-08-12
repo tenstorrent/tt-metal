@@ -1,18 +1,14 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
+#include "nlp_kv_cache_load_slice_device_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 
-#include "tt_metal/host_api.hpp"
-
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn::operations::experimental::transformer {
 
 // NLP KV Cache Unpad To Sharded op
-void NlpKVCacheLoadSlice::validate(const std::vector<Tensor> &input_tensors) const {
+void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to unpad need to be allocated in buffers on device!");
@@ -26,7 +22,7 @@ void NlpKVCacheLoadSlice::validate(const std::vector<Tensor> &input_tensors) con
         TT_FATAL(this->output_tensor_start[i] <= this->output_tensor_end[i]);
     }
 
-    Shape output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
+    tt::tt_metal::Shape output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
     auto num_dims = input_tensor_a.get_legacy_shape().rank();
     TT_FATAL(num_dims == 4, "Input tensor must be 4D");
     const auto input_shape = input_tensor_a.get_legacy_shape();
@@ -44,17 +40,17 @@ void NlpKVCacheLoadSlice::validate(const std::vector<Tensor> &input_tensors) con
                 (this->output_tensor_start[-1] % TILE_WIDTH == 0),
             "Can only unpad tilized tensor with full tiles");
 }
-std::vector<Shape> NlpKVCacheLoadSlice::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::Shape> NlpKVCacheLoadSliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     std::vector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
         out_shape.push_back(this->output_tensor_end[i] - this->output_tensor_start[i] + 1);
     }
-    Shape output_tensor_shape(out_shape);
+    tt::tt_metal::Shape output_tensor_shape(out_shape);
     return {output_tensor_shape};
 }
-std::vector<Tensor> NlpKVCacheLoadSlice::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+std::vector<Tensor> NlpKVCacheLoadSliceDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto input_shape = input_tensor_a.get_legacy_shape();
     auto dim0 = input_shape[0];
@@ -77,12 +73,11 @@ std::vector<Tensor> NlpKVCacheLoadSlice::create_output_tensors(const std::vector
         mem_config
         )};
 }
-operation::ProgramWithCallbacks NlpKVCacheLoadSlice::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks NlpKVCacheLoadSliceDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return multi_core_nlp_kv_cache_load_slice(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
 }
 
-} // namespace tt_metal
 
-} // namespace tt
+}  // namespace ttnn::operations::experimental::transformer

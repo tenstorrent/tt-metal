@@ -280,7 +280,7 @@ class TtLlamaAttention_optimized:
 
         # key and value layers will have kv_seq_len padded to nearest 32
         keys = self.layer_past[0]
-        key_layer = tt_lib.tensor.nlp_kv_cache_load_slice(keys, 0, padded_layer_past_len)
+        key_layer = ttnn.experimental.nlp_kv_cache_load_slice(keys, seq_len_start=0, seq_len_end=padded_layer_past_len)
 
         # PRE-SOFTMAX MM
         key_layer_transposed = ttnn.transpose(
@@ -326,7 +326,9 @@ class TtLlamaAttention_optimized:
         value_layer.deallocate(True)
 
         values = self.layer_past[1]
-        value_layer = tt_lib.tensor.nlp_kv_cache_load_slice(values, 0, padded_layer_past_len)
+        value_layer = ttnn.experimental.nlp_kv_cache_load_slice(
+            values, seq_len_start=0, seq_len_end=padded_layer_past_len
+        )
 
         # POST-SOFTMAX MM
         scores_prog_config = self.model_config["SCORES_BATCHED_MM_PROGCFG_LAMBDA"](padded_layer_past_len // 32)

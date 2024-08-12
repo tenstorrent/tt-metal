@@ -228,7 +228,7 @@ class TtGrokAttention(LightweightModule):
         k_heads_1B1D.deallocate(True)
         v_heads_1B1D.deallocate(True)
 
-        keys_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
+        keys_1BPD = ttnn.experimental.nlp_kv_cache_load_slice(
             keys_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
         )
 
@@ -277,7 +277,7 @@ class TtGrokAttention(LightweightModule):
         # post_softmax = ttnn.to_torch(attn_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))[0]
 
         # values matmul
-        values_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
+        values_1BPD = ttnn.experimental.nlp_kv_cache_load_slice(
             values_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
         )
 
