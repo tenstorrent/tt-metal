@@ -84,16 +84,17 @@ struct OpSignaler {
     OpSignaler(
         uint32_t num_workers_to_sync,
         uint32_t curr_worker_index,
-        uint32_t worker_sync_sem_addr,
+        uint32_t worker_sync_sem_id,
         uint32_t& rt_args_idx) :
-        num_workers_to_sync(num_workers_to_sync),
-        worker_sync_sem_addr(worker_sync_sem_addr) {
+        num_workers_to_sync(num_workers_to_sync) {
+
+        this-> worker_sync_sem_addr = get_semaphore(worker_sync_sem_id);
 
         // Runtime args
         this->workers_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2)); // Skip over the number of workers
         uint32_t op_worker_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t op_worker_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t signal_op_sem_addr = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t signal_op_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
 
         // Get the remote sem addresses to signal the op
         this->signal_op_sem_noc_addr = get_noc_addr(op_worker_noc_x, op_worker_noc_y, signal_op_sem_addr);
