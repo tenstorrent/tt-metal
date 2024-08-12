@@ -23,10 +23,11 @@
 /* Fusion includes */
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/experimental/ccl/ccl_op_fusion.hpp"
 
 
 namespace ttnn {
+namespace experimental {
 
 struct AllGatherMatmul {
 
@@ -82,9 +83,11 @@ operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(
     // bool untilize_out
 
 );
+}  // namespace experimental
 
 
 namespace operations {
+namespace experimental {
 namespace ccl {
 
 std::vector<Tensor> all_gather_matmul(
@@ -103,6 +106,7 @@ std::vector<Tensor> all_gather_matmul(
     const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 
 } // namespace ccl
+} // namespace experimental
 } // namespace operations
 
 }  // namespace ttnn

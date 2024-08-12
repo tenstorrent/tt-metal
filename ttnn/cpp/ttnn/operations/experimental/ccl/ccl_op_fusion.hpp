@@ -8,6 +8,7 @@
 #include "tt_metal/impl/program/program.hpp"
 
 namespace ttnn {
+namespace experimental {
 namespace ccl {
 
 struct AllGatherFusedOpSignaler {
@@ -112,4 +113,5 @@ struct AllGatherFusedOpSignaler {
 
 
 }  // namespace ccl
+}  // namespace experimental
 }  // namespace ttnn

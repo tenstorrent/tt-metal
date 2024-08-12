@@ -8,17 +8,17 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/ccl/all_gather_matmul/all_gather_matmul_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_op.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
 
 
 template <typename ccl_operation_t>
 void bind_all_gather_matmul(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
+    ttnn::bind_registered_operation(
         module,
         operation,
         doc,
@@ -61,7 +61,7 @@ void bind_all_gather_matmul(pybind11::module& module, const ccl_operation_t& ope
 void py_bind_all_gather_matmul(pybind11::module& module) {
     detail::bind_all_gather_matmul(
         module,
-        ttnn::all_gather_matmul,
+        ttnn::experimental::all_gather_matmul,
         R"doc(all_gather_matmul(input_tensor: ttnn.Tensor, weight_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> (ttnn.Tensor, ttnn.Tensor)
 
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
@@ -92,4 +92,4 @@ void py_bind_all_gather_matmul(pybind11::module& module) {
         )doc");
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::experimental::ccl

@@ -20,15 +20,15 @@
 #include <sstream>
 #include <type_traits>
 
-#include "ttnn/cpp/ttnn/operations/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
+#include "ttnn/operations/experimental/ccl/ccl_op_fusion.hpp"
 
 
 using namespace tt::constants;
 
 namespace ttnn {
 
-using namespace ccl;
+using namespace experimental::ccl;
 
 
 std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
@@ -45,7 +45,7 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
     CoreCoord datacopy_core_coord
 ) {
 
-    auto const& all_gather_config = AllGatherConfig(input_tensor, all_gather_output_tensor, dim, ring_size, num_links, topology, true);
+    auto const& all_gather_config = ttnn::AllGatherConfig(input_tensor, all_gather_output_tensor, dim, ring_size, num_links, topology, true);
     const uint32_t num_transfers = 4; // ring_size - 1;
 
     auto tensor_slicer = ttnn::ccl::InterleavedRingAllGatherTensorSlicer (
@@ -126,7 +126,7 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
     // Create the kernel
     tt::tt_metal::KernelHandle datacopy_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/ccl/all_gather_matmul/device/kernels/datacopy.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_matmul/device/kernels/datacopy.cpp",
         datacopy_workers,
         tt::tt_metal::WriterDataMovementConfig(datacopy_ct_args, kernel_defines));
 
@@ -146,7 +146,7 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
-operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(const Tensor& input_tensor, Tensor& all_gather_output_tensor, Tensor& datacopy_output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology, const CoreCoord core_grid_offset) {
+operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_workers(const Tensor& input_tensor, Tensor& all_gather_output_tensor, Tensor& datacopy_output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology, const CoreCoord core_grid_offset) {
 
     tt::tt_metal::Program program{};
 
@@ -155,10 +155,10 @@ operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(const 
     const std::vector<CoreCoord>& datacopy_cores = std::get<0>(datacopy_params);
     const std::vector<uint32_t> datacopy_signal_semaphore_ids = std::get<1>(datacopy_params);
 
-    std::optional<ccl::AllGatherFusedOpSignaler> fused_op_signaler = AllGatherFusedOpSignaler(datacopy_cores, datacopy_signal_semaphore_ids);
+    std::optional<AllGatherFusedOpSignaler> fused_op_signaler = AllGatherFusedOpSignaler(datacopy_cores, datacopy_signal_semaphore_ids);
 
     // Pass in the datacopy cores and sempahore address (Using optional arguments)
-    return all_gather_multi_core_with_workers_helper(program, input_tensor, all_gather_output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, fused_op_signaler, core_grid_offset);
+    return ttnn::all_gather_multi_core_with_workers_helper(program, input_tensor, all_gather_output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, fused_op_signaler, core_grid_offset);
 }
 
 }  // namespace ttnn
