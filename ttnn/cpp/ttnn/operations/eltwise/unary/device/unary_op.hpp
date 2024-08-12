@@ -35,6 +35,14 @@ struct Unary {
     UnaryOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const;
 
     const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
+
+    static Tensor operator()(
+        const Tensor& input_tensor,
+        const std::vector<UnaryWithParam>& op_chain,
+        const MemoryConfig& output_mem_config,
+        bool fp32_dest_acc_en,
+        bool preserve_fp32_precision,
+        DataType output_dtype);
 };
 
 }  // namespace ttnn::operations::unary

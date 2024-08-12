@@ -182,6 +182,8 @@ static const std::string python_fully_qualified_name(const std::string& cpp_full
 template <typename operation_t>
 concept PrimitiveOperationConcept = device_operation::DeviceOperationConcept<operation_t>;
 
+template <typename operation_t>
+concept OldInfraPrimitiveOperationConcept  = tt::tt_metal::operation::detail::is_device_operation<operation_t>();
 
 // Composite operation allows any code to be executed
 template<typename operation_t>
@@ -218,6 +220,15 @@ struct registered_operation_t {
     auto invoke(args_t&&... args) const {
         return operator()(DefaultQueueId, std::forward<args_t>(args)...);
     }
+
+    template <typename... args_t>
+    requires(OldInfraPrimitiveOperationConcept <operation_t>)
+    auto invoke(args_t&&... args) const {
+        ZoneScopedN("Run old style primitive ttnn operation");
+        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
+        return operation_t::operator()(std::forward<decltype(args)>(args)...);
+    }
+
 
 
     template <typename... args_t>
@@ -328,7 +339,7 @@ constexpr reflect::fixed_string prim_namespace = "ttnn::prim";
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 consteval void assert_operation_in_correct_namespace() {
-    if constexpr (PrimitiveOperationConcept<operation_t>) {
+    if constexpr (PrimitiveOperationConcept<operation_t> or OldInfraPrimitiveOperationConcept <operation_t>) {
         if constexpr(cpp_fully_qualified_name.size() > sizeof(prim_namespace)) {
             constexpr auto namespace_substring = tt::stl::reflection::fixed_string_substring<0, sizeof(prim_namespace)>(cpp_fully_qualified_name);
             static_assert(tt::stl::reflection::fixed_string_equals(namespace_substring, prim_namespace), "Primitive operations must be in the `ttnn::prim` namespace.");
