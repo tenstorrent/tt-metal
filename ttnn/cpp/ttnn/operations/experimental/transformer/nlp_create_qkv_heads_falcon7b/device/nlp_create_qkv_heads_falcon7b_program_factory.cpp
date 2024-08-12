@@ -1,19 +1,19 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "nlp_create_qkv_heads_falcon7b_device_operation.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+
+namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
 using namespace tt;
+using namespace tt::tt_metal;
 
-namespace tt {
-
-namespace tt_metal {
 
 operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_falcon7b(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
 
@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_falcon7b(const T
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/nlp_tms/kernels/dataflow/writer_tm_tile_layout_nlp_create_qkv_heads_falcon7b.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/device/kernels/dataflow/writer_tm_tile_layout_nlp_create_qkv_heads_falcon7b.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -182,6 +182,5 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_falcon7b(const T
     return {std::move(program), override_runtime_args_callback};
 }
 
-} // namespace tt_metal
 
-} // namespace tt
+}  // ttnn::operations::experimental::transformer

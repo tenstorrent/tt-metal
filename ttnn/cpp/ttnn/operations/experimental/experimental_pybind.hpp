@@ -18,6 +18,7 @@
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_pybind.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -31,6 +32,7 @@ void py_module(py::module& module) {
     transformer::detail::bind_nlp_concat_heads(module);
     transformer::detail::bind_nlp_concat_heads_decode(module);
     transformer::detail::bind_nlp_create_qkv_heads_decode(module);
+    transformer::detail::bind_nlp_create_qkv_heads_falcon7b(module);
     reduction::detail::bind_argmax_operation(module);
     reduction::detail::bind_argmin_operation(module);
     ssm::detail::bind_prefix_scan(module);

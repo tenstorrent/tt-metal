@@ -249,9 +249,9 @@ class TtFalconAttentionPrefill(nn.Module):
         ###########
         query_layer, key_layer, value_layer = [], [], []
         for i in range(self.num_devices):
-            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
+            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.nlp_create_qkv_heads_falcon7b(
                 fused_query_key_value[i],
-                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
             fused_query_key_value[i].deallocate()
             query_layer.append(query_layer_i)
@@ -412,9 +412,9 @@ class TtFalconAttentionPrefill(nn.Module):
         ###########
         query_layer, key_layer, value_layer = [], [], []
         for i in range(self.num_devices):
-            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
+            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.nlp_create_qkv_heads_falcon7b(
                 fused_query_key_value[i],
-                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
             fused_query_key_value[i].deallocate()
             query_layer.append(query_layer_i)
@@ -683,9 +683,9 @@ class TtFalconAttentionDecode(nn.Module):
         ###########
         query_layer, key_layer, value_layer = [], [], []
         for i in range(self.num_devices):
-            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
+            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.nlp_create_qkv_heads_falcon7b(
                 fused_query_key_value[i],
-                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
             fused_query_key_value[i].deallocate(True)
             query_layer.append(query_layer_i)

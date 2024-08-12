@@ -12,6 +12,7 @@
 #include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
 
@@ -104,9 +105,9 @@ inline std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
             input_shape.with_tile_padding()[1],
             input_shape.with_tile_padding()[2]);
         auto outputs =
-            tt::tt_metal::nlp_create_qkv_heads_falcon7b(input_4d, memory_config.value_or(input_tensor.memory_config()));
+            ttnn::experimental::nlp_create_qkv_heads_falcon7b(input_4d, memory_config.value_or(input_tensor.memory_config()));
         return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
-            {outputs.at(0), outputs.at(1), outputs.at(2)}, sequence_size, sequence_size_padded, transpose_key);
+            {std::get<0>(outputs), std::get<1>(outputs), std::get<2>(outputs)}, sequence_size, sequence_size_padded, transpose_key);
     }
 
     uint32_t hidden_dim_padded = 0, hidden_dim = 0;

@@ -13,18 +13,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_falcon7b(const Tensor &input_tensor_a, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
-
-struct NlpCreateHeadsFalcon7B {
-    MemoryConfig output_mem_config;
-
-    void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-};
 
 struct NlpKVCacheLoadSlice {
     const Shape output_tensor_start;
@@ -38,24 +27,6 @@ struct NlpKVCacheLoadSlice {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
-
-inline std::vector<Tensor> nlp_create_qkv_heads_falcon7b(const Tensor& input_tensor_a, const MemoryConfig& mem_config) {
-    // TODO: hard-coded for falcon-7b; can delete if we switch to the more generic one (but perf may be worse)
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input_tensor_a})),
-        Tensor(operation::get_workers_for_op_output({input_tensor_a})),
-        Tensor(operation::get_workers_for_op_output({input_tensor_a}))};
-    operation::launch_op(
-        [mem_config](
-            std::vector<Tensor> input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            return operation::run(NlpCreateHeadsFalcon7B{mem_config}, input_tensors);
-        },
-        {input_tensor_a},
-        output_tensors);
-    return output_tensors;
-}
 
 inline Tensor nlp_kv_cache_load_slice(const Tensor &input_tensor_a, const uint32_t seq_len_start, const uint32_t seq_len_end){
     // No-op (Will do a tensor copy)
