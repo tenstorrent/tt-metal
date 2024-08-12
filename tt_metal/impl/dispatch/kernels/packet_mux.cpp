@@ -140,8 +140,6 @@ constexpr uint32_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
 
 void kernel_main() {
 
-    noc_init();
-
     write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
     write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000000);
     write_test_results(test_results, PQ_TEST_MISC_INDEX+1, 0xaa000000 | mux_fan_in);

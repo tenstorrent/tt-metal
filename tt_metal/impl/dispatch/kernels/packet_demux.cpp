@@ -190,8 +190,6 @@ inline uint8_t dest_output_queue_id(uint32_t dest_endpoint_id) {
 
 void kernel_main() {
 
-    noc_init();
-
     write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
     write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff000000);
     write_test_results(test_results, PQ_TEST_MISC_INDEX+1, 0xbb000000 | demux_fan_out);
