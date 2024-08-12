@@ -39,6 +39,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 
 namespace py = pybind11;
 

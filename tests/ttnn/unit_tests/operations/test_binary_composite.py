@@ -6,7 +6,7 @@ import torch
 import pytest
 import random
 import ttnn
-from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc, compare_equal
 from models.utility_functions import is_grayskull, skip_for_grayskull, skip_for_wormhole_b0
 
 
@@ -551,7 +551,7 @@ def test_binary_gti_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.gt_)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    comp_pass = compare_pcc([input_tensor1], [golden_tensor])
+    comp_pass = compare_equal([input_tensor1], [golden_tensor])
     assert comp_pass
 
 
@@ -573,7 +573,7 @@ def test_gti_ttnn(input_shapes, scalar, device):
     golden_function = ttnn.get_golden_function(ttnn.gt_)
     golden_tensor = golden_function(in_data, scalar)
 
-    comp_pass = compare_pcc([input_tensor], [golden_tensor])
+    comp_pass = compare_equal([input_tensor], [golden_tensor])
     assert comp_pass
 
 
@@ -592,7 +592,7 @@ def test_binary_gei_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.ge_)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    comp_pass = compare_pcc([input_tensor1], [golden_tensor])
+    comp_pass = compare_equal([input_tensor1], [golden_tensor])
     assert comp_pass
 
 
@@ -614,7 +614,7 @@ def test_gei_ttnn(input_shapes, scalar, device):
     golden_function = ttnn.get_golden_function(ttnn.ge_)
     golden_tensor = golden_function(in_data, scalar)
 
-    comp_pass = compare_pcc([input_tensor], [golden_tensor])
+    comp_pass = compare_equal([input_tensor], [golden_tensor])
     assert comp_pass
 
 
@@ -633,7 +633,7 @@ def test_binary_lti_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.lt_)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    comp_pass = compare_pcc([input_tensor1], [golden_tensor])
+    comp_pass = compare_equal([input_tensor1], [golden_tensor])
     assert comp_pass
 
 
@@ -655,7 +655,7 @@ def test_lti_ttnn(input_shapes, scalar, device):
     golden_function = ttnn.get_golden_function(ttnn.lt_)
     golden_tensor = golden_function(in_data, scalar)
 
-    comp_pass = compare_pcc([input_tensor], [golden_tensor])
+    comp_pass = compare_equal([input_tensor], [golden_tensor])
     assert comp_pass
 
 
@@ -674,7 +674,7 @@ def test_binary_lei_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.le_)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    comp_pass = compare_pcc([input_tensor1], [golden_tensor])
+    comp_pass = compare_equal([input_tensor1], [golden_tensor])
     assert comp_pass
 
 
@@ -696,5 +696,5 @@ def test_lei_ttnn(input_shapes, scalar, device):
     golden_function = ttnn.get_golden_function(ttnn.le_)
     golden_tensor = golden_function(in_data, scalar)
 
-    comp_pass = compare_pcc([input_tensor], [golden_tensor])
+    comp_pass = compare_equal([input_tensor], [golden_tensor])
     assert comp_pass
