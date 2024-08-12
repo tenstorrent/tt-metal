@@ -155,7 +155,7 @@ operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(const 
     const std::vector<CoreCoord>& datacopy_cores = std::get<0>(datacopy_params);
     const std::vector<uint32_t> datacopy_signal_semaphore_addr = std::get<1>(datacopy_params);
 
-    ccl::AllGatherFusedOpSignaler fused_op_signaler = AllGatherFusedOpSignaler(datacopy_cores, datacopy_signal_semaphore_addr);
+    std::optional<ccl::AllGatherFusedOpSignaler> fused_op_signaler = AllGatherFusedOpSignaler(datacopy_cores, datacopy_signal_semaphore_addr);
 
     // Pass in the datacopy cores and sempahore address (Using optional arguments)
     return all_gather_multi_core_with_workers_helper(program, input_tensor, all_gather_output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, fused_op_signaler, core_grid_offset);

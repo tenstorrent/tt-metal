@@ -49,8 +49,8 @@ void kernel_main() {
     constexpr bool is_clockwise_direction = get_compile_time_arg_val(21) == 1;
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(22);
     constexpr uint32_t ring_size = get_compile_time_arg_val(23);
+    constexpr bool fuse_op = get_compile_time_arg_val(24);
     static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
-    constexpr uint32_t fuse_op = get_compile_time_arg_val(24) ? 1 : 0;
 
     #ifdef SHARDED_MEM_LAYOUT
     constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(25));
