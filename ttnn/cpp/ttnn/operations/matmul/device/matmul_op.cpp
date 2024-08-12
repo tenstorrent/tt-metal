@@ -853,7 +853,8 @@ Tensor matmul(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const std::optional<const Tensor> bias,
-    const struct Matmul &parameters) {
+    const struct Matmul &parameters,
+    const uint8_t queue_id) {
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
     if (bias.has_value()) {
@@ -866,7 +867,7 @@ Tensor matmul(
     }
 
     operation::launch_op(
-        [parameters](
+        [parameters, queue_id](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
             const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -896,7 +897,9 @@ Tensor matmul(
                     parameters.user_fused_activation,
                     parameters.user_run_batched},
                 {input_tensor_a, input_tensor_b},
-                optional_input_tensors);
+                optional_input_tensors,
+                {},
+                queue_id);
         },
         {input_tensor_a, input_tensor_b},
         output_tensors,

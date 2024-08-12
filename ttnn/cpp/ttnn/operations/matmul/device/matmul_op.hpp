@@ -184,7 +184,8 @@ Tensor matmul(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const std::optional<const Tensor> bias = std::nullopt,
-    const struct Matmul &parameters = Matmul{});
+    const struct Matmul &parameters = Matmul{},
+    const uint8_t queue_id = 0);
 
 }  // namespace matmul
 

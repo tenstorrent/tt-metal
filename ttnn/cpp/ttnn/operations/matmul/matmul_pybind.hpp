@@ -147,7 +147,8 @@ void py_module(py::module& module) {
            const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
            const std::optional<const std::string>& activation = std::nullopt,
            const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
+           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+           const uint8_t& queue_id = 0) -> ttnn::Tensor {
             std::optional<CoreCoord> user_core_coord;
             if (core_grid.has_value()) {
                 user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -168,7 +169,8 @@ void py_module(py::module& module) {
                     get_fused_activation(activation),
                     user_run_batched,
                     transpose_a,
-                    transpose_b});
+                    transpose_b},
+                queue_id);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -180,7 +182,8 @@ void py_module(py::module& module) {
         py::arg("program_config") = std::nullopt,
         py::arg("activation") = std::nullopt,
         py::arg("compute_kernel_config") = std::nullopt,
-        py::arg("core_grid") = std::nullopt);
+        py::arg("core_grid") = std::nullopt,
+        py::arg("queue_id") = 0);
 
     module.def(
         "linear",
@@ -194,7 +197,8 @@ void py_module(py::module& module) {
            const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
            const std::optional<const std::string>& activation = std::nullopt,
            const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
+           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+           const uint8_t& queue_id = 0) -> ttnn::Tensor {
             std::optional<CoreCoord> user_core_coord;
             if (core_grid.has_value()) {
                 user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -219,7 +223,8 @@ void py_module(py::module& module) {
                     get_fused_activation(activation),
                     /*user_run_batched=*/false,
                     transpose_a,
-                    transpose_b});
+                    transpose_b},
+                queue_id);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -232,7 +237,8 @@ void py_module(py::module& module) {
         py::arg("program_config") = std::nullopt,
         py::arg("activation") = std::nullopt,
         py::arg("compute_kernel_config") = std::nullopt,
-        py::arg("core_grid") = std::nullopt);
+        py::arg("core_grid") = std::nullopt,
+        py::arg("queue_id") = 0);
 }
 
 }  // namespace matmul

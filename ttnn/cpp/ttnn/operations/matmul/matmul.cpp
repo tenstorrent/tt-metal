@@ -41,7 +41,8 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const struct Matmul& parameters) {
+    const struct Matmul& parameters,
+    const uint8_t& queue_id) {
     const auto& input_tensor_a_adjusted = parameters.transpose_a
                                               ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
                                               : input_tensor_a;
