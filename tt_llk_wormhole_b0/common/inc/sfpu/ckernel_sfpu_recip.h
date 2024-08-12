@@ -70,7 +70,7 @@ inline void _calculate_reciprocal_(const int iterations)
         }
         v_endif;
 
-        if constexpr (is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en || APPROXIMATION_MODE) {
             dst_reg[0] = out;
         } else {
             dst_reg[0] = reinterpret<vFloat>(float_to_fp16b(out, 0));
