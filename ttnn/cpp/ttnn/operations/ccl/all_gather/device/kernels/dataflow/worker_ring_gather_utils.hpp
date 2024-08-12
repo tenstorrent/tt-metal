@@ -5,10 +5,7 @@
 #include "dataflow_api.h"
 #include "debug/assert.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-
-#include <optional>
 
 using ttnn::ccl::ShardType;
 using ttnn::ccl::UNINITIALIZED_VALUE_U16;

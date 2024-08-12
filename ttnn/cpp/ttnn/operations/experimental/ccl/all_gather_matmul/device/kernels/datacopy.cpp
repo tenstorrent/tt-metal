@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "debug/dprint.h"
 
 void kernel_main() {
