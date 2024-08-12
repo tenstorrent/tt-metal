@@ -12,7 +12,7 @@ def tt_all_reduce(input_tensor, device_mesh, cluster_axis, dim=0, num_links=2, m
     gathered_tensor = ttnn.line_all_gather(
         input_tensor, dim, num_links=num_links, cluster_axis=cluster_axis, device_mesh=device_mesh
     )
-    reduced_tensors = ttnn.experimental.tensor.fast_reduce_nc(
+    reduced_tensors = ttnn.experimental.reduction.fast_reduce_nc(
         gathered_tensor, dims=[dim], output=None, compute_kernel_config=None
     )
 

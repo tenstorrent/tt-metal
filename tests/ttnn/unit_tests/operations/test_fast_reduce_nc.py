@@ -78,7 +78,9 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_output = ttl.tensor.fast_reduce_nc(tt_input, dims=dims, output=None, compute_kernel_config=compute_kernel_config)
+    tt_output = ttnn.experimental.reduction.fast_reduce_nc(
+        tt_input, dims=dims, output=None, compute_kernel_config=compute_kernel_config
+    )
     tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
 
     # test for equivalance
@@ -153,7 +155,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device, use_program_cache):
         torch_output = torch.sum(torch_input, dims, True)
 
         cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-        tt_output = ttl.tensor.fast_reduce_nc(tt_input, dims=dims, output=None)
+        tt_output = ttnn.experimental.reduction.fast_reduce_nc(tt_input, dims=dims, output=None)
         tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape_1).to_torch()
 
         # test for equivalance
@@ -179,7 +181,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device, use_program_cache):
         torch_output = torch.sum(torch_input, dims, True)
 
         cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-        tt_output = ttl.tensor.fast_reduce_nc(tt_input, dims=dims, output=None)
+        tt_output = ttnn.experimental.reduction.fast_reduce_nc(tt_input, dims=dims, output=None)
         tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape_2).to_torch()
 
         # test for equivalance

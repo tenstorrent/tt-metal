@@ -407,7 +407,7 @@ class TtMixtralAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, (1, 1, seq_len, -1))
         output_11BH_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1)
         output_11SH.deallocate(True)
-        output_11BH_reduced = ttnn.experimental.tensor.fast_reduce_nc(
+        output_11BH_reduced = ttnn.experimental.reduction.fast_reduce_nc(
             output_11BH_gathered, dims=[1], output=None, compute_kernel_config=None
         )
         output_11BH_gathered.deallocate(True)
