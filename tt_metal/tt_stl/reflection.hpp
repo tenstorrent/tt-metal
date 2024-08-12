@@ -28,7 +28,7 @@ namespace stl {
 
 template <typename T>
 constexpr std::string_view get_type_name() {
-    return short_type_name<T>;
+    return short_type_name<std::decay_t<T>>;
 }
 
 template <typename T>
