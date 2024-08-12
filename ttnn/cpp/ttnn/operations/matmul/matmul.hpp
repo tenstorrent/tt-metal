@@ -38,3 +38,7 @@ ttnn::Tensor bound_matmul(
 }  // namespace matmul
 }  // namespace operations
 }  // namespace ttnn
+
+namespace ttnn {
+    using ttnn::operations::matmul::matmul;
+}
