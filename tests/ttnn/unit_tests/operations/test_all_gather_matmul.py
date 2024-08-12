@@ -11,6 +11,7 @@ from ttnn import ShardTensorToMesh
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 import itertools
+from tests.ttnn.unit_tests.operations.test_all_gather import is_unsupported_case
 
 
 def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
@@ -65,7 +66,7 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     return False, ""
 
 
-def run_all_gather_on_t3000_impl(
+def run_all_gather_matmul_on_t3000_impl(
     t3k_device_mesh,
     num_devices,
     input_shape,
@@ -274,7 +275,7 @@ def test_all_gather_on_t3000_post_commit(
     use_program_cache,
     function_level_defaults,
 ):
-    run_all_gather_on_t3000_impl(
+    run_all_gather_matmul_on_t3000_impl(
         t3k_device_mesh,
         num_devices,
         input_shape,

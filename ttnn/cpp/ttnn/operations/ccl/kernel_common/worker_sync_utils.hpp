@@ -22,11 +22,11 @@ FORCE_INLINE void master_sync_slaves(
     // Wait for all the slaves to finish their work
     volatile tt_l1_ptr uint32_t* master_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
     noc_semaphore_wait(master_l1_semaphore_addr,  num_workers_to_sync - 1);
-    DPRINT << "MASTER SYNCED WITH SLAVES" << ENDL();
+    // DPRINT << "MASTER SYNCED WITH SLAVES" << ENDL();
 
     // Send signal to op
     noc_semaphore_inc(remote_op_l1_semaphore_addr, 1);
-    DPRINT << "MASTER SIGNALED REMOTE OP" << ENDL();
+    // DPRINT << "MASTER SIGNALED REMOTE OP" << ENDL();
 
     // Clear the master semaphore, so that it can be used again
     noc_semaphore_set(master_l1_semaphore_addr, 0);
@@ -35,7 +35,7 @@ FORCE_INLINE void master_sync_slaves(
     for (uint32_t i = 1; i < num_workers_to_sync; i++) { // Skip the first set of coords because they are for master worker
         uint64_t remote_slave_l1_sem_addr = get_noc_addr(worker_noc_coords[i * 2], worker_noc_coords[i * 2 + 1], worker_sync_sem_addr);
         noc_semaphore_inc(remote_slave_l1_sem_addr, 1);
-        DPRINT << "MASTER CLEAREED A SLAVE SEMAPHORE" << ENDL();
+        // DPRINT << "MASTER CLEAREED A SLAVE SEMAPHORE" << ENDL();
     }
 }
 
@@ -48,12 +48,12 @@ FORCE_INLINE void slave_sync_master(
     // Signal the master that the slave has finished its work
     uint64_t remote_master_l1_semaphore_addr = get_noc_addr(worker_noc_coords[0], worker_noc_coords[1], worker_sync_sem_addr);
     noc_semaphore_inc(remote_master_l1_semaphore_addr, 1);
-    DPRINT << "SLAVE SYNCED WITH MASTER" << ENDL();
+    // DPRINT << "SLAVE SYNCED WITH MASTER" << ENDL();
 
     // Wait for the master to signal that this slave is ready to continue
     volatile tt_l1_ptr uint32_t* slave_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
     noc_semaphore_wait(slave_l1_semaphore_addr, 1);
-    DPRINT << "SLAVE SEMAPHORE CLEARED BY MASTER" << ENDL();
+    // DPRINT << "SLAVE SEMAPHORE CLEARED BY MASTER" << ENDL();
 
     // Clear the slave semaphore, so that it can be used again
     noc_semaphore_set(slave_l1_semaphore_addr, 0);
@@ -91,9 +91,9 @@ struct OpSignaler {
 
         // Runtime args
         this->workers_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2)); // Skip over the number of workers
-        uint32_t op_worker_noc_x = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-        uint32_t op_worker_noc_y = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-        uint32_t signal_op_sem_addr = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+        uint32_t op_worker_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t op_worker_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t signal_op_sem_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
         // Get the remote sem addresses to signal the op
         this->signal_op_sem_noc_addr = get_noc_addr(op_worker_noc_x, op_worker_noc_y, signal_op_sem_addr);
