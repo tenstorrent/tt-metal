@@ -917,6 +917,4 @@ op_map = {
         "tt_op": ttnn_ops.fill_bw,
         "pytorch_op": pytorch_ops.fill_bw,
     },
-        
 }
-
