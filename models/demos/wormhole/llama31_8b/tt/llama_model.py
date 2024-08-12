@@ -56,13 +56,30 @@ class TtTransformer(nn.Module):
             weight_key="norm",
         )
 
-        self.output_weight = ttnn.as_tensor(
-            state_dict["output.weight"].permute(1, 0),
+        # self.output_weight = ttnn.as_tensor(
+        #     state_dict["output.weight"].permute(1, 0),
+        #     device=device,
+        #     layout=ttnn.TILE_LAYOUT,
+        #     dtype=dtype,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     cache_file_name=weight_cache_path / "output.weight",
+        # )
+        # Divide the output weight in half due to very large vocab size (128k)
+        self.output_weight_1 = ttnn.as_tensor(
+            state_dict["output.weight"].permute(1, 0)[:, : self.vocab_size // 2],
             device=device,
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=weight_cache_path / "output.weight",
+            cache_file_name=weight_cache_path / "output_1half.weight",
+        )
+        self.output_weight_2 = ttnn.as_tensor(
+            state_dict["output.weight"].permute(1, 0)[:, self.vocab_size // 2 :],
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=weight_cache_path / "output_2half.weight",
         )
 
     def forward(
@@ -80,10 +97,34 @@ class TtTransformer(nn.Module):
         if mode == "prefill":
             return x
         x = self.norm(x)
-        output = ttnn.linear(
+
+        # output = ttnn.linear(
+        #     x,
+        #     self.output_weight,
+        #     compute_kernel_config=self.args.get_compute_kernel_config(),
+        #     core_grid=ttnn.CoreGrid(y=8, x=8),
+        # )
+
+        # Divide the output weight in half, and do 2 matmuls + 1 concat, due to very large vocab size (128k) not fitting in L1 on 1-chip
+        output_1 = ttnn.linear(
             x,
-            self.output_weight,
+            self.output_weight_1,
             compute_kernel_config=self.args.get_compute_kernel_config(),
-            core_grid=self.args.max_grid_size,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            # memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
+            # dtype=self.dtype,
+            # core_grid=self.args.max_grid_size,
         )
+        output_2 = ttnn.linear(
+            x,
+            self.output_weight_2,
+            compute_kernel_config=self.args.get_compute_kernel_config(),
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            # memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
+            # dtype=self.dtype,
+        )
+        output = ttnn.concat([output_1, output_2], dim=-1)
+
+        output_1.deallocate()
+        output_2.deallocate()
         return output
