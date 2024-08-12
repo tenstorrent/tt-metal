@@ -35,7 +35,7 @@ struct AllGatherMatmul {
     const ttnn::AllGather all_gather_struct;
 
     /* Matmul Params */
-    const tt::operations::primary::Matmul matmul_struct;
+    const operations::matmul::Matmul matmul_struct;
 
     /* Fusion Params */
     const CoreCoord all_gather_core_grid_offset;
@@ -100,7 +100,7 @@ std::vector<Tensor> all_gather_matmul(
     const bool transpose_a = false,
     const bool transpose_b = false,
     const std::optional<const DataType> dtype = std::nullopt,
-    const std::optional<const tt::operations::primary::MatmulProgramConfig> program_config = std::nullopt,
+    const std::optional<const operations::matmul::MatmulProgramConfig> program_config = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);

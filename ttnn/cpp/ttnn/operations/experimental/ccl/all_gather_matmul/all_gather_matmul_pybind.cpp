@@ -33,7 +33,7 @@ void bind_all_gather_matmul(pybind11::module& module, const ccl_operation_t& ope
                const bool transpose_a = false,
                const bool transpose_b = false,
                const std::optional<const DataType> dtype = std::nullopt,
-               const std::optional<const tt::operations::primary::MatmulProgramConfig> program_config = std::nullopt,
+               const std::optional<const operations::matmul::MatmulProgramConfig> program_config = std::nullopt,
                const std::optional<const std::string>& activation = std::nullopt,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
                const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> std::vector<ttnn::Tensor> {
