@@ -82,7 +82,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
     const bool transpose_a,
     const bool transpose_b,
     const std::optional<const DataType> dtype,
-    const std::optional<const tt::operations::primary::MatmulProgramConfig> program_config,
+    const std::optional<const operations::matmul::MatmulProgramConfig> program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid
@@ -121,11 +121,11 @@ std::vector <ttnn::Tensor> all_gather_matmul(
                 user_core_coord = CoreCoord(core_grid->x, core_grid->y);
             }
 
-            tt::operations::primary::Matmul matmul_struct =
-                tt::operations::primary::create_matmul_struct(
+            operations::matmul::Matmul matmul_struct =
+                operations::matmul::create_matmul_struct(
                     all_gather_out_tensor,
                     weight_tensor,
-                    /*parameters=*/tt::operations::primary::Matmul{
+                    /*parameters=*/operations::matmul::Matmul{
                         program_config,
                         /*bcast_batch=*/std::nullopt,
                         memory_config.value_or(input_tensor.memory_config()),
