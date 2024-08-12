@@ -102,34 +102,39 @@ std::vector <ttnn::Tensor> all_gather_matmul(
             const auto& input_tensor = input_tensors[0];
             const auto& weight_tensor = input_tensors[1];
 
+            /* AllGather setup */
             ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config, devices);
 
-            /* Matmul stuff */
-            auto arch = input_tensor.device()->arch();
-            const bool has_user_grid = core_grid.has_value();
-            const bool has_program_config = program_config.has_value();
-            const auto increase_fidelity = !has_program_config && !has_user_grid;
-            auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
-            auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity);
-            bool broadcast_batch = get_broadcast_batch(input_tensor, weight_tensor, program_config);
+            // Create the all gather output tensor used as input (activation) to the matmul
+            ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
+            ttnn::Tensor datacopy_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
+
+
+            /* Matmul setup */
             bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_shape());
-            TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
             std::optional<CoreCoord> user_core_coord;
             if (core_grid.has_value()) {
                 user_core_coord = CoreCoord(core_grid->x, core_grid->y);
             }
 
-            tt::operations::primary::Matmul matmul_struct{
-                program_config, broadcast_batch, memory_config.value_or(input_tensor.memory_config()), dtype.value_or(input_tensor.get_dtype()), compute_kernel_config,
-                /*untilize_out=*/false, user_core_coord, ttnn::operations::matmul::get_fused_activation(activation),
-                user_run_batched, transpose_a, transpose_b
-            };
-
-
-            /* Create the dummy all gather output tensor used as input (activation) to the matmul */
-            ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
-            ttnn::Tensor datacopy_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
-
+            tt::operations::primary::Matmul matmul_struct =
+                tt::operations::primary::create_matmul_struct(
+                    all_gather_out_tensor,
+                    weight_tensor,
+                    /*parameters=*/tt::operations::primary::Matmul{
+                        program_config,
+                        /*bcast_batch=*/std::nullopt,
+                        memory_config.value_or(input_tensor.memory_config()),
+                        dtype.value_or(input_tensor.get_dtype()),
+                        compute_kernel_config,
+                        /*untilize_out=*/false,
+                        user_core_coord,
+                        ttnn::operations::matmul::get_fused_activation(activation),
+                        user_run_batched,
+                        transpose_a,
+                        transpose_b
+                    }
+                );
 
             return operation::run(
                 ttnn::AllGatherMatmul{
