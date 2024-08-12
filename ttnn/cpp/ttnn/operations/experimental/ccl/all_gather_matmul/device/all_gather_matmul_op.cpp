@@ -13,7 +13,7 @@
 #include "eth_l1_address_map.h"
 
 
-#include "ttnn/operations/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 
 /* All Gather Matmul fusion includes */
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
@@ -21,6 +21,7 @@
 #include "ttnn/cpp/ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
+namespace experimental {
 
 void AllGatherMatmul::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors) const {
 
@@ -65,7 +66,10 @@ operation::ProgramWithCallbacks AllGatherMatmul::create_program(const std::vecto
     return all_gather_matmul_multi_core_with_workers(input_tensors[0], output_tensors[0], output_tensors[2], this->all_gather_struct.dim, this->all_gather_struct.num_links, this->all_gather_struct.ring_size, this->all_gather_struct.ring_index, this->all_gather_struct.receiver_device_id, this->all_gather_struct.sender_device_id, this->all_gather_struct.topology, this->all_gather_core_grid_offset);
 }
 
+}  // namespace experimental
+
 namespace operations {
+namespace experimental {
 namespace ccl {
 
 std::vector <ttnn::Tensor> all_gather_matmul(
@@ -137,7 +141,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
                 );
 
             return operation::run(
-                ttnn::AllGatherMatmul{
+                ttnn::experimental::AllGatherMatmul{
                     /* All Gather Params */
                     all_gather_struct,
                     /* Matmul params */
@@ -152,6 +156,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
 
 
 } // namespace ccl
+} // namespace experimental
 } // namespace operations
 
 }  // namespace ttnn

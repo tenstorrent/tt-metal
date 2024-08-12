@@ -6,8 +6,8 @@
 
 #include "pybind11/pybind_fwd.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 void py_bind_all_gather_matmul(pybind11::module& module);
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::experimental::ccl

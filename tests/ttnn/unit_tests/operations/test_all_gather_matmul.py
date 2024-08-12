@@ -156,7 +156,7 @@ def run_all_gather_matmul_on_t3000_impl(
         # )
 
         # Test ttnn all_gather_matmul
-        tt_all_gather_out_tensor, _, tt_datacopy_out_tensor = ttnn.all_gather_matmul(
+        tt_all_gather_out_tensor, _, tt_datacopy_out_tensor = ttl.all_gather_matmul(
             input_tensor_mesh,
             weight_tt,
             dim,

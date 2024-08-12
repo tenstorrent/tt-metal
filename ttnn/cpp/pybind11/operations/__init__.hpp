@@ -8,7 +8,6 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/all_gather_matmul/all_gather_matmul_pybind.hpp"
 #include "ttnn/operations/ccl/line_all_gather/line_all_gather_pybind.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "pybind11/operations/copy.hpp"
@@ -68,7 +67,6 @@ void py_module(py::module& module) {
 
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
     ccl::py_bind_all_gather(m_ccl);
-    ccl::py_bind_all_gather_matmul(m_ccl);
     ccl::py_bind_line_all_gather(m_ccl);
     ccl::py_bind_reduce_scatter(m_ccl);
 

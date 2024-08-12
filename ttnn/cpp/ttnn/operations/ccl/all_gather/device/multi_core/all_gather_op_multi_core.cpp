@@ -20,7 +20,7 @@
 #include <sstream>
 #include <type_traits>
 
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/experimental/ccl/ccl_op_fusion.hpp"
 
 
 using namespace tt::constants;
@@ -176,7 +176,7 @@ static void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pag
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology) {
 
     tt::tt_metal::Program program{};
-    std::optional<ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_multi_core_with_workers_helper(program, input_tensor, output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, empty_fused_op_signaler);
 }
 
@@ -191,7 +191,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology,
-    std::optional<ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
 
     TT_FATAL(!(receiver_device_id == std::nullopt && sender_device_id == std::nullopt), "At least one of receiver_device_id or sender_device_id must be specified");
@@ -206,7 +206,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const auto& device = input_tensor.device();
 
     /* All gather fusion */
-    ccl::AllGatherFusedOpSignaler all_gather_fused_op_signaler;
+    experimental::ccl::AllGatherFusedOpSignaler all_gather_fused_op_signaler;
     bool fuse_op = fused_op_signaler.has_value();
     if (fuse_op) {
         all_gather_fused_op_signaler = fused_op_signaler.value();
@@ -942,7 +942,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             all_gather_fused_op_signaler.emit_all_gather_fused_op_ct_args(worker_writer_receiver_ct_args, global_num_workers, b);
                         } else {
                             // Push dummy args so that kernel doesn't error out at compile time from the lack of args when fuse_op=false
-                            for (uint32_t w = 0; w < ccl::AllGatherFusedOpSignaler::get_num_ct_args(); ++w) {
+                            for (uint32_t w = 0; w < experimental::ccl::AllGatherFusedOpSignaler::get_num_ct_args(); ++w) {
                                 worker_writer_receiver_ct_args.push_back(static_cast<uint32_t>(0));
                             }
                         }

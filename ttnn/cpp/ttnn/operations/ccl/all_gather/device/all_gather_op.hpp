@@ -13,7 +13,7 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/experimental/ccl/ccl_op_fusion.hpp"
 
 
 #include "ttnn/run_operation.hpp"
@@ -179,7 +179,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     all_gather_op::Topology topology,
-    std::optional<ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 
