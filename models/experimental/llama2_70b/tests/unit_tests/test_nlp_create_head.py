@@ -37,7 +37,6 @@ from models.experimental.llama2_70b.tt.llama_common import (
     gather_rotary_emb,
     get_weight_cache_path,
 )
-import ttnn.experimental
 
 
 def run_test_create_head1(

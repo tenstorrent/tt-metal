@@ -13,7 +13,6 @@ from models.experimental.llama2_70b.tt.llama_common import (
     MAX_SEQ_LEN,
     MAX_SEQ_LEN_LLAMA3,
 )
-import ttnn.experimental
 
 
 class TtLlamaAttention_optimized:

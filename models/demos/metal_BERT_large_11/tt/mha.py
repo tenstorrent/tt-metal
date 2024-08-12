@@ -12,7 +12,6 @@ import ttnn
 from tt_lib.utils import pad_weight
 from models.utility_functions import torch2tt_tensor
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
-import ttnn.experimental
 
 
 def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
