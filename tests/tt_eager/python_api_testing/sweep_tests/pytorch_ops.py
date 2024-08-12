@@ -2067,6 +2067,21 @@ def cos_bw(x, y, *args, **kwargs):
     return in_data.grad
 
 
+def complex_polar_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.polar(in_data.real, in_data.imag)
+    pyt_y.backward(gradient=grad_data)
+
+    grad_real = torch.real(in_data.grad)
+    grad_imag = torch.imag(in_data.grad)
+
+    return torch.complex(grad_real, grad_imag)
+
+
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
     x = x.to(torch.float32)
