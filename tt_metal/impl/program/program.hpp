@@ -135,7 +135,7 @@ class Program {
     // Is worker_crs_ used anywhere?
     const CoreRangeSet& get_worker_core_range_set() const { return worker_crs_; };
 
-    void compile(Device * device);
+    void compile(Device * device, bool fd_bootloader_mode = false);
 
     void invalidate_compile();
 

@@ -8,6 +8,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "device/binary_device_operation.hpp"
 
 namespace ttnn {
 
@@ -113,6 +114,8 @@ struct RelationalBinary {
 }  // binary
 }  // operations
 
+
+
 constexpr auto add = ttnn::register_operation_with_auto_launch_op<
     "ttnn::add",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, false>>();
@@ -131,25 +134,6 @@ constexpr auto multiply = ttnn::register_operation_with_auto_launch_op<
 constexpr auto multiply_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::multiply_",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL, true>>();
-
-constexpr auto eq = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::eq",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ, false>>();
-constexpr auto ne = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::ne",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE, false>>();
-constexpr auto ge = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::ge",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::GTE, false>>();
-constexpr auto gt = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::gt",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT, false>>();
-constexpr auto le = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::le",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::LTE, false>>();
-constexpr auto lt = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::lt",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT, false>>();
 constexpr auto logical_and = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logical_and",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_AND, false>>();
@@ -172,6 +156,26 @@ constexpr auto squared_difference = ttnn::register_operation_with_auto_launch_op
 constexpr auto divide = ttnn::register_operation_with_auto_launch_op<
     "ttnn::divide",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::DIV_FAST, false>>();
+
+
+constexpr auto eq = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::eq",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ, false>>();
+constexpr auto ne = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::ne",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE, false>>();
+constexpr auto ge = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::ge",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::GTE, false>>();
+constexpr auto gt = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::gt",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT, false>>();
+constexpr auto le = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::le",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::LTE, false>>();
+constexpr auto lt = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::lt",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT, false>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
