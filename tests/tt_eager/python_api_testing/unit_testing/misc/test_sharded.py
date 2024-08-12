@@ -720,7 +720,7 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
     assert passing
 
 
-@pytest.mark.parametrize("H, W, num_cores, num_slices", [[4 * 32, 32 * 32, 56, 2]])
+@pytest.mark.parametrize("H, W, num_cores, num_slices", [[4 * 32, 32 * 32, 64, 2]])
 @pytest.mark.parametrize(
     "activations_dtype",
     [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],

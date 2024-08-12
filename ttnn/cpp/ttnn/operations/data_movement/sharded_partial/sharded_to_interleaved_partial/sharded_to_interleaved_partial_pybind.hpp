@@ -4,9 +4,7 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
+#include "pybind11/pybind_fwd.hpp"
 
 namespace ttnn::operations::data_movement {
 
