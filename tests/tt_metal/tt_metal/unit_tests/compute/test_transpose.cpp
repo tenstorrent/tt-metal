@@ -31,6 +31,7 @@ enum TransposeType : uint8_t {
 };
 
 struct TransposeConfig {
+    bool short_init;
     uint32_t single_tile_size;
     std::vector<uint32_t> shape;
     TransposeType transpose_type;
@@ -130,11 +131,18 @@ void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& 
         uint(Ht*Wt*NC)
     };
 
+    std::map<string, string> defines = {};
+
+    if (test_config.short_init)
+    {
+        defines["SHORT_INIT"] = "1";
+    }
+
     auto transpose_compute_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines}
     );
 
     tt_metal::SetRuntimeArgs(
@@ -180,6 +188,16 @@ void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& 
 
 TEST_F(DeviceFixture, ComputeTransposeWH) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
+        .short_init = false,
+        .single_tile_size = 2 * 1024,
+        .shape = {1, 3, 3*32*1, 4*32*1},
+        .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
+    unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, ComputeTransposeWHShortInit) {
+    unit_tests::compute::transpose::TransposeConfig test_config = {
+        .short_init = true,
         .single_tile_size = 2 * 1024,
         .shape = {1, 3, 3*32*1, 4*32*1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
