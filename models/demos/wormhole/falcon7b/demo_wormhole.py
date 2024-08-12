@@ -74,4 +74,5 @@ def test_demo(
         expected_perf_metrics=expected_perf_metrics,
         expected_greedy_output_path=expected_greedy_output_path,
         csv_perf_targets=csv_perf_targets,
+        is_ci_env=is_ci_env,
     )
