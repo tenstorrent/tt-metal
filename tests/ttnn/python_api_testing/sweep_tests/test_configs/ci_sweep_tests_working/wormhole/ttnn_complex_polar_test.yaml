@@ -1,6 +1,6 @@
 ---
 test-list:
-  - complex-abs:
+  - complex-polar:
       shape:
         start-shape: [1, 1, 32, 64]
         end-shape: [6, 12, 256, 256]
@@ -23,4 +23,4 @@ test-list:
         data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: complex_abs_sweep.csv
+      output-file: complex_polar_sweep.csv

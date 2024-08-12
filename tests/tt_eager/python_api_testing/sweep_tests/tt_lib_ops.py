@@ -2742,15 +2742,6 @@ def complex_mul(x, y, *args, device, dtype, layout, input_mem_config, output_mem
 
 
 @setup_host_and_device
-def complex_polar(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    tt_result = ttl.tensor.polar(t0, t1, output_mem_config=output_mem_config)
-    return ttl_complex_2_torch_complex(tt_result)
-
-
-@setup_host_and_device
 def complex_imag(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     temp = torch.cat([x.real, x.imag], -1)
     t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
