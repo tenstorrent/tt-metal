@@ -196,14 +196,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_unary_rdiv_trunc,
         "pytorch_op": pytorch_ops.unary_rdiv_trunc,
     },
-    "eltwise-div_no_nan": {
-        "tt_op": tt_lib_ops.eltwise_div_no_nan,
-        "pytorch_op": pytorch_ops.div_no_nan,
-    },
-    "eltwise-unary_div_no_nan": {
-        "tt_op": tt_lib_ops.eltwise_unary_div_no_nan,
-        "pytorch_op": pytorch_ops.unary_div_no_nan,
-    },
     "eltwise-square": {
         "tt_op": tt_lib_ops.eltwise_square,
         "pytorch_op": pytorch_ops.square,
