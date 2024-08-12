@@ -52,5 +52,10 @@ class TestDiv_No_Nan:
         comparison_func = comparison_funcs.comp_pcc
 
         run_single_pytorch_test(
-            "eltwise-div_no_nan", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_ops=True
+            "eltwise-div_no_nan",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+            test_args,
         )
