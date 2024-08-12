@@ -13,6 +13,6 @@
 
 namespace ttnn::operations::experimental::reduction::detail {
 
-operation::ProgramWithCallbacks reduce_nc_impl(const ttnn::Tensor &input, const ttnn::Tensor &output, int64_t dim,const DeviceComputeKernelConfig &compute_kernel_config);
+operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, const ttnn::Tensor &output, int64_t dim,const DeviceComputeKernelConfig &compute_kernel_config);
 
 }  // namespace ttnn::operations::experimental::reduction::detail

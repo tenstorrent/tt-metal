@@ -26,8 +26,6 @@ struct FastReduceNCDeviceOperation {
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
 };
 
-operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, const ttnn::Tensor &output, int64_t dim, const DeviceComputeKernelConfig &compute_kernel_config);
-
 Tensor fast_reduce_nc(
     uint8_t queue_id,
     const ttnn::Tensor &input,
