@@ -19,7 +19,7 @@ def test_rotate_half(shape, device):
     x = torch.randn(shape).bfloat16().float()
 
     xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.Layout.TILE).to(device)
-    xtt = ttnn.tranformer.rotate_half(xt)
+    xtt = ttnn.experimental.rotate_half(xt)
 
     tt_got_back = xtt.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
 

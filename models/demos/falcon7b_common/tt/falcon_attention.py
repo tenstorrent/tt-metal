@@ -98,7 +98,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         output = []
         for i in range(len(layer)):
             output.append(
-                ttnn.experimental.tensor.rotary_embedding(
+                ttnn.experimental.rotary_embedding(
                     layer[i],
                     self.tt_cos_cached[i],
                     self.tt_sin_cached[i],

@@ -104,7 +104,7 @@ class TtFalconRotaryEmbedding:
         seq_len = layer.get_legacy_shape()[2]
         assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
         # TODO: Make rotary embedding in place
-        output = ttnn.experimental.tensor.rotary_embedding(
+        output = ttnn.experimental.rotary_embedding(
             layer,
             self.tt_cos_cached,
             self.tt_sin_cached,
