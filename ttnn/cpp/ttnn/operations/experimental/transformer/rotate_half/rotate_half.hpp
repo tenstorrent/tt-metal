@@ -7,18 +7,18 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::transformer {
+namespace operations::experimental::transformer {
 
 struct RotateHalfOperation {
     static Tensor operator()(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 };
 
-}  // namespace operations::transformer
+}  // namespace operations::experimental::transformer
 
-namespace transformer {
+namespace experimental {
 constexpr auto rotate_half = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::transformer::rotate_half",
-    ttnn::operations::transformer::RotateHalfOperation>();
+    "ttnn::experimental::rotate_half",
+    ttnn::operations::experimental::transformer::RotateHalfOperation>();
 
-} // namespace transformer
+} // namespace experimental
 } // namespace ttnn

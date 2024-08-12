@@ -5,7 +5,7 @@
 #include "rotary_embedding.hpp"
 #include "device/rotary_embedding_device_operation.hpp"
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::experimental::transformer {
 
 namespace {
 Tensor rotary_embedding(

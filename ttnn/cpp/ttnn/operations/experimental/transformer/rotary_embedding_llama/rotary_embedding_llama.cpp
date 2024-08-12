@@ -6,7 +6,7 @@
 
 #include "device/rotary_embedding_llama_device_operation.hpp"
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::experimental::transformer {
 
 Tensor RotaryEmbeddingLlamaOperation::operator()(
     const Tensor &input_tensor,
@@ -31,4 +31,4 @@ Tensor RotaryEmbeddingLlamaOperation::operator()(
     return output_tensors.at(0);
 }
 
-}
+} // namespace ttnn::operations::experimental::transformer

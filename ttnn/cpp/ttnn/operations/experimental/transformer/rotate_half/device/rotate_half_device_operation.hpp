@@ -6,7 +6,7 @@
 
 #include "ttnn/operation.hpp"
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::experimental::transformer {
 
 enum class RotateHalfOpParallelizationStrategy {
     SINGLE_CORE
@@ -28,4 +28,4 @@ struct RotateHalf {
         std::vector<Tensor> &output_tensors) const;
 };
 
-}
+} // namespace ttnn::operations::experimental::transformer

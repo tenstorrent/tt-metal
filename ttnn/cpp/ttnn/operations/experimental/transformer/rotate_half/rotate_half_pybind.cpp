@@ -10,13 +10,13 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "rotate_half.hpp"
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::experimental::transformer {
 
 void py_bind_rotate_half(pybind11::module& module) {
     namespace py = pybind11;
     ttnn::bind_registered_operation(
         module,
-        ttnn::transformer::rotate_half,
+        ttnn::experimental::rotate_half,
         R"doc(rotate_half(input: ttnn.Tensor, *, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
 
             Performs a rotate half operation used by RotaryEmbedding
@@ -32,4 +32,4 @@ void py_bind_rotate_half(pybind11::module& module) {
             py::arg("memory_config") = std::nullopt});
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::experimental::transformer

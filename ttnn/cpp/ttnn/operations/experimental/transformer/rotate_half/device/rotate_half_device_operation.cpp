@@ -8,7 +8,7 @@
 
 #include "ttnn/run_operation.hpp"
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
 
@@ -46,4 +46,4 @@ RotateHalfOpParallelizationStrategy RotateHalf::get_parallelization_strategy(con
     return RotateHalfOpParallelizationStrategy::SINGLE_CORE;
 }
 
-}
+} // namespace ttnn::operations::experimental::transformer

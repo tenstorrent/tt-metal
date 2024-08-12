@@ -8,7 +8,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
-namespace ttnn::operations::transformer::detail {
+namespace ttnn::operations::experimental::transformer::detail {
 
 using namespace tt;
 using namespace tt::constants;
@@ -79,13 +79,13 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/rotate_half/device/kernels/dataflow/reader_rotate_half_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/rotate_half/device/kernels/dataflow/reader_rotate_half_interleaved_start_id.cpp",
         core,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/rotate_half/device/kernels/dataflow/writer_rotate_half_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/rotate_half/device/kernels/dataflow/writer_rotate_half_interleaved_start_id.cpp",
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -164,4 +164,4 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
     return {std::move(program), override_runtime_args_callback};
 }
 
-}
+} // namespace ttnn::operations::experimental::transformer::detail

@@ -2,23 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rotary_embedding_pybind.hpp"
+#include "rotary_embedding_llama_pybind.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
-#include "rotary_embedding.hpp"
+#include "rotary_embedding_llama.hpp"
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::experimental::transformer {
 
-void py_bind_rotary_embedding(pybind11::module& module) {
+void py_bind_rotary_embedding_llama(pybind11::module& module) {
     namespace py = pybind11;
+
     ttnn::bind_registered_operation(
         module,
-        ttnn::transformer::rotary_embedding,
-        R"doc(rotary_embedding(input_tensor: ttnn.Tensor, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor, token_index: int, memory_config: MemoryConfig, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
+        ttnn::experimental::rotary_embedding_llama,
+        R"doc(rotary_embedding_llama(input_tensor: ttnn.Tensor, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor, trans_mat: ttnn.Tensor, memory_config: MemoryConfig, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
 
             Applies the rotary embedding to the input_tensor tensor using the cos_cache and sin_cache tensors.
 
@@ -28,7 +29,7 @@ void py_bind_rotary_embedding(pybind11::module& module) {
                 * :attr:`input_tensor`: Input Tensor
                 * :attr:`cos_cache`: Cosine Cache Tensor
                 * :attr:`sin_cache`: Sine Cache Tensor
-                * :attr:`token_index`: Token Index = None
+                * :attr:`trans_mat`: Transformation Matrix Tensor
                 * :attr:`memory_config`: Memory Config of the output tensor = None
                 * :attr:`compute_kernel_config`: Optional[DeviceComputeKernelConfig] = None
         )doc",
@@ -36,9 +37,9 @@ void py_bind_rotary_embedding(pybind11::module& module) {
             py::arg("input_tensor"),
             py::arg("cos_cache"),
             py::arg("sin_cache"),
-            py::arg("token_index") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
+            py::arg("trans_mat"),
+            py::arg("memory_config"),
             py::arg("compute_kernel_config") = std::nullopt});
 }
 
-}  // namespace ttnn::operations::transformer
+}  // namespace ttnn::operations::experimental::transformer

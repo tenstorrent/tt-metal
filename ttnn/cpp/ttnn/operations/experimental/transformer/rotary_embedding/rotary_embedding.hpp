@@ -9,7 +9,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 
 namespace ttnn {
-namespace operations::transformer {
+namespace operations::experimental::transformer {
 
 struct RotaryEmbeddingOperation {
     static ttnn::Tensor operator()(
@@ -23,12 +23,12 @@ struct RotaryEmbeddingOperation {
 
 }  // namespace operations::transformer
 
-namespace transformer {
+namespace experimental {
 
 constexpr auto rotary_embedding = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::transformer::rotary_embedding",
-    ttnn::operations::transformer::RotaryEmbeddingOperation>();
+    "ttnn::experimental::rotary_embedding",
+    ttnn::operations::experimental::transformer::RotaryEmbeddingOperation>();
 
-}  // namespace transformer
+}  // namespace experimental
 
 }  // namespace ttnn

@@ -289,16 +289,16 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        in_sharded ? "ttnn/cpp/ttnn/operations/transformer/rotary_embedding/device/kernels/dataflow/"
+        in_sharded ? "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
                      "reader_rotary_embedding_interleaved_start_id_sharded.cpp"
-                   : "ttnn/cpp/ttnn/operations/transformer/rotary_embedding/device/kernels/dataflow/"
+                   : "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
                      "reader_rotary_embedding_interleaved_start_id.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_kernel_defines));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/rotary_embedding/device/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations//experimental/transformer/rotary_embedding/device/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_kernel_defines));
 
@@ -328,7 +328,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
     auto rotary_embedding_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = compute_kernel_defines});
     if (!core_group_2.ranges().empty()) {
@@ -336,7 +336,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
         auto rotary_embedding_kernel_group_2_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp",
             core_group_2,
             tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = compute_kernel_defines});
     }

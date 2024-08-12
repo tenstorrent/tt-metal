@@ -6,7 +6,7 @@
 
 #include "device/rotate_half_device_operation.hpp"
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::experimental::transformer {
 
 Tensor RotateHalfOperation::operator()(const Tensor& input_tensor, const MemoryConfig& output_mem_config)
 {
@@ -17,4 +17,4 @@ Tensor RotateHalfOperation::operator()(const Tensor& input_tensor, const MemoryC
 }
 
 
-}  // namespace ttnn::operations::transformer
+}  // namespace ttnn::operations::experimental::transformer

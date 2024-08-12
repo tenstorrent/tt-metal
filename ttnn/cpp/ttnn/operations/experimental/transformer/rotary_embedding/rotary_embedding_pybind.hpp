@@ -6,8 +6,8 @@
 
 #include "pybind11/pybind_fwd.hpp"
 
-namespace ttnn::operations::transformer {
+namespace ttnn::operations::experimental::transformer {
 
 void py_bind_rotary_embedding(pybind11::module& module);
 
-}  // namespace ttnn::operations::transformer
+}  // namespace ttnn::operations::experimental::transformer
