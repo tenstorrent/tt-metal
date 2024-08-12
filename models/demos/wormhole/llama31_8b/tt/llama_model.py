@@ -84,6 +84,6 @@ class TtTransformer(nn.Module):
             x,
             self.output_weight,
             compute_kernel_config=self.args.get_compute_kernel_config(),
-            core_grid=self.args.max_grid_size,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         return output
