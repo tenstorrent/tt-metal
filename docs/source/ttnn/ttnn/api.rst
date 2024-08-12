@@ -396,6 +396,7 @@ Data Movement
    ttnn/untilize
    ttnn/untilize_with_unpadding
    ttnn/untilize_with_halo_v2
+   ttnn/indexed_fill
 
 Normalization
 =============

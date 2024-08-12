@@ -10,7 +10,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
 
@@ -235,13 +234,6 @@ namespace tt::tt_metal::detail{
             py::arg("input"), py::arg("output_mem_config").noconvert(), py::arg("output_tensor").noconvert() = std::nullopt,
             R"doc(Converts a tensor sharded one way to another way)doc"
         );
-
-        //MOE ops
-        m_tensor.def("indexed_fill", &indexed_fill,
-            py::arg("batch_id"), py::arg("input_a"), py::arg("input_b"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("dim") = 0,
-            R"doc(Replaces batch of input in input_b denoted by batch_ids into input_a)doc"
-        );
-
 
         m_tensor.def("interleaved_to_sharded_partial", py::overload_cast<const Tensor &, const std::variant<CoreCoord, CoreRangeSet>, std::array<uint32_t, 2>, const uint32_t, const uint32_t, const TensorMemoryLayout, const ShardOrientation, const std::optional<const DataType>>(&interleaved_to_sharded_partial),
          py::arg("input"), py::arg("grid"), py::arg("shard_shape"), py::arg("num_slices"), py::arg("slice_index"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,

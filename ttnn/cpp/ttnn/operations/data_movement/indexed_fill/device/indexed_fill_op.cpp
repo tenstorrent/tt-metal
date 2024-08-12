@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/indexed_fill/indexed_fill_op.hpp"
+#include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
 
 
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn::operations::data_movement{
 
 void IndexedFill::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(1);
@@ -30,7 +28,7 @@ void IndexedFill::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Index Fill does not currently support sharding");
 }
 
-std::vector<Shape> IndexedFill::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::Shape> IndexedFill::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(1);
     return {input_tensor.get_legacy_shape()};
 }
@@ -49,11 +47,4 @@ operation::ProgramWithCallbacks IndexedFill::create_program(const std::vector<Te
     return indexed_fill_multi_core(batch_ids, input_tensor_a, input_tensor_b, output_tensor);
 }
 
-Tensor indexed_fill(const Tensor &batch_ids, const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config, std::int64_t dim) {
-    return operation::run_without_autoformat(IndexedFill{output_mem_config, dim}, {batch_ids, input_a, input_b}).at(0);
-}
-
-
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace ttnn::operations::data_movement
