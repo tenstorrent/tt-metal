@@ -92,10 +92,6 @@ op_map = {
         "tt_op": tt_lib_ops.fill_ones_rm,
         "pytorch_op": pytorch_ops.fill_ones_rm,
     },
-    "fill-bw": {
-        "tt_op": tt_lib_ops.fill_bw,
-        "pytorch_op": pytorch_ops.fill_bw,
-    },
     "fill-zero-bw": {
         "tt_op": tt_lib_ops.fill_zero_bw,
         "pytorch_op": pytorch_ops.fill_zero_bw,

@@ -4378,3 +4378,22 @@ def eltwise_unary_floor_div(
     t1 = ttnn.floor_div(t0, value, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1)
+
+
+def fill_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    t2 = ttnn.fill_bw(t0, t1, memory_config=output_mem_config)[0]
+
+    return ttnn_tensor_to_torch(t2)
