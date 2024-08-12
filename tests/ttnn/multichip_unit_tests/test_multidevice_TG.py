@@ -527,11 +527,11 @@ def test_galaxy_nlp_create_heads_decode(
         q_heads_tt,  # [seqlen, bsz, padded_n_local_heads, head_dim]
         k_heads_tt,  # [seqlen, bsz, padded_n_local_kv_heads, head_dim]
         v_heads_tt,  # [seqlen, bsz, padded_n_local_kv_heads, head_dim]
-    ) = ttnn.experimental.tensor.nlp_create_qkv_heads_decode(
+    ) = ttnn.experimental.nlp_create_qkv_heads_decode(
         qkv_heads,
         num_heads=n_local_heads,
         num_kv_heads=n_local_kv_heads,
-        output_mem_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
     )
     logger.info(f"q_heads_tt: {q_heads_tt.memory_config()}")
     logger.info(f"k_heads_tt: {k_heads_tt.memory_config()}")

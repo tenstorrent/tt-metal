@@ -37,6 +37,7 @@ from models.experimental.llama2_70b.tt.llama_common import (
     gather_rotary_emb,
     get_weight_cache_path,
 )
+import ttnn.experimental
 
 
 def run_test_create_head1(
@@ -201,11 +202,11 @@ def run_test_create_head2(
         q_heads_tt,  # [seqlen, n_local_heads, bsz, head_dim]
         k_heads_tt,  # [seqlen, n_local_kv_heads, bsz, head_dim]
         v_heads_tt,  # [seqlen, n_local_kv_heads, bsz, head_dim]
-    ) = ttl.tensor.nlp_create_qkv_heads_decode(
+    ) = ttnn.experimental.nlp_create_qkv_heads_decode(
         proj_output_tt,
         num_heads=n_local_heads,
         num_kv_heads=n_local_kv_heads,
-        output_mem_config=HEIGHT_SHARDED_MEMCFG,
+        memory_config=HEIGHT_SHARDED_MEMCFG,
     )
     logger.info(f"q_heads_tt: {q_heads_tt.memory_config()}")
     logger.info(f"k_heads_tt: {k_heads_tt.memory_config()}")
@@ -323,11 +324,11 @@ def run_test_create_head3(
         q_heads_tt,  # [seqlen, n_local_heads, bsz, head_dim]
         k_heads_tt,  # [seqlen, n_local_kv_heads, bsz, head_dim]
         v_heads_tt,  # [seqlen, n_local_kv_heads, bsz, head_dim]
-    ) = ttl.tensor.nlp_create_qkv_heads_decode(
+    ) = ttnn.experimental.nlp_create_qkv_heads_decode(
         proj_output_tt,
         num_heads=n_local_heads,
         num_kv_heads=n_local_kv_heads,
-        output_mem_config=HEIGHT_SHARDED_MEMCFG,
+        memory_config=HEIGHT_SHARDED_MEMCFG,
     )
     logger.info(f"q_heads_tt: {q_heads_tt.memory_config()}")
     logger.info(f"k_heads_tt: {k_heads_tt.memory_config()}")
