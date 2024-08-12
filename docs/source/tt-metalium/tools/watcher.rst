@@ -45,6 +45,7 @@ Watcher features can be disabled individually using the following environment va
    export TT_METAL_WATCHER_DISABLE_RING_BUFFER=1
    export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
    export TT_METAL_WATCHER_DISABLE_STATUS=1
+   export TT_METAL_WATCHER_DISABLE_STACK_USAGE=1
 
    # In certain cases enabling watcher can cause the binary to be too large. In this case, disable inlining.
    export TT_METAL_WATCHER_NOINLINE=1
@@ -196,15 +197,28 @@ watcher log:
 
 .. code-block::
 
-    # The ring buffer has a size of 31 elements, therefore writing 40 entries into the buffer will
-    # result in the oldest 9 entries being dropped. Entries are printed starting with the most recent.
+    # The ring buffer has a size of 32 elements, therefore writing 40 entries into the buffer will
+    # result in the oldest 8 entries being dropped. Entries are printed starting with the most recent.
     Core (x=1,y=1):    R,R,R,R,R rmsg:D0G|BNT smsg:GGGG k_ids:1|0|0
         debug_ring_buffer(latest_written_idx=8)=
         [0x00000028,0x00000027,0x00000026,0x00000025,0x00000024,0x00000023,0x00000022,0x00000021,
          0x00000020,0x0000001f,0x0000001e,0x0000001d,0x0000001c,0x0000001b,0x0000001a,0x00000019,
          0x00000018,0x00000017,0x00000016,0x00000015,0x00000014,0x00000013,0x00000012,0x00000011,
-         0x00000010,0x0000000f,0x0000000e,0x0000000d,0x0000000c,0x0000000b,0x0000000a]
+         0x00000010,0x0000000f,0x0000000e,0x0000000d,0x0000000c,0x0000000b,0x0000000a,0x00000009]
 
+Stack Usage Measurement
+-----------------------
+The watcher will automatically measure the stack usage after each kernel is run, and report the overall stack usage
+per RISC in the log. If a stack overflow is detected, the core will hang and an error will be thrown on host.
+
+.. code-block::
+
+    Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1):   GW,   W,   W,   W,   W  rmsg:D1D|BNt smsg:DDDD k_ids:11|10|0
+        brisc stack usage: 228/768, kernel using most stack: ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp
+        ncrisc stack usage: 192/768, kernel using most stack: ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp
+        trisc0 stack usage: 252/320, kernel using most stack: ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp
+        trisc1 stack usage: 208/256, kernel using most stack: ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp
+        trisc2 stack usage: 192/768, kernel using most stack: ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp
 
 Debug Delays
 ------------
