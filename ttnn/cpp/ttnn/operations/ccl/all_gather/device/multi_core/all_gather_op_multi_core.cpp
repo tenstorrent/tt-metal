@@ -205,11 +205,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const auto& device = input_tensor.device();
 
     /* All gather fusion */
-    ccl::AllGatherFusedOpSignaler* all_gather_fused_op_signaler;
+    ccl::AllGatherFusedOpSignaler all_gather_fused_op_signaler;
     bool fuse_op = fused_op_signaler.has_value();
     if (fuse_op) {
-        all_gather_fused_op_signaler = &fused_op_signaler.value();
-        all_gather_fused_op_signaler->init_fused_op(device);
+        all_gather_fused_op_signaler = fused_op_signaler.value();
+        all_gather_fused_op_signaler.init_fused_op(device);
     }
 
     auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology, fuse_op);
@@ -467,7 +467,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
             /* All gather fusion */
             if (fuse_op) {
-                all_gather_fused_op_signaler->init_all_gather(program, device, receiver_workers, receiver_worker_cores);
+                all_gather_fused_op_signaler.init_all_gather(program, device, receiver_workers, receiver_worker_cores);
             }
 
             {
@@ -930,10 +930,10 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         }
 
                         if (fuse_op) {
-                            all_gather_fused_op_signaler->emit_all_gather_fused_op_ct_args(worker_writer_receiver_ct_args, global_num_workers, b);
+                            all_gather_fused_op_signaler.emit_all_gather_fused_op_ct_args(worker_writer_receiver_ct_args, global_num_workers, b);
                         } else {
                             // Push dummy args so that kernel doesn't error out at compile time from the lack of args when fuse_op=false
-                            for (uint32_t w = 0; w < 3; ++w) {
+                            for (uint32_t w = 0; w < ccl::AllGatherFusedOpSignaler::get_num_ct_args(); ++w) {
                                 worker_writer_receiver_ct_args.push_back(static_cast<uint32_t>(0));
                             }
                         }
@@ -986,7 +986,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
                         /* All Gather fusion */
                         if (fuse_op) {
-                            all_gather_fused_op_signaler->emit_all_gather_fused_op_rt_args(worker_writer_receiver_rt_args, is_clockwise_direction ? 0 : 1);
+                            all_gather_fused_op_signaler.emit_all_gather_fused_op_rt_args(worker_writer_receiver_rt_args, is_clockwise_direction ? 0 : 1);
                         }
 
                         log_trace(tt::LogOp, "Worker {} RW rt args", b);
