@@ -150,7 +150,8 @@ class Buffer {
         device_(nullptr),
         buffer_type_(BufferType::DRAM),
         buffer_layout_(TensorMemoryLayout::INTERLEAVED),
-        shard_parameters_(std::nullopt) {}
+        shard_parameters_(std::nullopt),
+        bottom_up_(std::nullopt) {}
 
     Buffer(
         Device *device,
@@ -159,6 +160,7 @@ class Buffer {
         const BufferType buffer_type,
         const TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
         const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
+        const std::optional<bool> bottom_up = std::nullopt,
         bool allocate = true);
 
     Buffer(const Buffer &other);
@@ -260,6 +262,8 @@ class Buffer {
     BufferType buffer_type_;
     TensorMemoryLayout buffer_layout_;
     std::optional<ShardSpecBuffer> shard_parameters_;
+   protected:
+    std::optional<bool> bottom_up_;
 };
 
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);
