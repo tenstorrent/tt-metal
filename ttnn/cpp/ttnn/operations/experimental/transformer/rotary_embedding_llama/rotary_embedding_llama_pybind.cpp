@@ -38,6 +38,7 @@ void py_bind_rotary_embedding_llama(pybind11::module& module) {
             py::arg("cos_cache"),
             py::arg("sin_cache"),
             py::arg("trans_mat"),
+            py::kw_only(),
             py::arg("memory_config"),
             py::arg("compute_kernel_config") = std::nullopt});
 }

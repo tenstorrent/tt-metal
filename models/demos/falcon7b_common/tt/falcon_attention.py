@@ -103,7 +103,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
                     self.tt_cos_cached[i],
                     self.tt_sin_cached[i],
                     token_idx,
-                    output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
                 )
             )
         return output
