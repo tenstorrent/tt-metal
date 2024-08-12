@@ -595,7 +595,14 @@ class resnet50:
         ]
         if is_wormhole_b0() and self.batch_size == 20:
             x, x_height, x_width = self.layer1_module1(
-                x, device, batch_size, x_height, x_width, conv_op_cache, reshard_if_not_optimal=True
+                x,
+                device,
+                batch_size,
+                x_height,
+                x_width,
+                conv_op_cache,
+                reshard_if_not_optimal=True,
+                height_sharding=True,
             )
         else:
             x, x_height, x_width = self.layer1_module1(x, device, batch_size, x_height, x_width, conv_op_cache)
@@ -630,6 +637,7 @@ class resnet50:
                 x_width,
                 conv_op_cache,
                 reshard_if_not_optimal=True,
+                height_sharding=True,
             )
         else:
             x, x_height, x_width = self.layer2_module1(x, device, batch_size, x_height, x_width, conv_op_cache)
