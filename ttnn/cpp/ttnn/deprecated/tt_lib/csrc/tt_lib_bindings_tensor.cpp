@@ -169,9 +169,6 @@ void TensorModule(py::module& m_tensor) {
                     mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.SINGLE_BANK)
             )doc")
         .def(
-            "__repr__",
-            [](const MemoryConfig& memory_config) -> std::string { return fmt::format("{}", memory_config); })
-        .def(
             "__hash__",
             [](const MemoryConfig& memory_config) -> tt::stl::hash::hash_t {
                 return tt::stl::hash::detail::hash_object(memory_config);
@@ -214,7 +211,6 @@ void TensorModule(py::module& m_tensor) {
     auto pyCoreRange = tt_serializable_class<CoreRange>(m_tensor, "CoreRange", R"doc(
         Class defining a range of cores)doc");
     pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }))
-        .def("__repr__", [](const CoreRange& core_range) -> std::string { return fmt::format("{}", core_range); })
         .def_readonly("start", &CoreRange::start_coord)
         .def_readonly("end", &CoreRange::end_coord)
         .def("grid_size", &CoreRange::grid_size);
@@ -222,9 +218,6 @@ void TensorModule(py::module& m_tensor) {
     auto pyCoreRangeSet = tt_serializable_class<CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(
         Class defining a set of CoreRanges required for sharding)doc");
     pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
-        .def(
-            "__repr__",
-            [](const CoreRangeSet& core_range_set) -> std::string { return fmt::format("{}", core_range_set); })
         .def(
             "bounding_box",
             &CoreRangeSet::bounding_box,
@@ -256,7 +249,6 @@ void TensorModule(py::module& m_tensor) {
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self)
-        .def("__repr__", [](const ShardSpec& shard_spec) -> std::string { return fmt::format("{}", shard_spec); });
     ;
 
     auto py_owned_buffer_for_int32_t =
