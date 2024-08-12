@@ -29,30 +29,6 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor _unary_rdiv_trunc(
-    float value,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config) {
-    auto arch = input.device()->arch();
-    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
-    Tensor result = ttnn::multiply(ttnn::full_like(input, value), ttnn::reciprocal(input));
-    return ttnn::trunc(result);
-}
-Tensor unary_rdiv_trunc(
-    float value,
-    const Tensor& input,
-    const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _unary_rdiv_trunc)(value, input, output_mem_config);
-}
-
-Tensor _rfloor_div(float value, const Tensor& input, const MemoryConfig& output_mem_config) {
-    Tensor result = ttnn::multiply(ttnn::full_like(input, value), ttnn::reciprocal(input));
-    return ttnn::floor(result, output_mem_config);
-}
-Tensor rfloor_div(float value, const Tensor& input, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _rfloor_div)(value, input, output_mem_config);
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt

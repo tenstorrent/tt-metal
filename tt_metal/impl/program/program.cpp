@@ -124,7 +124,7 @@ KernelGroup::KernelGroup() : core_ranges({}) {}
 KernelGroup::KernelGroup(
     const Program &program,
     CoreType core_type,
-    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids,
+    kernel_id_array_t kernel_ids,
     bool erisc_is_idle,
     int last_cb_index,
     const CoreRangeSet &new_ranges) :
@@ -193,7 +193,7 @@ KernelGroup *Program::kernels_on_core(const CoreCoord &core, const CoreType &cor
 
 struct KernelGroupInt {
     bool valid;
-    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids;
+    kernel_id_array_t kernel_ids;
 
     bool operator==(const KernelGroupInt &b) const;
     void update(dispatch_core_processor_classes proc_class, size_t kernel_idx) {
@@ -512,9 +512,9 @@ void Program::init_semaphores(const Device &device, const CoreCoord &logical_cor
     }
 }
 
-void Program::add_semaphore(const CoreRangeSet &crs, uint32_t address, uint32_t init_value, CoreType core_type) {
+void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     this->invalidate_compile();
-    semaphores_.emplace_back(Semaphore(crs, address, init_value, core_type));
+    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 
 void Program::add_config_buffer(std::shared_ptr<Buffer> config_buffer) { config_buffers_.emplace_back(config_buffer); }
@@ -645,6 +645,7 @@ void Program::populate_dispatch_data(Device *device) {
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
+            std::vector<RISCV> riscvs;
             uint32_t transfer_info_index = 0;
 
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
@@ -653,6 +654,7 @@ void Program::populate_dispatch_data(Device *device) {
                 dst_base_addrs.resize(dst_base_addrs.size() + num_spans);
                 page_offsets.resize(page_offsets.size() + num_spans);
                 lengths.resize(lengths.size() + num_spans);
+                riscvs.resize(riscvs.size() + num_spans);
 
                 kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
                     uint64_t relo_addr =
@@ -662,6 +664,7 @@ void Program::populate_dispatch_data(Device *device) {
                     page_offsets[transfer_info_index] =
                         binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                     lengths[transfer_info_index] = len * sizeof(uint32_t);
+                    riscvs[transfer_info_index] = sub_kernels[sub_kernel_index];
 
                     binaries_data.insert(binaries_data.end(), mem_ptr, mem_ptr + len);
                     binaries_data.resize(
@@ -670,7 +673,7 @@ void Program::populate_dispatch_data(Device *device) {
                 });
             }
             kernel_bins_transfer_info kb_transfer_info = {
-                .dst_base_addrs = dst_base_addrs, .page_offsets = page_offsets, .lengths = lengths};
+                .dst_base_addrs = dst_base_addrs, .page_offsets = page_offsets, .lengths = lengths, .riscvs = riscvs};
             kernel_transfer_info.insert({kernel_id, kb_transfer_info});
         }
     }

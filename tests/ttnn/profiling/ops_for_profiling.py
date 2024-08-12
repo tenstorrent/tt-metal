@@ -1456,7 +1456,7 @@ def rsqrt_slow(x):
 def fill_rm(x):
     shape = x.get_legacy_shape()
 
-    tt_lib.tensor.fill_rm(
+    ttnn.fill_rm(
         N=shape[0],
         C=shape[1],
         H=shape[2],
@@ -1472,9 +1472,7 @@ def fill_rm(x):
 def fill_ones_rm(x):
     shape = x.get_legacy_shape()
 
-    tt_lib.tensor.fill_ones_rm(
-        N=shape[0], C=shape[1], H=shape[2], W=shape[3], hOnes=shape[2] - 32, wOnes=shape[3] - 32, any=x
-    )
+    ttnn.fill_ones_rm(N=shape[0], C=shape[1], H=shape[2], W=shape[3], hOnes=shape[2] - 32, wOnes=shape[3] - 32, any=x)
 
 
 def group_norm_no_weights(x):
@@ -1522,7 +1520,7 @@ def swiglu_2(x):
 
 
 def repeat(x):
-    tt_lib.tensor.repeat(x, (1, 1, 1, 4))
+    ttnn.repeat(x, ttnn.Shape((1, 1, 1, 4)))
 
 
 def repeat_interleave_0(x):
@@ -1972,8 +1970,8 @@ all_unary_ops = [
         "layout": "ROW_MAJOR",
     },
     {
-        "op": tt_lib.tensor.untilize,
-        "name": "tt_lib.tensor.untilize",
+        "op": ttnn.untilize,
+        "name": "ttnn.untilize",
     },
     {
         "op": tilize_with_val_padding,
@@ -1982,7 +1980,7 @@ all_unary_ops = [
     },
     {
         "op": untilize_with_unpadding,
-        "name": "tt_lib.tensor.untilize_with_unpadding",
+        "name": "ttnn.untilize_with_unpadding",
     },
     {
         "op": ttnn.tilize_with_zero_padding,
@@ -2254,7 +2252,7 @@ all_unary_ops = [
     },
     {
         "op": repeat,
-        "name": "tt_lib.tensor.repeat",
+        "name": "ttnn.repeat",
     },
     {
         "op": repeat_interleave_0,

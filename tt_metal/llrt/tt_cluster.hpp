@@ -13,12 +13,11 @@
 #include "common/tt_backend_api_types.hpp"
 #include "host_mem_address_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
-#include "third_party/umd/device/device_api.h"
+#include "third_party/umd/device/device_api_metal.h"
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
 // clang-format off
-#include "dev_mem_map.h"
 #include "noc/noc_parameters.h"
 #include "eth_interface.h"
 #include "dev_msgs.h"
@@ -309,7 +308,7 @@ class Cluster {
         (uint32_t)MEM_TRISC1_FIRMWARE_SIZE,
         (uint32_t)MEM_TRISC2_FIRMWARE_SIZE,
         (uint32_t)MEM_TRISC0_FIRMWARE_BASE,
-        (uint32_t)GET_MAILBOX_ADDRESS_HOST(l1_barrier),
+        (uint32_t)MEM_L1_BARRIER,
         (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE,
         (uint32_t)eth_l1_mem::address_map::FW_VERSION_ADDR,
     };

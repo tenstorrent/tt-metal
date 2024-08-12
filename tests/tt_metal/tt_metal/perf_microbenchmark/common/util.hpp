@@ -11,6 +11,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "debug/dprint_buffer.h"
+#include "llrt/hal.hpp"
 
 inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, const tt::tt_metal::Program &program) {
 #if defined(TRACY_ENABLE)
@@ -22,12 +23,16 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
     auto device_id = device->id();
     uint64_t min_cycle = -1;
     uint64_t max_cycle = 0;
+    dprint_buf_msg_t *dprint_msg =
+        hal.get_dev_addr<dprint_buf_msg_t *>(HalProgrammableCoreType::TENSIX, HalMemAddrType::DPRINT);
+
+    // This works for tensix only, will need to be updated for eth
     vector<uint64_t> print_buffer_addrs = {
-        static_cast<uint64_t>(GET_MAILBOX_ADDRESS_HOST(dprint_buf.data[DPRINT_RISCV_INDEX_NC])),
-        static_cast<uint64_t>(GET_MAILBOX_ADDRESS_HOST(dprint_buf.data[DPRINT_RISCV_INDEX_BR])),
-        static_cast<uint64_t>(GET_MAILBOX_ADDRESS_HOST(dprint_buf.data[DPRINT_RISCV_INDEX_TR0])),
-        static_cast<uint64_t>(GET_MAILBOX_ADDRESS_HOST(dprint_buf.data[DPRINT_RISCV_INDEX_TR1])),
-        static_cast<uint64_t>(GET_MAILBOX_ADDRESS_HOST(dprint_buf.data[DPRINT_RISCV_INDEX_TR2]))
+        reinterpret_cast<uint64_t>(dprint_msg->data[DPRINT_RISCV_INDEX_NC]),
+        reinterpret_cast<uint64_t>(dprint_msg->data[DPRINT_RISCV_INDEX_BR]),
+        reinterpret_cast<uint64_t>(dprint_msg->data[DPRINT_RISCV_INDEX_TR0]),
+        reinterpret_cast<uint64_t>(dprint_msg->data[DPRINT_RISCV_INDEX_TR1]),
+        reinterpret_cast<uint64_t>(dprint_msg->data[DPRINT_RISCV_INDEX_TR2]),
     };
     for (const auto &worker_core : worker_cores_used_in_program) {
         for (const auto &buffer_addr : print_buffer_addrs) {
@@ -37,6 +42,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
             profile_buffer = tt::llrt::read_hex_vec_from_core(device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);
 
             end_index = profile_buffer[BUFFER_END_INDEX];
+
             TT_ASSERT(end_index < (DPRINT_BUFFER_SIZE / sizeof(uint32_t)));
             dropped_marker_counter = profile_buffer[DROPPED_MARKER_COUNTER];
 
@@ -66,11 +72,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
 }
 
 inline int get_tt_npu_clock(tt::tt_metal::Device *device) {
-    int ai_clk = 0;
-#ifdef TT_METAL_VERSIM_DISABLED
-    ai_clk = tt::Cluster::instance().get_device_aiclk(device->id());
-#endif
-    return ai_clk;
+    return tt::Cluster::instance().get_device_aiclk(device->id());
 }
 
 template <typename T>

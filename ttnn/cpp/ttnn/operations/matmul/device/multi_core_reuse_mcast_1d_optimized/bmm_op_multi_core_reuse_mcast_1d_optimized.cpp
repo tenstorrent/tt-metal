@@ -190,8 +190,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     }
 
     // Mcast args
-    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
@@ -220,8 +220,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
             // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore,
-            (std::uint32_t)in0_mcast_receiver_semaphore,
+            (std::uint32_t)in0_mcast_sender_semaphore_id,
+            (std::uint32_t)in0_mcast_receiver_semaphore_id,
             (std::uint32_t)in0_mcast_receiver_num_dests,  // in0_mcast_num_dests
             (std::uint32_t)in0_mcast_receiver_num_cores,  // in0_mcast_num_cores
             (std::uint32_t)(in0_mcast_sender_cores_grid.x),
@@ -253,8 +253,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
             // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore,
-            (std::uint32_t)in0_mcast_receiver_semaphore,
+            (std::uint32_t)in0_mcast_sender_semaphore_id,
+            (std::uint32_t)in0_mcast_receiver_semaphore_id,
             (std::uint32_t)num_cores - 1,                     // in0_mcast_num_dests
             (std::uint32_t)in0_mcast_receiver_num_cores - 1,  // in0_mcast_num_cores
             // batch args
@@ -311,8 +311,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
         // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore,
-        (std::uint32_t)in0_mcast_receiver_semaphore,
+        (std::uint32_t)in0_mcast_sender_semaphore_id,
+        (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
         (std::uint32_t)B  // batch
     };
@@ -910,10 +910,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     }
 
     // Mcast args
-    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    uint32_t in3_mcast_sender_semaphore = 0;
-    uint32_t in3_mcast_receiver_semaphore = 0;
+    auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     CoreCoord top_left_core = in1_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in1_mcast_receiver_cores_bounding_box.end_coord;
@@ -970,8 +968,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
         // in1 mcast args
-        (std::uint32_t)in1_mcast_sender_semaphore,
-        (std::uint32_t)in1_mcast_receiver_semaphore,
+        (std::uint32_t)in1_mcast_sender_semaphore_id,
+        (std::uint32_t)in1_mcast_receiver_semaphore_id,
         (std::uint32_t)num_cores - 1,                     // in1_mcast_num_dests
         (std::uint32_t)in1_mcast_receiver_num_cores - 1,  // in1_mcast_num_cores
         // batch args
@@ -1006,8 +1004,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
         // in1 mcast args
-        (std::uint32_t)in1_mcast_sender_semaphore,
-        (std::uint32_t)in1_mcast_receiver_semaphore,
+        (std::uint32_t)in1_mcast_sender_semaphore_id,
+        (std::uint32_t)in1_mcast_receiver_semaphore_id,
         // batch args
         (std::uint32_t)B,  // batch
 

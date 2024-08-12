@@ -896,10 +896,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     CoreRange mcast_sender_cores(top_left_core, top_left_core);  // If single core, this kernel doesn't do mcasting
     CoreRangeSet mcast_receiver_cores{{}};
-    uint32_t weights_mcast_sender_semaphore{};
-    uint32_t weights_mcast_receiver_semaphore{};
-    uint32_t act_mcast_sender_semaphore = 0;
-    uint32_t act_mcast_receiver_semaphore = 0;
+    uint32_t weights_mcast_sender_semaphore_id{};
+    uint32_t weights_mcast_receiver_semaphore_id{};
+    uint32_t act_mcast_sender_semaphore_id = 0;
+    uint32_t act_mcast_receiver_semaphore_id = 0;
     std::vector<uint32_t> act_mcast_noc_y;
     if (weight_width_sliced) {
         // 2D mcast
@@ -910,8 +910,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             mcast_sender_cores = CoreRange(top_left_core, CoreCoord(num_cores_x - 1, 0));
             mcast_receiver_cores = {{CoreRange(CoreCoord(0, 1), bottom_right_core)}};
         }
-        weights_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-        weights_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+        weights_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+        weights_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     } else {
         // 1D mcast
         if (total_num_cores > 1) {
@@ -929,8 +929,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                 }
             }
             mcast_receiver_cores = mcast_receiver_set;
-            weights_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            weights_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            weights_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            weights_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
         }
     }
 
@@ -1087,8 +1087,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             writer_mcast_receiver_kernel =
                 "ttnn/cpp/ttnn/operations/conv2d/device/kernels/"
                 "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
-            act_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-            act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            act_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            act_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
             if (transpose_mcast) {
                 act_mcast_noc_y.reserve(num_cores_y);
@@ -1189,8 +1189,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         (uint32_t)conv_act_c_blocks,                                      // act_w_num_outer
         (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1),  // act_mcast_num_dests
         (uint32_t)(transpose_mcast ? num_cores_y - 1 : num_cores_x - 1),  // act_mcast_num_cores
-        (uint32_t)act_mcast_sender_semaphore,
-        (uint32_t)act_mcast_receiver_semaphore,
+        (uint32_t)act_mcast_sender_semaphore_id,
+        (uint32_t)act_mcast_receiver_semaphore_id,
         (uint32_t)in0_block_num_tiles * tilized_act_tile_size,  // act_mcast_sender_size_bytes
         (uint32_t)(transpose_mcast ? 1 : 0),
         (uint32_t)act_block_h_datums_last_block
@@ -1509,16 +1509,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
                     writer_rt_args.push_back(num_cores_x - 1);  // weights_mcast_num_dests
                     writer_rt_args.push_back(num_cores_x - 1);  // weights_mcast_num_cores
-                    writer_rt_args.push_back(weights_mcast_sender_semaphore);
-                    writer_rt_args.push_back(weights_mcast_receiver_semaphore);
+                    writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
+                    writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
 
                     SetRuntimeArgs(program, writer_mcast_sender_id, core, writer_rt_args);
                 } else {
                     // receiver
                     writer_rt_args.push_back(top_left_core_physical.x);  // weights_mcast_sender_noc_x
                     writer_rt_args.push_back(right_core_physical.y);     // weights_mcast_sender_noc_y
-                    writer_rt_args.push_back(weights_mcast_sender_semaphore);
-                    writer_rt_args.push_back(weights_mcast_receiver_semaphore);
+                    writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
+                    writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
 
                     SetRuntimeArgs(program, writer_mcast_receiver_id, core, writer_rt_args);
                 }
@@ -1544,16 +1544,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
                     writer_rt_args.push_back(num_cores_y - 1);  // weights_mcast_num_dests
                     writer_rt_args.push_back(num_cores_y - 1);  // weights_mcast_num_cores
-                    writer_rt_args.push_back(weights_mcast_sender_semaphore);
-                    writer_rt_args.push_back(weights_mcast_receiver_semaphore);
+                    writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
+                    writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
 
                     SetRuntimeArgs(program, writer_mcast_sender_id, core, writer_rt_args);
                 } else {
                     // receiver
                     writer_rt_args.push_back(top_core_physical.x);       // weights_mcast_sender_noc_x
                     writer_rt_args.push_back(top_left_core_physical.y);  // weights_mcast_sender_noc_y
-                    writer_rt_args.push_back(weights_mcast_sender_semaphore);
-                    writer_rt_args.push_back(weights_mcast_receiver_semaphore);
+                    writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
+                    writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
 
                     SetRuntimeArgs(program, writer_mcast_receiver_id, core, writer_rt_args);
                 }
@@ -1575,16 +1575,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                 }
                 writer_rt_args.push_back(total_active_num_cores - 1);  // weights_mcast_num_dests
                 writer_rt_args.push_back(total_num_cores - 1);         // weights_mcast_num_cores
-                writer_rt_args.push_back(weights_mcast_sender_semaphore);
-                writer_rt_args.push_back(weights_mcast_receiver_semaphore);
+                writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
+                writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
 
                 SetRuntimeArgs(program, writer_mcast_sender_id, core, writer_rt_args);
             } else {
                 // receiver
                 writer_rt_args.push_back(top_left_core_physical.x);  // weights_mcast_sender_noc_x
                 writer_rt_args.push_back(top_left_core_physical.y);  // weights_mcast_sender_noc_y
-                writer_rt_args.push_back(weights_mcast_sender_semaphore);
-                writer_rt_args.push_back(weights_mcast_receiver_semaphore);
+                writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
+                writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
 
                 // log_debug("Core: {}, WRITER RT ARGS: {}", core, writer_rt_args.size());
                 SetRuntimeArgs(program, writer_mcast_receiver_id, core, writer_rt_args);
@@ -1825,7 +1825,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
 
     // add config tensor to program
     tt::tt_metal::detail::AddConfigBuffer(program, conv_reader_indices_tensor.device_buffer());
-    if(a.memory_config().memory_layout==TensorMemoryLayout::WIDTH_SHARDED)
+    if(parallel_config.shard_scheme==TensorMemoryLayout::WIDTH_SHARDED)
     {
         return multi_core_optimized_conv_width_sharded_v2_impl(
         program,

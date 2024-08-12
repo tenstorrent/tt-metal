@@ -80,7 +80,7 @@ void kernel_main() {
     const uint32_t transfer_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t local_receiver_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t local_receiver_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t receiver_start_semaphore = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t receiver_start_semaphore = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     ASSERT(max_concurrent_samples <= NUM_CHANNELS);
     uint32_t last_channel_sync_addr = 0;

@@ -26,8 +26,10 @@
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+#include "llrt/hal.hpp"
 
 using std::map;
 using std::pair;
@@ -567,6 +569,11 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                     false,
                     core_type == CoreType::WORKER ? DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE
                                                   : DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+                for (auto &data_per_kernel : unique_rt_data_and_sizes) {
+                    for (auto &data_and_sizes : data_per_kernel) {
+                        RecordDispatchData(program, DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
+                    }
+                }
                 unique_sub_cmds.clear();
                 unique_rt_data_and_sizes.clear();
                 unique_rt_args_data.clear();
@@ -648,6 +655,11 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                     common_sub_cmds);
             }
 
+            for (auto& data_per_kernel : common_rt_data_and_sizes) {
+                for (auto& data_and_sizes : data_per_kernel) {
+                    RecordDispatchData(program, DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
+                }
+            }
             common_rt_data_and_sizes.clear();
             common_rt_args_data.clear();
         }
@@ -841,6 +853,11 @@ void EnqueueProgramCommand::assemble_device_commands(
                         noc_encoding,     // noc_xy_addr
                         kg_transfer_info.dst_base_addrs[kernel_idx],
                         kg_transfer_info.lengths[kernel_idx]);
+                    RecordDispatchData(
+                        program,
+                        DISPATCH_DATA_BINARY,
+                        kg_transfer_info.lengths[kernel_idx],
+                        kg_transfer_info.riscvs[kernel_idx]);
                     // Difference between prefetch total relayed pages and dispatch write linear
                     uint32_t relayed_bytes =
                         align(kg_transfer_info.lengths[kernel_idx], HostMemDeviceCommand::PROGRAM_PAGE_SIZE);
@@ -893,6 +910,8 @@ void EnqueueProgramCommand::assemble_device_commands(
                             .addr = dst_addr,
                             .length = (uint16_t)write_length,
                             .num_mcast_dests = (uint16_t)num_mcast_dests});
+                        RecordDispatchData(
+                            program, DISPATCH_DATA_BINARY, write_length, kg_transfer_info.riscvs[kernel_idx]);
                         dst_addr += write_length;
 
                         kernel_bins_prefetch_subcmds.back().emplace_back(CQPrefetchRelayPagedPackedSubCmd{
@@ -1007,6 +1026,9 @@ void EnqueueProgramCommand::assemble_device_commands(
                     this->packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+                for (auto &data_and_size : multicast_sem_data[i]) {
+                    RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
+                }
             }
         }
 
@@ -1024,6 +1046,9 @@ void EnqueueProgramCommand::assemble_device_commands(
                     this->packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+                for (auto &data_and_size : unicast_sem_data[i]) {
+                    RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
+                }
             }
         }
 
@@ -1043,7 +1068,11 @@ void EnqueueProgramCommand::assemble_device_commands(
                     multicast_cb_config_data,
                     this->packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
+                for (auto &data_and_size : multicast_cb_config_data) {
+                    RecordDispatchData(program, DISPATCH_DATA_CB_CONFIG, data_and_size.second);
+                }
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
+                RecordDispatchData(program, DISPATCH_DATA_CB_CONFIG, mcast_cb_payload_sizeB);
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
                      align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), L1_ALIGNMENT)) /
@@ -1086,7 +1115,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                 uint32_t write_offset_bytes = program_command_sequence.write_offset_bytes();
                 program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
                     num_sub_cmds_in_cmd,
-                    GET_MAILBOX_ADDRESS_HOST(launch),
+                    hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::LAUNCH),
                     go_signal_sizeB,
                     multicast_go_signal_payload_sizeB,
                     multicast_go_signal_sub_cmds,
@@ -1112,7 +1141,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                 uint32_t write_offset_bytes = program_command_sequence.write_offset_bytes();
                 program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
                     num_sub_cmds_in_cmd,
-                    GET_ETH_MAILBOX_ADDRESS_HOST(launch),
+                    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::LAUNCH),
                     go_signal_sizeB,
                     unicast_go_signal_payload_sizeB,
                     unicast_go_signal_sub_cmds,
@@ -1190,6 +1219,11 @@ void EnqueueProgramCommand::process() {
         this->assemble_stall_commands(true);
         // Runtime Args Command Sequence
         this->assemble_runtime_args_commands();
+
+        // Record kernel groups in this program, only need to do it once.
+        for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
+            RecordKernelGroups(program, core_type, program.get_kernel_groups(core_type));
+        }
     } else {
         static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
         static constexpr uint32_t tensix_l1_write_offset_offset =
@@ -1208,6 +1242,7 @@ void EnqueueProgramCommand::process() {
         this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
             eth_l1_write_offset_offset, &eth_l1_write_offset, sizeof(uint32_t));
     }
+    RecordProgramRun(program);
 
     // Main Command Sequence
     this->assemble_device_commands(is_cached, tensix_l1_write_offset, eth_l1_write_offset);

@@ -86,18 +86,6 @@ and create_output_tensors with the additional parameter for the output_tensors.
 
     };
 
-New Host Operation
-------------------
-
-And below, is an example of how to declare a new on-host operation with all of the methods required by the interface.
-
-.. code-block::
-
-    struct <NewOperation> {
-        void validate(const std::vector<Tensor> &input_tensors) const;
-        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-        std::vector<Tensor> compute_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    };
 
 Profiler
 ========
@@ -268,12 +256,7 @@ Enums
 Tensor elementwise operations
 =============================
 
-.. autofunction:: tt_lib.tensor.unary_rdiv_trunc
-
 .. autofunction:: tt_lib.tensor.assign
-
-.. autofunction:: tt_lib.tensor.rfloor_div
-
 
 Tensor manipulation operations
 -=============================
@@ -282,10 +265,6 @@ These operations change the tensor shape in some way, giving it new dimensions
 but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.reshape
-
-.. autofunction:: tt_lib.tensor.untilize
-
-.. autofunction:: tt_lib.tensor.untilize_with_unpadding
 
 .. autofunction:: tt_lib.tensor.clone
 
@@ -421,14 +400,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.sum
 
-.. autofunction:: tt_lib.tensor.fill_rm
-
-.. autofunction:: tt_lib.tensor.fill_ones_rm
-
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
 
 .. autofunction:: tt_lib.tensor.mean_hw
 
 .. autofunction:: tt_lib.tensor.lamb_optimizer
-
-.. autofunction:: tt_lib.tensor.repeat

@@ -51,8 +51,8 @@ void kernel_main() {
     constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(16);
     constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(17);
     constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(18);
-    constexpr uint32_t act_mcast_sender_semaphore_addr = get_compile_time_arg_val(19);
-    constexpr uint32_t act_mcast_receiver_semaphore_addr = get_compile_time_arg_val(20);
+    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(19));
+    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(20));
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(21);
 
     constexpr bool transpose_mcast = get_compile_time_arg_val(22) == 1;

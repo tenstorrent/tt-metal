@@ -2,7 +2,6 @@
 # We do not use GLOB here since build system won't be able to pick up changes to the file list generated
 set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/layout_conversion/layout_conversion_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/sharded_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/multi_core/sharded_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/sharded_op_partial.cpp
@@ -16,9 +15,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_overlap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_sharded.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/halo_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/indexed_fill/multi_core/indexed_fill_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/indexed_fill/indexed_fill_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fill_rm/fill_rm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/reduce_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/single_core_hw/reduce_op_single_core_hw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_h/reduce_op_multi_core_h.cpp
@@ -31,11 +27,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h_optimised.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_w/bcast_op_multi_core_w.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_hw/bcast_op_multi_core_hw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/untilize/multi_core/untilize_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/untilize/single_core/untilize_op_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/untilize/untilize_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/untilize/untilize_with_halo_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/untilize/untilize_with_halo_op_v2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/multi_core/sdpa_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/multi_core/sdpa_decode_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sdpa/sdpa_op.cpp
@@ -127,11 +118,8 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_attn_matmul/multi_core_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_group_attn_matmul/multi_core_group_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_1d_sum_reduce/multi_core_ssm_1d_sum_reduce.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/repeat/multi_core/repeat_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/repeat/repeat_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_tms.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_create_qkv_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_create_qkv_heads_decode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_concat_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_concat_heads_decode.cpp

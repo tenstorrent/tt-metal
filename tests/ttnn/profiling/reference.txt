@@ -96,7 +96,7 @@ tt_lib.tensor.real,200,0.027,0.029,0.06,0.012
 ttnn.real_bw,200,0.821,0.827,0.847
 ttnn.reglu_dim_2,200,0.102,0.107,0.245,0.045
 ttnn.reglu_dim_3,200,0.105,0.111,0.244,0.045
-tt_lib.tensor.repeat,200,0.025,0.027,0.368,0.009
+ttnn.repeat,200,0.025,0.027,0.368,0.009
 ttnn.repeat_interleave_dim_0,200,0.039,0.043,0.375,0.01
 ttnn.repeat_interleave_dim_1,80,0.42,0.429,323.298,0.219
 ttnn.repeat_interleave_dim_2,80,0.152,0.154,150.628,0.076
@@ -110,8 +110,6 @@ ttnn.swiglu_dim_2,200,0.094,0.102,0.265,0.044
 ttnn.swiglu_dim_3,200,0.111,0.114,0.256,0.047
 tt_lib.tensor.transpose,200,0.07,0.072,0.133,0.057
 tt_lib.tensor.typecast,200,0.021,0.021,0.08,0.009
-tt_lib.tensor.untilize,200,0.018,0.019,0.112,0.007
-tt_lib.tensor.untilize_with_unpadding,200,0.026,0.027,3.608,0.007
 ttnn.var_hw,200,0.14,0.15,0.455,0.094
 ttnn.abs,200,0.024,0.025,0.101,0.009
 ttnn.abs_bw,200,0.062,0.075,0.241,0.023
@@ -369,6 +367,8 @@ ttnn.trunc_bw,200,0.85,0.883,0.895,
 ttnn.unary_add_bw,200,0.022,0.023,0.026,
 ttnn.unary_div_bw,200,1.041,1.118,1.086,0.055
 ttnn.unary_pow_bw,200,0.526,0.536,1.919,0.281
+ttnn.untilize,200,0.018,0.019,0.112,0.007
+ttnn.untilize_with_unpadding,200,0.026,0.027,3.608,0.007
 ttnn.where,200,0.142,0.147,0.616,0.055
 ttnn.where_binary_x_const_y,200,0.169,0.184,0.596,0.098
 ttnn.where_binary_x_y_const,200,0.172,0.179,0.594,0.093

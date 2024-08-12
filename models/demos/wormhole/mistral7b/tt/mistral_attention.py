@@ -254,9 +254,9 @@ class TtMistralAttention(nn.Module):
         start_pos: the length of the KV cache. Same as current token's index.
         attn_mask: (seq_len, n_heads, batch, cache_len + seqlen
         """
-        self.start_pos += 1
-        padded_layer_past_len = min(nearest_32(self.start_pos), self.sliding_window)
-        layer_slice = min((self.start_pos), self.sliding_window)
+        # Indices for slicing tensors
+        padded_layer_past_len = min(nearest_32(current_pos + 1), self.sliding_window)
+        layer_slice = min((current_pos + 1), self.sliding_window)
 
         dense_outputs = []
         for i in range(self.num_devices):
@@ -302,12 +302,12 @@ class TtMistralAttention(nn.Module):
                 q_heads_pre_rot,  # [seqlen, n_heads, bsz, head_dim]
                 k_heads_pre_rot,  # [seqlen, n_kv_heads, bsz, head_dim]
                 v_heads,  # [seqlen, n_kv_heads, bsz, head_dim]
-            ) = ttnn.experimental.tensor.nlp_create_qkv_heads(
+            ) = ttnn.experimental.nlp_create_qkv_heads(
                 xqkv_fused,
                 num_heads=self.n_local_heads,
                 num_kv_heads=self.n_local_kv_heads,
                 transpose_k_heads=False,
-                output_mem_config=self.model_config["QKV_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["QKV_HEADS_OUTPUT_MEMCFG"],
             )
 
             ttnn.deallocate(xqkv_fused)
@@ -356,7 +356,7 @@ class TtMistralAttention(nn.Module):
             # Attention
             ###
             # splitting attention implementation into 2 parts because for token id>575 we run out of memory for group_attn_matmul op
-            if self.start_pos < 575:
+            if current_pos + 1 < 575:
                 keys_sliced = keys[:, :, :padded_layer_past_len, :]
                 keys_sliced_T = ttnn.permute(
                     keys_sliced, (0, 1, 3, 2)
@@ -547,12 +547,12 @@ class TtMistralAttention(nn.Module):
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
             v_heads_1VSD,
-        ) = ttnn.experimental.tensor.nlp_create_qkv_heads(
+        ) = ttnn.experimental.nlp_create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         xqkv_fused.deallocate(True)

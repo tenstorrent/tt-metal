@@ -353,12 +353,12 @@ class TtLlamaAttention_optimized:
             query_layer,  # [bsz, n_local_heads, seq_len, head_dim]
             key_layer,  # [bsz, n_local_kv_heads, seq_len, head_dim]
             value_layer,  # [bsz, n_local_kv_heads, seq_len, head_dim]
-        ) = ttnn.experimental.tensor.nlp_create_qkv_heads(
+        ) = ttnn.experimental.nlp_create_qkv_heads(
             fused_query_key_value,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=self.model_config["DRAM_MEMCFG"],
         )
 
         fused_query_key_value.deallocate(True)

@@ -29,7 +29,8 @@
 #define MEM_L1_SIZE (1464 * 1024)
 
 #define MEM_ETH_BASE 0x0
-#define MEM_ETH_SIZE (256 * 1024)
+// -32 for ETH barrier, see comment in eth_l1_address_map
+#define MEM_ETH_SIZE (256 * 1024 - 32)
 
 #define MEM_LOCAL_BASE 0xFFB00000
 #define MEM_BRISC_LOCAL_SIZE (4 * 1024)
@@ -53,6 +54,7 @@
 #define MEM_ZEROS_SIZE 512
 
 #define MEM_BOOT_CODE_BASE 0
+#define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + 1344)
 #define MEM_IERISC_MAILBOX_BASE 1024

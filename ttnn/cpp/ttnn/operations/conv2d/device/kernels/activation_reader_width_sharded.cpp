@@ -58,8 +58,8 @@ void kernel_main() {
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(9);
     constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(11);
-    constexpr uint32_t act_mcast_sender_semaphore_addr = get_compile_time_arg_val(12);
-    constexpr uint32_t act_mcast_receiver_semaphore_addr = get_compile_time_arg_val(13);
+    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));
+    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
     constexpr uint32_t act_mcast_dest_noc_start_x = get_compile_time_arg_val(14);
     constexpr uint32_t act_mcast_dest_noc_start_y = get_compile_time_arg_val(15);
     constexpr uint32_t act_mcast_dest_noc_end_x   = get_compile_time_arg_val(16);
