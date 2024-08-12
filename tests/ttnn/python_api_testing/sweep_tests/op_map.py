@@ -937,4 +937,8 @@ op_map = {
         "tt_op": ttnn_ops.complex_polar,
         "pytorch_op": pytorch_ops.complex_polar,
     },
+    "complex-recip": {
+        "tt_op": ttnn_ops.complex_recip,
+        "pytorch_op": pytorch_ops.complex_recip,
+    },
 }

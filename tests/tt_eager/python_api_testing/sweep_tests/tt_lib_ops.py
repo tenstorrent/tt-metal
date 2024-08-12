@@ -2703,17 +2703,6 @@ def complex_real(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
 
 @setup_host_and_device
-def complex_recip(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    temp = torch.cat([x.real, x.imag], -1)
-    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
-
-    tt_result = ttl.tensor.complex_recip(t0, output_mem_config=output_mem_config)
-    result = ttl_complex_2_torch_complex(tt_result)
-
-    return result
-
-
-@setup_host_and_device
 def complex_div(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     tempx = torch.cat([x.real, x.imag], -1)
     t0 = setup_tt_tensor(tempx, device, layout[0], input_mem_config[0], dtype[0])
