@@ -34,8 +34,8 @@ void kernel_main() {
     // in0 mcast args
     constexpr uint32_t in0_mcast_dest_noc_start_x         = get_compile_time_arg_val(8);
     constexpr uint32_t in0_mcast_dest_noc_end_x           = get_compile_time_arg_val(9);
-    constexpr uint32_t in0_mcast_sender_semaphore_addr    = get_compile_time_arg_val(10);
-    constexpr uint32_t in0_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(11);
+    uint32_t in0_mcast_sender_semaphore_addr    = get_semaphore(get_compile_time_arg_val(10));
+    uint32_t in0_mcast_receiver_semaphore_addr  = get_semaphore(get_compile_time_arg_val(11));
     constexpr uint32_t in0_mcast_num_dests                = get_compile_time_arg_val(12);
     // batch args
     constexpr uint32_t MtKt                               = get_compile_time_arg_val(13); // if 0

@@ -145,9 +145,8 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     std::vector<uint32_t> golden_sem_values;
     for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
-        auto semaphore_addr = tt_metal::CreateSemaphore(program, core_range_set, initial_value);
+        tt_metal::CreateSemaphore(program, core_range_set, initial_value);
         golden_sem_values.push_back(initial_value);
-        pass &= semaphore_addr == SEMAPHORE_BASE + (size_per_semaphore * i);
     }
 
     check_program_is_mapped_to_correct_cores(program, core_range_set, compute_kernel_args);

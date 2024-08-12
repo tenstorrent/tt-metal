@@ -901,4 +901,16 @@ op_map = {
         "tt_op": ttnn_ops.concat_bw,
         "pytorch_op": ttnn_pytorch_ops.concat_bw,
     },
+    "floor-bw": {
+        "tt_op": ttnn_ops.floor_bw,
+        "pytorch_op": pytorch_ops.floor_bw,
+    },
+    "eltwise-floor": {
+        "tt_op": ttnn_ops.floor,
+        "pytorch_op": pytorch_ops.floor,
+    },
+    "eltwise-unary_floor_div": {
+        "tt_op": ttnn_ops.eltwise_unary_floor_div,
+        "pytorch_op": pytorch_ops.unary_floor_div,
+    },
 }

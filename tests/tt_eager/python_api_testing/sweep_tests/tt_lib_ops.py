@@ -826,24 +826,6 @@ def eltwise_floor_div(
 
 
 @setup_host_and_device
-def eltwise_unary_floor_div(
-    x,
-    *args,
-    value,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.floor_div(t0, value, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def eltwise_rfloor_div(
     x,
     *args,
@@ -856,7 +838,7 @@ def eltwise_rfloor_div(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.rfloor_div(value, t0, output_mem_config=output_mem_config)
+    t1 = ttnn.rdiv(t0, value, round_mode="floor", memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -929,7 +911,7 @@ def eltwise_unary_rdiv_trunc(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.unary_rdiv_trunc(value, t0, output_mem_config=output_mem_config)
+    t1 = ttnn.rdiv(t0, value, round_mode="trunc", memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -1133,9 +1115,9 @@ def repeat(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.repeat(t0, repeat, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
+    t1 = ttnn.repeat(t0, ttnn.Shape(repeat), memory_config=output_mem_config)
+    output_tensor = ttnn.to_torch(t1)
+    return output_tensor
 
 
 @setup_host_and_device
@@ -2329,7 +2311,6 @@ eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
 eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
 zeros_like = make_ttnn_unary_op(ttnn.zeros_like)
 ones_like = make_ttnn_unary_op(ttnn.ones_like)
-eltwise_floor = make_unary_op_optional_output(ttnn.floor)
 eltwise_ceil = make_unary_op_optional_output(ttnn.ceil)
 eltwise_trunc = make_ttnn_unary_op(ttnn.trunc)
 eltwise_frac = make_ttnn_unary_op(ttnn.frac)

@@ -261,10 +261,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
 
     // Mcast args
-    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -302,8 +302,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
             // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore,
-            (std::uint32_t)in0_mcast_receiver_semaphore,
+            (std::uint32_t)in0_mcast_sender_semaphore_id,
+            (std::uint32_t)in0_mcast_receiver_semaphore_id,
             (std::uint32_t)num_blocks_x,  // in0_mcast_num_dests
             (std::uint32_t)num_blocks_x,  // in0_mcast_num_cores
             (std::uint32_t)num_x,
@@ -334,8 +334,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
             // in0 mcast args
-            (std::uint32_t)in0_mcast_sender_semaphore,
-            (std::uint32_t)in0_mcast_receiver_semaphore,
+            (std::uint32_t)in0_mcast_sender_semaphore_id,
+            (std::uint32_t)in0_mcast_receiver_semaphore_id,
             (std::uint32_t)(num_blocks_x - 1),  // in0_mcast_num_dests
             (std::uint32_t)(num_blocks_x - 1),  // in0_mcast_num_cores
             // batch args
@@ -360,8 +360,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
         // in1 mcast args
-        (std::uint32_t)in1_mcast_sender_semaphore,
-        (std::uint32_t)in1_mcast_receiver_semaphore,
+        (std::uint32_t)in1_mcast_sender_semaphore_id,
+        (std::uint32_t)in1_mcast_receiver_semaphore_id,
         (std::uint32_t)(num_blocks_y - 1),  // in1_mcast_num_dests
         (std::uint32_t)(num_blocks_y - 1),  // in1_mcast_num_cores
         // batch args
@@ -399,8 +399,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
         // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore,
-        (std::uint32_t)in0_mcast_receiver_semaphore,
+        (std::uint32_t)in0_mcast_sender_semaphore_id,
+        (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
         (std::uint32_t)B  // batch
     };
@@ -414,8 +414,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         // in0/in1 common args
         (std::uint32_t)num_blocks,  // num_blocks
         // in1 mcast args
-        (std::uint32_t)in1_mcast_sender_semaphore,
-        (std::uint32_t)in1_mcast_receiver_semaphore,
+        (std::uint32_t)in1_mcast_sender_semaphore_id,
+        (std::uint32_t)in1_mcast_receiver_semaphore_id,
         // batch args
         (std::uint32_t)B,  // batch
 

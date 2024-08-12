@@ -228,7 +228,7 @@ class Program {
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
-    void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value, CoreType core_type=CoreType::WORKER);
+    void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type=CoreType::WORKER);
 
     friend void detail::AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
     void add_config_buffer(std::shared_ptr<Buffer> config_buffer);

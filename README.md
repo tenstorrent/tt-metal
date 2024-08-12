@@ -12,7 +12,7 @@
 
 <h3>
 
-[API Reference](https://tenstorrent.github.io/tt-metal/latest/ttnn) | [Model Demos](./models/demos/)
+[API Reference](https://tenstorrent.github.io/ttnn/latest/index.html) | [Model Demos](./models/demos/)
 
 </h3>
 
@@ -109,11 +109,11 @@ print(output)
 
 <h3>
 
-[Programming Guide](./METALIUM_GUIDE.md) | [API Reference](https://tenstorrent.github.io/tt-metal/latest/tt-metalium)
+[Programming Guide](./METALIUM_GUIDE.md) | [API Reference](https://tenstorrent.github.io/tt-metalium/latest/tt_metal/apis/index.html)
 
 </h3>
 </div>
 
 ## Getting started
 
-Get started with [simple kernels](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
+Get started with [simple kernels](https://tenstorrent.github.io/tt-metalium/latest/tt_metal/examples/index.html).

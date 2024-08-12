@@ -36,8 +36,8 @@ void kernel_main() {
     constexpr uint32_t num_blocks                         = get_compile_time_arg_val(2);
     // in1 mcast args
     constexpr uint32_t in1_mcast_sender_noc_y             = get_compile_time_arg_val(3);
-    constexpr uint32_t in1_mcast_sender_semaphore_addr    = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(5);
+    uint32_t in1_mcast_sender_semaphore_addr    = get_semaphore(get_compile_time_arg_val(4));
+    uint32_t in1_mcast_receiver_semaphore_addr  = get_semaphore(get_compile_time_arg_val(5));
     // batch args
     constexpr uint32_t batch                              = get_compile_time_arg_val(6);
 
@@ -66,8 +66,8 @@ void kernel_main() {
 
         // in3 mcast args
         constexpr uint32_t in3_mcast_sender_noc_y             = get_compile_time_arg_val(16);
-        constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(17);
-        constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(18);
+        uint32_t in3_mcast_sender_semaphore_addr    = get_semaphore(get_compile_time_arg_val(17));
+        uint32_t in3_mcast_receiver_semaphore_addr  = get_semaphore(get_compile_time_arg_val(18));
         constexpr uint32_t cb_id_in3 = 3;
         volatile tt_l1_ptr uint32_t* in3_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in3_mcast_receiver_semaphore_addr);
     #endif

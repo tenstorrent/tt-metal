@@ -15,7 +15,7 @@ void kernel_main() {
     constexpr uint32_t eth_receiver_noc_x = get_compile_time_arg_val(5);
     constexpr uint32_t eth_receiver_noc_y = get_compile_time_arg_val(6);
     constexpr uint32_t eth_receiver_l1_semaphore_addr = get_compile_time_arg_val(7);
-    constexpr uint32_t receiver_read_sem_addr = get_compile_time_arg_val(8);
+    uint32_t receiver_read_sem_addr = get_semaphore(get_compile_time_arg_val(8));
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(9);
     static_assert (half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than 0");
 

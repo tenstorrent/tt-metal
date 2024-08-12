@@ -254,9 +254,9 @@ class TtMistralAttention(nn.Module):
         start_pos: the length of the KV cache. Same as current token's index.
         attn_mask: (seq_len, n_heads, batch, cache_len + seqlen
         """
-        self.start_pos += 1
-        padded_layer_past_len = min(nearest_32(self.start_pos), self.sliding_window)
-        layer_slice = min((self.start_pos), self.sliding_window)
+        # Indices for slicing tensors
+        padded_layer_past_len = min(nearest_32(current_pos + 1), self.sliding_window)
+        layer_slice = min((current_pos + 1), self.sliding_window)
 
         dense_outputs = []
         for i in range(self.num_devices):
@@ -356,7 +356,7 @@ class TtMistralAttention(nn.Module):
             # Attention
             ###
             # splitting attention implementation into 2 parts because for token id>575 we run out of memory for group_attn_matmul op
-            if self.start_pos < 575:
+            if current_pos + 1 < 575:
                 keys_sliced = keys[:, :, :padded_layer_past_len, :]
                 keys_sliced_T = ttnn.permute(
                     keys_sliced, (0, 1, 3, 2)

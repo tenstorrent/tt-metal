@@ -256,12 +256,7 @@ Enums
 Tensor elementwise operations
 =============================
 
-.. autofunction:: tt_lib.tensor.unary_rdiv_trunc
-
 .. autofunction:: tt_lib.tensor.assign
-
-.. autofunction:: tt_lib.tensor.rfloor_div
-
 
 Tensor manipulation operations
 -=============================
@@ -410,5 +405,3 @@ Other Operations
 .. autofunction:: tt_lib.tensor.mean_hw
 
 .. autofunction:: tt_lib.tensor.lamb_optimizer
-
-.. autofunction:: tt_lib.tensor.repeat
