@@ -1,11 +1,11 @@
 ---
 test-list:
-  - complex-polar-bw:
+  - complex-mul-bw:
       shape:
         start-shape: [1, 1, 32, 64]
         end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 64]
-        num-shapes: 2
+        num-shapes: 3
         num-samples: 128
         args-sampling-strategy: "all"
       env:
@@ -16,11 +16,11 @@ test-list:
           low: -100
           high: 100
       comparison:
-        function: comp_pcc
+        function: comp_pcc_list
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: complex_polar_bw_sweep.csv
+      output-file: complex_bw_mul_sweep.csv
