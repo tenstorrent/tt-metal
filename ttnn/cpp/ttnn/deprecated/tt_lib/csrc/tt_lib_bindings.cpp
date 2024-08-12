@@ -191,17 +191,21 @@ void DeviceModule(py::module &m_device) {
     )doc");
 
     m_device.def("Synchronize",
-        [] (Device* device) {
+        [] (Device* device, const std::optional<uint8_t> cq_id) {
             // Send finish command to issue queue through worker thread
             // Worker thread will stall until the device is flushed.
-            device->push_work([device] () mutable {
-                detail::Synchronize(device);
+            device->push_work([device, cq_id] () mutable {
+                Synchronize(device, cq_id);
             });
             // Main thread stalls until worker is complete (full device and worker queue flush).
             device->synchronize();
         }, R"doc(
-        Wait for all kernels on TT device to complete.
-    )doc");
+        Synchronize the device with host by waiting for all operations to complete.
+        If cq_id is provided then only the operations associated with that cq_id are waited for,
+        otherwise operations for all command queues are waited on.
+    )doc",
+        py::arg("device"),
+        py::arg("cq_id") = std::nullopt);
     m_device.def("SetLazyCommandQueueMode", &detail::SetLazyCommandQueueMode, R"doc(
         If set to true, the host does not notify the device that there are commands available other than
         the FinishCommand. Once set to false, all subsequent commands will immediately notify the device

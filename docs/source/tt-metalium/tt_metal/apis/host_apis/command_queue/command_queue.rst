@@ -15,3 +15,4 @@ CommandQueue
   ReleaseTrace
   EnqueueTrace
   Finish
+  Synchronize

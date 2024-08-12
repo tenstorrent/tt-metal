@@ -4,7 +4,7 @@
 
 import contextlib
 
-from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable
+from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union
 
 import ttnn
 
@@ -188,17 +188,19 @@ def create_device_mesh(
         close_device_mesh(device_mesh)
 
 
-def synchronize_devices(devices):
+def synchronize_devices(devices: Union["ttnn.Device", "ttnn.DeviceMesh"], queue_id: Optional[int] = None) -> None:
     """
-    synchronize_device(device: ttnn.Device) -> None:
+    synchronize_devices(devices: Union[ttnn.Device, ttnn.DeviceMesh], queue_id: Optional[int] = None) -> None:
 
-    Synchronize the device with host by waiting for all operations to complete.
+    Synchronize the devices with host by waiting for all operations to complete.
+    If queue_id is provided then only the operations associated with that queue_id are waited for,
+    otherwise operations for all command queues are waited on.
     """
     if isinstance(devices, ttnn.Device):
-        ttnn._ttnn.deprecated.device.Synchronize(devices)
+        ttnn._ttnn.deprecated.device.Synchronize(devices, queue_id)
     else:
         for device in devices.get_device_ids():
-            ttnn._ttnn.deprecated.device.Synchronize(devices.get_device(device))
+            ttnn._ttnn.deprecated.device.Synchronize(devices.get_device(device), queue_id)
 
 
 class TensorToMesh:

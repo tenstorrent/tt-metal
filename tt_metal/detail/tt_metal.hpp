@@ -317,13 +317,6 @@ namespace tt::tt_metal{
             return true;
         }
 
-        inline void Synchronize(Device *device)
-        {
-            if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-                Finish(device->command_queue());
-            }
-        }
-
         inline void SetLazyCommandQueueMode(bool lazy)
         {
             DispatchStateCheck(true);

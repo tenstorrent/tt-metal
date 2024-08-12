@@ -579,6 +579,19 @@ void EventSynchronize(std::shared_ptr<Event> event);
  */
 bool EventQuery(std::shared_ptr<Event> event);
 
+/**
+ * Synchronize the device with host by waiting for all operations to complete.
+ * If cq_id is provided then only the operations associated with that cq_id are waited for,
+ * otherwise operations for all command queues are waited on.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | device       | The device to synchronize.                                             | Device *                      |                                    | Yes      |
+ * | cq_id        | The specific command queue id to synchronize  .                        | uint8_t                       |                                    | No       |
+ */
+void Synchronize(Device *device, const std::optional<uint8_t> cq_id = std::nullopt);
 
 }  // namespace tt_metal
 
