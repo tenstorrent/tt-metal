@@ -32,8 +32,8 @@ void kernel_main() {
     constexpr uint32_t last_output_page_offset = get_compile_time_arg_val(11);
 
     constexpr bool is_clockwise_direction = get_compile_time_arg_val(12); // Specify direction for the first half
-    constexpr uint32_t signal_op_sem_addr_dir0 = get_compile_time_arg_val(13);
-    constexpr uint32_t signal_op_sem_addr_dir1 = get_compile_time_arg_val(14);
+    const uint32_t signal_op_sem_addr_dir0 = get_semaphore(get_compile_time_arg_val(13));
+    const uint32_t signal_op_sem_addr_dir1 = get_semaphore(get_compile_time_arg_val(14));
     constexpr uint32_t max_buffer_size = get_compile_time_arg_val(15);
 
 

@@ -62,8 +62,8 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
 
     // Setup semaphores used to signal datacopy. TODO: instead of datacopy, this should be matmul cores
     // Dir0: first half of all gather (clockwise), Dir1: second half of all gather (counter-clockwise)
-    auto datacopy_signal_semaphore_addr_dir0 = CreateSemaphore(program, datacopy_workers, 0);
-    auto datacopy_signal_semaphore_addr_dir1 = CreateSemaphore(program, datacopy_workers, 0);
+    auto datacopy_signal_semaphore_id_dir0 = CreateSemaphore(program, datacopy_workers, 0);
+    auto datacopy_signal_semaphore_id_dir1 = CreateSemaphore(program, datacopy_workers, 0);
 
     // Setup args for the kernel
     const uint32_t tile_size = 32;
@@ -99,8 +99,8 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
         static_cast<uint32_t>(tensor_slicer.output_page_offset),
         static_cast<uint32_t>(last_output_page_offset),
         static_cast<bool>(is_clockwise_dir),
-        static_cast<uint32_t>(datacopy_signal_semaphore_addr_dir0),
-        static_cast<uint32_t>(datacopy_signal_semaphore_addr_dir1),
+        static_cast<uint32_t>(datacopy_signal_semaphore_id_dir0),
+        static_cast<uint32_t>(datacopy_signal_semaphore_id_dir1),
         static_cast<uint32_t>(datacopy_buffer_size),
     };
 
@@ -139,7 +139,7 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
     );
 
     // Return the core coordinates and semaphore address
-    return {all_datacopy_cores, {datacopy_signal_semaphore_addr_dir0, datacopy_signal_semaphore_addr_dir1}};
+    return {all_datacopy_cores, {datacopy_signal_semaphore_id_dir0, datacopy_signal_semaphore_id_dir1}};
 }
 
 
@@ -153,9 +153,9 @@ operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(const 
     auto datacopy_params = setup_datacopy(program, input_tensor, all_gather_output_tensor, datacopy_output_tensor, dim, num_links, ring_size, ring_index, topology, {0, 0});
 
     const std::vector<CoreCoord>& datacopy_cores = std::get<0>(datacopy_params);
-    const std::vector<uint32_t> datacopy_signal_semaphore_addr = std::get<1>(datacopy_params);
+    const std::vector<uint32_t> datacopy_signal_semaphore_ids = std::get<1>(datacopy_params);
 
-    std::optional<ccl::AllGatherFusedOpSignaler> fused_op_signaler = AllGatherFusedOpSignaler(datacopy_cores, datacopy_signal_semaphore_addr);
+    std::optional<ccl::AllGatherFusedOpSignaler> fused_op_signaler = AllGatherFusedOpSignaler(datacopy_cores, datacopy_signal_semaphore_ids);
 
     // Pass in the datacopy cores and sempahore address (Using optional arguments)
     return all_gather_multi_core_with_workers_helper(program, input_tensor, all_gather_output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, fused_op_signaler, core_grid_offset);
