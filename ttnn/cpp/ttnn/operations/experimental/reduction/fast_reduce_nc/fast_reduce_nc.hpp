@@ -34,7 +34,7 @@ struct FastReduceNCOperation {
 namespace experimental::reduction {
 
 constexpr auto fast_reduce_nc = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::reduction::fast_reduce_nc",
+    "ttnn::experimental::fast_reduce_nc",
     ttnn::operations::experimental::reduction::FastReduceNCOperation>();
 
 }  // namespace experimental::reduction
