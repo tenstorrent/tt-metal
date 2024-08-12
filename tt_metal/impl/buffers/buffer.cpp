@@ -120,13 +120,15 @@ Buffer::Buffer(
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<bool> bottom_up,
     bool allocate) :
     device_(device),
     size_(size),
     page_size_(page_size),
     buffer_type_(buffer_type),
     buffer_layout_(buffer_layout),
-    shard_parameters_(shard_parameters) {
+    shard_parameters_(shard_parameters),
+    bottom_up_(bottom_up) {
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     if (allocate) {
@@ -200,7 +202,8 @@ Buffer::Buffer(const Buffer &other) :
     page_size_(other.page_size_),
     buffer_type_(other.buffer_type_),
     buffer_layout_(other.buffer_layout_),
-    shard_parameters_(other.shard_parameters_) {
+    shard_parameters_(other.shard_parameters_),
+    bottom_up_(other.bottom_up_) {
     this->allocate();
 }
 
@@ -212,6 +215,7 @@ Buffer &Buffer::operator=(const Buffer &other) {
         this->buffer_type_ = other.buffer_type_;
         this->buffer_layout_ = other.buffer_layout_;
         this->shard_parameters_ = other.shard_parameters_;
+        this->bottom_up_ = other.bottom_up_;
         this->allocate();
     }
     return *this;
@@ -224,7 +228,8 @@ Buffer::Buffer(Buffer &&other) :
     page_size_(other.page_size_),
     buffer_type_(other.buffer_type_),
     buffer_layout_(other.buffer_layout_),
-    shard_parameters_(other.shard_parameters_) {
+    shard_parameters_(other.shard_parameters_),
+    bottom_up_(other.bottom_up_) {
     // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
     // transferred to `this`
     other.device_ = nullptr;
@@ -239,6 +244,7 @@ Buffer &Buffer::operator=(Buffer &&other) {
         this->buffer_type_ = other.buffer_type_;
         this->buffer_layout_ = other.buffer_layout_;
         this->shard_parameters_ = other.shard_parameters_;
+        this->bottom_up_ = other.bottom_up_;
         // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
         // transferred to `this`
         other.device_ = nullptr;
@@ -249,7 +255,7 @@ Buffer &Buffer::operator=(Buffer &&other) {
 void Buffer::allocate() {
     TT_ASSERT(this->device_ != nullptr);
     // L1 and Trace buffers (which live in DRAM) are allocated top down!
-    bool bottom_up = this->buffer_type_ == BufferType::DRAM;
+    bool bottom_up = this->bottom_up_.value_or(this->is_dram());
     detail::AllocateBuffer(this, bottom_up);
     detail::BUFFER_MAP.insert({this->device_->id(), this->address_}, this);
 }
