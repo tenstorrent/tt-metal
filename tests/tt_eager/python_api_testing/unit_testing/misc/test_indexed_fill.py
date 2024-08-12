@@ -6,7 +6,7 @@ import pytest
 
 import os
 import pathlib
-
+import ttnn
 import torch
 import numpy as np
 
@@ -62,7 +62,7 @@ def test_indexed_slice(seed, B, b, D, tt_dtype, device):
     )
     input_a = ttl.tensor.Tensor(torch_input_a, tt_dtype).to(device)
     input_b = ttl.tensor.Tensor(torch_input_b, tt_dtype).to(device)
-    output = ttl.tensor.indexed_fill(batch_ids, input_a, input_b)
+    output = ttnn.indexed_fill(batch_ids, input_a, input_b)
     torch_input_a[torch_batch_ids[-1]] = torch_input_b
     output_torch = output.cpu().to_torch()
 
