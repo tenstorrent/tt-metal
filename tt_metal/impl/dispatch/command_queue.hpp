@@ -335,6 +335,7 @@ class EnqueueRecordEventCommand : public Command {
     uint32_t event_id;
     uint32_t expected_num_workers_completed;
     bool clear_count;
+    bool write_barrier;
 
    public:
     EnqueueRecordEventCommand(
@@ -344,7 +345,8 @@ class EnqueueRecordEventCommand : public Command {
         SystemMemoryManager& manager,
         uint32_t event_id,
         uint32_t expected_num_workers_completed,
-        bool clear_count = false);
+        bool clear_count = false,
+        bool write_barrier = true);
 
     void process();
 
