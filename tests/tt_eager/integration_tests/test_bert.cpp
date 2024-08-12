@@ -28,7 +28,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
 
     auto batch_size = hidden_states.get_legacy_shape()[0];
 
-    auto fused_qkv_matmul_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+    auto fused_qkv_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 4,
         .out_subblock_h = 4,
@@ -42,7 +42,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         hidden_states,
         parameters.at(fmt::format("fused_qkv_weight_{}", encoder_index)),
         parameters.at(fmt::format("fused_qkv_bias_{}", encoder_index)),
-        tt::operations::primary::Matmul{
+        ttnn::operations::matmul::Matmul{
             fused_qkv_matmul_program_config,
             /*bcast_batch=*/std::nullopt,
             l1_memory_config}
@@ -53,7 +53,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     fused_qkv_matmul_output.deallocate();
 
 
-    auto pre_softmax_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseProgramConfig{
+    auto pre_softmax_bmm_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 1,
         .out_subblock_h = 4,
@@ -65,7 +65,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
             query,
             key,
             /*bias=*/std::nullopt,
-            tt::operations::primary::Matmul{
+            ttnn::operations::matmul::Matmul{
             pre_softmax_bmm_program_config,
             /*bcast_batch=*/std::nullopt,
             dram_memory_config}
@@ -77,7 +77,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     pre_softmax_bmm_matmul = ttnn::scale_mask_softmax_in_place(pre_softmax_bmm_matmul, 1.0f / std::sqrt(head_size), attention_mask);
 
 
-    auto post_softmax_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseProgramConfig{
+    auto post_softmax_bmm_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 2,
         .out_subblock_h = 4,
@@ -89,7 +89,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
             pre_softmax_bmm_matmul,
             value,
             /*bias=*/std::nullopt,
-            tt::operations::primary::Matmul{
+            ttnn::operations::matmul::Matmul{
             post_softmax_bmm_program_config,
             /*bcast_batch=*/std::nullopt,
             l1_memory_config}
@@ -102,7 +102,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     post_softmax_bmm_output.deallocate();
 
 
-    auto selfout_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+    auto selfout_bmm_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 4,
         .out_subblock_h = 6,
@@ -116,7 +116,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         concat_heads_output,
         parameters.at(fmt::format("selfout_weight_{}", encoder_index)),
         parameters.at(fmt::format("selfout_bias_{}", encoder_index)),
-        tt::operations::primary::Matmul{
+        ttnn::operations::matmul::Matmul{
             selfout_bmm_program_config,
             /*bcast_batch=*/std::nullopt,
             l1_memory_config}
@@ -136,7 +136,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     selfout_bmm_output.deallocate();
 
 
-    auto ff1_matmul_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+    auto ff1_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 4,
         .out_subblock_h = 6,
@@ -150,14 +150,14 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         attention_layernorm_output,
         parameters.at(fmt::format("ff1_weight_{}", encoder_index)),
         parameters.at(fmt::format("ff1_bias_{}", encoder_index)),
-        tt::operations::primary::Matmul{
+        ttnn::operations::matmul::Matmul{
             ff1_matmul_program_config,
             /*bcast_batch=*/std::nullopt,
             dram_memory_config}
     );
 
 
-    auto ff2_matmul_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+    auto ff2_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 4,
         .out_subblock_h = 6,
@@ -171,7 +171,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         ff1_matmul_output,
         parameters.at(fmt::format("ff2_weight_{}", encoder_index)),
         parameters.at(fmt::format("ff2_bias_{}", encoder_index)),
-        tt::operations::primary::Matmul{
+        ttnn::operations::matmul::Matmul{
             ff2_matmul_program_config,
             /*bcast_batch=*/std::nullopt,
             l1_memory_config}
@@ -196,7 +196,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
 
 Tensor qa_head(Tensor&& hidden_states, const Parameters& parameters) {
 
-    auto output = ttnn::operations::matmul::matmul(hidden_states, parameters.at("qa_head_weight"), /*bias=*/std::nullopt, tt::operations::primary::Matmul{});
+    auto output = ttnn::operations::matmul::matmul(hidden_states, parameters.at("qa_head_weight"), /*bias=*/std::nullopt, ttnn::operations::matmul::Matmul{});
     hidden_states.deallocate();
 
     return ttnn::add(output, parameters.at("qa_head_bias"), std::nullopt, l1_memory_config);

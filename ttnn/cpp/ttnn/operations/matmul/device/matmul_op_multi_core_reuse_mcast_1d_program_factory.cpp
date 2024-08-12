@@ -14,15 +14,13 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
-using namespace tt::constants;
 using namespace tt;
+using namespace tt::constants;
+using namespace tt_metal;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
 namespace reuse_mcast_1d_optimized_helpers {
-using namespace tt::constants;
-using namespace tt;
-using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0(
     const Tensor& a,
@@ -1469,9 +1467,11 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
 }  // namespace reuse_mcast_1d_optimized_helpers
 
-namespace tt {
+namespace ttnn {
 
-namespace tt_metal {
+namespace operations {
+
+namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     const Tensor& a,
@@ -1701,6 +1701,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
         untilize_out);
 }
 
-}  // namespace tt_metal
+}  // namespace matmul
 
-}  // namespace tt
+}  // namespace operations
+
+}  // namespace ttnn

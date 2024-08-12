@@ -451,9 +451,11 @@ operation::ProgramWithCallbacks create_program(
 
 }  // namespace reuse_optimized_helpers
 
-namespace tt {
+namespace ttnn {
 
-namespace tt_metal {
+namespace operations {
+
+namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     const Tensor& a,
@@ -619,6 +621,8 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
         untilize_out);
 }
 
-}  // namespace tt_metal
+}  // namespace matmul
 
-}  // namespace tt
+}  // namespace operations
+
+}  // namespace ttnn

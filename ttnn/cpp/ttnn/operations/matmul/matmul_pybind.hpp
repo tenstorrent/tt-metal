@@ -18,7 +18,6 @@ namespace ttnn {
 namespace operations {
 namespace matmul {
 
-using namespace tt::operations::primary;
 using ttnn::operations::unary::UnaryWithParam;
 
 void py_module(py::module& module) {
@@ -145,16 +144,17 @@ void py_module(py::module& module) {
            const bool transpose_b = false,
            const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
            const std::optional<const DataType> dtype = std::nullopt,
-           const std::optional<const ttnn::MatmulProgramConfig> program_config = std::nullopt,
+           const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
            const std::optional<const std::string>& activation = std::nullopt,
            const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
+           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+           const uint8_t& queue_id = 0) -> ttnn::Tensor {
             std::optional<CoreCoord> user_core_coord;
             if (core_grid.has_value()) {
                 user_core_coord = CoreCoord(core_grid->x, core_grid->y);
             }
-            bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(input_tensor_b.get_shape());
-            return ttnn::operations::matmul::matmul(
+            bool user_run_batched = detail::is_input_batched(input_tensor_b.get_shape());
+            return bound_matmul(
                 input_tensor_a,
                 input_tensor_b,
                 /*bias=*/std::nullopt,
@@ -169,7 +169,8 @@ void py_module(py::module& module) {
                     get_fused_activation(activation),
                     user_run_batched,
                     transpose_a,
-                    transpose_b});
+                    transpose_b},
+                queue_id);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -181,7 +182,8 @@ void py_module(py::module& module) {
         py::arg("program_config") = std::nullopt,
         py::arg("activation") = std::nullopt,
         py::arg("compute_kernel_config") = std::nullopt,
-        py::arg("core_grid") = std::nullopt);
+        py::arg("core_grid") = std::nullopt,
+        py::arg("queue_id") = 0);
 
     module.def(
         "linear",
@@ -192,24 +194,25 @@ void py_module(py::module& module) {
            const bool transpose_b = false,
            const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
            const std::optional<const DataType> dtype = std::nullopt,
-           const std::optional<const ttnn::MatmulProgramConfig> program_config = std::nullopt,
+           const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
            const std::optional<const std::string>& activation = std::nullopt,
            const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
+           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+           const uint8_t& queue_id = 0) -> ttnn::Tensor {
             std::optional<CoreCoord> user_core_coord;
             if (core_grid.has_value()) {
                 user_core_coord = CoreCoord(core_grid->x, core_grid->y);
             }
-            bool b_is_batched = ttnn::operations::matmul::detail::is_input_batched(input_tensor_b.get_shape());
+            bool b_is_batched = detail::is_input_batched(input_tensor_b.get_shape());
             TT_FATAL(
                 !(b_is_batched && bias.has_value()),
                 "Batched input not supported when bias exists (linear operation).");
 
-            return ttnn::operations::matmul::matmul(
+            return bound_matmul(
                 input_tensor_a,
                 input_tensor_b,
                 bias,
-                tt::operations::primary::Matmul{
+                Matmul{
                     program_config,
                     /*bcast_batch=*/std::nullopt,
                     memory_config,
@@ -220,7 +223,8 @@ void py_module(py::module& module) {
                     get_fused_activation(activation),
                     /*user_run_batched=*/false,
                     transpose_a,
-                    transpose_b});
+                    transpose_b},
+                queue_id);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -233,7 +237,8 @@ void py_module(py::module& module) {
         py::arg("program_config") = std::nullopt,
         py::arg("activation") = std::nullopt,
         py::arg("compute_kernel_config") = std::nullopt,
-        py::arg("core_grid") = std::nullopt);
+        py::arg("core_grid") = std::nullopt,
+        py::arg("queue_id") = 0);
 }
 
 }  // namespace matmul

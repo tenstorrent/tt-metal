@@ -16,66 +16,73 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 
+using namespace tt;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 using ttnn::operations::unary::UnaryWithParam;
-
-vector<uint32_t> _get_prime_factors(uint32_t n) {
-    uint32_t i = 2;
-
-    vector<uint32_t> prime_factors;
-    while (i * i <= n) {
-        if (n % i != 0)
-            i++;
-        else {
-            n /= i;
-            prime_factors.push_back(i);
-        }
-    }
-    if (n > 1)
-        prime_factors.push_back(n);
-
-    return prime_factors;
-}
-
-vector<uint32_t> _get_possible_products(vector<uint32_t> factors) {
-    if (factors.size() == 0)
-        return {1};
-
-    vector<uint32_t> products;
-    for (uint32_t& fac : factors) {
-        vector<uint32_t> new_products;
-        if (not std::count(products.begin(), products.end(), fac))
-            new_products.push_back(fac);
-        for (uint32_t& prod : products) {
-            if (not std::count(products.begin(), products.end(), fac * prod))
-                new_products.push_back(fac * prod);
-        }
-
-        // Insert all new products to product
-        products.reserve(products.size() + distance(new_products.begin(), new_products.end()));
-        products.insert(products.end(), new_products.begin(), new_products.end());
-    }
-
-    // Sort products
-    std::sort(products.begin(), products.end());
-
-    return products;
-}
-
-uint32_t _get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
-    int32_t other_dim = (400 - 2 * in0_block_w * block_dim) / (2 * in0_block_w + block_dim);
-    if (other_dim > 0)
-        return other_dim;
-    return 0;
-}
+using tt::tt_metal::Shape;
 
 namespace {
-using namespace tt;
-using namespace tt::tt_metal;
+
+using namespace ttnn::operations::matmul;
+// Ensure there are always symmetrical values. Different paths use different
+// index ordering (0,1 vs 1,0) to meet test PCC requirements.
+constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
+    {4, 2}, {2, 4}, {8, 1}, {1, 8},  // subblock_hw = 8
+    {7, 1}, {1, 7},                  // subblock_hw = 7
+    {3, 2}, {2, 3}, {6, 1}, {1, 6},  // subblock_hw = 6
+    {5, 1}, {1, 5},                  // subblock_hw = 5
+    {2, 2}, {4, 1}, {1, 4},          // subblock_hw = 4
+    {3, 1}, {1, 3},                  // subblock_hw = 3
+    {2, 1}, {1, 2},                  // subblock_hw = 2
+    {1, 1},                          // subblock_hw = 1
+}};
+
+inline bool get_fp32_dest_acc_en(const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    bool fp32_dest_acc_en = false;
+    if (compute_kernel_config) {
+        std::visit(
+            [&](auto &&compute_kernel_config) {
+                using T = std::decay_t<decltype(compute_kernel_config)>;
+                if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+                    fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
+                }
+            },
+            *compute_kernel_config);
+    }
+    return fp32_dest_acc_en;
+}
+
+bool get_broadcast_batch(
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    const std::optional<const MatmulProgramConfig> matmul_program_config) {
+    uint32_t batch_size_b = get_batch_size(input_tensor_b.get_legacy_shape());
+    bool broadcast_batch = batch_size_b == 1;
+    if (!matmul_program_config.has_value()) {
+        return broadcast_batch;
+    }
+
+    bool is_multi_core_reuse = std::visit(
+        [](const auto &program_config) -> bool {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
+                return true;
+            }
+            return false;
+        },
+        matmul_program_config.value());
+    if (is_multi_core_reuse) {
+        uint32_t batch_size_a = get_batch_size(input_tensor_a.get_legacy_shape());
+        broadcast_batch &= batch_size_a > 1;
+    }
+    return broadcast_batch;
+}
+
 operation::OpPerformanceModel create_op_performance_model_for_matmul(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors,
+    const std::vector<Tensor>& output_tensors,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& in_a_shape = input_tensors.at(0).get_shape();
     const auto& in_b_shape = input_tensors.at(1).get_shape();
@@ -128,106 +135,219 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
 #endif
     return result;
 }
-}  // namespace
-namespace bmm_op_utils {
-using namespace tt;
-using namespace tt::tt_metal;
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
-    uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w) {
-    auto Nt_fac = _get_prime_factors(Nt);
-    auto Mt_fac = _get_prime_factors(Mt);
-    uint32_t Npc_min = 1;
-    uint32_t Mpc_min = 1;
-
-    for (auto it = Nt_fac.begin(); it != Nt_fac.end(); ++it) {
-        auto ele = *it;
-        if (ele > num_cores_x) {
-            Npc_min *= ele;
-            Nt_fac.erase(it);
-            --it;
-        }
-    }
-    for (auto it = Mt_fac.begin(); it != Mt_fac.end(); ++it) {
-        auto ele = *it;
-        if (ele > num_cores_y) {
-            Mpc_min *= ele;
-            Mt_fac.erase(it);
-            --it;
-        }
-    }
-
-    if (Npc_min > _get_maximum_block_dim(Mpc_min, in0_block_w))
-        return {0, 0, 0, 0};
-
-    uint32_t Mpc = Mpc_min;
-    uint32_t Npc = Npc_min;
-    if (Mpc_min > 1) {
-        auto Npc_choices = _get_possible_products(Nt_fac);
-        auto Npc_max = _get_maximum_block_dim(Mpc_min, in0_block_w);
-        for (auto& ele : Npc_choices) {
-            if (ele * Npc_min <= Npc_max)
-                Npc = ele * Npc_min;
-            else
-                break;
-        }
-
-        if (Mt / Mpc > num_cores_y or Nt / Npc > num_cores_x)
-            return {0, 0, 0, 0};
-
-        for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
-            auto subblock_h = std::get<0>(subblock_hw);
-            auto subblock_w = std::get<1>(subblock_hw);
-            if (Mpc % subblock_h == 0 and Npc % subblock_w == 0)
-                return {Mpc, Npc, subblock_h, subblock_w};
-        }
-    }
-
-    else if (Npc_min > 1) {
-        auto Mpc_choices = _get_possible_products(Mt_fac);
-        auto Mpc_max = _get_maximum_block_dim(Npc_min, in0_block_w);
-        for (auto& ele : Mpc_choices) {
-            if (ele * Mpc_min <= Mpc_max)
-                Mpc = ele * Mpc_min;
-            else
-                break;
-        }
-
-        if (Mt / Mpc > num_cores_y or Nt / Npc > num_cores_x) {
-            return {0, 0, 0, 0};
-        }
-
-        for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
-            auto subblock_h = std::get<0>(subblock_hw);
-            auto subblock_w = std::get<1>(subblock_hw);
-            if (Mpc % subblock_h == 0 and Npc % subblock_w == 0)
-                return {Mpc, Npc, subblock_h, subblock_w};
-        }
-    }
-
-    else {
-        auto Mpc_choices = _get_possible_products(Mt_fac);
-        auto Npc_choices = _get_possible_products(Nt_fac);
-        for (auto& Npc : Npc_choices) {
-            auto Mpc_max = _get_maximum_block_dim(Npc, in0_block_w);
-            for (auto& ele : Mpc_choices) {
-                if (ele <= Mpc_max)
-                    Mpc = ele;
-            }
-
-            if (Mt / Mpc > num_cores_y or Nt / Npc > num_cores_x)
-                continue;
-
-            for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
-                auto subblock_h = std::get<0>(subblock_hw);
-                auto subblock_w = std::get<1>(subblock_hw);
-                if (Mpc % subblock_h == 0 and Npc % subblock_w == 0)
-                    return {Mpc, Npc, subblock_h, subblock_w};
+std::tuple<uint32_t, uint32_t> get_subblock_sizes(
+    uint32_t m_tiles_per_core, uint32_t n_tiles_per_core, bool fp32_dest_acc_en) {
+    uint32_t out_subblock_h, out_subblock_w;
+    for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+        out_subblock_w = std::get<0>(subblock_hw);
+        out_subblock_h = std::get<1>(subblock_hw);
+        if ((out_subblock_h * out_subblock_w) <= 4 || !fp32_dest_acc_en) {
+            if (m_tiles_per_core % out_subblock_h == 0 && n_tiles_per_core % out_subblock_w == 0) {
+                return {out_subblock_h, out_subblock_w};
             }
         }
     }
+    TT_FATAL(false, "Unable to find subblock sizes");
+}
 
-    return {0, 0, 0, 0};
+MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
+    const ttnn::types::Shape& input_shape_a,
+    const ttnn::types::Shape& input_shape_b,
+    const CoreCoord& core_coord,
+    const std::optional<const UnaryWithParam> fused_activation,
+    const bool fp32_dest_acc_en,
+    const TensorMemoryLayout input_layout_a) {
+    auto a_padded_shape = input_shape_a.with_tile_padding();
+    auto b_padded_shape = input_shape_b.with_tile_padding();
+    auto k_size = a_padded_shape[-1];
+    auto m_size = a_padded_shape[-2];
+    auto n_size = b_padded_shape[-1];
+    uint32_t batch_size_a = get_batch_size(a_padded_shape);
+    uint32_t batch_size_b = get_batch_size(b_padded_shape);
+    bool input_b_is_batched = batch_size_b > 1;
+    TT_FATAL(batch_size_b == 1, "Second input cannot be currently batched when running matmul using 1d systolic array");
+    TT_FATAL(
+        (batch_size_a * m_size) % ttnn::TILE_SIZE == 0 && k_size % ttnn::TILE_SIZE == 0 &&
+            n_size % ttnn::TILE_SIZE == 0,
+        "The last two dimensions of the first tensor and the last dimension of the second tensor must be a multiple of "
+        "tile size");
+    uint32_t batch_and_m_tiles = (batch_size_a * m_size) / ttnn::TILE_SIZE;
+    uint32_t k_tiles = k_size / ttnn::TILE_SIZE;
+    uint32_t n_tiles = n_size / ttnn::TILE_SIZE;
+    uint32_t num_cores = core_coord.x * core_coord.y;
+    bool is_tall = batch_and_m_tiles > n_tiles;
+    // specific 1D mcasts require specific layout types. Override accordingly.
+    if (input_layout_a == TensorMemoryLayout::HEIGHT_SHARDED) {
+        is_tall = true;
+    } else if (input_layout_a == TensorMemoryLayout::WIDTH_SHARDED) {
+        is_tall = false;
+    }
+
+    bool is_wide = !is_tall;
+    uint32_t batch_and_m_tiles_per_core;
+    uint32_t k_tiles_per_core;
+    uint32_t n_tiles_per_core;
+    if (is_tall) {
+        batch_and_m_tiles_per_core = div_up(batch_and_m_tiles, num_cores);
+        k_tiles_per_core = div_up(k_tiles, num_cores);
+        n_tiles_per_core = n_tiles;
+    } else {
+        batch_and_m_tiles_per_core = batch_and_m_tiles;
+        k_tiles_per_core = div_up(k_tiles, num_cores);
+        n_tiles_per_core = div_up(n_tiles, num_cores);
+    }
+    while (k_tiles % k_tiles_per_core != 0) {
+        k_tiles_per_core -= 1;
+    }
+    auto matmul_params =
+        get_subblock_sizes(batch_and_m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
+    uint32_t out_subblock_h = std::get<0>(matmul_params);
+    uint32_t out_subblock_w = std::get<1>(matmul_params);
+    return MatmulMultiCoreReuseMultiCast1DProgramConfig{
+        .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
+        .in0_block_w = k_tiles_per_core,
+        .out_subblock_h = out_subblock_h,
+        .out_subblock_w = out_subblock_w,
+        .per_core_M = batch_and_m_tiles_per_core,
+        .per_core_N = n_tiles_per_core,
+        .fuse_batch = true,
+        .fused_activation = fused_activation,
+        .mcast_in0 = is_wide,
+    };
+}
+
+MatmulProgramConfig create_matmul_program_config(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const CoreCoord> user_core_coord,
+    const std::optional<UnaryWithParam> fused_activation,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    auto a_shape = input_tensor_a.get_shape();
+    auto b_shape = input_tensor_b.get_shape();
+    auto a_padded_shape = a_shape.with_tile_padding();
+    auto b_padded_shape = b_shape.with_tile_padding();
+    auto a_layout = input_tensor_a.memory_config().memory_layout;
+    auto inteneded_k_size_of_a = a_shape[-1];
+    auto inteneded_k_size_of_b = b_shape[-2];
+    auto k_size = a_padded_shape[-1];
+    auto m_size = a_padded_shape[-2];
+    auto n_size = b_padded_shape[-1];
+    uint32_t batch_size_a = get_batch_size(a_padded_shape);
+    uint32_t batch_size_b = get_batch_size(b_padded_shape);
+    bool input_b_is_batched = batch_size_b > 1;
+    bool any_size_within_tile = k_size <= ttnn::TILE_SIZE || m_size <= ttnn::TILE_SIZE || n_size <= ttnn::TILE_SIZE;
+    auto input_tensor_a_memory_config = input_tensor_a.memory_config();
+    auto input_tensor_b_memory_config = input_tensor_b.memory_config();
+    bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
+    bool a_is_sharded = input_tensor_a.is_sharded();
+    TT_FATAL(inteneded_k_size_of_a == inteneded_k_size_of_b, "The k dimension does not match between tensors");
+    TT_FATAL(
+        (batch_size_a * m_size) % ttnn::TILE_SIZE == 0 && k_size % ttnn::TILE_SIZE == 0 &&
+            n_size % ttnn::TILE_SIZE == 0,
+        "The last two dimensions of the first tensor and the last dimension of the second tensor must be a multiple of "
+        "tile size");
+    auto core_coord = input_tensor_a.device()->compute_with_storage_grid_size();
+    bool has_user_core_coord = user_core_coord.has_value();
+    if (has_user_core_coord) {
+        auto x = user_core_coord.value().x;
+        auto y = user_core_coord.value().y;
+        if (x <= core_coord.x && y <= core_coord.y) {
+            core_coord = user_core_coord.value();
+        }
+    }
+
+    uint32_t m_tiles_per_core;
+    uint32_t n_tiles_per_core;
+    uint32_t k_tiles_per_core;
+    if (input_b_is_batched) {
+        TT_FATAL(!fused_activation.has_value(), "Cannot use activation with batched input b");
+        if (!a_is_sharded && !input_tensor_b.is_sharded()) {
+            m_tiles_per_core = div_up(m_size, ttnn::TILE_SIZE);
+            n_tiles_per_core = div_up(n_size, ttnn::TILE_SIZE);
+            k_tiles_per_core = 1;  // TODO(arakhmati): Can it be more than 1 without running out of memory?
+        } else if (a_is_sharded) {
+            TT_FATAL(
+                a_layout != TensorMemoryLayout::WIDTH_SHARDED,
+                "MatmulMultiCoreReuseProgramConfig: Cannot be width sharded");
+            auto shard_shape = input_tensor_a_memory_config.shard_spec.value().shape;
+            uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
+            m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
+            n_tiles_per_core = n;
+            k_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
+        } else {
+            TT_FATAL(
+                input_tensor_b_memory_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
+                "MatmulMultiCoreReuseProgramConfig: Cannot be width sharded");
+            auto shard_shape = input_tensor_b_memory_config.shard_spec.value().shape;
+            m_tiles_per_core = div_up(m_size, ttnn::TILE_SIZE);
+            n_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
+            k_tiles_per_core = 1;
+        }
+
+        auto matmul_params = get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
+        uint32_t out_subblock_h = std::get<0>(matmul_params);
+        uint32_t out_subblock_w = std::get<1>(matmul_params);
+
+        return MatmulMultiCoreReuseProgramConfig{
+            .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
+            .in0_block_w = k_tiles_per_core,
+            .out_subblock_h = out_subblock_h,
+            .out_subblock_w = out_subblock_w,
+            .per_core_M = m_tiles_per_core,
+            .per_core_N = n_tiles_per_core,
+        };
+    }
+
+    auto height = batch_size_a * m_size;
+    auto width = n_size;
+    auto height_width_ratio = (height > width) ? height / width : width / height;
+    bool a_is_block_sharded = a_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    if (height_width_ratio > 8 || any_size_within_tile) {
+        if (!a_is_block_sharded) {
+            return create_matmul_1d_systolic_array_program_config(
+                a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en, a_layout);
+        }
+    }
+    if (!a_is_sharded) {
+        m_tiles_per_core = (uint32_t)std::ceil((((double)batch_size_a * m_size) / ttnn::TILE_SIZE) / core_coord.y);
+        n_tiles_per_core = (uint32_t)std::ceil((double)n_size / ttnn::TILE_SIZE / core_coord.x);
+        k_tiles_per_core = 4;  // TODO(arakhmati): What is a good starting point?
+        while ((k_size / ttnn::TILE_SIZE) % k_tiles_per_core != 0) {
+            k_tiles_per_core -= 1;
+        }
+    } else {
+        if (!a_is_block_sharded) {
+            return create_matmul_1d_systolic_array_program_config(
+                a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en, a_layout);
+        }
+        uint32_t k = a_shape[-1] / ttnn::TILE_SIZE;
+        uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
+        auto shard_shape = input_tensor_a_memory_config.shard_spec.value().shape;
+        m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
+        n_tiles_per_core = (n * shard_shape[1]) / (k * ttnn::TILE_SIZE);
+        k_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
+    }
+
+    auto matmul_params = get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
+    uint32_t out_subblock_h = std::get<0>(matmul_params);
+    uint32_t out_subblock_w = std::get<1>(matmul_params);
+    bool transpose_mcast =
+        a_is_block_sharded && input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
+    if (out_subblock_w != n_tiles_per_core) {
+        out_subblock_h = 1;
+    }
+
+    return MatmulMultiCoreReuseMultiCastProgramConfig{
+        .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
+        .in0_block_w = k_tiles_per_core,
+        .out_subblock_h = out_subblock_h,
+        .out_subblock_w = out_subblock_w,
+        .per_core_M = m_tiles_per_core,
+        .per_core_N = n_tiles_per_core,
+        .transpose_mcast = transpose_mcast,
+        .fused_activation = fused_activation,
+    };
 }
 
 CoreCoord get_core_range(
@@ -241,15 +361,15 @@ CoreCoord get_core_range(
     return core_range;
 }
 
-tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
+MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    bool fuse_batch,
-    std::optional<UnaryWithParam> fused_activation,
-    bool mcast_in0,
-    bool out_sharded,
-    std::optional<CoreCoord> compute_with_storage_grid_size,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const bool fuse_batch,
+    const std::optional<UnaryWithParam> fused_activation,
+    const bool mcast_in0,
+    const bool out_sharded,
+    const std::optional<const CoreCoord> compute_with_storage_grid_size,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = input_tensor_a.device();
     auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());
     uint32_t M = fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1]
@@ -267,8 +387,8 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
     uint32_t in0_block_w = K / TILE_WIDTH % 2 == 0 ? 2 : 1;
     bool per_core_N_equals_subblock_w_constraint = out_sharded && !mcast_in0;
     bool per_core_M_equals_subblock_h_constraint = out_sharded && mcast_in0;
-    bool fp32_dest_acc_en = bmm_op_utils::get_fp32_dest_acc_en(compute_kernel_config);
-    auto subblock_hw = get_matmul_subblock_params(
+    bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
+    auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
         per_core_M,
         per_core_N,
         per_core_M_equals_subblock_h_constraint,
@@ -277,7 +397,7 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
     auto out_subblock_h = std::get<0>(subblock_hw);
     auto out_subblock_w = std::get<1>(subblock_hw);
 
-    return tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig{
+    return MatmulMultiCoreReuseMultiCast1DProgramConfig{
         .compute_with_storage_grid_size = grid_size,
         .in0_block_w = in0_block_w,
         .out_subblock_h = out_subblock_h,
@@ -289,54 +409,17 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
         .mcast_in0 = mcast_in0};
 }
 
-std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
-    const uint32_t per_core_M,
-    const uint32_t per_core_N,
-    const bool per_core_M_equals_subblock_h_constraint,
-    bool per_core_N_equals_subblock_w_constraint,
-    bool fp32_dest_acc_en) {
-    TT_FATAL(
-        !(per_core_M_equals_subblock_h_constraint and per_core_N_equals_subblock_w_constraint),
-        "Only one constraint may be true for h or w!");
-
-    uint32_t out_subblock_h, out_subblock_w;
-    for (auto& subblock_hw : bmm_op_utils::SUBBLOCK_HW_CHOICES) {
-        out_subblock_h = std::get<0>(subblock_hw);
-        out_subblock_w = std::get<1>(subblock_hw);
-        if (fp32_dest_acc_en) {
-            if ((out_subblock_h * out_subblock_w) > 4) {
-                continue;  // Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode
-            }
-        }
-        if (per_core_N_equals_subblock_w_constraint) {
-            if (out_subblock_w != per_core_N || out_subblock_h != 1) {
-                continue;
-            }
-        }
-        if (per_core_M_equals_subblock_h_constraint) {
-            if (out_subblock_h != per_core_M || out_subblock_w != 1) {
-                continue;
-            }
-        }
-        if (per_core_M % out_subblock_h == 0 and per_core_N % out_subblock_w == 0) {
-            return {out_subblock_h, out_subblock_w};
-        }
-    }
-    // Return basic value that should work in most cases.
-    return {1, 1};
-}
-
 // TODO: Only supports sharded matmul for now; infer most matmul params from shard spec
-tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
+MatmulProgramConfig get_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const MemoryConfig& output_mem_config,
-    std::optional<UnaryWithParam> fused_activation,
+    const std::optional<UnaryWithParam> fused_activation,
     const bool matmul,
     const std::optional<const CoreCoord> user_core_coord,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     TT_FATAL(input_tensor_a.is_sharded());
-    bool fp32_dest_acc_en = bmm_op_utils::get_fp32_dest_acc_en(compute_kernel_config);
+    bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
     // TODO: allow overwriting of grid size by user_core_coord after allowing support of arbitrary compute grid and more
     // generic sharded output tensor creation
     auto grid_size = input_tensor_a.shard_spec().value().grid.bounding_box().grid_size();
@@ -379,12 +462,12 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
                 TT_FATAL(false, "Input tensor must be WIDTH or HEIGHT sharded for 1D mcast matmul!");
             }
 
-            auto subblock_hw = get_matmul_subblock_params(
+            auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
                 per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
             auto out_subblock_h = std::get<0>(subblock_hw);
             auto out_subblock_w = std::get<1>(subblock_hw);
 
-            return tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig{
+            return MatmulMultiCoreReuseMultiCast1DProgramConfig{
                 .compute_with_storage_grid_size = grid_size,
                 .in0_block_w = in0_block_w,
                 .out_subblock_h = out_subblock_h,
@@ -427,12 +510,12 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
             uint32_t per_core_N = div_up(N, virtual_x);
             uint32_t in0_block_w = cores_along_x_match_grid_size ? shard_shape[1] / TILE_WIDTH : 1;
 
-            auto subblock_hw = get_matmul_subblock_params(
+            auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
                 per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
             auto out_subblock_h = std::get<0>(subblock_hw);
             auto out_subblock_w = std::get<1>(subblock_hw);
 
-            return tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+            return MatmulMultiCoreReuseMultiCastProgramConfig{
                 .compute_with_storage_grid_size = grid_size,
                 .in0_block_w = in0_block_w,
                 .out_subblock_h = out_subblock_h,
@@ -463,7 +546,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
         uint32_t per_core_N = N;
         uint32_t in0_block_w = in0_shard_shape[1] / TILE_WIDTH;
 
-        auto subblock_hw = get_matmul_subblock_params(
+        auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
             per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
         auto out_subblock_h = std::get<0>(subblock_hw);
         auto out_subblock_w = std::get<1>(subblock_hw);
@@ -482,7 +565,7 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
                 input_tensor_a.shard_spec().value().orientation == input_tensor_b.shard_spec().value().orientation);
         }
 
-        return tt::operations::primary::MatmulMultiCoreReuseProgramConfig{
+        return MatmulMultiCoreReuseProgramConfig{
             .compute_with_storage_grid_size = grid_size,
             .in0_block_w = in0_block_w,
             .out_subblock_h = out_subblock_h,
@@ -491,47 +574,9 @@ tt::operations::primary::MatmulProgramConfig get_matmul_program_config(
             .per_core_N = per_core_N,
         };
     }
-    return tt::operations::primary::create_matmul_program_config(
+    return create_matmul_program_config(
         input_tensor_a, input_tensor_b, grid_size, fused_activation, compute_kernel_config);
 }
-
-void add_stagger_defines_if_needed(const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines) {
-    // Empirically deduced di/dt problems appear for matmuls using more than 48 cores;
-    // when there is 48 cores or less, we never enable stagger since the delay impacts op performance
-    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
-
-    // Apply stagger delay on Wormhole B0 on odd rows, so that only half of cores start doing work at once.
-    // This is done to mitigate di/dt issues, in case the environment var is set.
-    // See issue #9857.
-    const bool enable_stagger = std::getenv("TT_ENABLE_MATMUL_STAGGER");
-    if (enable_stagger && arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
-        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
-        log_warning(tt::LogOp, "Stagger enabled for matmul op using {} cores.", num_cores);
-    }
-}
-
-std::tuple<uint32_t, uint32_t> get_subblock_sizes(
-    uint32_t m_tiles_per_core, uint32_t n_tiles_per_core, bool fp32_dest_acc_en) {
-    uint32_t out_subblock_h, out_subblock_w;
-    for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
-        out_subblock_w = std::get<0>(subblock_hw);
-        out_subblock_h = std::get<1>(subblock_hw);
-        if ((out_subblock_h * out_subblock_w) <= 4 || !fp32_dest_acc_en) {
-            if (m_tiles_per_core % out_subblock_h == 0 && n_tiles_per_core % out_subblock_w == 0) {
-                return {out_subblock_h, out_subblock_w};
-            }
-        }
-    }
-    TT_FATAL(false, "Unable to find subblock sizes");
-}
-
-}  // namespace bmm_op_utils
-
-namespace tt {
-
-namespace operations {
-
-namespace primary {
 
 inline uint32_t get_estimated_size_of_cbs(
     uint32_t per_core_M,
@@ -609,9 +654,9 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     num_blocks_x = (Nt - 1) / per_core_N + 1;
 
     if (num_blocks_x * num_blocks_y <= num_cores_x * num_cores_y and Kt % in0_block_w == 0) {
-        CoreCoord core_range = bmm_op_utils::get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
+        CoreCoord core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
         if (core_range.y == 1) {
-            return bmm_op_utils::get_mcast_1d_config(
+            return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
                 false /* fuse_batch */,
@@ -621,7 +666,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 std::nullopt /* compute_with_storage_grid_size */,
                 compute_kernel_config);
         } else if (core_range.x == 1) {
-            return bmm_op_utils::get_mcast_1d_config(
+            return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
                 false /* fuse_batch */,
@@ -681,7 +726,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
         }
     } else {
         bool bmm = user_run_batched;
-        return bmm_op_utils::get_matmul_program_config(
+        return get_matmul_program_config(
             input_tensor_a, input_tensor_b, mem_config, std::nullopt, !bmm, user_core_coord, compute_kernel_config);
     }
 }
@@ -738,6 +783,128 @@ inline MatmulProgramConfig get_program_config(
         },
         config);
     return config;
+}
+
+}  // namespace
+
+namespace bmm_op_utils {
+
+std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
+    const uint32_t per_core_M,
+    const uint32_t per_core_N,
+    const bool per_core_M_equals_subblock_h_constraint,
+    const bool per_core_N_equals_subblock_w_constraint,
+    const bool fp32_dest_acc_en) {
+    TT_FATAL(
+        !(per_core_M_equals_subblock_h_constraint and per_core_N_equals_subblock_w_constraint),
+        "Only one constraint may be true for h or w!");
+
+    uint32_t out_subblock_h, out_subblock_w;
+    for (auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
+        out_subblock_h = std::get<0>(subblock_hw);
+        out_subblock_w = std::get<1>(subblock_hw);
+        if (fp32_dest_acc_en) {
+            if ((out_subblock_h * out_subblock_w) > 4) {
+                continue;  // Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode
+            }
+        }
+        if (per_core_N_equals_subblock_w_constraint) {
+            if (out_subblock_w != per_core_N || out_subblock_h != 1) {
+                continue;
+            }
+        }
+        if (per_core_M_equals_subblock_h_constraint) {
+            if (out_subblock_h != per_core_M || out_subblock_w != 1) {
+                continue;
+            }
+        }
+        if (per_core_M % out_subblock_h == 0 and per_core_N % out_subblock_w == 0) {
+            return {out_subblock_h, out_subblock_w};
+        }
+    }
+    // Return basic value that should work in most cases.
+    return {1, 1};
+}
+
+void add_stagger_defines_if_needed(const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines) {
+    // Empirically deduced di/dt problems appear for matmuls using more than 48 cores;
+    // when there is 48 cores or less, we never enable stagger since the delay impacts op performance
+    constexpr uint32_t WH_B0_MM_MAX_CORES_NO_STAGGER = 48;
+
+    // Apply stagger delay on Wormhole B0 on odd rows, so that only half of cores start doing work at once.
+    // This is done to mitigate di/dt issues, in case the environment var is set.
+    // See issue #9857.
+    const bool enable_stagger = std::getenv("TT_ENABLE_MATMUL_STAGGER");
+    if (enable_stagger && arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_STAGGER) {
+        mm_kernel_defines["MM_STAGGER_ODD_ROWS"] = "1";
+        log_warning(tt::LogOp, "Stagger enabled for matmul op using {} cores.", num_cores);
+    }
+}
+
+}  // namespace bmm_op_utils
+
+namespace ttnn {
+
+namespace operations {
+
+namespace matmul {
+
+Tensor matmul(
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    const std::optional<const Tensor> bias,
+    const struct Matmul &parameters,
+    const uint8_t queue_id) {
+    std::vector<std::optional<const Tensor>> optional_input_tensors = {};
+    std::vector<Tensor> output_tensors;
+    if (bias.has_value()) {
+        optional_input_tensors.push_back(bias.value());
+        output_tensors = {
+            Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias.value()}))};
+    } else {
+        optional_input_tensors.push_back(std::nullopt);
+        output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
+    }
+
+    operation::launch_op(
+        [parameters, queue_id](
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+            const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
+            const auto &input_tensor_a = input_tensors.at(0);
+            const auto &input_tensor_b = input_tensors.at(1);
+            auto arch = input_tensor_a.device()->arch();
+            const bool has_user_grid = parameters.user_core_coord.has_value();
+            const bool has_program_config = parameters.program_config.has_value();
+            const auto increase_fidelity = !has_program_config && !has_user_grid;
+            auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
+            auto kernel_config_val =
+                init_device_compute_kernel_config(arch, parameters.compute_kernel_config, math_fidelity);
+            bool broadcast_batch = parameters.bcast_batch.value_or(
+                get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
+            TT_FATAL(
+                !(has_user_grid && has_program_config),
+                "Cannot use both user core grid/coordinates and a program config");
+            return operation::run(
+                Matmul{
+                    parameters.program_config,
+                    broadcast_batch,
+                    parameters.output_mem_config,
+                    parameters.output_dtype.value_or(input_tensor_a.get_dtype()),
+                    kernel_config_val,
+                    parameters.untilize_out,
+                    parameters.user_core_coord,
+                    parameters.user_fused_activation,
+                    parameters.user_run_batched},
+                {input_tensor_a, input_tensor_b},
+                optional_input_tensors,
+                {},
+                queue_id);
+        },
+        {input_tensor_a, input_tensor_b},
+        output_tensors,
+        optional_input_tensors);
+    return output_tensors.at(0);
 }
 
 void Matmul::validate(
@@ -1054,8 +1221,8 @@ void Matmul::validate(
 }
 
 std::vector<Shape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const Shape input_shape_a = input_tensors.at(0).get_legacy_shape();
-    const Shape input_shape_b = input_tensors.at(1).get_legacy_shape();
+    const Shape& input_shape_a = input_tensors.at(0).get_legacy_shape();
+    const Shape& input_shape_b = input_tensors.at(1).get_legacy_shape();
     const uint32_t a_rank = input_shape_a.rank();
     const uint32_t b_rank = input_shape_b.rank();
     const uint32_t out_rank = std::max(a_rank, b_rank);
@@ -1205,26 +1372,6 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
         *this, input_tensors, this->output_dtype.value(), Layout::TILE, this->output_mem_config);
 }
 
-uint32_t get_per_core_for_multiple_blocks(uint32_t per_core, uint32_t tiles) {
-    static std::vector<uint32_t> divisors = {2, 3, 5, 7, 11, 13};
-    uint32_t num_blocks = (tiles - 1) / per_core + 1;
-    while (per_core > 1 && num_blocks == 1) {
-        bool divided = false;
-        for (uint32_t divisor : divisors) {
-            if (per_core % divisor == 0) {
-                per_core /= divisor;
-                divided = true;
-                break;
-            }
-        }
-        if (!divided) {
-            per_core = 1;
-        }
-        num_blocks = (tiles - 1) / per_core + 1;
-    }
-    return per_core;
-}
-
 operation::ProgramWithCallbacks Matmul::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -1340,207 +1487,8 @@ operation::OpPerformanceModel Matmul::create_op_performance_model(
         input_tensors, optional_input_tensors, output_tensors, this->compute_kernel_config.value());
 }
 
-MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
-    const ttnn::types::Shape& input_shape_a,
-    const ttnn::types::Shape& input_shape_b,
-    const CoreCoord& core_coord,
-    const std::optional<UnaryWithParam> fused_activation,
-    const bool fp32_dest_acc_en,
-    const TensorMemoryLayout input_layout_a) {
-    auto a_padded_shape = input_shape_a.with_tile_padding();
-    auto b_padded_shape = input_shape_b.with_tile_padding();
-    auto k_size = a_padded_shape[-1];
-    auto m_size = a_padded_shape[-2];
-    auto n_size = b_padded_shape[-1];
-    uint32_t batch_size_a = get_batch_size(a_padded_shape);
-    uint32_t batch_size_b = get_batch_size(b_padded_shape);
-    bool input_b_is_batched = batch_size_b > 1;
-    TT_FATAL(batch_size_b == 1, "Second input cannot be currently batched when running matmul using 1d systolic array");
-    TT_FATAL(
-        (batch_size_a * m_size) % ttnn::TILE_SIZE == 0 && k_size % ttnn::TILE_SIZE == 0 &&
-            n_size % ttnn::TILE_SIZE == 0,
-        "The last two dimensions of the first tensor and the last dimension of the second tensor must be a multiple of "
-        "tile size");
-    uint32_t batch_and_m_tiles = (batch_size_a * m_size) / ttnn::TILE_SIZE;
-    uint32_t k_tiles = k_size / ttnn::TILE_SIZE;
-    uint32_t n_tiles = n_size / ttnn::TILE_SIZE;
-    uint32_t num_cores = core_coord.x * core_coord.y;
-    bool is_tall = batch_and_m_tiles > n_tiles;
-    // specific 1D mcasts require specific layout types. Override accordingly.
-    if (input_layout_a == TensorMemoryLayout::HEIGHT_SHARDED) {
-        is_tall = true;
-    } else if (input_layout_a == TensorMemoryLayout::WIDTH_SHARDED) {
-        is_tall = false;
-    }
-
-    bool is_wide = !is_tall;
-    uint32_t batch_and_m_tiles_per_core;
-    uint32_t k_tiles_per_core;
-    uint32_t n_tiles_per_core;
-    if (is_tall) {
-        batch_and_m_tiles_per_core = div_up(batch_and_m_tiles, num_cores);
-        k_tiles_per_core = div_up(k_tiles, num_cores);
-        n_tiles_per_core = n_tiles;
-    } else {
-        batch_and_m_tiles_per_core = batch_and_m_tiles;
-        k_tiles_per_core = div_up(k_tiles, num_cores);
-        n_tiles_per_core = div_up(n_tiles, num_cores);
-    }
-    while (k_tiles % k_tiles_per_core != 0) {
-        k_tiles_per_core -= 1;
-    }
-    auto matmul_params =
-        bmm_op_utils::get_subblock_sizes(batch_and_m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
-    uint32_t out_subblock_h = std::get<0>(matmul_params);
-    uint32_t out_subblock_w = std::get<1>(matmul_params);
-    return MatmulMultiCoreReuseMultiCast1DProgramConfig{
-        .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
-        .in0_block_w = k_tiles_per_core,
-        .out_subblock_h = out_subblock_h,
-        .out_subblock_w = out_subblock_w,
-        .per_core_M = batch_and_m_tiles_per_core,
-        .per_core_N = n_tiles_per_core,
-        .fuse_batch = true,
-        .fused_activation = fused_activation,
-        .mcast_in0 = is_wide,
-    };
-}
-
-MatmulProgramConfig create_matmul_program_config(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<const CoreCoord> user_core_coord,
-    std::optional<UnaryWithParam> fused_activation,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    auto a_shape = input_tensor_a.get_shape();
-    auto b_shape = input_tensor_b.get_shape();
-    auto a_padded_shape = a_shape.with_tile_padding();
-    auto b_padded_shape = b_shape.with_tile_padding();
-    auto a_layout = input_tensor_a.memory_config().memory_layout;
-    auto inteneded_k_size_of_a = a_shape[-1];
-    auto inteneded_k_size_of_b = b_shape[-2];
-    auto k_size = a_padded_shape[-1];
-    auto m_size = a_padded_shape[-2];
-    auto n_size = b_padded_shape[-1];
-    uint32_t batch_size_a = get_batch_size(a_padded_shape);
-    uint32_t batch_size_b = get_batch_size(b_padded_shape);
-    bool input_b_is_batched = batch_size_b > 1;
-    bool any_size_within_tile = k_size <= ttnn::TILE_SIZE || m_size <= ttnn::TILE_SIZE || n_size <= ttnn::TILE_SIZE;
-    auto input_tensor_a_memory_config = input_tensor_a.memory_config();
-    auto input_tensor_b_memory_config = input_tensor_b.memory_config();
-    bool fp32_dest_acc_en = bmm_op_utils::get_fp32_dest_acc_en(compute_kernel_config);
-    bool a_is_sharded = input_tensor_a.is_sharded();
-    TT_FATAL(inteneded_k_size_of_a == inteneded_k_size_of_b, "The k dimension does not match between tensors");
-    TT_FATAL(
-        (batch_size_a * m_size) % ttnn::TILE_SIZE == 0 && k_size % ttnn::TILE_SIZE == 0 &&
-            n_size % ttnn::TILE_SIZE == 0,
-        "The last two dimensions of the first tensor and the last dimension of the second tensor must be a multiple of "
-        "tile size");
-    auto core_coord = input_tensor_a.device()->compute_with_storage_grid_size();
-    bool has_user_core_coord = user_core_coord.has_value();
-    if (has_user_core_coord) {
-        auto x = user_core_coord.value().x;
-        auto y = user_core_coord.value().y;
-        if (x <= core_coord.x && y <= core_coord.y) {
-            core_coord = user_core_coord.value();
-        }
-    }
-
-    uint32_t m_tiles_per_core;
-    uint32_t n_tiles_per_core;
-    uint32_t k_tiles_per_core;
-    if (input_b_is_batched) {
-        TT_FATAL(!fused_activation.has_value(), "Cannot use activation with batched input b");
-        if (!a_is_sharded && !input_tensor_b.is_sharded()) {
-            m_tiles_per_core = div_up(m_size, ttnn::TILE_SIZE);
-            n_tiles_per_core = div_up(n_size, ttnn::TILE_SIZE);
-            k_tiles_per_core = 1;  // TODO(arakhmati): Can it be more than 1 without running out of memory?
-        } else if (a_is_sharded) {
-            TT_FATAL(
-                a_layout != TensorMemoryLayout::WIDTH_SHARDED,
-                "MatmulMultiCoreReuseProgramConfig: Cannot be width sharded");
-            auto shard_shape = input_tensor_a_memory_config.shard_spec.value().shape;
-            uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
-            m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
-            n_tiles_per_core = n;
-            k_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
-        } else {
-            TT_FATAL(
-                input_tensor_b_memory_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
-                "MatmulMultiCoreReuseProgramConfig: Cannot be width sharded");
-            auto shard_shape = input_tensor_b_memory_config.shard_spec.value().shape;
-            m_tiles_per_core = div_up(m_size, ttnn::TILE_SIZE);
-            n_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
-            k_tiles_per_core = 1;
-        }
-
-        auto matmul_params = bmm_op_utils::get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
-        uint32_t out_subblock_h = std::get<0>(matmul_params);
-        uint32_t out_subblock_w = std::get<1>(matmul_params);
-
-        return MatmulMultiCoreReuseProgramConfig{
-            .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
-            .in0_block_w = k_tiles_per_core,
-            .out_subblock_h = out_subblock_h,
-            .out_subblock_w = out_subblock_w,
-            .per_core_M = m_tiles_per_core,
-            .per_core_N = n_tiles_per_core,
-        };
-    }
-
-    auto height = batch_size_a * m_size;
-    auto width = n_size;
-    auto height_width_ratio = (height > width) ? height / width : width / height;
-    bool a_is_block_sharded = a_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    if (height_width_ratio > 8 || any_size_within_tile) {
-        if (!a_is_block_sharded) {
-            return create_matmul_1d_systolic_array_program_config(
-                a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en, a_layout);
-        }
-    }
-    if (!a_is_sharded) {
-        m_tiles_per_core = (uint32_t)std::ceil((((double)batch_size_a * m_size) / ttnn::TILE_SIZE) / core_coord.y);
-        n_tiles_per_core = (uint32_t)std::ceil((double)n_size / ttnn::TILE_SIZE / core_coord.x);
-        k_tiles_per_core = 4;  // TODO(arakhmati): What is a good starting point?
-        while ((k_size / ttnn::TILE_SIZE) % k_tiles_per_core != 0) {
-            k_tiles_per_core -= 1;
-        }
-    } else {
-        if (!a_is_block_sharded) {
-            return create_matmul_1d_systolic_array_program_config(
-                a_shape, b_shape, core_coord, fused_activation, fp32_dest_acc_en, a_layout);
-        }
-        uint32_t k = a_shape[-1] / ttnn::TILE_SIZE;
-        uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
-        auto shard_shape = input_tensor_a_memory_config.shard_spec.value().shape;
-        m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
-        n_tiles_per_core = (n * shard_shape[1]) / (k * ttnn::TILE_SIZE);
-        k_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
-    }
-
-    auto matmul_params = bmm_op_utils::get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
-    uint32_t out_subblock_h = std::get<0>(matmul_params);
-    uint32_t out_subblock_w = std::get<1>(matmul_params);
-    bool transpose_mcast =
-        a_is_block_sharded && input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
-    if (out_subblock_w != n_tiles_per_core) {
-        out_subblock_h = 1;
-    }
-
-    return MatmulMultiCoreReuseMultiCastProgramConfig{
-        .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
-        .in0_block_w = k_tiles_per_core,
-        .out_subblock_h = out_subblock_h,
-        .out_subblock_w = out_subblock_w,
-        .per_core_M = m_tiles_per_core,
-        .per_core_N = n_tiles_per_core,
-        .transpose_mcast = transpose_mcast,
-        .fused_activation = fused_activation,
-    };
-}
-
-}  // namespace primary
+}  // namespace matmul
 
 }  // namespace operations
 
-}  // namespace tt
+}  // namespace ttnn

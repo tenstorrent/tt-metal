@@ -8,16 +8,20 @@
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
+using namespace tt;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
-namespace tt {
+namespace ttnn {
 
-namespace tt_metal {
+namespace operations {
+
+namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor &b, Tensor &output, bool bcast_batch) {
     tt_metal::Program program{};
 
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const tt::tt_metal::Shape& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
@@ -31,8 +35,8 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     tt_metal::Buffer *src1_buffer = b.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
-    Shape cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
+    tt::tt_metal::Device *device = a.device();
+    const tt::tt_metal::Shape& cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -169,8 +173,8 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     auto override_runtime_args_callback =
         [reader_kernel_id = reader_id, writer_kernel_id = writer_id, num_cores, num_cores_y](
             const Program &program,
-            const std::vector<Buffer *> &input_buffers,
-            const std::vector<Buffer *> &output_buffers) {
+            const std::vector<tt_metal::Buffer *> &input_buffers,
+            const std::vector<tt_metal::Buffer *> &output_buffers) {
             auto src_dram_buffer_a = input_buffers.at(0);
             auto src_dram_buffer_b = input_buffers.at(1);
 
@@ -195,6 +199,8 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     return {std::move(program), override_runtime_args_callback};
 }
 
-}  // namespace tt_metal
+}  // namespace matmul
 
-}  // namespace tt
+}  // namespace operations
+
+}  // namespace ttnn

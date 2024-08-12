@@ -369,13 +369,7 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
         }
     }
 
-    return ttnn::operations::matmul::matmul(
-            a_slim,
-            b_slim,
-            std::nullopt,
-            tt::operations::primary::Matmul{
-            std::nullopt,
-            std::nullopt});
+    return ttnn::matmul(a_slim, b_slim);
 }
 
 Tensor _polyval(const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {

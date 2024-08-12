@@ -14,17 +14,15 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
-using namespace tt::constants;
 using namespace tt;
+using namespace tt::constants;
 
 namespace reuse_dram_sharded_optimized_helpers {
-using namespace tt::constants;
-using namespace tt;
-using namespace tt_metal;
 using ttnn::operations::unary::UnaryOpType;
+using ttnn::operations::unary::UnaryWithParam;
 
 void get_dram_reader_core_coords_grayskull(
-    tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
+    tt::tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
     // hardcoded for grayskull
     uint32_t full_grid_size_y = 12;
 
@@ -118,7 +116,7 @@ void get_dram_reader_core_coords_grayskull(
 }
 
 void get_dram_reader_core_coords_wormhole_b0(
-    tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
+    tt::tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
     // hardcoded for wh_b0
     uint32_t full_grid_size_y = 12;
     uint32_t x_step = 3;
@@ -335,7 +333,7 @@ void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2,
 }
 
 operation::ProgramWithCallbacks create_program_dram_sharded(
-    tt_metal::Device* device,
+    tt::tt_metal::Device* device,
     CoreRangeSet all_storage_cores,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1119,9 +1117,11 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
 }
 }  // namespace reuse_dram_sharded_optimized_helpers
 
-namespace tt {
+namespace ttnn {
 
-namespace tt_metal {
+namespace operations {
+
+namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     const Tensor& a,
@@ -1157,7 +1157,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.get_dtype());
     }
 
-    tt_metal::Device* device = a.device();
+    tt::tt_metal::Device* device = a.device();
 
     TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value());
     CoreRangeSet all_cores_storage = a.shard_spec().value().grid;
@@ -1283,6 +1283,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
         skip_write_back);
 }
 
-}  // namespace tt_metal
+}  // namespace matmul
 
-}  // namespace tt
+}  // namespace operations
+
+}  // namespace ttnn

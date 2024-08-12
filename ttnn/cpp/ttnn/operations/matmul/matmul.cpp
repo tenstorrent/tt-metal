@@ -12,13 +12,6 @@
 
 namespace ttnn {
 
-using MatmulMultiCoreReuseProgramConfig = tt::operations::primary::MatmulMultiCoreReuseProgramConfig;
-using MatmulMultiCoreReuseMultiCastProgramConfig = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig;
-using MatmulMultiCoreReuseMultiCast1DProgramConfig =
-    tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig;
-// MatmulProgramConfig is the Union of the above types
-using MatmulProgramConfig = tt::operations::primary::MatmulProgramConfig;
-
 namespace operations {
 namespace matmul {
 
@@ -44,11 +37,12 @@ std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std
     return ttnn::operations::unary::utils::string_to_unary_with_param(activation.value());
 }
 
-ttnn::Tensor matmul(
+ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const struct tt::operations::primary::Matmul& parameters) {
+    const struct Matmul& parameters,
+    const uint8_t& queue_id) {
     const auto& input_tensor_a_adjusted = parameters.transpose_a
                                               ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
                                               : input_tensor_a;
@@ -75,7 +69,7 @@ ttnn::Tensor matmul(
         }
     }
 
-    auto output_tensor = tt::operations::primary::matmul(
+    auto output_tensor = matmul(
         input_tensor_a_adjusted, input_tensor_b_adjusted, post_process_bias ? std::nullopt : bias, parameters);
 
     if (post_process_bias) {
