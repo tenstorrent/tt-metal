@@ -68,23 +68,27 @@ Mistral-7B is running on a single chip. If you are running on a T3000 please set
 
 Note that while running the demo you might see the warning: `Op | WARNING  | TILE layout does not have multicore implementation yet. Falling back to 1 core.` This is expected and can be ignored; the demo will run after the warning.
 
+Batches of 1 to 5 are supported. To set the number of batches for the demo, replace `<number_of_batches>` with a value between 1 and 5 in the CLI command.
+
 ```
 # Run the demo with a pre-written batch of 8 user prompts:
 
 # Prefill & Decode demo
-pytest models/demos/wormhole/mistral7b/demo/demo_with_prefill.py::test_mistral7B_demo[general_weights]
+pytest models/demos/wormhole/mistral7b/demo/demo_with_prefill.py::test_mistral7B_demo[general_weights-<number_of_batches>_batch]
 
 # Decode-only demo
-pytest models/demos/wormhole/mistral7b/demo/demo.py::test_mistral7B_demo[general_weights]
+pytest models/demos/wormhole/mistral7b/demo/demo.py::test_mistral7B_demo[general_weights-<number_of_batches>_batch]
 ```
 
 We also provide an input file with 32 user question-prompt for instruct weights (don't forget to update your env flags to the correct instruct weights folder):
 ```
+# Run the demo with a pre-written batch of 8 user question-prompts:
+
 # Prefill & Decode demo
-pytest models/demos/wormhole/mistral7b/demo/demo_with_prefill.py::test_mistral7B_demo[instruct_weights]
+pytest models/demos/wormhole/mistral7b/demo/demo_with_prefill.py::test_mistral7B_demo[instruct_weights-<number_of_batches>_batch]
 
 # Decode-only demo
-pytest models/demos/wormhole/mistral7b/demo/demo.py::test_mistral7B_demo[instruct_weights]
+pytest models/demos/wormhole/mistral7b/demo/demo.py::test_mistral7B_demo[instruct_weights-<number_of_batches>_batch]
 ```
 
 Both input files are provided inside `models/demos/wormhole/mistral7b/demo/`.
