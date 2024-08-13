@@ -1,16 +1,17 @@
 # Guidelines for Writing Effective Error Messages ✍️
-It's important to remember the impact that clear and informative error messages can have on debugging and maintenance. A well-crafted error message can save hours of troubleshooting and make our codebase more user-friendly, especially for those who may be less familiar with the inner workings of the system.
+Clear and informative error messages are crucial for debugging and maintenance. A well-crafted error message can save hours of troubleshooting and make our codebase more user-friendly, especially for those less familiar with the system. 
 
-## Common Mistakes
-1. **Being Too Vague:** Avoid generic messages like "An error occurred" or "Invalid input." These do not help in identifying the root cause.
-2. **Not Including Variable Values:** Forgetting to include the actual values that caused the error can make debugging significantly harder.
-3. **Overloading Messages:** While it’s important to be informative, avoid making the message too long or cluttered. Keep it concise and to the point.
-4. **Assuming Prior Knowledge:** Don’t assume that the person encountering the error knows as much about the code as you do. Provide enough context to make the error understandable on its own.
-5. **Not Making the Message Actionable:** Ensure that the error message provides clear guidance on what needs to be done to resolve the issue. Simply stating what went wrong without suggesting how to fix it can leave the user frustrated and confused.
+A well-written error message provides the following information to the user:
+* What happened and why?
+* What is the end result for the user?
+* What can the user do to prevent it from happening again?
 
-## Be Specific
-Always include the actual values and conditions that caused the error. This helps immediately identify the issue without needing to dig into the code.
-Instead of writing:
+## Key Principles
+### 1. Be Specific
+Always include the actual values and conditions that caused the error. This helps to immediately identify the issue without needing to dig into the code.
+Vague messages like "An error occurred" or "Invalid input" don’t help in identifying the root cause.
+
+Instead of:
 ```cpp
 TT_FATAL(input_shape.rank() == 3, "Invalid input tensor dimensions.");
 ```
@@ -18,9 +19,9 @@ Write:
 ```cpp
 TT_FATAL(input_shape.rank() == 3, fmt::format("Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank()));
 ```
-
-## Explain the Issue
+### 2. Explain the Issue
 Provide a brief explanation of why the error occurred or why the condition is important. This helps users understand the context of the error.
+
 Instead of:
 ```cpp
 TT_FATAL(!input_tensor_kv.has_value(), "KV tensor cannot be passed in when sharded.");
@@ -30,30 +31,22 @@ Write:
 TT_FATAL(!input_tensor_kv.has_value(), "Invalid operation: KV tensor should not be provided when the input tensor is sharded. Please ensure that the KV tensor is only used in non-sharded configurations.");
 ```
 
-## Avoid Ambiguity
-Make sure the error message clearly states what is wrong. Avoid vague language that leaves room for interpretation.
-Instead of:
-```cpp
-TT_FATAL(error_code == SUCCESS, "Operation failed.");
-```
-Write:
-```cpp
-TT_FATAL(error_code == SUCCESS, fmt::format("Operation failed with error code {}. Ensure that the previous steps were successful.", error_code));
-```
+### 3. Include Relevant Information
+Always include relevant variable values and context in the error message to aid in quick identification of the issue.
+Omitting variable values or relevant details makes debugging harder.
 
-## Avoid Redundancy
-Don’t repeat information that’s already obvious or present in the code. Focus on what adds value to the message.
-Avoid:
+Instead of:
 ```cpp
 TT_FATAL(ptr != nullptr, "Pointer must not be null.");
 ```
-Instead, enhance the message by providing context:
+Write:
 ```cpp
 TT_FATAL(ptr != nullptr, "Failed to allocate memory: pointer is null.");
 ```
+### 4. Make the Message Actionable
+Ensure the error message provides clear guidance on what needs to be done to resolve the issue.
+Stating what went wrong without providing guidance on how to fix it can be frustrating for users.
 
-## Make the Message Actionable
-Ensure that the error message provides clear guidance on what needs to be done to resolve the issue. Simply stating what went wrong without suggesting how to fix it can leave the user frustrated and confused.
 Instead of:
 ```cpp
 TT_FATAL(head_size % TILE_WIDTH != 0, "Head size is invalid.");
@@ -63,10 +56,20 @@ Write:
 TT_FATAL(head_size % TILE_WIDTH != 0, fmt::format("Invalid head size: {}. The head size must be a multiple of tile width ({}). Please adjust the dimensions accordingly.", head_size, TILE_WIDTH));
 ```
 
-## Example of a well-constructed error message:
+## Good Example
+This message clearly states the problem, includes the actual value of head_size, and offers guidance on how to fix it.
 ```cpp
 TT_FATAL(head_size % TILE_WIDTH == 0,
          fmt::format("Invalid head size: {}. The head size must be a multiple of the tile width ({}). Please adjust the dimensions accordingly.", 
                      head_size, TILE_WIDTH));
 ```
-This message clearly states the problem (head size not being a multiple of the tile width), includes the actual value of head_size, and offers guidance on what needs to be done to fix it.
+
+## Style recommendations
+* **Use simple, complete sentences.**
+* **Use present tense** to describe current issues, and past tense for things that happened already.
+* **Use active voice** when possible; passive voice is okay for describing errors.
+* **Avoid using** ALL CAPS and exclamation points.
+* **Clarify terms** by adding descriptors before them. For example,<br>instead of `Specify Axis when Merge is set to No`, say `Specify the Axis parameter when the Merge option is set to No.`
+* **Don’t use the word "bad."** Be specific about what’s wrong. Instead of "Bad size," explain what size is needed.
+* **Avoid the word "please."** It can make required actions sound optional.
+* **Start your message with** the most important words that relate to the issue.
