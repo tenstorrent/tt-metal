@@ -14,6 +14,12 @@ jobs:
   single-card-demos:
     uses: ./.github/workflows/single-card-demo-tests.yaml
     secrets: inherit
+  single-card-device-perf:
+    uses: ./.github/workflows/perf-device-models.yaml
+    secrets: inherit
+  t3000-demos:
+    uses: ./.github/workflows/t3000-demo-tests.yaml
+    secrets: inherit
   get-params:
     runs-on: ubuntu-latest
     outputs:
