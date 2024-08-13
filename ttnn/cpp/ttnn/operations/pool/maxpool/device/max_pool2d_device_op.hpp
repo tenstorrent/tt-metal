@@ -12,7 +12,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/conv2d/conv2d.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window.hpp"
 
 
 namespace ttnn::operations {
@@ -25,7 +25,7 @@ inline uint32_t ceil_multiple_of(uint32_t n, uint32_t m) {
 // new maxpool uop -- called from the macro-op
 struct MaxPoolNew {
     struct operation_attributes_t {
-        tt::tt_metal::SlidingWindowConfig sliding_window_config_;
+        sliding_window::SlidingWindowConfig sliding_window_config_;
         DataType output_dtype_;
         MemoryConfig memory_config_;
     };

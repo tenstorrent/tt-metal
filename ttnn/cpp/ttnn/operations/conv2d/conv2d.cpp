@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv2d.hpp"
-
+#include "ttnn/common/constants.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
@@ -13,6 +13,8 @@
 using namespace tt;
 namespace ttnn {
 namespace operations {
+using sliding_window::SlidingWindowConfig;
+using sliding_window::ParallelConfig;
 
 namespace conv2d {
 
@@ -686,7 +688,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             opt_conv_op_parallel_config.num_cores_nhw,
             input_tensor_post_tm.memory_config().shard_spec.value().grid,
             true);
-        auto halo_output = ttnn::operations::halo::halo_op(
+        auto halo_output = ttnn::halo(
+            DefaultQueueId,
             input_tensor_post_tm,
             sliding_window_config,
             0,

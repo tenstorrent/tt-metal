@@ -6,15 +6,12 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/multi_core/sharded_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/sharded_op_partial.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/multi_core/sharded_op_partial_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/sliding_window.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/reference_sliding_window.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/copy_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/multi_core/copy_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/move_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_overlap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_sharded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/halo_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/reduce_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/single_core_hw/reduce_op_single_core_hw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_h/reduce_op_multi_core_h.cpp

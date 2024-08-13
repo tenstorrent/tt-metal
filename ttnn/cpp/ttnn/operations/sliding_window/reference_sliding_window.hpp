@@ -11,23 +11,23 @@
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 using tt::tt_metal::Shape;
 using tt::tt_metal::Tensor;
 
-namespace tt::tt_metal::sliding_window {
+namespace ttnn::operations::sliding_window {
 
 // Calculate Convolution on padded input buffer.
 owned_buffer::Buffer<bfloat16> ref_conv_op(
     const Tensor &input_padded_tensor,
-    Shape input_nchw_shape,
+    const Shape &input_nchw_shape,
     uint32_t stride_h,
     uint32_t stride_w,
     const vector<float> &filter_vector,
-    Shape &filter_pyt_tensor_shape,
-    Shape &out_golden_pyt_tensor_shape);
+    const Shape &filter_pyt_tensor_shape,
+    const Shape &out_golden_pyt_tensor_shape);
 
 // Calculate convolution using op_trace_metadata on padded input buffer.
 owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(
