@@ -921,7 +921,7 @@ def run_test_sdpa_decode_single_iter(
     start_idx = s // 2
     scale = d**-0.5
 
-    program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+    program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=0,  # Unused
         k_chunk_size=0,  # Unused
@@ -951,7 +951,7 @@ def run_test_sdpa_decode_single_iter(
         mesh_mapper=ReplicateTensorToMesh(device_mesh),
     )
 
-    tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
+    tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
         tt_Q,
         tt_K,
         tt_V,
@@ -959,7 +959,7 @@ def run_test_sdpa_decode_single_iter(
         scale=scale,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
-        output_mem_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+        memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
     )
 
     tt_back = ttnn.to_torch(tt_back, mesh_composer=ListMeshToTensor(device_mesh))[0]

@@ -125,9 +125,7 @@ class TtModelArgs:
                 packer_l1_acc=True,
             )
             # Chunk values based on what works best empirically
-            self.model_config[
-                "SDPA_PROGCFG"
-            ] = lambda seqlen: ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+            self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 q_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),
                 k_chunk_size=256 if seqlen > 8192 * 2 else (128 if seqlen >= 8192 else 64),

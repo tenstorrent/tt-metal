@@ -221,7 +221,7 @@ def run_test_sdpa_decode_multi_pos(
         start_indices = np.linspace(0, max_start_idx, b, dtype=np.int32).tolist()
 
         k_chunk_size = get_chunk_size(max_start_idx + 1)
-        program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+        program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
             q_chunk_size=padded_num_heads,
             k_chunk_size=k_chunk_size,
@@ -250,7 +250,7 @@ def run_test_sdpa_decode_multi_pos(
             memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
         )
 
-        tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
+        tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
             tt_Q,
             tt_K,
             tt_V,
@@ -258,7 +258,7 @@ def run_test_sdpa_decode_multi_pos(
             scale=scale,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
-            output_mem_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+            memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
         )
 
         tt_back = ttnn.to_torch(tt_back)
@@ -342,7 +342,7 @@ def run_test_sdpa_decode_single_iter(
     scale = d**-0.5
 
     k_chunk_size = get_chunk_size(max_start_idx + 1)
-    program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+    program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=padded_num_heads,
         k_chunk_size=k_chunk_size,
@@ -371,7 +371,7 @@ def run_test_sdpa_decode_single_iter(
         memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
     )
 
-    tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
+    tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
         tt_Q,
         tt_K,
         tt_V,
@@ -379,7 +379,7 @@ def run_test_sdpa_decode_single_iter(
         scale=scale,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
-        output_mem_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+        memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
     )
 
     tt_back = ttnn.to_torch(tt_back)
@@ -664,7 +664,7 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
         scale = d**-0.5
 
         k_chunk_size = get_chunk_size(start_idx + 1)
-        program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+        program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
             q_chunk_size=padded_num_heads,
             k_chunk_size=k_chunk_size,
@@ -703,7 +703,7 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
                 memory_config=dram_memcfg,  # height_sharded_memcfg
             )
 
-            tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
+            tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
                 tt_Q,
                 tt_K,
                 tt_V,
@@ -711,7 +711,7 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
                 scale=scale,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
-                output_mem_config=dram_memcfg,  # height_sharded_memcfg,
+                memory_config=dram_memcfg,  # height_sharded_memcfg,
             )
 
             tt_back = ttnn.to_torch(tt_back)
