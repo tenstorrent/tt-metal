@@ -92,4 +92,4 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--num_layers", type=int, default=80, help="total number of layers")
     parser.add_argument("-hs", "--hidden_size", type=int, default=8192, help="hidden size of the model")
     args = parser.parse_args()
-    repack(args.in_dir, args.out_dir, args.chunk_size)
+    repack(args.in_dir, args.out_dir, args.chunk_size, args.num_layers, args.hidden_size)
