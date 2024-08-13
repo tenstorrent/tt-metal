@@ -485,5 +485,21 @@ namespace tt::tt_metal{
                 while(not target_device->work_executor.worker_queue.empty());
             }
         }
+        
+        // TODO: why is this in program.hpp
+        template <typename CoreRangeContainer>
+        vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(Device* device, const CoreRangeContainer& ranges, const CoreType core_type) {
+            // This API extracts all the pairs of noc multicast encodings given a set of core ranges
+            vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
+            dst_noc_multicast_info.reserve(ranges.size());
+            for (const CoreRange& core_range : ranges) {
+                CoreCoord physical_start = device->physical_core_from_logical_core(core_range.start_coord, core_type);
+                CoreCoord physical_end = device->physical_core_from_logical_core(core_range.end_coord, core_type);
+
+                uint32_t num_receivers = core_range.size();
+                dst_noc_multicast_info.push_back(std::make_pair(CoreRange(physical_start, physical_end), num_receivers));
+            }
+            return dst_noc_multicast_info;
+        }
     }
 }

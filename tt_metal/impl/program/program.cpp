@@ -602,7 +602,7 @@ void Program::populate_dispatch_data(Device *device) {
         // TODO: use semaphore.core_type from main
         if (semaphore.core_type() == CoreType::WORKER) {
             vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                extract_dst_noc_multicast_info<std::set<CoreRange>>(
+                detail::extract_dst_noc_multicast_info<std::set<CoreRange>>(
                     device, semaphore.core_range_set().ranges(), semaphore.core_type());
             transfer_info transfer_info = {
                 .dst_base_addr = semaphore.address(),
@@ -688,7 +688,7 @@ void Program::populate_dispatch_data(Device *device) {
 
     for (KernelGroup &kernel_group : this->get_kernel_groups(CoreType::WORKER)) {
         std::vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-            extract_dst_noc_multicast_info<std::set<CoreRange>>(
+            detail::extract_dst_noc_multicast_info<std::set<CoreRange>>(
                 device, kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
 
         vector<KernelHandle> kernel_ids;
