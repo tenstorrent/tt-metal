@@ -17,7 +17,7 @@ namespace operations::experimental::transformer {
         const Tensor& cos_cache,
         const Tensor& sin_cache,
         const Tensor& trans_mat,
-        const std::optional<MemoryConfig> memory_config = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
  };
 

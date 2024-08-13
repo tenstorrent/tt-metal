@@ -17,7 +17,7 @@ struct RotaryEmbeddingOperation {
         const Tensor& cos_cache,
         const Tensor& sin_cache,
         const std::optional<uint32_t> token_index = std::nullopt,
-        const std::optional<MemoryConfig> memory_config = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 

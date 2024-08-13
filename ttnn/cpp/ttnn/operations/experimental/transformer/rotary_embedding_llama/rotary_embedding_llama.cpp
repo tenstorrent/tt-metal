@@ -10,13 +10,13 @@ namespace ttnn::operations::experimental::transformer {
 
 Tensor RotaryEmbeddingLlamaOperation::operator()(
     const Tensor &input_tensor,
-    const Tensor &cos,
-    const Tensor &sin,
+    const Tensor &cos_cache,
+    const Tensor &sin_cache,
     const Tensor& trans_mat,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor, cos, sin, trans_mat}))};
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor, cos_cache, sin_cache, trans_mat}))};
     operation::launch_op(
         [memory_config, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
@@ -32,7 +32,7 @@ Tensor RotaryEmbeddingLlamaOperation::operator()(
 
             return operation::run(
                     RotaryEmbeddingLlama{seq_len, memory_config.value_or(default_memory_config), kernel_config_val}, input_tensors);
-        }, {input_tensor, cos, sin, trans_mat}, output_tensors);
+        }, {input_tensor, cos_cache, sin_cache, trans_mat}, output_tensors);
     return output_tensors.at(0);
 }
 
