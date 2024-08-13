@@ -335,13 +335,13 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
         tt_metal::CircularBufferConfig cb_interm_config =
-            tt_metal::CircularBufferConfig(1 * src0_single_tile_size, {{CB::c_intermed0, src0_cb_data_format}})
+            tt_metal::CircularBufferConfig(max_block_size * src0_single_tile_size, {{CB::c_intermed0, src0_cb_data_format}})
                 .set_page_size(CB::c_intermed0, src0_single_tile_size);
         auto cb_interm = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
     }
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
         tt_metal::CircularBufferConfig cb_interm2_config =
-            tt_metal::CircularBufferConfig(1 * src1_single_tile_size, {{CB::c_intermed1, src1_cb_data_format}})
+            tt_metal::CircularBufferConfig(max_block_size * src1_single_tile_size, {{CB::c_intermed1, src1_cb_data_format}})
                 .set_page_size(CB::c_intermed1, src1_single_tile_size);
         auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
     }
