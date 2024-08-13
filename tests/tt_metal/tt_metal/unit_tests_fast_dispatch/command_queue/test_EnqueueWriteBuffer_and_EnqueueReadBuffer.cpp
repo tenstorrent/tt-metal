@@ -670,9 +670,8 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferL1ReadWrites) {
     std::map<std::string, std::vector<std::array<uint32_t, 2>>> test_params;
 
     for (Device *device : devices_) {
-        if (device->arch() == tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP(); // debug why this passes on BH with watcher enabled?
-        }
+        // This test hangs on Blackhole A0 when using static VCs through static TLBs and there are large number of reads/writes issued
+        //  workaround is to use dynamic VC (implemented in UMD)
         if (tt::Cluster::instance().is_galaxy_cluster()) {
             test_params = {
                 {"cores",

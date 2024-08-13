@@ -74,7 +74,6 @@ ttnn.glu_dim_2,200,0.108,0.115,0.261,0.036
 ttnn.glu_dim_3,200,0.12,0.128,0.266,0.054
 ttnn.imag,200,0.025,0.027,0.058,0.011
 ttnn.imag_bw,200,0.918,0.932,0.955
-tt_lib.tensor.lamb_optimizer,80,3.468,3.474,6.687,2.054
 ttnn.mac,200,0.066,0.068,0.279,0.027
 tt_lib.tensor.mean_hw,200,0.027,0.029,0.08,0.012
 tt_lib.tensor.moreh_norm_backward,200,0.036,0.038,0.667,0.017
