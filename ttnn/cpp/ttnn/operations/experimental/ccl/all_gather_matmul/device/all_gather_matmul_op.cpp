@@ -88,7 +88,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
     const std::optional<const ttnn::CoreGrid> core_grid
 ) {
 
-    TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
+    TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "AllGatherMatmul is only supported for Fast Dispatch");
 
     auto devices = input_tensor.get_workers();
     std::vector<Tensor> output_tensors = {ttnn::Tensor(operation::get_workers_for_op_output({input_tensor, weight_tensor})),

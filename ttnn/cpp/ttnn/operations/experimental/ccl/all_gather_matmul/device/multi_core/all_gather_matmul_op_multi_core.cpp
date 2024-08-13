@@ -31,7 +31,14 @@ namespace ttnn {
 using namespace experimental::ccl;
 using Tensors = std::vector<Tensor>;
 
-std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>, std::optional<operation::OverrideRuntimeArgumentsCallback<Tensors>>> setup_datacopy(
+// Used to hold the return values for setup_datacopy
+struct DatacopyParams {
+    std::vector<CoreCoord> datacopy_cores;
+    std::vector<uint32_t> datacopy_signal_semaphore_ids;
+    std::optional<operation::OverrideRuntimeArgumentsCallback<Tensors>> datacopy_override_runtime_arguments_callback;
+};
+
+DatacopyParams setup_datacopy(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& all_gather_output_tensor,
@@ -161,7 +168,11 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>, std::optional<operatio
     };
 
     // Return the core coordinates and semaphore address
-    return {all_datacopy_cores, {datacopy_signal_semaphore_id_dir0, datacopy_signal_semaphore_id_dir1}, override_runtime_arguments_callback};
+    return {
+        .datacopy_cores = all_datacopy_cores,
+        .datacopy_signal_semaphore_ids = {datacopy_signal_semaphore_id_dir0, datacopy_signal_semaphore_id_dir1},
+        .datacopy_override_runtime_arguments_callback = override_runtime_arguments_callback
+    };
 }
 
 
@@ -172,13 +183,10 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
 
     tt::tt_metal::Program program{};
 
-    auto datacopy_params = setup_datacopy(program, input_tensor, all_gather_output_tensor, datacopy_output_tensor, dim, num_links, ring_size, ring_index, topology, {0, 0});
+    DatacopyParams datacopy_params = setup_datacopy(program, input_tensor, all_gather_output_tensor, datacopy_output_tensor, dim, num_links, ring_size, ring_index, topology, {0, 0});
+    const auto& datacopy_override_runtime_arguments_callback = datacopy_params.datacopy_override_runtime_arguments_callback;
 
-    const std::vector<CoreCoord>& datacopy_cores = std::get<0>(datacopy_params);
-    const std::vector<uint32_t> datacopy_signal_semaphore_ids = std::get<1>(datacopy_params);
-    const auto& datacopy_override_runtime_arguments_callback = std::get<2>(datacopy_params);
-
-    std::optional<AllGatherFusedOpSignaler> fused_op_signaler = AllGatherFusedOpSignaler(datacopy_cores, datacopy_signal_semaphore_ids);
+    std::optional<AllGatherFusedOpSignaler> fused_op_signaler = AllGatherFusedOpSignaler(datacopy_params.datacopy_cores, datacopy_params.datacopy_signal_semaphore_ids);
 
     // Pass in the datacopy cores and sempahore address (Using optional arguments)
     operation::ProgramWithCallbacks program_with_callbacks = ttnn::all_gather_multi_core_with_workers_helper(program, input_tensor, all_gather_output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, fused_op_signaler, core_grid_offset);

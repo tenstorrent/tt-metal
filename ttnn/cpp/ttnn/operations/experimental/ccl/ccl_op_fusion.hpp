@@ -26,8 +26,8 @@ struct AllGatherFusedOpSignaler {
 
 
     AllGatherFusedOpSignaler(
-        std::vector<CoreCoord> fused_op_receiver_cores,
-        std::vector<uint32_t> fused_op_receiver_signal_semaphores)
+        const std::vector<CoreCoord>& fused_op_receiver_cores,
+        const std::vector<uint32_t>& fused_op_receiver_signal_semaphores)
         : fused_op_receiver_cores(fused_op_receiver_cores),
             fused_op_receiver_signal_semaphores(fused_op_receiver_signal_semaphores) {
 
