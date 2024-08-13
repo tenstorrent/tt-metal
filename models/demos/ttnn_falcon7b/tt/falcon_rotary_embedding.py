@@ -13,7 +13,7 @@ def falcon_rotary_embedding(
     seq_len = layer.shape[2]
     assert seq_len <= max_position_embeddings, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
 
-    return ttnn.transformer.rotary_embedding(
+    return ttnn.experimental.rotary_embedding(
         layer, parameters.cos_cached, parameters.sin_cached, token_idx, memory_config=memory_config
     )
 

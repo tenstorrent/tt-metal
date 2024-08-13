@@ -427,14 +427,14 @@ class TtLlamaAttention_optimized:
         # ROTARY EMBEDDINGS
         # Q Rotary Embeddings
         # query_layer: ttnn.Shape([1, 8, seq_len, 128]) -> [bsz, n_local_heads, seq_len, head_dim]
-        query_layer_ret = ttnn.experimental.tensor.rotary_embedding_llama(
+        query_layer_ret = ttnn.experimental.rotary_embedding_llama(
             query_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
         query_layer.deallocate(True)
 
         # K Rotary Embeddings
         # key_layer: ttnn.Shape([1, 1, seq_len, 128]) -> [bsz, n_local_kv_heads, seq_len, head_dim]
-        key_layer_ret = ttnn.experimental.tensor.rotary_embedding_llama(
+        key_layer_ret = ttnn.experimental.rotary_embedding_llama(
             key_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
         key_layer.deallocate(True)

@@ -126,12 +126,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_kv_cache_load_slice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/multi_core_create_q_and_kv_heads_separate/multi_core_create_q_and_kv_heads.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotate_half/single_core/rotate_half_op_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotate_half/rotate_half_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/multi_core/rotary_embedding_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/rotary_embedding_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/multi_core/rotary_embedding_llama_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/rotary_embedding_llama_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/multi_core/update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/paged_update_cache/multi_core/paged_update_cache_op_multi_core.cpp

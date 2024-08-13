@@ -98,12 +98,12 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         output = []
         for i in range(len(layer)):
             output.append(
-                ttnn.experimental.tensor.rotary_embedding(
+                ttnn.experimental.rotary_embedding(
                     layer[i],
                     self.tt_cos_cached[i],
                     self.tt_sin_cached[i],
                     token_idx,
-                    output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
                 )
             )
         return output

@@ -2709,7 +2709,9 @@ def rotary_embedding(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     cost = setup_ttnn_tensor(cos_cached, device, layout[0], input_mem_config[0], dtype[0])
     sint = setup_ttnn_tensor(sin_cached, device, layout[0], input_mem_config[0], dtype[0])
-    t2 = ttnn.transformer.rotary_embedding(t0, cost, sint, None, memory_config=memory_config_to_ttnn(output_mem_config))
+    t2 = ttnn.experimental.rotary_embedding(
+        t0, cost, sint, None, memory_config=memory_config_to_ttnn(output_mem_config)
+    )
 
     return ttnn_tensor_to_torch(t2)
 
