@@ -11,7 +11,7 @@ import torch
 
 from models.experimental.yolov3.reference.models.common import autopad
 from models.experimental.yolov3.tt.yolov3_conv import TtConv
-from ttnn.fallback_ops import fallback_ops
+from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
