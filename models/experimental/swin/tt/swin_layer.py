@@ -21,8 +21,8 @@ from models.experimental.swin.swin_utils import (
     window_reverse,
 )
 
-import tt_lib
-from tt_lib.fallback_ops import fallback_ops
+import ttnn.deprecated
+from ttnn.deprecated.fallback_ops import fallback_ops
 
 
 class TtSwinLayer(nn.Module):
@@ -137,12 +137,12 @@ class TtSwinLayer(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         input_dimensions: Tuple[int, int],
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        head_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
         output_attentions: Optional[bool] = False,
         always_partition: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor, ttnn.experimental.tensor.Tensor]:
         if not always_partition:
             self.set_shift_and_window_size(input_dimensions)
         else:

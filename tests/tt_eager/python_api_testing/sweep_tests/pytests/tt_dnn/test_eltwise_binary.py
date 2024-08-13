@@ -5,7 +5,7 @@
 import pytest
 import torch
 from functools import partial
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
@@ -44,8 +44,12 @@ if is_wormhole_b0():
 @pytest.mark.parametrize("output_mem_config", output_mem_cfgs)
 class TestEltwiseBinary:
     @pytest.mark.parametrize("fn_kind", ["add", "sub", "mul", "squared_difference"])
-    @pytest.mark.parametrize("in0_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-    @pytest.mark.parametrize("in1_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+    @pytest.mark.parametrize(
+        "in0_dtype", [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B]
+    )
+    @pytest.mark.parametrize(
+        "in1_dtype", [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B]
+    )
     def test_run_eltwise_binary_ops(
         self,
         input_shapes,

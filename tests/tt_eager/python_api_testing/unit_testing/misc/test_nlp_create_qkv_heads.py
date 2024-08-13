@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import tt2torch_tensor, comp_pcc
 from models.utility_functions import is_grayskull
 import torch
@@ -24,9 +24,11 @@ def run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config
 
     A = torch.randn(in0_shape)
 
-    in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
+    in0_t = (
+        ttnn.experimental.tensor.Tensor(A, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in0_mem_config)
+    )
 
-    q, k, v = ttl.tensor.nlp_create_qkv_heads_falcon7b(in0_t, out_mem_config)
+    q, k, v = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(in0_t, out_mem_config)
 
     # Check memory of inputs and outputs
     assert in0_t.memory_config().buffer_type == in0_mem_config.buffer_type
@@ -50,7 +52,7 @@ def run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config
     # Additional shuffling for Q head
     ref_q = torch.reshape(ref_q, [batch, seq_len, 71, 64]).transpose(-3, -2)
 
-    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
         pcc = 0.99
     else:
         pcc = 1.0
@@ -72,22 +74,34 @@ def run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    (
+        ttnn.experimental.tensor.DataType.BFLOAT8_B,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.FLOAT32,
+    ),
     ids=["BFLOAT8_B", "BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
@@ -100,26 +114,38 @@ def run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config
     ],
 )
 def test_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, request, device):
-    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+    if is_grayskull() and dtype == ttnn.experimental.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
     run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device)
 
 
 def test_nlp_create_qkv_heads_falcon7b_with_program_cache(device, use_program_cache):
-    dtype = ttl.tensor.DataType.BFLOAT8_B
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
+    mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+    )
     for _ in range(2):
         run_nlp_create_qkv_heads_falcon7b_test(1, 32, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
+        tt_dummy_tensor = (
+            ttnn.experimental.tensor.Tensor(py_dummy_tensor, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, mem_config)
+        )
 
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+    )
     for _ in range(2):
         run_nlp_create_qkv_heads_falcon7b_test(1, 32, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
+        tt_dummy_tensor = (
+            ttnn.experimental.tensor.Tensor(py_dummy_tensor, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, mem_config)
+        )
 
     assert device.num_program_cache_entries() == 2
 
@@ -149,12 +175,18 @@ def run_nlp_create_qkv_heads_test(
         in1_shape = [batch, 1, seq_len, 2 * num_kv_heads * head_dim]
         A = torch.randn(in0_shape)
         B = torch.randn(in1_shape)
-        in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in_mem_config)
-        in1_t = ttl.tensor.Tensor(B, dtype).to(ttl.tensor.Layout.TILE).to(device, in_mem_config)
+        in0_t = (
+            ttnn.experimental.tensor.Tensor(A, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in_mem_config)
+        )
+        in1_t = (
+            ttnn.experimental.tensor.Tensor(B, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in_mem_config)
+        )
     else:
         in0_shape = [batch, 1, seq_len, (num_q_heads + 2 * num_kv_heads) * head_dim]
         A = torch.randn(in0_shape)
-        in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in_mem_config)
+        in0_t = (
+            ttnn.experimental.tensor.Tensor(A, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in_mem_config)
+        )
 
     q, k, v = ttnn.experimental.nlp_create_qkv_heads(
         in0_t,
@@ -201,9 +233,9 @@ def run_nlp_create_qkv_heads_test(
     if transpose_k_heads:
         ref_k = ref_k.transpose(-2, -1)
 
-    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
         pcc = 0.99
-    elif dtype == ttl.tensor.DataType.FLOAT32:  # conversion from fp32 to tf32 will decrease pcc
+    elif dtype == ttnn.experimental.tensor.DataType.FLOAT32:  # conversion from fp32 to tf32 will decrease pcc
         pcc = 0.9999999
     else:
         pcc = 1.0
@@ -227,22 +259,34 @@ def run_nlp_create_qkv_heads_test(
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
     ids=["in_DRAM", "in_L1"],
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    (
+        ttnn.experimental.tensor.DataType.BFLOAT8_B,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.FLOAT32,
+    ),
     ids=["BFLOAT8_B", "BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
@@ -267,13 +311,15 @@ def test_nlp_create_qkv_heads_test(
     request,
     device,
 ):
-    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+    if is_grayskull() and dtype == ttnn.experimental.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
     if (
-        dtype == ttl.tensor.DataType.FLOAT32
+        dtype == ttnn.experimental.tensor.DataType.FLOAT32
         and (batch == 111 or batch == 5)
         and in_mem_config
-        == ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        == ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        )
     ):
         logger.warning("fp32 tensor too large to fit L1")
     else:
@@ -293,15 +339,21 @@ def test_nlp_create_qkv_heads_test(
 
 
 def test_nlp_create_qkv_heads_with_program_cache(device, use_program_cache):
-    dtype = ttl.tensor.DataType.BFLOAT8_B
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
+    mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+    )
     for _ in range(2):
         run_nlp_create_qkv_heads_test(5, 1024, 64, 4, 2, True, False, dtype, mem_config, mem_config, device)
         # Same in0_shape to make sure cache misses if we have additional optional tensor works
         run_nlp_create_qkv_heads_test(5, 1024, 64, 8, 8, True, True, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
+        tt_dummy_tensor = (
+            ttnn.experimental.tensor.Tensor(py_dummy_tensor, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, mem_config)
+        )
 
     assert device.num_program_cache_entries() == 2
 
@@ -319,7 +371,9 @@ def run_sharded_nlp_create_qkv_heads_test(
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_kv_heads
-    shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
+    )
     q_shape = [seq_len, 1, batch, num_cores, num_q_heads // num_cores * head_dim]
     kv_shape = [seq_len, 1, batch, num_cores, num_kv_heads // num_cores * head_dim]
     Q = torch.randn(q_shape)
@@ -331,52 +385,72 @@ def run_sharded_nlp_create_qkv_heads_test(
         B = torch.concat([K.flatten(-2, -1), V.flatten(-2, -1)], -1)
         A_interleaved = torch.concat([Q], -1).flatten(-2, -1)
         B_interleaved = torch.concat([K, V], -1).flatten(-2, -1)
-        in0_shard_spec = ttl.tensor.ShardSpec(
+        in0_shard_spec = ttnn.experimental.tensor.ShardSpec(
             shard_grid,
             [
                 seq_len * batch,
                 A_interleaved.shape[-1] // num_cores,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             False,
         )
-        in1_shard_spec = ttl.tensor.ShardSpec(
+        in1_shard_spec = ttnn.experimental.tensor.ShardSpec(
             shard_grid,
             [
                 seq_len * batch,
                 B_interleaved.shape[-1] // num_cores,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             False,
         )
-        in0_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, in0_shard_spec
+        in0_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            in0_shard_spec,
         )
-        in1_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, in1_shard_spec
+        in1_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            in1_shard_spec,
         )
-        in0_t = ttl.tensor.Tensor(A_interleaved, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
-        in1_t = ttl.tensor.Tensor(B_interleaved, dtype).to(ttl.tensor.Layout.TILE).to(device, in1_mem_config)
+        in0_t = (
+            ttnn.experimental.tensor.Tensor(A_interleaved, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, in0_mem_config)
+        )
+        in1_t = (
+            ttnn.experimental.tensor.Tensor(B_interleaved, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, in1_mem_config)
+        )
     else:
         A = torch.concat([Q.flatten(-2, -1), K.flatten(-2, -1), V.flatten(-2, -1)], -1)
         A_interleaved = torch.concat([Q, K, V], -1).flatten(-2, -1)
-        in0_shard_spec = ttl.tensor.ShardSpec(
+        in0_shard_spec = ttnn.experimental.tensor.ShardSpec(
             shard_grid,
             [
                 seq_len * batch,
                 A_interleaved.shape[-1] // num_cores,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             False,
         )
-        in0_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, in0_shard_spec
+        in0_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            in0_shard_spec,
         )
-        in0_t = ttl.tensor.Tensor(A_interleaved, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
+        in0_t = (
+            ttnn.experimental.tensor.Tensor(A_interleaved, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, in0_mem_config)
+        )
 
     out_shard_spec = in0_shard_spec
-    out_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, out_shard_spec
+    out_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.experimental.tensor.BufferType.L1,
+        out_shard_spec,
     )
     q, k, v = ttnn.experimental.nlp_create_qkv_heads(
         in0_t,
@@ -408,7 +482,7 @@ def run_sharded_nlp_create_qkv_heads_test(
     ref_k = torch.reshape(ref_k, [seq_len, batch, num_kv_heads, head_dim]).transpose(-3, -2)
     ref_v = torch.reshape(ref_v, [seq_len, batch, num_kv_heads, head_dim]).transpose(-3, -2)
 
-    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
         pcc = 0.99
     else:
         pcc = 1.0
@@ -431,7 +505,11 @@ def run_sharded_nlp_create_qkv_heads_test(
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    (
+        ttnn.experimental.tensor.DataType.BFLOAT8_B,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.FLOAT32,
+    ),
     ids=["BFLOAT8_B", "BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
@@ -455,7 +533,7 @@ def test_sharded_nlp_create_qkv_heads_test(
     dtype,
     device,
 ):
-    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+    if is_grayskull() and dtype == ttnn.experimental.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
     run_sharded_nlp_create_qkv_heads_test(
@@ -471,14 +549,20 @@ def test_sharded_nlp_create_qkv_heads_test(
 
 
 def test_sharded_nlp_create_qkv_heads_with_program_cache(device, use_program_cache):
-    dtype = ttl.tensor.DataType.BFLOAT8_B
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
+    mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+    )
     for _ in range(2):
         run_sharded_nlp_create_qkv_heads_test(32, 1, 64, 16, 8, False, dtype, device)
         # Same in0_shape to make sure cache misses if we have additional optional tensor works
         run_sharded_nlp_create_qkv_heads_test(32, 1, 64, 32, 1, True, dtype, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
+        tt_dummy_tensor = (
+            ttnn.experimental.tensor.Tensor(py_dummy_tensor, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, mem_config)
+        )
 
     assert device.num_program_cache_entries() == 2

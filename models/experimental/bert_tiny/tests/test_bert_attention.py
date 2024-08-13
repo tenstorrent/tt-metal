@@ -5,7 +5,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from models.experimental.bert_tiny.tt.bert_attention import TtBertattention
 from transformers import BertForQuestionAnswering
 from models.utility_functions import (
@@ -28,8 +28,8 @@ def test_bert_attention_inference(
     hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     state_dict = hugging_face_reference_model.state_dict()
     encoder_idx = 0
-    output_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     )
     tt_ouptut_model = TtBertattention(
         hugging_face_reference_model.config,

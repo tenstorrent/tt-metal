@@ -5,7 +5,7 @@
 import torch
 import pytest
 from loguru import logger
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
@@ -67,7 +67,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         )
 
     tt_output_tensor = ttnn.to_torch(mesh_composer=ttnn.from_device(ttnn_tensor))
-    if input_dtype == ttl.tensor.DataType.BFLOAT16:
+    if input_dtype == ttnn.experimental.tensor.DataType.BFLOAT16:
         eq, output = comp_equal(tt_output_tensor, full_tensor)
     else:
         eq, output = comp_pcc(tt_output_tensor, full_tensor)
@@ -81,26 +81,26 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        (8, 1, [1, 1, 32, 1280], 1, ttl.tensor.Layout.TILE),
-        (8, 1, [1, 1, 32, 2048], 1, ttl.tensor.Layout.TILE),
-        (8, 1, [1, 1, 32, 2304], 1, ttl.tensor.Layout.TILE),
-        (8, 1, [1, 1, 32, 4096], 1, ttl.tensor.Layout.TILE),
+        (8, 1, [1, 1, 32, 1280], 1, ttnn.experimental.tensor.Layout.TILE),
+        (8, 1, [1, 1, 32, 2048], 1, ttnn.experimental.tensor.Layout.TILE),
+        (8, 1, [1, 1, 32, 2304], 1, ttnn.experimental.tensor.Layout.TILE),
+        (8, 1, [1, 1, 32, 4096], 1, ttnn.experimental.tensor.Layout.TILE),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,  # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.BFLOAT8_B,  # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(
-            buffer_type=ttl.tensor.BufferType.DRAM
+        ttnn.experimental.tensor.MemoryConfig(
+            buffer_type=ttnn.experimental.tensor.BufferType.DRAM
         ),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        # ttnn.experimental.tensor.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("replication_factor", [1])  # , 2, 3, 8])
@@ -143,30 +143,30 @@ def test_line_all_gather_on_TG_rows_post_commit(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        (4, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
-        # (4, 1, [1, 1, 32, 2304], 1, ttl.tensor.Layout.TILE),
-        # (4, 1, [1, 1, 32, 4096], 1, ttl.tensor.Layout.TILE),
-        # (4, 1, [1, 1, 32, 6656], 1, ttl.tensor.Layout.TILE),
-        # (4, 3, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
-        # (4, 3, [1, 1, 32, 2304], 1, ttl.tensor.Layout.TILE),
-        # (4, 3, [1, 1, 32, 4096], 1, ttl.tensor.Layout.TILE),
-        # (4, 3, [1, 1, 32, 6656], 1, ttl.tensor.Layout.TILE),
+        (4, 1, [1, 1, 32, 16384], 3, ttnn.experimental.tensor.Layout.TILE),
+        # (4, 1, [1, 1, 32, 2304], 1, ttnn.experimental.tensor.Layout.TILE),
+        # (4, 1, [1, 1, 32, 4096], 1, ttnn.experimental.tensor.Layout.TILE),
+        # (4, 1, [1, 1, 32, 6656], 1, ttnn.experimental.tensor.Layout.TILE),
+        # (4, 3, [1, 1, 32, 16384], 3, ttnn.experimental.tensor.Layout.TILE),
+        # (4, 3, [1, 1, 32, 2304], 1, ttnn.experimental.tensor.Layout.TILE),
+        # (4, 3, [1, 1, 32, 4096], 1, ttnn.experimental.tensor.Layout.TILE),
+        # (4, 3, [1, 1, 32, 6656], 1, ttnn.experimental.tensor.Layout.TILE),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B, # https://github.com/tenstorrent/tt-metal/issues/9686
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        # ttnn.experimental.tensor.DataType.BFLOAT8_B, # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(
-            buffer_type=ttl.tensor.BufferType.DRAM
+        ttnn.experimental.tensor.MemoryConfig(
+            buffer_type=ttnn.experimental.tensor.BufferType.DRAM
         ),  # https://github.com/tenstorrent/tt-metal/issues/9686
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        # ttnn.experimental.tensor.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("enable_async", [True])

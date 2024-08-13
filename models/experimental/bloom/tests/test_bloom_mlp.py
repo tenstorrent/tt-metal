@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn.deprecated
 
 from transformers import BloomForCausalLM
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -18,9 +18,7 @@ import models.experimental.bloom.tt.bloom_mlp as bloom_mlp
 
 def run_bloom_mlp_test(device):
     # Prepare input
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
-        "bigscience/bloom-560m", torchscript=False
-    )
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()
 
     block = 2

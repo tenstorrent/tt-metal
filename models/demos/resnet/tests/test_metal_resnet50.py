@@ -5,7 +5,7 @@
 from loguru import logger
 import torch
 import pytest
-import tt_lib
+import ttnn.deprecated
 
 from models.utility_functions import is_e75, skip_for_wormhole_b0, divup
 
@@ -20,98 +20,98 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 golden_pcc = {
     8: {
         (
-            tt_lib.tensor.MathFidelity.HiFi4,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi4,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         ): 0.990804,  # Max ATOL Delta: 1.607335090637207, Max RTOL Delta: 115.62200164794922, PCC: 0.9908042840544742
         (
-            tt_lib.tensor.MathFidelity.HiFi4,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi4,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         ): 0.986301,  # Max ATOL Delta: 1.5697126388549805, Max RTOL Delta: 21.3042049407959, PCC: 0.9863013351442654
         (
-            tt_lib.tensor.MathFidelity.HiFi4,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi4,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.973763,  # Max ATOL Delta: 2.455164909362793, Max RTOL Delta: inf, PCC: 0.9737631427307492
         (
-            tt_lib.tensor.MathFidelity.HiFi4,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi4,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.978099,  # Max ATOL Delta: 1.955164909362793, Max RTOL Delta: inf, PCC: 0.9780993165966628
         (
-            tt_lib.tensor.MathFidelity.HiFi2,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         ): 0.983400,  # Max ATOL Delta: 1.7310011386871338, Max RTOL Delta: 369.5689392089844, PCC: 0.9834004200555363
         (
-            tt_lib.tensor.MathFidelity.HiFi2,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         ): 0.984828,  # Max ATOL Delta: 1.6054553985595703, Max RTOL Delta: 59.124324798583984, PCC: 0.9848281996919587
         (
-            tt_lib.tensor.MathFidelity.HiFi2,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.934073,  # Max ATOL Delta: 4.330164909362793, Max RTOL Delta: inf, PCC: 0.9340735819578696
         (
-            tt_lib.tensor.MathFidelity.HiFi2,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.944435,  # Max ATOL Delta: 4.705164909362793, Max RTOL Delta: inf, PCC: 0.9444350983635019
         (
-            tt_lib.tensor.MathFidelity.LoFi,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         ): 0.938909,  # Max ATOL Delta: 3.861414909362793, Max RTOL Delta: 240.63145446777344, PCC: 0.9389092547575272
         (
-            tt_lib.tensor.MathFidelity.LoFi,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         ): 0.959609,  # Max ATOL Delta: 3.205164909362793, Max RTOL Delta: 141.7057342529297, PCC: 0.9596095155046113
         (
-            tt_lib.tensor.MathFidelity.LoFi,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.854903,  # Max ATOL Delta: 7.830164909362793, Max RTOL Delta: inf, PCC: 0.8549035869182201
         (
-            tt_lib.tensor.MathFidelity.LoFi,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419433
     },
     16: {
         (
-            tt_lib.tensor.MathFidelity.HiFi4,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi4,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.978099,  # Max ATOL Delta: 1.955164909362793, Max RTOL Delta: inf, PCC: 0.9780993165966632
         (
-            tt_lib.tensor.MathFidelity.HiFi2,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.944435,  # Max ATOL Delta: 4.705164909362793, Max RTOL Delta: inf, PCC: 0.9444350983635021
         (
-            tt_lib.tensor.MathFidelity.LoFi,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419435
     },
     20: {
         (
-            tt_lib.tensor.MathFidelity.HiFi4,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi4,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.978099,  # Max ATOL Delta: 1.955164909362793, Max RTOL Delta: inf, PCC: 0.9780993165966628
         (
-            tt_lib.tensor.MathFidelity.HiFi2,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.944435,  # Max ATOL Delta: 4.705164909362793, Max RTOL Delta: inf, PCC: 0.9444350983635021
         (
-            tt_lib.tensor.MathFidelity.LoFi,
-            tt_lib.tensor.DataType.BFLOAT8_B,
-            tt_lib.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
         ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419433
     },
 }
@@ -124,165 +124,167 @@ def run_model(device, tt_image, tt_resnet50):
 
 def run_2cq_model(device, tt_image, tt_resnet50):
     input_shape = tt_image.get_legacy_shape()
-    shard_spec = tt_lib.tensor.ShardSpec(
+    shard_spec = ttnn.experimental.tensor.ShardSpec(
         tt_resnet50.dram_shard_grid,
         [
             divup(tt_image.volume() // input_shape[3], tt_resnet50.n_dram_cores),
             input_shape[3],
         ],
-        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    sharded_mem_config_DRAM = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.DRAM, shard_spec
+    sharded_mem_config_DRAM = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.DRAM, shard_spec
     )
-    tt_image_res = tt_lib.tensor.allocate_tensor_on_device(
+    tt_image_res = ttnn.experimental.tensor.allocate_tensor_on_device(
         tt_image.shape, tt_image.dtype, tt_image.layout, device, sharded_mem_config_DRAM
     )
-    op_event = tt_lib.device.CreateEvent()
-    write_event = tt_lib.device.CreateEvent()
+    op_event = ttnn.deprecated.device.CreateEvent()
+    write_event = ttnn.deprecated.device.CreateEvent()
     # Initialize the op event so we can write
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.deprecated.device.RecordEvent(device, 0, op_event)
 
-    tt_lib.device.WaitForEvent(device, 1, op_event)
-    tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+    ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res, 1)
+    ttnn.deprecated.device.RecordEvent(device, 1, write_event)
     _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
 
     # Test overlapping write
     outputs = []
     for iter in range(0, 2):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
-        tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+        ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res, 1)
+        ttnn.deprecated.device.RecordEvent(device, 1, write_event)
         outputs.append(tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=False))
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
     return outputs[1]
 
 
 def run_trace_model(device, tt_image, tt_resnet50):
     input_shape = tt_image.get_legacy_shape()
-    shard_spec = tt_lib.tensor.ShardSpec(
+    shard_spec = ttnn.experimental.tensor.ShardSpec(
         tt_resnet50.dram_shard_grid,
         [
             divup(tt_image.volume() // input_shape[3], tt_resnet50.n_dram_cores),
             input_shape[3],
         ],
-        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    sharded_mem_config_DRAM = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.DRAM, shard_spec
+    sharded_mem_config_DRAM = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.DRAM, shard_spec
     )
-    tt_image_res = tt_lib.tensor.allocate_tensor_on_device(
+    tt_image_res = ttnn.experimental.tensor.allocate_tensor_on_device(
         tt_image.shape, tt_image.dtype, tt_image.layout, device, sharded_mem_config_DRAM
     )
-    tt_lib.tensor.write_tensor(tt_image, tt_image_res)
+    ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res)
 
     # Compile
     tt_resnet50(tt_image_res)
     # Trace
-    tid = tt_lib.device.BeginTraceCapture(device, 0)
+    tid = ttnn.deprecated.device.BeginTraceCapture(device, 0)
     tt_output_res = tt_resnet50(tt_image_res)
-    tt_lib.device.EndTraceCapture(device, 0, tid)
+    ttnn.deprecated.device.EndTraceCapture(device, 0, tid)
 
-    tt_lib.tensor.write_tensor(tt_image, tt_image_res)
-    tt_lib.device.ReplayTrace(device, 0, tid, True)
+    ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res)
+    ttnn.deprecated.device.ReplayTrace(device, 0, tid, True)
 
     # Done with the trace, can deallocate the buffers now.
-    tt_lib.device.ReleaseTrace(device, tid)
+    ttnn.deprecated.device.ReleaseTrace(device, tid)
 
     return tt_output_res.cpu(blocking=True)
 
 
 def run_trace_2cq_model(device, tt_image, tt_resnet50):
     input_shape = tt_image.get_legacy_shape()
-    shard_spec = tt_lib.tensor.ShardSpec(
+    shard_spec = ttnn.experimental.tensor.ShardSpec(
         tt_resnet50.dram_shard_grid,
         [
             divup(tt_image.volume() // input_shape[3], tt_resnet50.n_dram_cores),
             input_shape[3],
         ],
-        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    sharded_mem_config_DRAM = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.DRAM, shard_spec
+    sharded_mem_config_DRAM = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.DRAM, shard_spec
     )
 
-    tt_image_res = tt_lib.tensor.allocate_tensor_on_device(
+    tt_image_res = ttnn.experimental.tensor.allocate_tensor_on_device(
         tt_image.shape, tt_image.dtype, tt_image.layout, device, sharded_mem_config_DRAM
     )
 
     tt_image_res_shape = tt_image_res.get_legacy_shape()
-    reshard_shard_spec = tt_lib.tensor.ShardSpec(
+    reshard_shard_spec = ttnn.experimental.tensor.ShardSpec(
         tt_resnet50.shard_grid,
         [
             tt_image_res_shape[2] // tt_resnet50.first_conv_num_cores_nhw,
             tt_image_res_shape[3],
         ],
-        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    reshard_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, reshard_shard_spec
+    reshard_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.experimental.tensor.BufferType.L1,
+        reshard_shard_spec,
     )
-    interleaved_dram_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    interleaved_dram_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     )
 
-    op_event = tt_lib.device.CreateEvent()
-    write_event = tt_lib.device.CreateEvent()
+    op_event = ttnn.deprecated.device.CreateEvent()
+    write_event = ttnn.deprecated.device.CreateEvent()
     # Initialize the op event so we can write
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.deprecated.device.RecordEvent(device, 0, op_event)
 
     # Compile
-    tt_lib.device.WaitForEvent(device, 1, op_event)
-    tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+    ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res, 1)
+    ttnn.deprecated.device.RecordEvent(device, 1, write_event)
 
-    tt_lib.device.WaitForEvent(device, 0, write_event)
-    reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config)
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.deprecated.device.WaitForEvent(device, 0, write_event)
+    reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config)
+    ttnn.deprecated.device.RecordEvent(device, 0, op_event)
     first_out_addr = reshard_out.buffer_address()
 
     tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config)
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
     # Trace
-    tt_lib.device.WaitForEvent(device, 1, op_event)
-    tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+    ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res, 1)
+    ttnn.deprecated.device.RecordEvent(device, 1, write_event)
 
-    tt_lib.device.WaitForEvent(device, 0, write_event)
-    reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config)
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.deprecated.device.WaitForEvent(device, 0, write_event)
+    reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config)
+    ttnn.deprecated.device.RecordEvent(device, 0, op_event)
 
-    tid = tt_lib.device.BeginTraceCapture(device, 0)
+    tid = ttnn.deprecated.device.BeginTraceCapture(device, 0)
     tt_output_res = tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config)
-    reshard_out = tt_lib.tensor.allocate_tensor_on_device(
+    reshard_out = ttnn.experimental.tensor.allocate_tensor_on_device(
         reshard_out.shape, reshard_out.dtype, reshard_out.layout, device, reshard_mem_config
     )
-    tt_lib.device.EndTraceCapture(device, 0, tid)
+    ttnn.deprecated.device.EndTraceCapture(device, 0, tid)
     assert first_out_addr == reshard_out.buffer_address()
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
 
     # Test overlapping write
     outputs = []
     for iter in range(0, 2):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
-        tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+        ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res, 1)
+        ttnn.deprecated.device.RecordEvent(device, 1, write_event)
 
-        tt_lib.device.WaitForEvent(device, 0, write_event)
-        reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
-        tt_lib.device.RecordEvent(device, 0, op_event)
+        ttnn.deprecated.device.WaitForEvent(device, 0, write_event)
+        reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
+        ttnn.deprecated.device.RecordEvent(device, 0, op_event)
 
-        tt_lib.device.ReplayTrace(device, 0, tid, False)
+        ttnn.deprecated.device.ReplayTrace(device, 0, tid, False)
         outputs.append(tt_output_res.cpu(blocking=False))
 
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
     # Done with the trace, can deallocate the buffers now.
-    tt_lib.device.ReleaseTrace(device, tid)
+    ttnn.deprecated.device.ReleaseTrace(device, tid)
 
     return outputs[1]
 
@@ -301,7 +303,8 @@ def run_resnet50_inference(
         pytest.skip("Resnet50 is not supported on E75")
 
     if batch_size > 8 and (
-        activations_dtype != tt_lib.tensor.DataType.BFLOAT8_B or weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B
+        activations_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B
+        or weights_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B
     ):
         pytest.skip("Batch > 8 must be run fully bfp8")
     if batch_size <= 2:
@@ -354,13 +357,13 @@ def run_resnet50_inference(
                 (model_config["MATH_FIDELITY"], model_config["WEIGHTS_DTYPE"], model_config["ACTIVATIONS_DTYPE"])
             ]
         else:
-            if model_config["ACTIVATIONS_DTYPE"] == tt_lib.tensor.DataType.BFLOAT8_B:
-                if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
+            if model_config["ACTIVATIONS_DTYPE"] == ttnn.experimental.tensor.DataType.BFLOAT8_B:
+                if model_config["MATH_FIDELITY"] == ttnn.experimental.tensor.MathFidelity.LoFi:
                     valid_pcc = 0.87
                 else:
                     valid_pcc = 0.94
             else:
-                if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
+                if model_config["MATH_FIDELITY"] == ttnn.experimental.tensor.MathFidelity.LoFi:
                     valid_pcc = 0.93
                 else:
                     valid_pcc = 0.982
@@ -374,17 +377,21 @@ def run_resnet50_inference(
 @pytest.mark.parametrize("batch_size", [1, 2, 16, 20], ids=["batch_1", "batch_2", "batch_16", "batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",
-    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B],
     ids=["weights_BFLOAT16", "weights_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B],
     ids=["activations_BFLOAT16", "activations_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "math_fidelity",
-    [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.HiFi2, tt_lib.tensor.MathFidelity.LoFi],
+    [
+        ttnn.experimental.tensor.MathFidelity.HiFi4,
+        ttnn.experimental.tensor.MathFidelity.HiFi2,
+        ttnn.experimental.tensor.MathFidelity.LoFi,
+    ],
     ids=["HiFi4", "HiFi2", "LoFi"],
 )
 def test_run_resnet50_inference(

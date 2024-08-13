@@ -5,7 +5,7 @@
 import pytest
 import torch
 from functools import partial
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
@@ -17,8 +17,12 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
 )
 
 mem_configs = [
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+    ),
+    ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+    ),
 ]
 
 
@@ -140,7 +144,7 @@ class TestCopy:
 @pytest.mark.parametrize(
     "output_type",
     [
-        ttl.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
     ],
 )
 @pytest.mark.parametrize(

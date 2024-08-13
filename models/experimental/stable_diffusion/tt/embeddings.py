@@ -9,9 +9,9 @@ import torch
 import ttnn
 
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.experimental.stable_diffusion.sd_utils import make_linear
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 
 
 class TtTimestepEmbedding(nn.Module):
@@ -32,8 +32,8 @@ class TtTimestepEmbedding(nn.Module):
 
         weights = state_dict[f"{base_address}.linear_1.weight"]
         bias = state_dict[f"{base_address}.linear_1.bias"]
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        self.out_mem_config_l1 = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
 
         self.linear_1 = make_linear(
@@ -68,7 +68,7 @@ class TtTimestepEmbedding(nn.Module):
             device=device,
         )
 
-    def forward(self, sample: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def forward(self, sample: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         sample = self.linear_1(sample)
 
         if self.act is not None:

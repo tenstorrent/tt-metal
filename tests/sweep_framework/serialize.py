@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from ttnn import *
-import tt_lib
+import ttnn.deprecated
 from statuses import VectorValidity
 
 

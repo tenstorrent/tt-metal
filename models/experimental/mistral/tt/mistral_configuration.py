@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 from dataclasses import dataclass
-import tt_lib
+import ttnn.deprecated
 
 
 @dataclass
@@ -22,13 +22,13 @@ class TtModelArgs:
     FALLBACK_EMPTY: bool = False
     FALLBACK_SCATTER: bool = True
     FALLBACK_DRAM: bool = True
-    WEIGHTS_DTYPE = tt_lib.tensor.DataType.BFLOAT16
+    WEIGHTS_DTYPE = ttnn.experimental.tensor.DataType.BFLOAT16
 
     if FALLBACK_DRAM:
-        out_mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+        out_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
         )
     else:
-        out_mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        out_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )

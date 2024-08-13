@@ -7,7 +7,7 @@ from diffusers import StableDiffusionPipeline
 from loguru import logger
 
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import (
     torch_to_tt_tensor,
     torch_to_tt_tensor_rm,

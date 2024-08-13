@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttm
+import ttnn.deprecated as ttm
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from models.utility_functions import print_diff_argmax
@@ -31,9 +31,7 @@ def pad_input_32(tensor, value):
 
 
 def run_bloom_causal_lm_test(device):
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
-        "bigscience/bloom-560m", torchscript=False
-    )
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()
 
     config = hugging_bloom_reference_model.config

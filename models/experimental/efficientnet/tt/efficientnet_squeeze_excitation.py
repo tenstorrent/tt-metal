@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn.deprecated
 import ttnn
 
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.experimental.efficientnet.tt.efficientnet_conv import TtEfficientnetConv2d
 
 
@@ -65,5 +65,7 @@ class TtEfficientnetSqueezeExcitation(torch.nn.Module):
     def forward(self, x):
         scale = self._scale(x)
 
-        x = tt_lib.tensor.bcast(x, scale, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        x = ttnn.experimental.tensor.bcast(
+            x, scale, ttnn.experimental.tensor.BcastOpMath.MUL, ttnn.experimental.tensor.BcastOpDim.HW
+        )
         return x

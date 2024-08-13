@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from loguru import logger
-from tt_lib.utils import (
+from ttnn.deprecated.utils import (
     tilize_to_list,
     tilize,
     untilize,
@@ -30,20 +30,20 @@ def run_tilize_matmul_test(M, K, N, device):
     A_padded = pad_activation(A)
     B = torch.randn(b_shape) - 0.95
 
-    a = ttl.tensor.Tensor(
+    a = ttnn.experimental.tensor.Tensor(
         A.flatten().tolist(),
         a_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
         device,
     )
     a_t = ttnn.tilize_with_zero_padding(a)
     print("Shape of A_t - " + str(a_t.get_legacy_shape()))
-    b_t = ttl.tensor.Tensor(
+    b_t = ttnn.experimental.tensor.Tensor(
         tilize_to_list(B),
         b_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
         device,
     )
     print("Shape of B_t - " + str(b_t.get_legacy_shape()))

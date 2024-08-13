@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import comp_allclose
 from loguru import logger
 
@@ -14,7 +14,7 @@ from loguru import logger
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
-def to_cpu(npu_tensor, shape, *, cpu_layout=ttl.tensor.Layout.ROW_MAJOR):
+def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR):
     if npu_tensor is None:
         return None
     if not isinstance(shape, (list, tuple)):
@@ -27,15 +27,17 @@ def to_npu(
     cpu_tensor,
     device,
     *,
-    npu_layout=ttl.tensor.Layout.TILE,
-    npu_dtype=ttl.tensor.DataType.BFLOAT16,
+    npu_layout=ttnn.experimental.tensor.Layout.TILE,
+    npu_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
     shape=None,
 ):
     if cpu_tensor is None:
         return None
     if shape is not None:
         cpu_tensor = cpu_tensor.view(shape)
-    npu_tensor = ttl.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    npu_tensor = (
+        ttnn.experimental.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    )
     return npu_tensor
 
 

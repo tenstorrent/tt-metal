@@ -4,7 +4,7 @@
 
 from typing import Tuple, Union, List
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 import ttnn
 import ttnn.decorators

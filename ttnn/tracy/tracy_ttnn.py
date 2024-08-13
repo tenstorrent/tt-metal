@@ -6,7 +6,7 @@ import random
 
 import seaborn as sns
 
-from tt_lib import profiler
+from ttnn.deprecated import profiler
 
 
 def hex_to_int(color):

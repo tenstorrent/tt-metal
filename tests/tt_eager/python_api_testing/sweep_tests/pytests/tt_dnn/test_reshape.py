@@ -9,7 +9,7 @@ from functools import partial
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 params = [
     pytest.param([[4, 4, 32, 32]], reshape_args)
@@ -19,13 +19,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.TILE],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [-1, 2, 32, 32],
         },
@@ -33,13 +35,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.TILE],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [-1, 2, 32, 64],
         },
@@ -47,13 +51,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.TILE],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [2, -1, 32, 32],
         },
@@ -61,13 +67,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.TILE],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [2, -1, 32, 64],
         },
@@ -75,13 +83,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.TILE],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [4, 2, -1, 32],
         },
@@ -89,13 +99,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.TILE],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [4, 2, -1, 64],
         },
@@ -103,13 +115,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.TILE],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [4, 4, 32, -1],
         },
@@ -117,13 +131,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.TILE],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [4, 2, 32, -1],
         },
@@ -131,13 +147,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [-1, 2, 32, 32],
         },
@@ -145,13 +163,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [2, -1, 32, 32],
         },
@@ -159,13 +179,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [4, 1, -1, 32],
         },
@@ -173,13 +195,15 @@ params += [
     pytest.param(
         [[4, 4, 32, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [4, 2, 32, -1],
         },
@@ -187,13 +211,15 @@ params += [
     pytest.param(
         [[2, 3, 4, 4]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [2, 12, 1, 4],
         },
@@ -201,13 +227,15 @@ params += [
     pytest.param(
         [[1, 3, 6, 4]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [3, 1, 3, 8],
         },
@@ -215,13 +243,15 @@ params += [
     pytest.param(
         [[1, 1, 60, 768]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [1, 60, 12, 64],
         },
@@ -229,13 +259,15 @@ params += [
     pytest.param(
         [[2, 4, 128, 4]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [1, 2, 64, 32],
         },
@@ -243,13 +275,15 @@ params += [
     pytest.param(
         [[1, 11, 64, 2]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [1, 11, 1, 128],
         },
@@ -257,13 +291,15 @@ params += [
     pytest.param(
         [[1, 2, 64, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [2, 4, 128, 4],
         },
@@ -271,13 +307,15 @@ params += [
     pytest.param(
         [[3, 2, 2, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "reshape_dims": [1, 3, 1, -1],
         },

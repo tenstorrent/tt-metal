@@ -9,7 +9,7 @@ import pytest
 from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull, is_grayskull, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
-import tt_lib
+import ttnn.deprecated
 import math
 import os
 
@@ -47,14 +47,16 @@ def prepare_conv_input_and_copy_to_device_interleaved(
 
     if mem_config is not None:
         # Remove the else block when resolved (https://github.com/tenstorrent/tt-metal/issues/6310):
-        if mem_config.memory_layout == tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
+        if mem_config.memory_layout == ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED:
             tt_input_tensor_on_device = tt_input_tensor.to(device, mem_config)
         else:
-            interleaved_mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+            interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             )
             tt_input_tensor_on_device = tt_input_tensor.to(device, interleaved_mem_config)
-            tt_input_tensor_on_device = tt_lib.tensor.interleaved_to_sharded(tt_input_tensor_on_device, mem_config)
+            tt_input_tensor_on_device = ttnn.experimental.tensor.interleaved_to_sharded(
+                tt_input_tensor_on_device, mem_config
+            )
     else:
         tt_input_tensor_on_device = ttnn.to_device(tt_input_tensor, device)
 
@@ -507,7 +509,7 @@ def test_resnet50_conv_wh(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
-    use_shallow_conv_variant = (input_channels == 16) and device.arch() != tt_lib.device.Arch.WORMHOLE_B0
+    use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.deprecated.device.Arch.WORMHOLE_B0
     run_conv(
         device,
         math_fidelity,
@@ -627,7 +629,7 @@ def test_resnet50_conv_wh_fp32(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
-    use_shallow_conv_variant = (input_channels == 16) and device.arch() != tt_lib.device.Arch.WORMHOLE_B0
+    use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.deprecated.device.Arch.WORMHOLE_B0
     run_conv(
         device,
         math_fidelity,

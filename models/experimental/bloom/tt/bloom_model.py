@@ -11,8 +11,8 @@ import ttnn
 
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_block as bloom_block
-import tt_lib as ttl
-from tt_lib.fallback_ops import fallback_ops
+import ttnn.deprecated as ttl
+from ttnn.deprecated.fallback_ops import fallback_ops
 from typing import Optional, Tuple, Union
 from models.utility_functions import pad_by_zero
 

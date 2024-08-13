@@ -10,15 +10,15 @@ import ttnn
 import torch
 import numpy as np
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 
 tt_dtype_to_torch_dtype = {
-    ttl.tensor.DataType.UINT16: torch.int16,
-    ttl.tensor.DataType.UINT32: torch.int32,
-    ttl.tensor.DataType.FLOAT32: torch.float,
-    ttl.tensor.DataType.BFLOAT16: torch.bfloat16,
-    ttl.tensor.DataType.BFLOAT8_B: torch.float,
+    ttnn.experimental.tensor.DataType.UINT16: torch.int16,
+    ttnn.experimental.tensor.DataType.UINT32: torch.int32,
+    ttnn.experimental.tensor.DataType.FLOAT32: torch.float,
+    ttnn.experimental.tensor.DataType.BFLOAT16: torch.bfloat16,
+    ttnn.experimental.tensor.DataType.BFLOAT8_B: torch.float,
 }
 
 
@@ -45,7 +45,7 @@ tt_dtype_to_torch_dtype = {
 @pytest.mark.parametrize(
     "tt_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
     ],
 )
 def test_indexed_slice(seed, B, b, D, tt_dtype, device):
@@ -57,11 +57,14 @@ def test_indexed_slice(seed, B, b, D, tt_dtype, device):
     torch_batch_ids = torch.randint(0, B - 1, (1, 1, 1, b))
     torch_input_a = torch.rand(input_a_shape, dtype=dtype)
     torch_input_b = torch.rand(input_b_shape, dtype=dtype)
-    batch_ids = ttl.tensor.Tensor(torch_batch_ids, ttl.tensor.DataType.UINT32).to(
-        device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    batch_ids = ttnn.experimental.tensor.Tensor(torch_batch_ids, ttnn.experimental.tensor.DataType.UINT32).to(
+        device,
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     )
-    input_a = ttl.tensor.Tensor(torch_input_a, tt_dtype).to(device)
-    input_b = ttl.tensor.Tensor(torch_input_b, tt_dtype).to(device)
+    input_a = ttnn.experimental.tensor.Tensor(torch_input_a, tt_dtype).to(device)
+    input_b = ttnn.experimental.tensor.Tensor(torch_input_b, tt_dtype).to(device)
     output = ttnn.indexed_fill(batch_ids, input_a, input_b)
     torch_input_a[torch_batch_ids[-1]] = torch_input_b
     output_torch = output.cpu().to_torch()

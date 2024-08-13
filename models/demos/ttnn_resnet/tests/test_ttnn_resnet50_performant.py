@@ -4,7 +4,7 @@
 
 import pytest
 import torch
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from models.utility_functions import (
     is_wormhole_b0,
@@ -22,9 +22,9 @@ except ModuleNotFoundError:
 
 
 # TODO: Create ttnn apis for these
-ttnn.create_event = tt_lib.device.CreateEvent
-ttnn.wait_for_event = tt_lib.device.WaitForEvent
-ttnn.record_event = tt_lib.device.RecordEvent
+ttnn.create_event = ttnn.deprecated.device.CreateEvent
+ttnn.wait_for_event = ttnn.deprecated.device.WaitForEvent
+ttnn.record_event = ttnn.deprecated.device.RecordEvent
 
 
 # TODO: Move these into Resnet model preprocessing/member functions

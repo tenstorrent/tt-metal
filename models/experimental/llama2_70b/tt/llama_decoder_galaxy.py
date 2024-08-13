@@ -5,7 +5,7 @@
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from models.utility_functions import torch2tt_tensor, pad_by_zero, tt2torch_tensor, nearest_32
 from models.experimental.llama2_70b.tt.llama_attention_galaxy import TtLlamaAttention_galaxy
@@ -116,35 +116,35 @@ class TtLlamaDecoder_galaxy:
             for i in range(self.num_devices):
                 tensor_cache_path = get_weight_cache_path(self.cache_path, attn_norm_str, i, self.num_devices)
                 self.attn_norm_list.append(
-                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                    ttnn.experimental.tensor.load_tensor(str(tensor_cache_path)).to(
                         self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
 
                 tensor_cache_path = get_weight_cache_path(self.cache_path, ffn_norm_str, i, self.num_devices)
                 self.ffn_norm_list.append(
-                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                    ttnn.experimental.tensor.load_tensor(str(tensor_cache_path)).to(
                         self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
         else:
             for i in range(self.num_devices):
-                attn_norm_host = tt_lib.tensor.Tensor(
+                attn_norm_host = ttnn.experimental.tensor.Tensor(
                     # Expand to size of input since we decomped norm
                     self.state_dict[attn_norm_str].reshape([1, 1, -1, 32]),
                     self.model_config["LN_ATTN_WEIGHTS_DTYPE"],
                 )
-                tt_lib.tensor.dump_tensor(
+                ttnn.experimental.tensor.dump_tensor(
                     str(get_weight_cache_path(self.cache_path, attn_norm_str, i, self.num_devices)), attn_norm_host
                 )
                 self.attn_norm_list.append(attn_norm_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
 
-                ffn_norm_host = tt_lib.tensor.Tensor(
+                ffn_norm_host = ttnn.experimental.tensor.Tensor(
                     # Expand to size of input since we decomped norm
                     self.state_dict[ffn_norm_str].reshape([1, 1, -1, 32]),
                     self.model_config["LN_MLP_WEIGHTS_DTYPE"],
                 )
-                tt_lib.tensor.dump_tensor(
+                ttnn.experimental.tensor.dump_tensor(
                     str(get_weight_cache_path(self.cache_path, ffn_norm_str, i, self.num_devices)), ffn_norm_host
                 )
                 self.ffn_norm_list.append(ffn_norm_host.to(self.devices[i], self.model_config["DRAM_MEMCFG"]))
@@ -170,7 +170,7 @@ class TtLlamaDecoder_galaxy:
                 )
             )
         for i in range(self.num_devices):
-            x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
+            x_multichip[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                 x_multichip[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
             )
 
@@ -224,7 +224,7 @@ class TtLlamaDecoder_galaxy:
             attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
         for i in range(self.num_devices):
-            attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
+            attn_masks[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                 attn_masks[i], sharded_mem_config=attention_mask_memconfig
             )
 
@@ -269,14 +269,16 @@ class TtLlamaDecoder_galaxy:
         rot_mats: list,
         start_pos: int,
         attn_masks: list,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         ### xs (residual stream) is full activation on all chips
 
         ## FOR BRINGUP!!! Put on DRAM because two activations makes L1 full on a single chip
         xs_replicated = []
         for i in range(self.num_devices):
             xs_replicated.append(
-                tt_lib.tensor.sharded_to_interleaved(xs[i], output_mem_config=self.model_config["DRAM_MEMCFG"])
+                ttnn.experimental.tensor.sharded_to_interleaved(
+                    xs[i], output_mem_config=self.model_config["DRAM_MEMCFG"]
+                )
             )
 
         attn_norm_replicated = []
@@ -299,7 +301,7 @@ class TtLlamaDecoder_galaxy:
 
         ## FOR BRINGUP!!! Only shard on L1 after attention deallocated inputs
         for i in range(self.num_devices):
-            xs_replicated[i] = tt_lib.tensor.interleaved_to_sharded(
+            xs_replicated[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                 xs_replicated[i], sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"]
             )
 

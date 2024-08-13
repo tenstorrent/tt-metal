@@ -5,7 +5,7 @@
 import torch
 import pytest
 from loguru import logger
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.test_reduce_scatter_post_commit import (
@@ -27,41 +27,41 @@ import itertools
 @pytest.mark.parametrize(
     "per_chip_output_shape, scatter_dim, layout",
     [
-        ([1, 8, 1024, 1024], 3, ttl.tensor.Layout.TILE),
-        ([1, 4, 1024, 1024], 3, ttl.tensor.Layout.TILE),
-        ([1, 4, 2048, 1024], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 32], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 64], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 64, 64], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 128], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 256], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 512], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 1024], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 32, 2048], 3, ttl.tensor.Layout.TILE),
-        ([1, 1, 128, 1024], 3, ttl.tensor.Layout.TILE),
+        ([1, 8, 1024, 1024], 3, ttnn.experimental.tensor.Layout.TILE),
+        ([1, 4, 1024, 1024], 3, ttnn.experimental.tensor.Layout.TILE),
+        ([1, 4, 2048, 1024], 3, ttnn.experimental.tensor.Layout.TILE),
+        ([1, 1, 32, 32], 3, ttnn.experimental.tensor.Layout.TILE),
+        ([1, 1, 32, 64], 3, ttnn.experimental.tensor.Layout.TILE),
+        ([1, 1, 64, 64], 3, ttnn.experimental.tensor.Layout.TILE),
+        ([1, 1, 32, 128], 3, ttnn.experimental.tensor.Layout.TILE),
+        ([1, 1, 32, 256], 3, ttnn.experimental.tensor.Layout.TILE),
+        ([1, 1, 32, 512], 3, ttnn.experimental.tensor.Layout.TILE),
+        ([1, 1, 32, 1024], 3, ttnn.experimental.tensor.Layout.TILE),
+        ([1, 1, 32, 2048], 3, ttnn.experimental.tensor.Layout.TILE),
+        ([1, 1, 128, 1024], 3, ttnn.experimental.tensor.Layout.TILE),
         # Has worker slice size warning - defaults to 1x1
-        ([1, 1, 128, 8192], 3, ttl.tensor.Layout.TILE),
+        ([1, 1, 128, 8192], 3, ttnn.experimental.tensor.Layout.TILE),
         # Always fails with bfp8_b
-        ([1, 1, 2048, 1024], 3, ttl.tensor.Layout.TILE),
+        ([1, 1, 2048, 1024], 3, ttnn.experimental.tensor.Layout.TILE),
         # Has worker slice size warning - defaults to 1x1
-        ([1, 1, 2048, 8192], 3, ttl.tensor.Layout.TILE),
+        ([1, 1, 2048, 8192], 3, ttnn.experimental.tensor.Layout.TILE),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.BFLOAT8_B,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.DRAM),
+        ttnn.experimental.tensor.MemoryConfig(buffer_type=ttnn.experimental.tensor.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+@pytest.mark.parametrize("math_op", [ttnn.experimental.tensor.ReduceOpMath.SUM])
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_reduce_scatter_nightly(
     t3k_device_mesh,

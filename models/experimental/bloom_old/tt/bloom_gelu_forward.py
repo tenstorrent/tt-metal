@@ -7,7 +7,7 @@ import torch
 import math
 from torch.nn import functional as F
 
-import tt_lib as ttm
+import ttnn.deprecated as ttm
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,

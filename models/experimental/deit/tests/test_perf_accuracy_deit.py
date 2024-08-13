@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn.deprecated
 import numpy as np
 
 from loguru import logger
@@ -59,7 +59,7 @@ def run_perf_deit(
 
         profiler.start(first_key)
         tt_output = tt_model_with_teacher(tt_input)[0]
-        tt_lib.device.Synchronize(device)
+        ttnn.deprecated.device.Synchronize(device)
         profiler.end(first_key)
         del tt_output
 
@@ -67,7 +67,7 @@ def run_perf_deit(
 
         profiler.start(second_key)
         tt_output = tt_model_with_teacher(tt_input)[0]
-        tt_lib.device.Synchronize(device)
+        ttnn.deprecated.device.Synchronize(device)
         profiler.end(second_key)
         del tt_output
 
@@ -121,7 +121,7 @@ def run_perf_deit(
 
         logger.info("Accuracy")
         logger.info(accuracy)
-        tt_lib.device.Synchronize(device)
+        ttnn.deprecated.device.Synchronize(device)
         profiler.end(third_key)
 
     first_iter_time = profiler.get(first_key)

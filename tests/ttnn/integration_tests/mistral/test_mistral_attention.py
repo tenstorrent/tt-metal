@@ -6,7 +6,7 @@ import pytest
 
 import torch
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import json
@@ -41,8 +41,8 @@ def test_mistral_attention_inference(model_location_generator, device, reset_see
 
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(state_dict)
-    output_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     )
 
     parameters = preprocess_model_parameters(

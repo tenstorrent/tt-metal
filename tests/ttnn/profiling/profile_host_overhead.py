@@ -5,7 +5,7 @@
 import os
 import pytest
 import torch
-import tt_lib
+import ttnn.deprecated
 import ttnn
 import time
 import statistics
@@ -19,17 +19,21 @@ from tracy import signpost
 test_sweep_args = [
     # (
     #     (1, 2, 1024, 1024),
-    #     tt_lib.tensor.DataType.BFLOAT16,
-    #     tt_lib.tensor.Layout.TILE,
-    #     tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    #     tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+    #     ttnn.experimental.tensor.DataType.BFLOAT16,
+    #     ttnn.experimental.tensor.Layout.TILE,
+    #     ttnn.experimental.tensor.MemoryConfig(ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM),
+    #     ttnn.experimental.tensor.MemoryConfig(ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM),
     # ),
     (
         (1, 4, 1024, 1024),
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
     ),
 ]
 
@@ -38,11 +42,11 @@ NUM_REPEATS = 5
 
 
 # def torch2tt_tensor(x, device, dlayout, in_mem_config, dtype):
-#     return tt_lib.tensor.Tensor(x, dtype).pad_to_tile(float("nan")).to(dlayout).to(device, in_mem_config)
+#     return ttnn.experimental.tensor.Tensor(x, dtype).pad_to_tile(float("nan")).to(dlayout).to(device, in_mem_config)
 
 
 def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
 
     if not is_warmup:
         signpost(header=f"start {op_name}")
@@ -51,7 +55,7 @@ def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup
     for _ in range(num_call_to_stack):
         op_func()
 
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
 
     duration = 1000 * (time.time() - start_time)
     avg_op_time = duration / num_call_to_stack
@@ -64,7 +68,7 @@ def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup
         # signpost(header=f"ending {op_name}")
 
     dispatch_end_time = time.time()
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
 
     sync_time = 1000 * (time.time() - dispatch_end_time)
     dispatch_time = 1000 * (dispatch_end_time - start_time)
@@ -242,7 +246,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
         logger.info(f"Profiling op {op['name']} for input shape {input_shape}")
 
         if "layout" in op and op["layout"] == "ROW_MAJOR":
-            dlayout = tt_lib.tensor.Layout.ROW_MAJOR
+            dlayout = ttnn.experimental.tensor.Layout.ROW_MAJOR
 
         num_repeats = op["num_repeats"] if "num_repeats" in op else NUM_REPEATS
         shape_func = None if "shape_func" not in op else op["shape_func"]

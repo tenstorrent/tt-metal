@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib
+import ttnn.deprecated
 import ttnn
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
@@ -70,12 +70,12 @@ class TtLlamaQKV(torch.nn.Module):
             for i in range(self.num_devices):
                 tensor_cache_path = get_weight_cache_path(self.cache_path, wqkv_cache_str, i, self.num_devices)
                 self.qkv_list.append(
-                    tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                    ttnn.experimental.tensor.load_tensor(str(tensor_cache_path)).to(
                         self.devices[i], self.model_config["DRAM_MEMCFG"]
                     )
                 )
 
-    def forward(self, xs: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, xs: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         fused_query_key_value = []
         for i in range(len(xs)):
             fused_query_key_value.append(

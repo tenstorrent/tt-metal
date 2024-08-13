@@ -13,9 +13,9 @@ import random
 import pytest
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
-from tt_lib.utils import (
+from ttnn.deprecated.utils import (
     pad_weight,
     tilize_to_list,
     untilize,
@@ -32,7 +32,7 @@ def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
     torch.manual_seed(data_seed)
 
     # Initialize the device
-    tensor = ttl.tensor
+    tensor = ttnn.experimental.tensor
     dev = device
 
     test_dims = (input_shape,)
@@ -42,7 +42,7 @@ def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
             x = torch.Tensor(size=(N, C, H, W)).uniform_(-100, 100)
             x_ref = x
             factor = random.randint(1, 100)
-            if dlayout == ttl.tensor.Layout.TILE:
+            if dlayout == ttnn.experimental.tensor.Layout.TILE:
                 x = tilize_to_list(x)
             else:
                 x = x.reshape(-1).tolist()
@@ -94,26 +94,50 @@ def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
 test_sweep_args = [
     (
         (1, 1, 32, 64),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
-        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
+        (
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            )
+        ),
+        (
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            )
+        ),
         19096254,
     ),
     (
         (1, 1, 128, 192),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
-        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
+        (
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            )
+        ),
+        (
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            )
+        ),
         19096254,
     ),
     (
         (1, 1, 64, 128),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)),
-        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
+        (
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+            )
+        ),
+        (
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            )
+        ),
         19096254,
     ),
 ]

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 import torch
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
@@ -15,21 +15,21 @@ def apply_rotary_emb(xq, xk, bcast_freq_xq, bcast_freq_xk, device, mem_config):
     xq_real = torch_to_tt_tensor_rm(t_xq[..., :, :, ::2], device)
     xq_img = torch_to_tt_tensor_rm(t_xq[..., :, :, 1::2], device)
 
-    xq = tt_lib.tensor.complex_tensor(xq_real, xq_img)
+    xq = ttnn.experimental.tensor.complex_tensor(xq_real, xq_img)
 
     xq_real.deallocate()
     xq_img.deallocate()
 
     xk_real = torch_to_tt_tensor_rm(t_xk[..., :, :, ::2], device)
     xk_img = torch_to_tt_tensor_rm(t_xk[..., :, :, 1::2], device)
-    xk = tt_lib.tensor.complex_tensor(xk_real, xk_img)
+    xk = ttnn.experimental.tensor.complex_tensor(xk_real, xk_img)
 
     xk_real.deallocate()
     xk_img.deallocate()
 
-    xq_out = tt_lib.tensor.complex_mul(xq, bcast_freq_xq, output_mem_config=mem_config)
+    xq_out = ttnn.experimental.tensor.complex_mul(xq, bcast_freq_xq, output_mem_config=mem_config)
 
-    xk_out = tt_lib.tensor.complex_mul(xk, bcast_freq_xk, output_mem_config=mem_config)
+    xk_out = ttnn.experimental.tensor.complex_mul(xk, bcast_freq_xk, output_mem_config=mem_config)
 
     xq_out = ttnn.concat([xq_out.real, xq_out.imag], -1, memory_config=mem_config)
     xk_out = ttnn.concat([xk_out.real, xk_out.imag], -1, memory_config=mem_config)
@@ -97,14 +97,14 @@ def attention(config, x, bcast_freq_xq, bcast_freq_xk, positions, mask, seqlen, 
 
     cache_k = ttnn.empty(
         [config.max_batch_size, config.sliding_window, config.n_kv_heads, config.head_dim],
-        layout=tt_lib.tensor.Layout.ROW_MAJOR,
+        layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
         device=device,
         memory_config=config.out_mem_config,
     )
     cache_k = tt_to_torch_tensor(cache_k).to(torch.float32)
     cache_v = ttnn.empty(
         [config.max_batch_size, config.sliding_window, config.n_kv_heads, config.head_dim],
-        layout=tt_lib.tensor.Layout.ROW_MAJOR,
+        layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
         device=device,
         memory_config=config.out_mem_config,
     )

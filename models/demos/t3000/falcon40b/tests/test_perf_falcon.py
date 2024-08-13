@@ -7,7 +7,7 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from ttnn import ConcatMeshToTensor
 
@@ -191,7 +191,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     for _ in range(warmup_iterations):
         for device in devices:
-            tt_lib.device.DumpDeviceProfiler(device)
+            ttnn.deprecated.device.DumpDeviceProfiler(device)
         if llm_mode == "prefill":
             model_inputs = torch.split(model_input, 1)
             tt_inputs, tt_attention_mask = zip(
@@ -237,7 +237,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     # Run for perf iteration - profiler enabled
     for device in devices:
-        tt_lib.device.DumpDeviceProfiler(device)
+        ttnn.deprecated.device.DumpDeviceProfiler(device)
     profiler.enable()
     enable_persistent_kernel_cache()
     logger.info(f"Enable profiler and enable binary and compile cache")

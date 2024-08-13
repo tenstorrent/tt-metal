@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn.deprecated
 import ttnn
 
 from loguru import logger
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 from typing import Optional, Sequence, Tuple, Union
 
 from models.utility_functions import (
@@ -185,10 +185,10 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
         running_mean = state_dict[f"{bn_base_address}.running_mean"]
         running_var = state_dict[f"{bn_base_address}.running_var"]
 
-        bnorm_weights = torch2tt_tensor(bnorm_weights, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-        bnrom_bias = torch2tt_tensor(bnrom_bias, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-        running_mean = torch2tt_tensor(running_mean, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-        running_var = torch2tt_tensor(running_var, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        bnorm_weights = torch2tt_tensor(bnorm_weights, device, tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR)
+        bnrom_bias = torch2tt_tensor(bnrom_bias, device, tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR)
+        running_mean = torch2tt_tensor(running_mean, device, tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR)
+        running_var = torch2tt_tensor(running_var, device, tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR)
 
         self.bnorm = fallback_ops.BatchNorm2d(
             weights=bnorm_weights,

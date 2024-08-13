@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import torch.nn as nn
 import math
 import ttnn
@@ -15,7 +15,7 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 from loguru import logger
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.utility_functions import is_grayskull
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding

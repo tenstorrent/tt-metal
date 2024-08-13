@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttl
-import tt_lib.fallback_ops
+import ttnn.deprecated as ttl
+import ttnn.deprecated.fallback_ops
 from models.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
@@ -97,21 +97,21 @@ def test_layer_norm_fallback(input_shape, weight_shape, bias_shape, normalized_s
     )
 
     # Test on host RM
-    t0 = ttl.tensor.Tensor(
+    t0 = ttnn.experimental.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
     )
     if on_device:
         t0 = t0.to(device)
 
     if w is not None:
-        w0 = ttl.tensor.Tensor(
+        w0 = ttnn.experimental.tensor.Tensor(
             w.reshape(-1).tolist(),
             w.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         if on_device:
             w0 = w0.to(device)
@@ -119,11 +119,11 @@ def test_layer_norm_fallback(input_shape, weight_shape, bias_shape, normalized_s
         w0 = None
 
     if b is not None:
-        b0 = ttl.tensor.Tensor(
+        b0 = ttnn.experimental.tensor.Tensor(
             b.reshape(-1).tolist(),
             b.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         if on_device:
             b0 = b0.to(device)
@@ -132,7 +132,7 @@ def test_layer_norm_fallback(input_shape, weight_shape, bias_shape, normalized_s
 
     t1 = ttl.fallback_ops.layer_norm(t0, normalized_shape, w0, b0, eps)
 
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    output = t1.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.debug(comp_out)
@@ -201,29 +201,29 @@ def test_LayerNorm_fallback(
     pt_out = pt_nn(x)
 
     # Test on host RM
-    t0 = ttl.tensor.Tensor(
+    t0 = ttnn.experimental.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
     )
     if on_device:
         t0 = t0.to(device)
 
-    w0 = ttl.tensor.Tensor(
+    w0 = ttnn.experimental.tensor.Tensor(
         w.reshape(-1).tolist(),
         w.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
     )
     if on_device:
         w0 = w0.to(device)
 
-    b0 = ttl.tensor.Tensor(
+    b0 = ttnn.experimental.tensor.Tensor(
         b.reshape(-1).tolist(),
         b.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
     )
     if on_device:
         b0 = b0.to(device)
@@ -231,7 +231,7 @@ def test_LayerNorm_fallback(
     tt_nn = ttl.fallback_ops.LayerNorm(w0, b0, normalized_shape, eps, elementwise_affine)
     t1 = tt_nn(t0)
 
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    output = t1.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.debug(comp_out)

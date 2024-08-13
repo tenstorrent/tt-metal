@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
@@ -31,11 +31,13 @@ class TestArgmin:
 
         input_data = torch.randn(input_shapes).bfloat16()
         input_tensor = (
-            tt_lib.tensor.Tensor(input_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+            ttnn.experimental.tensor.Tensor(input_data, ttnn.experimental.tensor.DataType.BFLOAT16)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device)
         )
         tt_output_tensor_on_device = ttnn.experimental.argmin(input_tensor, dim=dim, all=all)
 
-        tt_out_tensor = tt_output_tensor_on_device.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_out_tensor = tt_output_tensor_on_device.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         if all:
             golden_tensor = torch.argmin(input_data)
             tt_out_tensor = tt_out_tensor[0, 0, 0, 0]

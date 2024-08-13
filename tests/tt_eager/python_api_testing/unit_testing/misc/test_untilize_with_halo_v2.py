@@ -24,8 +24,8 @@ from ttnn.operations.conv.tt_py_untilize_with_halo import (
     SlidingWindowOpParamsWithParallelConfig,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc, comp_pcc
-from tt_lib.utils import _nearest_y
-import tt_lib as ttl
+from ttnn.deprecated.utils import _nearest_y
+import ttnn.deprecated as ttl
 
 from loguru import logger
 
@@ -392,12 +392,18 @@ def test_generate_all_configs_and_references(
         ## for input_c < 32, always need to pad when not skipping untilize, so skip
         pytest.skip("Skipping first conv tests when untilize is skipped.")
 
-    memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    memory_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+    )
 
-    untilize_with_halp_input_tt_tensor = ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.BFLOAT16)
+    untilize_with_halp_input_tt_tensor = ttnn.experimental.tensor.Tensor(
+        input_pyt_tensor, ttnn.experimental.tensor.DataType.BFLOAT16
+    )
     if skip_untilize:
         ## no need to pad, just construct the tensor in RM
-        untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.to(ttl.tensor.Layout.ROW_MAJOR)
+        untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.to(
+            ttnn.experimental.tensor.Layout.ROW_MAJOR
+        )
     else:
         ## pad to tile size first, then convert to TILE
         input_padded_to_tile_shape = [
@@ -408,12 +414,12 @@ def test_generate_all_configs_and_references(
         ]
         untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.pad(
             input_padded_to_tile_shape, (0, 0, 0, 0), 0
-        ).to(ttl.tensor.Layout.TILE)
+        ).to(ttnn.experimental.tensor.Layout.TILE)
     ## move input to device
     untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.to(device, memory_config)
 
-    # untilize_with_halp_input_tt_tensor = ttl.tensor.permute(untilize_with_halp_input_tt_tensor, (0, 2, 3, 1))
-    # untilize_with_halp_input_tt_tensor = ttl.tensor.reshape(untilize_with_halp_input_tt_tensor, batch_size, 1, input_h * input_w, input_c)
+    # untilize_with_halp_input_tt_tensor = ttnn.experimental.tensor.permute(untilize_with_halp_input_tt_tensor, (0, 2, 3, 1))
+    # untilize_with_halp_input_tt_tensor = ttnn.experimental.tensor.reshape(untilize_with_halp_input_tt_tensor, batch_size, 1, input_h * input_w, input_c)
     grid_size_binary = device.compute_with_storage_grid_size()
 
     logger.info(f"GRID SIZE BINARY: {grid_size_binary}")
@@ -421,20 +427,20 @@ def test_generate_all_configs_and_references(
     if is_block_sharded:
         num_cores_c = num_cores_h
         assert input_padded_c % num_cores_c == 0
-        untilize_with_halp_input_tt_tensor = ttl.tensor.interleaved_to_sharded(
+        untilize_with_halp_input_tt_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
             untilize_with_halp_input_tt_tensor,
             grid_size,  ## need to pass in actual grid size for block sharded
             [input_size_to_shard_evenly // num_cores_nhw, input_padded_c // num_cores_c],
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttl.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
         )
     else:
-        untilize_with_halp_input_tt_tensor = ttl.tensor.interleaved_to_sharded(
+        untilize_with_halp_input_tt_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
             untilize_with_halp_input_tt_tensor,
             grid_size_binary,
             [input_size_to_shard_evenly // num_cores_nhw, input_padded_c],
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         )
 
     # Run forward
@@ -483,7 +489,9 @@ def test_generate_all_configs_and_references(
         for i in range(num_cores_nhw):
             for j in range(num_cores_c):
                 output_shard = torch.reshape(
-                    untilize_with_halo_output_tt_tensor.extract_shard(ttl.tensor.CoreCoord(i, j)).to_torch(),
+                    untilize_with_halo_output_tt_tensor.extract_shard(
+                        ttnn.experimental.tensor.CoreCoord(i, j)
+                    ).to_torch(),
                     [max_out_shard_nsticks, shard_size_c],
                 )
                 golden_shard = golden_untilize_with_halo_output_pyt_tensor[

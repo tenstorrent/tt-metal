@@ -7,14 +7,14 @@ import random
 import pytest
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
-def to_cpu(npu_tensor, shape, *, cpu_layout=ttl.tensor.Layout.ROW_MAJOR):
+def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR):
     if npu_tensor is None:
         return None
     cpu_tensor = npu_tensor.cpu().to(cpu_layout).unpad_from_tile(shape).to_torch()
@@ -25,13 +25,15 @@ def to_npu(
     cpu_tensor,
     device,
     *,
-    npu_layout=ttl.tensor.Layout.TILE,
-    npu_dtype=ttl.tensor.DataType.BFLOAT16,
+    npu_layout=ttnn.experimental.tensor.Layout.TILE,
+    npu_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
     padding_value=float("nan"),
 ):
     if cpu_tensor is None:
         return None
-    npu_tensor = ttl.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(padding_value).to(npu_layout).to(device)
+    npu_tensor = (
+        ttnn.experimental.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(padding_value).to(npu_layout).to(device)
+    )
     return npu_tensor
 
 
@@ -61,7 +63,7 @@ def test_moreh_clip_grad_norm(
     random.seed(2023)
 
     cpu_dtype = torch.float32
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
+    npu_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     cpu_inputs = []
     npu_inputs = []
@@ -120,7 +122,7 @@ def test_moreh_clip_grad_norm(
 #     torch.manual_seed(2023)
 
 #     cpu_dtype = torch.bfloat16
-#     npu_dtype = ttl.tensor.DataType.BFLOAT16
+#     npu_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
 #     input_shape = [4, 4, 4 * TILE_HEIGHT, 4 * TILE_WIDTH]
 #     param = torch.nn.Parameter(torch.empty(input_shape, dtype=cpu_dtype))

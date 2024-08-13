@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn.deprecated
 
 from models.experimental.yolov5.reference.models.common import DetectMultiBackend
 from models.experimental.yolov5.tt.yolov5_detection_model import (

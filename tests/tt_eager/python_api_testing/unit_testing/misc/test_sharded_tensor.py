@@ -8,16 +8,16 @@ import pathlib
 
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 from models.utility_functions import get_debug_tensor
 from enum import Enum
 
 tt_dtype_to_torch_dtype = {
-    ttl.tensor.DataType.UINT32: torch.int32,
-    ttl.tensor.DataType.UINT16: torch.int16,
-    ttl.tensor.DataType.BFLOAT16: torch.bfloat16,
-    ttl.tensor.DataType.BFLOAT8_B: torch.float,
+    ttnn.experimental.tensor.DataType.UINT32: torch.int32,
+    ttnn.experimental.tensor.DataType.UINT16: torch.int16,
+    ttnn.experimental.tensor.DataType.BFLOAT16: torch.bfloat16,
+    ttnn.experimental.tensor.DataType.BFLOAT8_B: torch.float,
 }
 TILE_WIDTH = 32
 TILE_HEIGHT = 32
@@ -56,214 +56,256 @@ def get_tensor(shape, dtype):
 @pytest.mark.parametrize(
     "tt_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
     ],
 )
 @pytest.mark.parametrize(
     "shard_orientation, tensor_shape, shard_scheme, shard_shape, grid_override, direct_read_write_type",
     [
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 4, 64, 64],
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             (64, 64),
             None,
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 128, 128],
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             (64, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 1)),  # 4 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
+                    ),  # 4 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 2048, 64],
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             (512, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(3, 0)),  # 4 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(3, 0)
+                    ),  # 4 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 2048, 64],
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             (1024, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 0)),  # 2 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 0)
+                    ),  # 2 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 4096, 64],
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             (1024, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(3, 0)),  # 4 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(3, 0)
+                    ),  # 4 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 8192, 64],
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             (1024, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0)),  # 8 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 0)
+                    ),  # 8 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 14336, 64],
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             (1024, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 0)),  # 8 cores
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(1, 1), ttl.tensor.CoreCoord(2, 2)),  # 4 cores
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(4, 4), ttl.tensor.CoreCoord(5, 4)),  # 2 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 0)
+                    ),  # 8 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(1, 1), ttnn.experimental.tensor.CoreCoord(2, 2)
+                    ),  # 4 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(4, 4), ttnn.experimental.tensor.CoreCoord(5, 4)
+                    ),  # 2 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 256, 32],
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             (256, 32),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0)),  # 1 core
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 0)
+                    ),  # 1 core
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 128, 64],
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             (128, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 0)),  # 1 core
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 0)
+                    ),  # 1 core
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 2048, 64],
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             (1024, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1)),  # 2 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+                    ),  # 2 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 32, 16256],
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             (32, 512),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(4, 4)),  # 25 cores
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(5, 5), ttl.tensor.CoreCoord(6, 6)),  # 4 cores
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(6, 7), ttl.tensor.CoreCoord(7, 7)),  # 2 cores
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(5, 4), ttl.tensor.CoreCoord(5, 4)),  # 1 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(4, 4)
+                    ),  # 25 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(5, 5), ttnn.experimental.tensor.CoreCoord(6, 6)
+                    ),  # 4 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(6, 7), ttnn.experimental.tensor.CoreCoord(7, 7)
+                    ),  # 2 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(5, 4), ttnn.experimental.tensor.CoreCoord(5, 4)
+                    ),  # 1 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 64, 96],
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             (32, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(1, 1)),  # 4 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
+                    ),  # 4 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
             [1, 1, 256, 288],
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             (32, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 5)),  # 48 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 5)
+                    ),  # 48 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
             [1, 1, 8192, 320],
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             (1024, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 4)),  # 40 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 4)
+                    ),  # 40 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         pytest.param(
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 8192, 1536],
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             (1024, 320),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(4, 7)),  # 40 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(4, 7)
+                    ),  # 40 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
             marks=pytest.mark.xfail(reason="7740: Test case doesn't work anymore after flipping the to correct grid."),
         ),
         (
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             [1, 1, 64, 96],
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             (64, 64),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1)),  # 2 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
+                    ),  # 2 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
         ),
         (
-            ttl.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
             [1, 1, 8192, 512],
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             (1024, 320),
-            ttl.tensor.CoreRangeSet(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 4)),  # 40 cores
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(7, 4)
+                    ),  # 40 cores
                 }
             ),
             DirectReadWriteType.READ_WRITE,
@@ -274,17 +316,19 @@ def test_tensor_conversion_between_torch_and_tt_tile(
     tt_dtype, device, shard_orientation, tensor_shape, shard_scheme, shard_shape, grid_override, direct_read_write_type
 ):
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
-    compute_grid = ttl.tensor.CoreCoord(
+    compute_grid = ttnn.experimental.tensor.CoreCoord(
         device.compute_with_storage_grid_size().x - 1, device.compute_with_storage_grid_size().y - 1
     )
 
     if grid_override == None:
-        shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), compute_grid)})
+        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+            {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), compute_grid)}
+        )
     else:
         shard_grid = grid_override
 
     shard_halo = False
-    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
 
     two_d_shape = (tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3])
     num_tiles_width = (two_d_shape[1]) / TILE_WIDTH
@@ -294,23 +338,23 @@ def test_tensor_conversion_between_torch_and_tt_tile(
         torch_tensor = get_debug_tensor(num_tiles_width, num_tiles_height, dtype)
     else:
         torch_tensor = get_tensor(tensor_shape, dtype)
-    tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(ttl.tensor.Layout.TILE)
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+    tt_tensor = ttnn.experimental.tensor.Tensor(torch_tensor, tt_dtype).to(ttnn.experimental.tensor.Layout.TILE)
+    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     )
-    mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+    mem_config = ttnn.experimental.tensor.MemoryConfig(shard_scheme, ttnn.experimental.tensor.BufferType.L1, shard_spec)
 
     # test not doing direct write
     if direct_read_write_type == DirectReadWriteType.READ_ONLY:
         tt_tensor = tt_tensor.to(device, interleaved_mem_config)
-        tt_tensor = ttl.tensor.interleaved_to_sharded(tt_tensor, mem_config)
+        tt_tensor = ttnn.experimental.tensor.interleaved_to_sharded(tt_tensor, mem_config)
     else:
         tt_tensor = tt_tensor.to(device, mem_config)
     ttl.device.Synchronize(device)
     # not doing direct read
     if direct_read_write_type == DirectReadWriteType.WRITE_ONLY:
-        tt_tensor = ttl.tensor.sharded_to_interleaved(tt_tensor, interleaved_mem_config)
-    tt_tensor = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+        tt_tensor = ttnn.experimental.tensor.sharded_to_interleaved(tt_tensor, interleaved_mem_config)
+    tt_tensor = tt_tensor.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
     torch_tensor_after_round_trip = tt_tensor.to_torch()
 
     assert torch_tensor.dtype == torch_tensor_after_round_trip.dtype
@@ -323,20 +367,20 @@ def test_tensor_conversion_between_torch_and_tt_tile(
 @pytest.mark.parametrize(
     "tt_dtype",
     [
-        ttl.tensor.DataType.UINT32,
-        ttl.tensor.DataType.UINT16,
-        ttl.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.UINT32,
+        ttnn.experimental.tensor.DataType.UINT16,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
     ],
 )
 @pytest.mark.parametrize(
     "tensor_shape, shard_scheme, shard_shape",
     [
-        ([1, 1, 4, 256], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1, 256)),
+        ([1, 1, 4, 256], ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1, 256)),
     ],
 )
 @pytest.mark.parametrize(
     "buffer_type",
-    [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.L1],
+    [ttnn.experimental.tensor.BufferType.DRAM, ttnn.experimental.tensor.BufferType.L1],
 )
 def test_tensor_conversion_between_torch_and_tt_rm(
     tt_dtype, device, tensor_shape, shard_scheme, shard_shape, buffer_type
@@ -345,16 +389,18 @@ def test_tensor_conversion_between_torch_and_tt_rm(
     num_pages_width = tensor_shape[2] / shard_shape[0]
     num_pages_height = tensor_shape[3] / shard_shape[1]
 
-    shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
+    shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
     shard_halo = False
-    if buffer_type == ttl.tensor.BufferType.DRAM:
-        shard_grid = ttl.tensor.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+    if buffer_type == ttnn.experimental.tensor.BufferType.DRAM:
+        shard_grid = ttnn.experimental.tensor.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
     else:
-        shard_grid = ttl.tensor.CoreCoord(
+        shard_grid = ttnn.experimental.tensor.CoreCoord(
             device.compute_with_storage_grid_size().x - 1, device.compute_with_storage_grid_size().y - 1
         )
-    shard_grid = ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), shard_grid)})
-    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), shard_grid)}
+    )
+    shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
 
     if debug:
         torch_tensor = get_debug_tensor(
@@ -365,13 +411,13 @@ def test_tensor_conversion_between_torch_and_tt_rm(
 
     torch_tensor = torch_tensor.reshape(tensor_shape)
 
-    tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype)
+    tt_tensor = ttnn.experimental.tensor.Tensor(torch_tensor, tt_dtype)
 
     assert list(torch_tensor.size()) == tensor_shape
 
-    mem_config = ttl.tensor.MemoryConfig(shard_scheme, buffer_type, shard_spec)
+    mem_config = ttnn.experimental.tensor.MemoryConfig(shard_scheme, buffer_type, shard_spec)
     tt_tensor = tt_tensor.to(device, mem_config)
-    tt_tensor = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_tensor = tt_tensor.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
 
     torch_tensor_after_round_trip = tt_tensor.to_torch()
 

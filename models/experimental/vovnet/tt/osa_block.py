@@ -4,7 +4,7 @@
 
 import torch.nn as nn
 
-import tt_lib
+import ttnn.deprecated
 
 from models.experimental.vovnet.tt.conv_norm_act import TtConvNormAct
 from models.experimental.vovnet.tt.sequential_append_list import (
@@ -13,8 +13,6 @@ from models.experimental.vovnet.tt.sequential_append_list import (
 from models.experimental.vovnet.tt.effective_se_module import (
     TtEffectiveSEModule,
 )
-
-
 
 
 class TtOsaBlock(nn.Module):
@@ -99,7 +97,7 @@ class TtOsaBlock(nn.Module):
             device=device,
         )
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         output = [x]
         if self.conv_reduction is not None:
             x = self.conv_reduction(x)

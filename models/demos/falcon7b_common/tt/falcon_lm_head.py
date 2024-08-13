@@ -4,7 +4,7 @@
 
 from typing import List
 
-import tt_lib
+import ttnn.deprecated
 import ttnn
 
 from models.utility_functions import nearest_y
@@ -23,7 +23,7 @@ def falcon_lm_head_matmul_2d(
     out_dtype: ttnn.experimental.tensor.DataType,
 ):
     assert (
-        hidden_states.device().arch() == tt_lib.device.Arch.WORMHOLE_B0
+        hidden_states.device().arch() == ttnn.deprecated.device.Arch.WORMHOLE_B0
     ), "Falcon LM head is only supported for Wormhole BO arch"
 
     seq_len = hidden_states.get_legacy_shape()[-2]

@@ -6,7 +6,7 @@ from loguru import logger
 
 import torch
 import pytest
-import tt_lib
+import ttnn.deprecated
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_allclose_and_pcc
 from models.utility_functions import is_wormhole_b0, is_grayskull
 from models.demos.resnet.tt.metalResnetBlock50 import (
@@ -59,16 +59,18 @@ from ttnn.operations.conv.tt_py_composite_conv import (
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B],
     ids=["weights_BFLOAT16", "weights_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B],
     ids=["activations_BFLOAT16", "activations_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
-    "math_fidelity", [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.LoFi], ids=["HiFi4", "LoFi"]
+    "math_fidelity",
+    [ttnn.experimental.tensor.MathFidelity.HiFi4, ttnn.experimental.tensor.MathFidelity.LoFi],
+    ids=["HiFi4", "LoFi"],
 )
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 def test_optimized_conv_v2(
@@ -97,16 +99,16 @@ def test_optimized_conv_v2(
     if input_channels == 16:
         pytest.skip("These tests are hanging in interleaved_to_sharded after rebase. Issue: #4336")
 
-    if math_fidelity != tt_lib.tensor.MathFidelity.LoFi:
+    if math_fidelity != ttnn.experimental.tensor.MathFidelity.LoFi:
         pytest.skip(
             "By default, only run tests with LoFi math for pipelines. For local unit testing, enable the other variants by uncommenting the skip here!"
         )
 
-    if untilize_out and activations_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
+    if untilize_out and activations_dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
         pytest.skip("We can only untilize to non-bfp formats")
 
     if (
-        activations_dtype == tt_lib.tensor.DataType.BFLOAT16
+        activations_dtype == ttnn.experimental.tensor.DataType.BFLOAT16
         and batch_size == 20
         and (
             output_channels == 64
@@ -114,7 +116,7 @@ def test_optimized_conv_v2(
                 stride_h == 2
                 and (
                     output_channels == 256
-                    or (output_channels == 128 and weights_dtype == tt_lib.tensor.DataType.BFLOAT16)
+                    or (output_channels == 128 and weights_dtype == ttnn.experimental.tensor.DataType.BFLOAT16)
                 )
             )
         )
@@ -174,25 +176,29 @@ def test_optimized_conv_v2(
 
     reader_patterns_cache = {}
 
-    tt_tensor_conv_weight = tt_lib.tensor.Tensor(
+    tt_tensor_conv_weight = ttnn.experimental.tensor.Tensor(
         conv_weight_pyt.reshape(-1).tolist(),
         conv_weight_pyt.shape,
-        weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
-        tt_lib.tensor.Layout.ROW_MAJOR,
+        weights_dtype
+        if weights_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B
+        else ttnn.experimental.tensor.DataType.FLOAT32,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
     )
     tt_tensor_conv_bias = (
-        tt_lib.tensor.Tensor(
+        ttnn.experimental.tensor.Tensor(
             conv_bias_pyt.reshape(-1).tolist(),
             conv_bias_pyt.shape,
-            weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            weights_dtype
+            if weights_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B
+            else ttnn.experimental.tensor.DataType.FLOAT32,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         if bias
         else None
     )
 
     if is_wormhole_b0():
-        compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+        compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
             math_fidelity=math_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
@@ -212,16 +218,18 @@ def test_optimized_conv_v2(
         output_dtype=activations_dtype,
         math_fidelity=math_fidelity,
         deallocate_activation=True,
-        output_layout=tt_lib.tensor.Layout.ROW_MAJOR if untilize_out else tt_lib.tensor.Layout.TILE,
+        output_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR
+        if untilize_out
+        else ttnn.experimental.tensor.Layout.TILE,
         fuse_relu=fuse_relu,
         compute_kernel_config=compute_kernel_config if is_wormhole_b0() else None,
     )
 
-    conv_input = tt_lib.tensor.Tensor(
+    conv_input = ttnn.experimental.tensor.Tensor(
         conv_input_pyt_nhwc.reshape(-1).tolist(),
         conv_input_pyt_nhwc.shape,
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.ROW_MAJOR,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
     )
 
     conv_input_on_device = conv.copy_input_to_device(conv_input)
@@ -233,14 +241,17 @@ def test_optimized_conv_v2(
     # out is in row major layout and NHWC shape
     out = conv.copy_output_from_device(output_on_device)
 
-    assert out.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR
+    assert out.get_layout() == ttnn.experimental.tensor.Layout.ROW_MAJOR
 
     out_result = out.to_torch()
     # NHWC to NCHW
     out_result = torch.transpose(out_result, 2, 3)
     out_result = torch.transpose(out_result, 1, 2)
 
-    if math_fidelity == tt_lib.tensor.MathFidelity.LoFi and activations_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
+    if (
+        math_fidelity == ttnn.experimental.tensor.MathFidelity.LoFi
+        and activations_dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B
+    ):
         pcc = 0.998
     else:
         pcc = 0.999
@@ -255,9 +266,9 @@ def test_simple(
     device,
     use_program_cache,
 ):
-    math_fidelity = tt_lib.tensor.MathFidelity.LoFi
-    activations_dtype = tt_lib.tensor.DataType.BFLOAT16
-    weights_dtype = tt_lib.tensor.DataType.BFLOAT8_B
+    math_fidelity = ttnn.experimental.tensor.MathFidelity.LoFi
+    activations_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
+    weights_dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
     batch_size = 1
     output_channels = 128
     input_channels = 128
@@ -321,18 +332,22 @@ def test_simple(
 
     reader_patterns_cache = {}
 
-    tt_tensor_conv_weight = tt_lib.tensor.Tensor(
+    tt_tensor_conv_weight = ttnn.experimental.tensor.Tensor(
         conv_weight_pyt.reshape(-1).tolist(),
         conv_weight_pyt.shape,
-        weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
-        tt_lib.tensor.Layout.ROW_MAJOR,
+        weights_dtype
+        if weights_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B
+        else ttnn.experimental.tensor.DataType.FLOAT32,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
     )
     tt_tensor_conv_bias = (
-        tt_lib.tensor.Tensor(
+        ttnn.experimental.tensor.Tensor(
             conv_bias_pyt.reshape(-1).tolist(),
             conv_bias_pyt.shape,
-            weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            weights_dtype
+            if weights_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B
+            else ttnn.experimental.tensor.DataType.FLOAT32,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         if bias
         else None
@@ -352,7 +367,9 @@ def test_simple(
         output_dtype=activations_dtype,
         math_fidelity=math_fidelity,
         deallocate_activation=True,
-        output_layout=tt_lib.tensor.Layout.ROW_MAJOR if untilize_out else tt_lib.tensor.Layout.TILE,
+        output_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR
+        if untilize_out
+        else ttnn.experimental.tensor.Layout.TILE,
         fuse_relu=fuse_relu,
     )
 
@@ -364,22 +381,22 @@ def test_simple(
             conv_input_pyt_nhwc.shape[3],
         ),
     )
-    conv_input = tt_lib.tensor.Tensor(
+    conv_input = ttnn.experimental.tensor.Tensor(
         conv_input_pyt_nhwc.reshape(-1).tolist(),
         conv_input_pyt_nhwc.shape,
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.ROW_MAJOR,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
     )
 
     # Remove the else block when resolved (https://github.com/tenstorrent/tt-metal/issues/6310):
     if False and is_1d_systolic:
         conv_input = conv_input.to(device, conv.input_sharded_memory_config)
     else:
-        interleaved_mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+        interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
         )
         conv_input = conv_input.to(device, interleaved_mem_config)
-        conv_input = tt_lib.tensor.interleaved_to_sharded(conv_input, conv.input_sharded_memory_config)
+        conv_input = ttnn.experimental.tensor.interleaved_to_sharded(conv_input, conv.input_sharded_memory_config)
 
     # Optimized conv v2
     output_on_device = conv(conv_input)
@@ -388,14 +405,17 @@ def test_simple(
     # out is in row major layout and NHWC shape
     out = conv.copy_output_from_device(output_on_device)
 
-    assert out.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR
+    assert out.get_layout() == ttnn.experimental.tensor.Layout.ROW_MAJOR
 
     out_result = out.to_torch()
     # NHWC to NCHW
     out_result = torch.transpose(out_result, 2, 3)
     out_result = torch.transpose(out_result, 1, 2)
 
-    if math_fidelity == tt_lib.tensor.MathFidelity.LoFi and activations_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
+    if (
+        math_fidelity == ttnn.experimental.tensor.MathFidelity.LoFi
+        and activations_dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B
+    ):
         pcc = 0.998
     else:
         pcc = 0.999

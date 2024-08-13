@@ -10,9 +10,9 @@ from loguru import logger
 
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
-from tt_lib.utils import _nearest_32
+from ttnn.deprecated.utils import _nearest_32
 from models.utility_functions import comp_pcc
 
 from functools import reduce
@@ -75,9 +75,13 @@ def volume(shape):
 @pytest.mark.parametrize(
     "in_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        # ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        # ttnn.experimental.tensor.MemoryConfig(ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
     ids=[
         "in_DRAM",
@@ -88,9 +92,13 @@ def volume(shape):
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        # ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        # ttnn.experimental.tensor.MemoryConfig(ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
     ids=[
         "out_DRAM",
@@ -152,8 +160,8 @@ def test_run_max_pool(
     if nblocks > 1 and in_mem_config.is_sharded() and use_multicore:
         pytest.skip("nblocks > 1 is not properly supported with multicore sharded input")
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
     )
 
     if (out_mem_config.is_sharded() or in_mem_config.is_sharded()) and not use_multicore:
@@ -200,11 +208,11 @@ def test_run_max_pool(
     act_padded = torch.nn.functional.pad(act_reshaped, act_padding, value=0xFF7F)
     assert act_shape_padded == act_padded.shape
 
-    ttact = ttl.tensor.Tensor(
+    ttact = ttnn.experimental.tensor.Tensor(
         act_padded.flatten().tolist(),
         act_shape_padded,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
     )
     ncores = 1
     grid_size = [1, 1]
@@ -227,12 +235,12 @@ def test_run_max_pool(
             pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
 
         ttact = ttact.to(device, interleaved_mem_config)
-        ttact = ttl.tensor.interleaved_to_sharded(
+        ttact = ttnn.experimental.tensor.interleaved_to_sharded(
             ttact,
             grid_size,
             [in_height // ncores, act_padded.shape[-1]],
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         )
     else:
         ttact = ttact.to(device, in_mem_config)
@@ -255,8 +263,8 @@ def test_run_max_pool(
         use_multicore=use_multicore,
     )
     if out_mem_config.is_sharded():
-        out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
-    out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+        out_padded = ttnn.experimental.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
+    out_padded = out_padded.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
 
     out_shape_padded = out_padded.get_legacy_shape()
     out_pytorch_padded = out_padded.to_torch().reshape(tuple(out_shape_padded))  ## N, 1, HW, C

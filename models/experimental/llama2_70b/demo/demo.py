@@ -6,7 +6,7 @@ import os
 import json
 import torch
 import torch.nn.functional as F
-import tt_lib
+import ttnn.deprecated
 
 from time import time
 import pytest

@@ -6,7 +6,7 @@ from loguru import logger
 import math
 import torch
 from torch import nn
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, nearest_32, pad_by_zero
 from models.experimental.llama2_70b.tt.llama_common import (
@@ -100,7 +100,7 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
                 )
             )
         for i in range(self.num_devices):
-            x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
+            x_multichip[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                 x_multichip[i], sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
             )
 
@@ -149,7 +149,7 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
             attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
         for i in range(self.num_devices):
-            attn_masks[i] = tt_lib.tensor.interleaved_to_sharded(
+            attn_masks[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                 attn_masks[i], sharded_mem_config=attention_mask_memconfig
             )
 
@@ -172,11 +172,11 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
 
     def forward(
         self,
-        xs: tt_lib.tensor.Tensor,
-        rot_mats: tt_lib.tensor.Tensor,
+        xs: ttnn.experimental.tensor.Tensor,
+        rot_mats: ttnn.experimental.tensor.Tensor,
         start_pos: int,
-        attn_masks: tt_lib.tensor.Tensor,
-    ) -> tt_lib.tensor.Tensor:
+        attn_masks: ttnn.experimental.tensor.Tensor,
+    ) -> ttnn.experimental.tensor.Tensor:
         # forward pass for each attention module
         all_attn_outputs = []
         # First calculate attention for each device group
@@ -236,7 +236,7 @@ class TtLlamaAttention_galaxy(torch.nn.Module):
         if self.emulated:
             # FOR BRINGUP! Outputs are Interaved, Shard them
             for i in range(len(all_attn_outputs)):
-                all_attn_outputs[i] = tt_lib.tensor.interleaved_to_sharded(
+                all_attn_outputs[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                     all_attn_outputs[i], sharded_mem_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"]
                 )
 

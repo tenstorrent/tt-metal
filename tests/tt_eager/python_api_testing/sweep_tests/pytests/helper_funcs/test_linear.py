@@ -4,7 +4,7 @@
 
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from functools import partial
 
 
@@ -33,14 +33,16 @@ def test_linear_no_bias(input_shapes, device):
         device,
         {
             "weight": weight,
-            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-            "dtype": [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.TILE, ttnn.experimental.tensor.Layout.TILE],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT16],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ]
             * 2,
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "bias": None,
         },
@@ -73,14 +75,20 @@ def test_linear_with_bias(input_shapes, device):
         {
             "weight": weight,
             "bias": bias,
-            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.ROW_MAJOR],
-            "dtype": [ttl.tensor.DataType.BFLOAT16] * 3,
+            "layout": [
+                ttnn.experimental.tensor.Layout.TILE,
+                ttnn.experimental.tensor.Layout.TILE,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
+            ],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16] * 3,
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ]
             * 3,
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
         },
     )

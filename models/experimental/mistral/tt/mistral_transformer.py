@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import ttnn.deprecated
 import torch
 import torch.nn as nn
 import ttnn
@@ -44,8 +44,8 @@ class TtTransformer(nn.Module):
 
         embedding_weights = torch.load(tt_cache_path + "tok_embeddings.weight.pt")
         self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim, _weight=embedding_weights)
-        self.output_mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+        self.output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
         )
         self.layers = torch.nn.ModuleList(
             [
@@ -68,7 +68,7 @@ class TtTransformer(nn.Module):
             output_mem_config=self.output_mem_config,
         )
 
-        self.output_weight = tt_lib.tensor.load_tensor(
+        self.output_weight = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + "output.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.output = TtLinear(
@@ -109,11 +109,13 @@ class TtTransformer(nn.Module):
             diagonal = -self.args.sliding_window
             mask = ttnn.triu(mask, diagonal)
             mask = ttnn.log(mask)
-            mask = format_tensor(mask, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config, pad_value=-10000)
+            mask = format_tensor(
+                mask, ttnn.experimental.tensor.Layout.TILE, self.device, self.output_mem_config, pad_value=-10000
+            )
 
         positions = torch_to_tt_tensor_rm(positions, self.device, put_on_device=False)
         h = torch_to_tt_tensor_rm(h, self.device, put_on_device=False)
-        h = format_tensor(h, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
+        h = format_tensor(h, ttnn.experimental.tensor.Layout.TILE, self.device, self.output_mem_config)
         for layer in self.layers:
             h = layer(h, bcast_freq_xq, bcast_freq_xk, positions, mask, seqlen)
 

@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from models.experimental.yolov4.ttnn.common import Conv
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 
 
 class TtNeck:

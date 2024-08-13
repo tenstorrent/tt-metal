@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
 from models.experimental.mistral.mistral_helper_funcs import Linear as TtLinear
@@ -23,7 +23,7 @@ class TtFeedForward(nn.Module):
         self.args = args
 
         self.output_mem_config = output_mem_config
-        self.w1_weights = tt_lib.tensor.load_tensor(
+        self.w1_weights = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + base_address + "w1.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.w1 = TtLinear(
@@ -33,7 +33,7 @@ class TtFeedForward(nn.Module):
             device=self.device,
         )
 
-        self.w2_weights = tt_lib.tensor.load_tensor(
+        self.w2_weights = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + base_address + "w2.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.w2 = TtLinear(
@@ -43,7 +43,7 @@ class TtFeedForward(nn.Module):
             device=self.device,
         )
 
-        self.w3_weights = tt_lib.tensor.load_tensor(
+        self.w3_weights = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + base_address + "w3.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.w3 = TtLinear(
@@ -53,7 +53,7 @@ class TtFeedForward(nn.Module):
             device=self.device,
         )
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         silu_out = ttnn.silu(self.w1(x))
         x = ttnn.mul(silu_out, self.w3(x))
         out = self.w2(x)

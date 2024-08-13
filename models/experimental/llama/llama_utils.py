@@ -7,7 +7,7 @@ from loguru import logger
 from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.logits_process import LogitsProcessorList
 from typing import List, Optional, Tuple, Union
-import tt_lib
+import ttnn.deprecated
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 
@@ -20,7 +20,9 @@ def linear(x, weight, bias, device):
     x = torch_to_tt_tensor_rm(x, device, put_on_device=False)
 
     if bias is not None:
-        x = tt_lib.tensor.bcast(x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
+        x = ttnn.experimental.tensor.bcast(
+            x, bias, ttnn.experimental.tensor.BcastOpMath.ADD, ttnn.experimental.tensor.BcastOpDim.H
+        )
     return x
 
 
@@ -276,7 +278,7 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] 
 
 
 def shape_tt(states, batch_size, seq_len, n_heads, head_dim):
-    tt_out = tt_lib.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
+    tt_out = ttnn.experimental.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
     tt_out = ttnn.transpose(tt_out, 1, -2)
 
     return tt_out

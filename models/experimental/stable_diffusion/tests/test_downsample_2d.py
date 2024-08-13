@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from diffusers import StableDiffusionPipeline
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 

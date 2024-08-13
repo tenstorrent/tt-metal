@@ -6,7 +6,7 @@ import sys
 import pytest
 
 import numpy as np
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from models.utility_functions import is_wormhole_b0
 from ttnn.device import Arch
@@ -32,7 +32,7 @@ def test_run_sfpu_eps(device):
 def test_run_sfpu_tensor(device):
     value = device.sfpu_eps()
     shape = [1, 1, 32, 32]
-    eps = ttnn.full(ttl.tensor.Shape(shape), value)
-    eps = eps.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    eps = ttnn.full(ttnn.experimental.tensor.Shape(shape), value)
+    eps = eps.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
     passing = np.isclose(np.ones((1, 1, 32, 32)) * value, eps.float()).all()
     assert passing

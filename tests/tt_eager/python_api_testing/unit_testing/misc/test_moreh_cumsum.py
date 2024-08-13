@@ -6,7 +6,7 @@ import pytest
 import torch
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import comp_allclose_and_pcc
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
@@ -14,30 +14,41 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_
 
 def get_tensors(input_shape, output_shape, device):
     torch.manual_seed(2023)
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
+    npu_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
     cpu_dtype = torch.bfloat16
-    npu_layout = ttl.tensor.Layout.TILE
+    npu_layout = ttnn.experimental.tensor.Layout.TILE
 
     torch_input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype, requires_grad=True)
     torch_output = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
 
-    tt_input = ttl.tensor.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-    tt_output = ttl.tensor.Tensor(torch_output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    tt_input = (
+        ttnn.experimental.tensor.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    )
+    tt_output = (
+        ttnn.experimental.tensor.Tensor(torch_output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    )
 
     return tt_input, tt_output, torch_input
 
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     torch.manual_seed(2023)
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
+    npu_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
     cpu_dtype = torch.bfloat16
-    npu_layout = ttl.tensor.Layout.TILE
+    npu_layout = ttnn.experimental.tensor.Layout.TILE
 
     torch_output_grad = torch.randint(-2, 3, output_grad_shape, dtype=cpu_dtype, requires_grad=True)
     torch_input_grad = torch.randint(-2, 3, input_grad_shape, dtype=cpu_dtype)
 
-    tt_output_grad = ttl.tensor.Tensor(torch_output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-    tt_input_grad = ttl.tensor.Tensor(torch_input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    tt_output_grad = (
+        ttnn.experimental.tensor.Tensor(torch_output_grad, npu_dtype)
+        .pad_to_tile(float("nan"))
+        .to(npu_layout)
+        .to(device)
+    )
+    tt_input_grad = (
+        ttnn.experimental.tensor.Tensor(torch_input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    )
 
     return tt_output_grad, tt_input_grad, torch_output_grad
 
@@ -72,7 +83,7 @@ def test_moreh_cumsum_dim(input_shape, dim, device):
 
     torch_output = torch.cumsum(torch_input, dim)
 
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.experimental.tensor.Layout.ROW_MAJOR
     tt_output_cpu = (
         ttl.operations.primary.moreh_cumsum(tt_input, tt_output, dim=dim)
         .cpu()
@@ -123,7 +134,7 @@ def test_moreh_cumsumsum_backward(input_shape, dim, device):
     torch_output = torch.cumsum(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.experimental.tensor.Layout.ROW_MAJOR
     tt_input_grad_cpu = (
         ttl.operations.primary.moreh_cumsum_backward(tt_output_grad, tt_input_grad, dim=dim)
         .cpu()

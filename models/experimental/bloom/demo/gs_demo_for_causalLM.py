@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import ttnn.deprecated
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 import numpy as np

@@ -21,7 +21,7 @@ from models.experimental.stable_diffusion.tt.unet_2d_condition import (
 )
 from models.experimental.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 from models.utility_functions import (
     torch_to_tt_tensor_rm,

@@ -9,7 +9,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
     comp_and_get_pcc,
 )
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from loguru import logger
 import pytest
@@ -188,12 +188,12 @@ def run_test_sdpa_decode_multi_pos(
         min_pcc = 0.90
     else:
         min_pcc = 0.99
-        if q_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
+        if q_dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
             min_pcc = 0.98
-        min_pcc = 0.93 if dtype == tt_lib.tensor.DataType.BFLOAT4_B else min_pcc
+        min_pcc = 0.93 if dtype == ttnn.experimental.tensor.DataType.BFLOAT4_B else min_pcc
 
-    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-        math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -222,7 +222,7 @@ def run_test_sdpa_decode_multi_pos(
         start_indices = np.linspace(0, max_start_idx, b, dtype=np.int32).tolist()
 
         k_chunk_size = get_chunk_size(max_start_idx + 1)
-        program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+        program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
             q_chunk_size=padded_num_heads,
             k_chunk_size=k_chunk_size,
@@ -251,7 +251,7 @@ def run_test_sdpa_decode_multi_pos(
             memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
         )
 
-        tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention_decode(
+        tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
             tt_Q,
             tt_K,
             tt_V,
@@ -311,12 +311,12 @@ def run_test_sdpa_decode_single_iter(
         min_pcc = 0.90
     else:
         min_pcc = 0.99
-        if q_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
+        if q_dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
             min_pcc = 0.98
-        min_pcc = 0.93 if dtype == tt_lib.tensor.DataType.BFLOAT4_B else min_pcc
+        min_pcc = 0.93 if dtype == ttnn.experimental.tensor.DataType.BFLOAT4_B else min_pcc
 
-    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-        math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -343,7 +343,7 @@ def run_test_sdpa_decode_single_iter(
     scale = d**-0.5
 
     k_chunk_size = get_chunk_size(max_start_idx + 1)
-    program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+    program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=padded_num_heads,
         k_chunk_size=k_chunk_size,
@@ -372,7 +372,7 @@ def run_test_sdpa_decode_single_iter(
         memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
     )
 
-    tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention_decode(
+    tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
         tt_Q,
         tt_K,
         tt_V,
@@ -406,10 +406,10 @@ def run_test_sdpa_decode_single_iter(
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
-        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
-        [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16],
-        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16],
-        [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT16],
+        [ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT8_B],
+        [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT16],
+        [ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT16],
+        [ttnn.experimental.tensor.DataType.BFLOAT4_B, ttnn.experimental.tensor.DataType.BFLOAT16],
     ],
     ids=[
         "all_bfp8",
@@ -428,7 +428,7 @@ def run_test_sdpa_decode_single_iter(
     ),
 )
 def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, use_program_cache):
-    tt_lib.device.DisablePersistentKernelCache()
+    ttnn.deprecated.device.DisablePersistentKernelCache()
     if single_iter:
         run_test_sdpa_decode_single_iter(
             device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=False, sharded_out=False
@@ -444,8 +444,8 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
-        [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
-        [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16],
+        [ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT8_B],
+        [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT16],
     ],
     ids=[
         "all_bfp8",
@@ -457,7 +457,7 @@ def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single
     ([16, 8, 1, 32768, 128, (8, 6)],),  # Llama2-70B
 )
 def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
-    tt_lib.device.DisablePersistentKernelCache()
+    ttnn.deprecated.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_single_iter(
         device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=True, sharded_out=False
     )
@@ -472,8 +472,8 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.skip("Skipping Perf Test in CI")
 def test_sdpa_decode_perf(device, use_program_cache):
-    dtype = tt_lib.tensor.DataType.BFLOAT8_B
-    q_dtype = tt_lib.tensor.DataType.BFLOAT16
+    dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
+    q_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
     nh = 8
     nkv = 1
     d = 128
@@ -527,7 +527,7 @@ def test_sdpa_decode_perf(device, use_program_cache):
 @pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16],
+    [ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT16],
     ids=["bfp8", "bf16"],
 )
 @pytest.mark.parametrize(
@@ -535,7 +535,7 @@ def test_sdpa_decode_perf(device, use_program_cache):
     ([16, 8, 1, 8192, 128],),  # Llama2-70B
 )
 def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_cache):
-    tt_lib.device.DisablePersistentKernelCache()
+    ttnn.deprecated.device.DisablePersistentKernelCache()
 
     dummy_tensors = []
     for i in range(2):
@@ -640,8 +640,8 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
 
-    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-        math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -665,7 +665,7 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
         scale = d**-0.5
 
         k_chunk_size = get_chunk_size(start_idx + 1)
-        program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+        program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
             q_chunk_size=padded_num_heads,
             k_chunk_size=k_chunk_size,
@@ -704,7 +704,7 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
                 memory_config=dram_memcfg,  # height_sharded_memcfg
             )
 
-            tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention_decode(
+            tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
                 tt_Q,
                 tt_K,
                 tt_V,
@@ -746,9 +746,9 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
-        # [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT16],
-        # [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT8_B],
-        [tt_lib.tensor.DataType.BFLOAT4_B, tt_lib.tensor.DataType.BFLOAT4_B],
+        # [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT16],
+        # [ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT8_B],
+        [ttnn.experimental.tensor.DataType.BFLOAT4_B, ttnn.experimental.tensor.DataType.BFLOAT4_B],
     ],
     ids=[
         # "bfp16_bfp16",
@@ -765,5 +765,5 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     ),
 )
 def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, use_program_cache):
-    tt_lib.device.DisablePersistentKernelCache()
+    ttnn.deprecated.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype)

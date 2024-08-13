@@ -4,7 +4,7 @@
 
 import torch
 from torch import nn
-import tt_lib
+import ttnn.deprecated
 from models.utility_functions import pad_by_zero
 
 import ttnn

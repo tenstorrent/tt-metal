@@ -12,7 +12,7 @@ from functools import wraps
 import pytest
 
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,

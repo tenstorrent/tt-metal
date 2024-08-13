@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import comp_pcc, tt2torch_tensor
 import torch
 from models.utility_functions import is_wormhole_b0
@@ -21,9 +21,11 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
 
     A = torch.randn(in0_shape)
 
-    in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
+    in0_t = (
+        ttnn.experimental.tensor.Tensor(A, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in0_mem_config)
+    )
 
-    out = ttl.tensor.nlp_concat_heads(in0_t, out_mem_config)
+    out = ttnn.experimental.tensor.nlp_concat_heads(in0_t, out_mem_config)
 
     # Check memory of inputs and outputs
     assert in0_t.memory_config().buffer_type == in0_mem_config.buffer_type
@@ -37,7 +39,7 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
 
     ref_out = torch.transpose(A, -3, -2).reshape([batch, 1, seq_len, num_heads * head_dim])
 
-    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
         pcc = 0.99
     else:
         pcc = 1.0
@@ -51,22 +53,34 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    (
+        ttnn.experimental.tensor.DataType.BFLOAT8_B,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.FLOAT32,
+    ),
     ids=["BFLOAT8_B", "BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
@@ -79,25 +93,37 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
     ],
 )
 def test_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, request, device):
-    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+    if is_grayskull() and dtype == ttnn.experimental.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
     run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device)
 
 
 def test_nlp_concat_heads_with_program_cache(device, use_program_cache):
-    dtype = ttl.tensor.DataType.BFLOAT8_B
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
+    mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+    )
     for _ in range(2):
         run_nlp_concat_heads_test(1, 32, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
+        tt_dummy_tensor = (
+            ttnn.experimental.tensor.Tensor(py_dummy_tensor, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, mem_config)
+        )
 
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+    )
     for _ in range(2):
         run_nlp_concat_heads_test(1, 32, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
+        tt_dummy_tensor = (
+            ttnn.experimental.tensor.Tensor(py_dummy_tensor, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, mem_config)
+        )
 
     assert device.num_program_cache_entries() == 2

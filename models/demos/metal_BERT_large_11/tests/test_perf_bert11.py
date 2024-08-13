@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer
 
-import tt_lib
+import ttnn.deprecated
 
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
@@ -124,7 +124,7 @@ def run_perf_bert11(
             del tt_embedding_inputs
             del tt_embedding
         # Run last inference iteration
-        tt_lib.device.Synchronize(device)
+        ttnn.deprecated.device.Synchronize(device)
         profiler.end(second_run_accum_key, force_enable=True)
         del tt_output
 

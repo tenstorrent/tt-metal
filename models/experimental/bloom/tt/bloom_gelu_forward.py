@@ -4,10 +4,12 @@
 
 import torch
 import ttnn
-import tt_lib
+import ttnn.deprecated
 import models.experimental.bloom.bloom_utils as bloom_utils
 
-mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+mem_config = ttnn.experimental.tensor.MemoryConfig(
+    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+)
 
 
 def bloom_gelu_forward(x: torch.Tensor) -> torch.Tensor:

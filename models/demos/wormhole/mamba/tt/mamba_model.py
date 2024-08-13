@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 from loguru import logger
 
@@ -107,8 +107,8 @@ class MambaTT(torch.nn.Module):
             tt_dtype=ttnn.bfloat8_b,
         )
         self.embedding_weights = load_fn("embedding.weight", tt_dtype=ttnn.bfloat16, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+        self.compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )

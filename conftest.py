@@ -90,7 +90,7 @@ def device_params(request):
 
 @pytest.fixture(scope="function")
 def device(request, device_params):
-    import tt_lib as ttl
+    import ttnn.deprecated as ttl
 
     device_id = request.config.getoption("device_id")
     request.node.pci_ids = [ttl.device.GetPCIeDeviceID(device_id)]
@@ -110,7 +110,7 @@ def device(request, device_params):
 
 @pytest.fixture(scope="function")
 def pcie_devices(request, device_params):
-    import tt_lib as ttl
+    import ttnn.deprecated as ttl
 
     num_devices = ttl.device.GetNumPCIeDevices()
     device_ids = [i for i in range(num_devices)]
@@ -129,7 +129,7 @@ def pcie_devices(request, device_params):
 
 @pytest.fixture(scope="function")
 def all_devices(request, device_params):
-    import tt_lib as ttl
+    import ttnn.deprecated as ttl
 
     num_devices = ttl.device.GetNumAvailableDevices()
     device_ids = [i for i in range(num_devices)]
@@ -165,7 +165,7 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
         device_mesh: Initialized device mesh object.
     """
     import ttnn
-    import tt_lib as ttl
+    import ttnn.deprecated as ttl
 
     device_ids = ttnn.get_device_ids()
 
@@ -203,7 +203,7 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
 @pytest.fixture(scope="function")
 def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
-    import tt_lib as ttl
+    import ttnn.deprecated as ttl
 
     device_ids = ttnn.get_pcie_device_ids()
     try:
@@ -230,7 +230,7 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 @pytest.fixture(scope="function")
 def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
-    import tt_lib as ttl
+    import ttnn.deprecated as ttl
 
     if ttnn.get_num_devices() < 8:
         pytest.skip()
@@ -259,14 +259,14 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 @pytest.fixture()
 def clear_compile_cache():
     yield
-    import tt_lib as ttl
+    import ttnn.deprecated as ttl
 
     ttl.device.DisablePersistentKernelCache()
 
 
 @pytest.fixture(autouse=True)
 def reset_default_device():
-    import tt_lib as ttl
+    import ttnn.deprecated as ttl
 
     device = ttl.device.GetDefaultDevice()
     yield

@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import ttnn.deprecated
 import ttnn
 
 
 def subalpha(x, y):
-    tt_lib.tensor.subalpha(x, y, 5)
+    ttnn.experimental.tensor.subalpha(x, y, 5)
 
 
 def addalpha(x, y):
@@ -27,39 +27,57 @@ def where_binary_2(x, y):
 
 
 def bcast_add_h(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
+    ttnn.experimental.tensor.bcast(
+        x, y, ttnn.experimental.tensor.BcastOpMath.ADD, ttnn.experimental.tensor.BcastOpDim.H
+    )
 
 
 def bcast_add_w(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.W)
+    ttnn.experimental.tensor.bcast(
+        x, y, ttnn.experimental.tensor.BcastOpMath.ADD, ttnn.experimental.tensor.BcastOpDim.W
+    )
 
 
 def bcast_add_hw(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.HW)
+    ttnn.experimental.tensor.bcast(
+        x, y, ttnn.experimental.tensor.BcastOpMath.ADD, ttnn.experimental.tensor.BcastOpDim.HW
+    )
 
 
 def bcast_sub_h(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.H)
+    ttnn.experimental.tensor.bcast(
+        x, y, ttnn.experimental.tensor.BcastOpMath.SUB, ttnn.experimental.tensor.BcastOpDim.H
+    )
 
 
 def bcast_sub_w(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.W)
+    ttnn.experimental.tensor.bcast(
+        x, y, ttnn.experimental.tensor.BcastOpMath.SUB, ttnn.experimental.tensor.BcastOpDim.W
+    )
 
 
 def bcast_sub_hw(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.HW)
+    ttnn.experimental.tensor.bcast(
+        x, y, ttnn.experimental.tensor.BcastOpMath.SUB, ttnn.experimental.tensor.BcastOpDim.HW
+    )
 
 
 def bcast_mul_h(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.H)
+    ttnn.experimental.tensor.bcast(
+        x, y, ttnn.experimental.tensor.BcastOpMath.MUL, ttnn.experimental.tensor.BcastOpDim.H
+    )
 
 
 def bcast_mul_w(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.W)
+    ttnn.experimental.tensor.bcast(
+        x, y, ttnn.experimental.tensor.BcastOpMath.MUL, ttnn.experimental.tensor.BcastOpDim.W
+    )
 
 
 def bcast_mul_hw(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+    ttnn.experimental.tensor.bcast(
+        x, y, ttnn.experimental.tensor.BcastOpMath.MUL, ttnn.experimental.tensor.BcastOpDim.HW
+    )
 
 
 def bcast_h_shape_func(input_shape):
@@ -195,7 +213,7 @@ def threshold_bw(x, y):
 
 
 def unary_eq_bw(x, y):
-    tt_lib.tensor.unary_eq_bw(x, y, other=0.7)
+    ttnn.experimental.tensor.unary_eq_bw(x, y, other=0.7)
 
 
 def logiteps_bw(x, y):
@@ -228,51 +246,51 @@ def mseloss(x, y):
 
 
 def primary_moreh_softmax_backward_0(x, y):
-    tt_lib.operations.primary.moreh_softmax_backward(x, y, dim=0)
+    ttnn.experimental.operations.primary.moreh_softmax_backward(x, y, dim=0)
 
 
 def primary_moreh_softmax_backward_1(x, y):
-    tt_lib.operations.primary.moreh_softmax_backward(x, y, dim=1)
+    ttnn.experimental.operations.primary.moreh_softmax_backward(x, y, dim=1)
 
 
 def primary_moreh_softmax_backward_2(x, y):
-    tt_lib.operations.primary.moreh_softmax_backward(x, y, dim=2)
+    ttnn.experimental.operations.primary.moreh_softmax_backward(x, y, dim=2)
 
 
 def primary_moreh_softmax_backward_3(x, y):
-    tt_lib.operations.primary.moreh_softmax_backward(x, y, dim=3)
+    ttnn.experimental.operations.primary.moreh_softmax_backward(x, y, dim=3)
 
 
 def primary_moreh_softmin_backward_0(x, y):
-    tt_lib.operations.primary.moreh_softmin_backward(x, y, dim=0)
+    ttnn.experimental.operations.primary.moreh_softmin_backward(x, y, dim=0)
 
 
 def primary_moreh_softmin_backward_1(x, y):
-    tt_lib.operations.primary.moreh_softmin_backward(x, y, dim=1)
+    ttnn.experimental.operations.primary.moreh_softmin_backward(x, y, dim=1)
 
 
 def primary_moreh_softmin_backward_2(x, y):
-    tt_lib.operations.primary.moreh_softmin_backward(x, y, dim=2)
+    ttnn.experimental.operations.primary.moreh_softmin_backward(x, y, dim=2)
 
 
 def primary_moreh_softmin_backward_3(x, y):
-    tt_lib.operations.primary.moreh_softmin_backward(x, y, dim=3)
+    ttnn.experimental.operations.primary.moreh_softmin_backward(x, y, dim=3)
 
 
 def primary_moreh_logsoftmax_backward_0(x, y):
-    tt_lib.operations.primary.moreh_logsoftmax_backward(x, y, dim=0)
+    ttnn.experimental.operations.primary.moreh_logsoftmax_backward(x, y, dim=0)
 
 
 def primary_moreh_logsoftmax_backward_1(x, y):
-    tt_lib.operations.primary.moreh_logsoftmax_backward(x, y, dim=1)
+    ttnn.experimental.operations.primary.moreh_logsoftmax_backward(x, y, dim=1)
 
 
 def primary_moreh_logsoftmax_backward_2(x, y):
-    tt_lib.operations.primary.moreh_logsoftmax_backward(x, y, dim=2)
+    ttnn.experimental.operations.primary.moreh_logsoftmax_backward(x, y, dim=2)
 
 
 def primary_moreh_logsoftmax_backward_3(x, y):
-    tt_lib.operations.primary.moreh_logsoftmax_backward(x, y, dim=3)
+    ttnn.experimental.operations.primary.moreh_logsoftmax_backward(x, y, dim=3)
 
 
 def primary_scale_mask_softmax_in_place(x, y):
@@ -284,7 +302,7 @@ def scale_mask_softmax_in_place_shape_func(input_shape):
 
 
 def primaru_moreh_mean_0(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[0])
 
 
 def primaru_moreh_mean_0_shape_func(input_shape):
@@ -292,7 +310,7 @@ def primaru_moreh_mean_0_shape_func(input_shape):
 
 
 def primaru_moreh_mean_01(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[0, 1])
 
 
 def primaru_moreh_mean_01_shape_func(input_shape):
@@ -300,7 +318,7 @@ def primaru_moreh_mean_01_shape_func(input_shape):
 
 
 def primaru_moreh_mean_012(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1, 2])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[0, 1, 2])
 
 
 def primaru_moreh_mean_012_shape_func(input_shape):
@@ -308,7 +326,7 @@ def primaru_moreh_mean_012_shape_func(input_shape):
 
 
 def primaru_moreh_mean_0123(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1, 2, 3])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[0, 1, 2, 3])
 
 
 def primaru_moreh_mean_0123_shape_func(input_shape):
@@ -316,7 +334,7 @@ def primaru_moreh_mean_0123_shape_func(input_shape):
 
 
 def primaru_moreh_mean_013(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1, 3])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[0, 1, 3])
 
 
 def primaru_moreh_mean_013_shape_func(input_shape):
@@ -324,7 +342,7 @@ def primaru_moreh_mean_013_shape_func(input_shape):
 
 
 def primaru_moreh_mean_023(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 2, 3])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[0, 2, 3])
 
 
 def primaru_moreh_mean_023_shape_func(input_shape):
@@ -332,7 +350,7 @@ def primaru_moreh_mean_023_shape_func(input_shape):
 
 
 def primaru_moreh_mean_1(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[1])
 
 
 def primaru_moreh_mean_1_shape_func(input_shape):
@@ -340,7 +358,7 @@ def primaru_moreh_mean_1_shape_func(input_shape):
 
 
 def primaru_moreh_mean_12(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1, 2])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[1, 2])
 
 
 def primaru_moreh_mean_12_shape_func(input_shape):
@@ -348,7 +366,7 @@ def primaru_moreh_mean_12_shape_func(input_shape):
 
 
 def primaru_moreh_mean_123(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1, 2, 3])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[1, 2, 3])
 
 
 def primaru_moreh_mean_123_shape_func(input_shape):
@@ -356,7 +374,7 @@ def primaru_moreh_mean_123_shape_func(input_shape):
 
 
 def primaru_moreh_mean_13(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1, 3])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[1, 3])
 
 
 def primaru_moreh_mean_13_shape_func(input_shape):
@@ -364,7 +382,7 @@ def primaru_moreh_mean_13_shape_func(input_shape):
 
 
 def primaru_moreh_mean_2(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[2])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[2])
 
 
 def primaru_moreh_mean_2_shape_func(input_shape):
@@ -372,7 +390,7 @@ def primaru_moreh_mean_2_shape_func(input_shape):
 
 
 def primaru_moreh_mean_23(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[2, 3])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[2, 3])
 
 
 def primaru_moreh_mean_23_shape_func(input_shape):
@@ -380,7 +398,7 @@ def primaru_moreh_mean_23_shape_func(input_shape):
 
 
 def primaru_moreh_mean_3(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[3])
+    ttnn.experimental.operations.primary.moreh_mean(x, y, dims=[3])
 
 
 def primaru_moreh_mean_3_shape_func(input_shape):
@@ -465,7 +483,7 @@ all_binary_ops = [
     },
     {
         "op": subalpha,
-        "name": "tt_lib.tensor.subalpha",
+        "name": "ttnn.experimental.tensor.subalpha",
     },
     {
         "op": addalpha,
@@ -484,8 +502,8 @@ all_binary_ops = [
         "name": "ttnn.logical_and",
     },
     {
-        "op": tt_lib.tensor.assign,
-        "name": "tt_lib.tensor.assign_binary",
+        "op": ttnn.experimental.tensor.assign,
+        "name": "ttnn.experimental.tensor.assign_binary",
     },
     {
         "op": isclose,
@@ -532,52 +550,52 @@ all_binary_ops = [
         "name": "ttnn.matmul",
     },
     {
-        "op": tt_lib.tensor.copy,
-        "name": "tt_lib.tensor.copy",
+        "op": ttnn.experimental.tensor.copy,
+        "name": "ttnn.experimental.tensor.copy",
     },
     {
         "op": bcast_add_h,
-        "name": "tt_lib.tensor.bcast_add_h",
+        "name": "ttnn.experimental.tensor.bcast_add_h",
         "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_add_w,
-        "name": "tt_lib.tensor.bcast_add_w",
+        "name": "ttnn.experimental.tensor.bcast_add_w",
         "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_add_hw,
-        "name": "tt_lib.tensor.bcast_add_hw",
+        "name": "ttnn.experimental.tensor.bcast_add_hw",
         "shape_func": bcast_hw_shape_func,
     },
     {
         "op": bcast_sub_h,
-        "name": "tt_lib.tensor.bcast_sub_h",
+        "name": "ttnn.experimental.tensor.bcast_sub_h",
         "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_sub_w,
-        "name": "tt_lib.tensor.bcast_sub_w",
+        "name": "ttnn.experimental.tensor.bcast_sub_w",
         "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_sub_hw,
-        "name": "tt_lib.tensor.bcast_sub_hw",
+        "name": "ttnn.experimental.tensor.bcast_sub_hw",
         "shape_func": bcast_hw_shape_func,
     },
     {
         "op": bcast_mul_h,
-        "name": "tt_lib.tensor.bcast_mul_h",
+        "name": "ttnn.experimental.tensor.bcast_mul_h",
         "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_mul_w,
-        "name": "tt_lib.tensor.bcast_mul_w",
+        "name": "ttnn.experimental.tensor.bcast_mul_w",
         "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_mul_hw,
-        "name": "tt_lib.tensor.bcast_mul_hw",
+        "name": "ttnn.experimental.tensor.bcast_mul_hw",
         "shape_func": bcast_hw_shape_func,
     },
     {
@@ -917,7 +935,7 @@ all_binary_ops = [
     },
     {
         "op": unary_eq_bw,
-        "name": "tt_lib.tensor.unary_eq_bw",
+        "name": "ttnn.experimental.tensor.unary_eq_bw",
     },
     {
         "op": ttnn.logit_bw,
@@ -982,51 +1000,51 @@ all_binary_ops = [
     },
     {
         "op": primary_moreh_softmax_backward_0,
-        "name": "tt_lib.operations.primary.moreh_softmax_backward_dim_0",
+        "name": "ttnn.experimental.operations.primary.moreh_softmax_backward_dim_0",
     },
     {
         "op": primary_moreh_softmax_backward_1,
-        "name": "tt_lib.operations.primary.moreh_softmax_backward_dim_1",
+        "name": "ttnn.experimental.operations.primary.moreh_softmax_backward_dim_1",
     },
     {
         "op": primary_moreh_softmax_backward_2,
-        "name": "tt_lib.operations.primary.moreh_softmax_backward_dim_2",
+        "name": "ttnn.experimental.operations.primary.moreh_softmax_backward_dim_2",
     },
     {
         "op": primary_moreh_softmax_backward_3,
-        "name": "tt_lib.operations.primary.moreh_softmax_backward_dim_3",
+        "name": "ttnn.experimental.operations.primary.moreh_softmax_backward_dim_3",
     },
     {
         "op": primary_moreh_softmin_backward_0,
-        "name": "tt_lib.operations.primary.moreh_softmin_backward_dim_0",
+        "name": "ttnn.experimental.operations.primary.moreh_softmin_backward_dim_0",
     },
     {
         "op": primary_moreh_softmin_backward_1,
-        "name": "tt_lib.operations.primary.moreh_softmin_backward_dim_1",
+        "name": "ttnn.experimental.operations.primary.moreh_softmin_backward_dim_1",
     },
     {
         "op": primary_moreh_softmin_backward_2,
-        "name": "tt_lib.operations.primary.moreh_softmin_backward_dim_2",
+        "name": "ttnn.experimental.operations.primary.moreh_softmin_backward_dim_2",
     },
     {
         "op": primary_moreh_softmin_backward_3,
-        "name": "tt_lib.operations.primary.moreh_softmin_backward_dim_3",
+        "name": "ttnn.experimental.operations.primary.moreh_softmin_backward_dim_3",
     },
     {
         "op": primary_moreh_logsoftmax_backward_0,
-        "name": "tt_lib.operations.primary.moreh_logsoftmax_backward_dim_0",
+        "name": "ttnn.experimental.operations.primary.moreh_logsoftmax_backward_dim_0",
     },
     {
         "op": primary_moreh_logsoftmax_backward_1,
-        "name": "tt_lib.operations.primary.moreh_logsoftmax_backward_dim_1",
+        "name": "ttnn.experimental.operations.primary.moreh_logsoftmax_backward_dim_1",
     },
     {
         "op": primary_moreh_logsoftmax_backward_2,
-        "name": "tt_lib.operations.primary.moreh_logsoftmax_backward_dim_2",
+        "name": "ttnn.experimental.operations.primary.moreh_logsoftmax_backward_dim_2",
     },
     {
         "op": primary_moreh_logsoftmax_backward_3,
-        "name": "tt_lib.operations.primary.moreh_logsoftmax_backward_dim_3",
+        "name": "ttnn.experimental.operations.primary.moreh_logsoftmax_backward_dim_3",
     },
     {
         "op": primary_scale_mask_softmax_in_place,
@@ -1035,57 +1053,57 @@ all_binary_ops = [
     },
     {
         "op": primaru_moreh_mean_0,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_0",
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_0",
         "shape_func": primaru_moreh_mean_0_shape_func,
     },
     {
         "op": primaru_moreh_mean_01,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_01",
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_01",
         "shape_func": primaru_moreh_mean_01_shape_func,
     },
     # {
     #     "op": primaru_moreh_mean_012,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_012",
+    #     "name": "ttnn.experimental.operations.primary.moreh_mean_dims_012",
     #     "shape_func": primaru_moreh_mean_012_shape_func,
     # },
     # {
     #     "op": primaru_moreh_mean_013,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_013",
+    #     "name": "ttnn.experimental.operations.primary.moreh_mean_dims_013",
     #     "shape_func": primaru_moreh_mean_013_shape_func,
     # },
     {
         "op": primaru_moreh_mean_1,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_1",
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_1",
         "shape_func": primaru_moreh_mean_1_shape_func,
     },
     # {
     #     "op": primaru_moreh_mean_12,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_12",
+    #     "name": "ttnn.experimental.operations.primary.moreh_mean_dims_12",
     #     "shape_func": primaru_moreh_mean_12_shape_func,
     # },
     # {
     #     "op": primaru_moreh_mean_13,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_13",
+    #     "name": "ttnn.experimental.operations.primary.moreh_mean_dims_13",
     #     "shape_func": primaru_moreh_mean_13_shape_func,
     # },
     # {
     #     "op": primaru_moreh_mean_2,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_2",
+    #     "name": "ttnn.experimental.operations.primary.moreh_mean_dims_2",
     #     "shape_func": primaru_moreh_mean_2_shape_func,
     # },
     # {
     #     "op": primaru_moreh_mean_23,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_23",
+    #     "name": "ttnn.experimental.operations.primary.moreh_mean_dims_23",
     #     "shape_func": primaru_moreh_mean_23_shape_func,
     # },
     # {
     #     "op": primaru_moreh_mean_3,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_3",
+    #     "name": "ttnn.experimental.operations.primary.moreh_mean_dims_3",
     #     "shape_func": primaru_moreh_mean_3_shape_func,
     # },
     {
-        "op": tt_lib.operations.primary.moreh_mean_backward,
-        "name": "tt_lib.operations.primary.moreh_mean_backward",
+        "op": ttnn.experimental.operations.primary.moreh_mean_backward,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_backward",
     },
     {
         "op": ttnn.angle_bw,
@@ -1115,24 +1133,24 @@ all_binary_ops = [
 # To make
 # {
 #     "op": conv,
-#     "name": "tt_lib.tensor.conv",
+#     "name": "ttnn.experimental.tensor.conv",
 # },
 
 
 # Crashing
 # {
 #     "op": primaru_moreh_mean_0123,
-#     "name": "tt_lib.operations.primary.moreh_mean_dims_0123",
+#     "name": "ttnn.experimental.operations.primary.moreh_mean_dims_0123",
 #     "shape_func": primaru_moreh_mean_0123_shape_func,
 # },
 # {
 #     "op": primaru_moreh_mean_023,
-#     "name": "tt_lib.operations.primary.moreh_mean_dims_023",
+#     "name": "ttnn.experimental.operations.primary.moreh_mean_dims_023",
 #     "shape_func": primaru_moreh_mean_023_shape_func,
 # },
 # {
 #     "op": primaru_moreh_mean_123,
-#     "name": "tt_lib.operations.primary.moreh_mean_dims_123",
+#     "name": "ttnn.experimental.operations.primary.moreh_mean_dims_123",
 #     "shape_func": primaru_moreh_mean_123_shape_func,
 # },
 
@@ -1266,7 +1284,7 @@ def ttnn_slice(x):
 
 
 def typecast(x):
-    tt_lib.tensor.typecast(x, tt_lib.tensor.DataType.BFLOAT8_B)
+    ttnn.experimental.tensor.typecast(x, ttnn.experimental.tensor.DataType.BFLOAT8_B)
 
 
 def arange(x):
@@ -1342,11 +1360,11 @@ def rdiv(x):
 
 
 def sum_0(x):
-    tt_lib.tensor.sum(x, 0)
+    ttnn.experimental.tensor.sum(x, 0)
 
 
 def sum_1(x):
-    tt_lib.tensor.sum(x, 1)
+    ttnn.experimental.tensor.sum(x, 1)
 
 
 def sum_2(x):
@@ -1396,7 +1414,7 @@ def group_norm_no_weights(x):
 
 
 def convert_conv_weight_tensor_to_tiled_layout(x):
-    tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout(x, in1_block_h=32, in1_block_w=32)
+    ttnn.experimental.tensor.convert_conv_weight_tensor_to_tiled_layout(x, in1_block_h=32, in1_block_w=32)
 
 
 def logical_not_(x):
@@ -1476,7 +1494,7 @@ def argmax_shape_func(input_shape):
 
 
 def argmin_1(x):
-    tt_lib.argmin(x, dim=-1)
+    ttnn.deprecated.argmin(x, dim=-1)
 
 
 def argmin_2(x):
@@ -1496,74 +1514,74 @@ def argmin_all(x):
 
 
 def primary_moreh_softmax_0(x):
-    tt_lib.operations.primary.moreh_softmax(x, dim=0)
+    ttnn.experimental.operations.primary.moreh_softmax(x, dim=0)
 
 
 def primary_moreh_softmax_1(x):
-    tt_lib.operations.primary.moreh_softmax(x, dim=1)
+    ttnn.experimental.operations.primary.moreh_softmax(x, dim=1)
 
 
 def primary_moreh_softmax_2(x):
-    tt_lib.operations.primary.moreh_softmax(x, dim=2)
+    ttnn.experimental.operations.primary.moreh_softmax(x, dim=2)
 
 
 def primary_moreh_softmax_3(x):
-    tt_lib.operations.primary.moreh_softmax(x, dim=3)
+    ttnn.experimental.operations.primary.moreh_softmax(x, dim=3)
 
 
 def primary_moreh_softmin_0(x):
-    tt_lib.operations.primary.moreh_softmin(x, dim=0)
+    ttnn.experimental.operations.primary.moreh_softmin(x, dim=0)
 
 
 def primary_moreh_softmin_1(x):
-    tt_lib.operations.primary.moreh_softmin(x, dim=1)
+    ttnn.experimental.operations.primary.moreh_softmin(x, dim=1)
 
 
 def primary_moreh_softmin_2(x):
-    tt_lib.operations.primary.moreh_softmin(x, dim=2)
+    ttnn.experimental.operations.primary.moreh_softmin(x, dim=2)
 
 
 def primary_moreh_softmin_3(x):
-    tt_lib.operations.primary.moreh_softmin(x, dim=3)
+    ttnn.experimental.operations.primary.moreh_softmin(x, dim=3)
 
 
 def primary_moreh_logsoftmax_0(x):
-    tt_lib.operations.primary.moreh_logsoftmax(x, dim=0)
+    ttnn.experimental.operations.primary.moreh_logsoftmax(x, dim=0)
 
 
 def primary_moreh_logsoftmax_1(x):
-    tt_lib.operations.primary.moreh_logsoftmax(x, dim=1)
+    ttnn.experimental.operations.primary.moreh_logsoftmax(x, dim=1)
 
 
 def primary_moreh_logsoftmax_2(x):
-    tt_lib.operations.primary.moreh_logsoftmax(x, dim=2)
+    ttnn.experimental.operations.primary.moreh_logsoftmax(x, dim=2)
 
 
 def primary_moreh_logsoftmax_3(x):
-    tt_lib.operations.primary.moreh_logsoftmax(x, dim=3)
+    ttnn.experimental.operations.primary.moreh_logsoftmax(x, dim=3)
 
 
 def primary_moreh_norm_0(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=0)
+    ttnn.experimental.operations.primary.moreh_norm(x, p=2.0, dim=0)
 
 
 def primary_moreh_norm_1(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=1)
+    ttnn.experimental.operations.primary.moreh_norm(x, p=2.0, dim=1)
 
 
 def primary_moreh_norm_2(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=2)
+    ttnn.experimental.operations.primary.moreh_norm(x, p=2.0, dim=2)
 
 
 def primary_moreh_norm_3(x):
-    tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=3)
+    ttnn.experimental.operations.primary.moreh_norm(x, p=2.0, dim=3)
 
 
 def clone(x):
     ttnn.clone(x, ttnn.get_memory_config(x), x.dtype)
 
 
-from tt_lib.fused_ops.softmax import softmax as fused_softmax
+from ttnn.deprecated.fused_ops.softmax import softmax as fused_softmax
 
 
 all_unary_ops = [
@@ -1809,8 +1827,8 @@ all_unary_ops = [
         "name": "ttnn.multigammaln",
     },
     {
-        "op": tt_lib.tensor.assign,
-        "name": "tt_lib.tensor.assign_unary",
+        "op": ttnn.experimental.tensor.assign,
+        "name": "ttnn.experimental.tensor.assign_unary",
     },
     {
         "op": ttnn.i0,
@@ -1909,7 +1927,7 @@ all_unary_ops = [
     },
     {
         "op": typecast,
-        "name": "tt_lib.tensor.typecast",
+        "name": "ttnn.experimental.tensor.typecast",
     },
     {
         "op": arange,
@@ -1941,7 +1959,7 @@ all_unary_ops = [
     },
     {
         "op": ttnn.split,
-        "name": "tt_lib.tensor.split_last_dim_two_chunks_tiled",
+        "name": "ttnn.experimental.tensor.split_last_dim_two_chunks_tiled",
     },
     {
         "op": empty,
@@ -1994,20 +2012,20 @@ all_unary_ops = [
         "name": "ttnn.max_dim_23",
     },
     {
-        "op": tt_lib.tensor.global_min,
-        "name": "tt_lib.tensor.global_min",
+        "op": ttnn.experimental.tensor.global_min,
+        "name": "ttnn.experimental.tensor.global_min",
     },
     {
-        "op": tt_lib.tensor.global_max,
-        "name": "tt_lib.tensor.global_max",
+        "op": ttnn.experimental.tensor.global_max,
+        "name": "ttnn.experimental.tensor.global_max",
     },
     {
-        "op": tt_lib.tensor.global_sum,
-        "name": "tt_lib.tensor.global_sum",
+        "op": ttnn.experimental.tensor.global_sum,
+        "name": "ttnn.experimental.tensor.global_sum",
     },
     {
-        "op": tt_lib.tensor.global_mean,
-        "name": "tt_lib.tensor.global_mean",
+        "op": ttnn.experimental.tensor.global_mean,
+        "name": "ttnn.experimental.tensor.global_mean",
     },
     {
         "op": rpow,
@@ -2059,12 +2077,12 @@ all_unary_ops = [
     },
     {
         "op": sum_0,
-        "name": "tt_lib.tensor.sum_dim_0",
+        "name": "ttnn.experimental.tensor.sum_dim_0",
         "num_repeats": 2,
     },
     {
         "op": sum_1,
-        "name": "tt_lib.tensor.sum_dim_1",
+        "name": "ttnn.experimental.tensor.sum_dim_1",
     },
     {
         "op": ttnn.log_sigmoid,
@@ -2112,15 +2130,15 @@ all_unary_ops = [
     },
     {
         "op": fill_rm,
-        "name": "tt_lib.tensor.fill_rm",
+        "name": "ttnn.experimental.tensor.fill_rm",
     },
     {
         "op": fill_ones_rm,
-        "name": "tt_lib.tensor.fill_ones_rm",
+        "name": "ttnn.experimental.tensor.fill_ones_rm",
     },
     {
-        "op": tt_lib.tensor.mean_hw,
-        "name": "tt_lib.tensor.mean_hw",
+        "op": ttnn.experimental.tensor.mean_hw,
+        "name": "ttnn.experimental.tensor.mean_hw",
     },
     {
         "op": ttnn.var_hw,
@@ -2194,11 +2212,11 @@ all_unary_ops = [
     },
     {
         "op": pow_int,
-        "name": "tt_lib.tensor.pow_int",
+        "name": "ttnn.experimental.tensor.pow_int",
     },
     {
         "op": pow_float,
-        "name": "tt_lib.tensor.pow_float",
+        "name": "ttnn.experimental.tensor.pow_float",
     },
     {
         "op": ttnn.identity,
@@ -2251,71 +2269,71 @@ all_unary_ops = [
     },
     {
         "op": primary_moreh_softmax_0,
-        "name": "tt_lib.operations.primary.moreh_softmax_dim_0",
+        "name": "ttnn.experimental.operations.primary.moreh_softmax_dim_0",
     },
     {
         "op": primary_moreh_softmax_1,
-        "name": "tt_lib.operations.primary.moreh_softmax_dim_1",
+        "name": "ttnn.experimental.operations.primary.moreh_softmax_dim_1",
     },
     {
         "op": primary_moreh_softmax_2,
-        "name": "tt_lib.operations.primary.moreh_softmax_dim_2",
+        "name": "ttnn.experimental.operations.primary.moreh_softmax_dim_2",
     },
     {
         "op": primary_moreh_softmax_3,
-        "name": "tt_lib.operations.primary.moreh_softmax_dim_3",
+        "name": "ttnn.experimental.operations.primary.moreh_softmax_dim_3",
     },
     {
         "op": primary_moreh_softmin_0,
-        "name": "tt_lib.operations.primary.moreh_softmin_dim_0",
+        "name": "ttnn.experimental.operations.primary.moreh_softmin_dim_0",
     },
     {
         "op": primary_moreh_softmin_1,
-        "name": "tt_lib.operations.primary.moreh_softmin_dim_1",
+        "name": "ttnn.experimental.operations.primary.moreh_softmin_dim_1",
     },
     {
         "op": primary_moreh_softmin_2,
-        "name": "tt_lib.operations.primary.moreh_softmin_dim_2",
+        "name": "ttnn.experimental.operations.primary.moreh_softmin_dim_2",
     },
     {
         "op": primary_moreh_softmin_3,
-        "name": "tt_lib.operations.primary_moreh_softmin_dim_3",
+        "name": "ttnn.experimental.operations.primary_moreh_softmin_dim_3",
     },
     {
         "op": primary_moreh_logsoftmax_0,
-        "name": "tt_lib.operations.primary.moreh_logsoftmax_dim_0",
+        "name": "ttnn.experimental.operations.primary.moreh_logsoftmax_dim_0",
     },
     {
         "op": primary_moreh_logsoftmax_1,
-        "name": "tt_lib.operations.primary.moreh_logsoftmax_dim_1",
+        "name": "ttnn.experimental.operations.primary.moreh_logsoftmax_dim_1",
     },
     {
         "op": primary_moreh_logsoftmax_2,
-        "name": "tt_lib.operations.primary.moreh_logsoftmax_dim_2",
+        "name": "ttnn.experimental.operations.primary.moreh_logsoftmax_dim_2",
     },
     {
         "op": primary_moreh_logsoftmax_3,
-        "name": "tt_lib.operations.primary.moreh_logsoftmax_dim_3",
+        "name": "ttnn.experimental.operations.primary.moreh_logsoftmax_dim_3",
     },
     {
         "op": primary_moreh_norm_0,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_0",
+        "name": "ttnn.experimental.operations.primary.moreh_norm_dim_0",
     },
     {
         "op": primary_moreh_norm_1,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_1",
+        "name": "ttnn.experimental.operations.primary.moreh_norm_dim_1",
     },
     {
         "op": primary_moreh_norm_2,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_2",
+        "name": "ttnn.experimental.operations.primary.moreh_norm_dim_2",
     },
     {
         "op": primary_moreh_norm_3,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_3",
+        "name": "ttnn.experimental.operations.primary.moreh_norm_dim_3",
     },
     {
         "op": fused_softmax,
-        "name": "tt_lib.fused_ops.softmax.softmax",
+        "name": "ttnn.deprecated.fused_ops.softmax.softmax",
     },
 ]
 
@@ -2328,7 +2346,7 @@ all_unary_ops = [
 #  Unsupported storage type
 # {
 #     "op": convert_conv_weight_tensor_to_tiled_layout,
-#     "name": "tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout",
+#     "name": "ttnn.experimental.tensor.convert_conv_weight_tensor_to_tiled_layout",
 #     "layout": "ROW_MAJOR",
 # },
 
@@ -2336,11 +2354,11 @@ all_unary_ops = [
 # Very slow - And crashes sometimes
 # {
 #     "op": argmin_4,
-#     "name": "tt_lib.tensor.argmin_dim_0",
+#     "name": "ttnn.experimental.tensor.argmin_dim_0",
 # },
 # {
 #     "op": argmax_4,
-#     "name": "tt_lib.tensor.argmax_dim_0",
+#     "name": "ttnn.experimental.tensor.argmax_dim_0",
 # },
 
 
@@ -2370,7 +2388,7 @@ def group_norm(x, y, z):
 
 
 def primary_moreh_groupnorm(x, y, z):
-    tt_lib.operations.primary.moreh_groupnorm(
+    ttnn.experimental.operations.primary.moreh_groupnorm(
         input=x, num_groups=4, eps=0.0001, gamma=y, beta=y, are_required_outputs=(True, True, True), mean=z, rstd=z
     )
 
@@ -2398,7 +2416,9 @@ def addcdiv(x, y, z):
 
 
 def lamb_optimizer(x, y, z):
-    tt_lib.tensor.lamb_optimizer(x, x, y, z, beta1=0.8, beta2=0.99, step_size=1e-3, eps=1e-6, weight_decay=0.02)
+    ttnn.experimental.tensor.lamb_optimizer(
+        x, x, y, z, beta1=0.8, beta2=0.99, step_size=1e-3, eps=1e-6, weight_decay=0.02
+    )
 
 
 def addalpha_bw(x, y, z):
@@ -2482,7 +2502,7 @@ def add_bw(x, y, z):
 
 
 def primary_moreh_norm_backward(x, y, z):
-    tt_lib.operations.primary.moreh_norm_backward(x, y, z, p=2.0)
+    ttnn.experimental.operations.primary.moreh_norm_backward(x, y, z, p=2.0)
 
 
 def linear(x, weight, bias):
@@ -2545,7 +2565,7 @@ all_ternary_ops = [
     },
     {
         "op": lamb_optimizer,
-        "name": "tt_lib.tensor.lamb_optimizer",
+        "name": "ttnn.experimental.tensor.lamb_optimizer",
         "num_repeats": 2,
     },
     {
@@ -2586,8 +2606,8 @@ all_ternary_ops = [
         "name": "ttnn.add_bw",
     },
     # {
-    #     "op": tt_lib.tensor.embedding_bw,
-    #     "name": "tt_lib.tensor.embedding_bw",
+    #     "op": ttnn.experimental.tensor.embedding_bw,
+    #     "name": "ttnn.experimental.tensor.embedding_bw",
     # },
     {
         "op": where_bw,
@@ -2671,7 +2691,7 @@ all_ternary_ops = [
     },
     {
         "op": primary_moreh_norm_backward,
-        "name": "tt_lib.tensor.moreh_norm_backward",
+        "name": "ttnn.experimental.tensor.moreh_norm_backward",
     },
     {
         "op": linear,
@@ -2709,12 +2729,12 @@ all_ternary_ops = [
 # Gets stuck
 # {
 #     "op": primary_moreh_groupnorm,
-#     "name": "tt_lib.operations.primary.moreh_groupnorm",
+#     "name": "ttnn.experimental.operations.primary.moreh_groupnorm",
 #     "shape_func": primary_moreh_groupnorm_shape_func,
 # },
 # {
 #     "op": primary_moreh_groupnorm_backward,
-#     "name": "tt_lib.operations.primary.moreh_groupnorm_backward",
+#     "name": "ttnn.experimental.operations.primary.moreh_groupnorm_backward",
 #     "shape_func": primary_moreh_groupnorm_backward_shape_func,
 # }
 
@@ -2722,6 +2742,6 @@ all_ternary_ops = [
 # Seems depricated
 # {
 #     "op": fused_layernorm,
-#     "name": "tt_lib.fused_ops.layernorm.Layernorm",
+#     "name": "ttnn.deprecated.fused_ops.layernorm.Layernorm",
 #     "shape_func": norm_shapes_func,
 # },

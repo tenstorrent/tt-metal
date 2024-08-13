@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 
@@ -180,7 +180,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             device=llama_decoder_model.device_mesh,
         )
         xs = ttnn.to_device(xs, llama_decoder_model.device_mesh)
-        xs = tt_lib.tensor.interleaved_to_sharded(
+        xs = ttnn.experimental.tensor.interleaved_to_sharded(
             xs, sharded_mem_config=llama_decoder_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
         )
 
@@ -199,7 +199,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
         )
         rot_mats = ttnn.to_device(rot_mats, llama_decoder_model.device_mesh)
 
-        rot_mats = tt_lib.tensor.interleaved_to_sharded(
+        rot_mats = ttnn.experimental.tensor.interleaved_to_sharded(
             rot_mats, sharded_mem_config=llama_decoder_model.model_config["ROT_MAT_MM_IN1_MEMCFG"]
         )
 

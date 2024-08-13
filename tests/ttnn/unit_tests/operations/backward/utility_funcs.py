@@ -4,7 +4,7 @@
 
 
 import torch
-import tt_lib
+import ttnn.deprecated
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
@@ -15,7 +15,9 @@ def data_gen_pt_tt(input_shapes, device, required_grad=False):
     torch.manual_seed(213919)
     pt_tensor = torch.randn(input_shapes, requires_grad=required_grad).bfloat16()
     tt_tensor = (
-        tt_lib.tensor.Tensor(pt_tensor, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        ttnn.experimental.tensor.Tensor(pt_tensor, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
     )
     return pt_tensor, tt_tensor
 
@@ -26,13 +28,15 @@ def data_gen_with_range(input_shapes, low, high, device, required_grad=False, is
     pt_tensor = torch.rand(input_shapes, requires_grad=required_grad).bfloat16() * (high - low) + low
     if is_row_major:
         tt_tensor = (
-            tt_lib.tensor.Tensor(pt_tensor, tt_lib.tensor.DataType.BFLOAT16)
-            .to(tt_lib.tensor.Layout.ROW_MAJOR)
+            ttnn.experimental.tensor.Tensor(pt_tensor, ttnn.experimental.tensor.DataType.BFLOAT16)
+            .to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
             .to(device)
         )
     else:
         tt_tensor = (
-            tt_lib.tensor.Tensor(pt_tensor, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+            ttnn.experimental.tensor.Tensor(pt_tensor, ttnn.experimental.tensor.DataType.BFLOAT16)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device)
         )
     return pt_tensor, tt_tensor
 
@@ -41,13 +45,15 @@ def data_gen_with_val(input_shapes, device, required_grad=False, val=1, is_row_m
     pt_tensor = (torch.ones(input_shapes, requires_grad=required_grad) * val).bfloat16()
     if is_row_major:
         tt_tensor = (
-            tt_lib.tensor.Tensor(pt_tensor, tt_lib.tensor.DataType.BFLOAT16)
-            .to(tt_lib.tensor.Layout.ROW_MAJOR)
+            ttnn.experimental.tensor.Tensor(pt_tensor, ttnn.experimental.tensor.DataType.BFLOAT16)
+            .to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
             .to(device)
         )
     else:
         tt_tensor = (
-            tt_lib.tensor.Tensor(pt_tensor, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+            ttnn.experimental.tensor.Tensor(pt_tensor, ttnn.experimental.tensor.DataType.BFLOAT16)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device)
         )
     return pt_tensor, tt_tensor
 
@@ -66,7 +72,9 @@ def data_gen_pt_tt_prod(input_shapes, device, all_dimensions=True, dim=0, requir
     if all_dimensions == False and (dim == 1 or dim == 0 or dim == -4 or dim == -3):
         pt_tensor = torch.randn(shape_Required, requires_grad=required_grad).bfloat16()
         tt_tensor = (
-            tt_lib.tensor.Tensor(pt_tensor, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+            ttnn.experimental.tensor.Tensor(pt_tensor, ttnn.experimental.tensor.DataType.BFLOAT16)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device)
         )
         return pt_tensor, tt_tensor
     elif all_dimensions == False:
@@ -80,7 +88,9 @@ def data_gen_pt_tt_prod(input_shapes, device, all_dimensions=True, dim=0, requir
         pt_tensor = torch.randn(shape_Required, requires_grad=required_grad).bfloat16()
         pt_tensor_temp[:1, :1, :1, :1] = pt_tensor
     tt_tensor = (
-        tt_lib.tensor.Tensor(pt_tensor_temp, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        ttnn.experimental.tensor.Tensor(pt_tensor_temp, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
     )
     return pt_tensor, tt_tensor
 
@@ -88,7 +98,7 @@ def data_gen_pt_tt_prod(input_shapes, device, all_dimensions=True, dim=0, requir
 def compare_results(tt_tensor, golden_tensor, pcc=0.99):
     status = True
     for i in range(len(tt_tensor)):
-        tt_out_tensor = tt_tensor[i].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_out_tensor = tt_tensor[i].cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         pt_out_tensor = golden_tensor[i]
         comp_pass, comp_out = comparison_funcs.comp_pcc(pt_out_tensor, tt_out_tensor, pcc=pcc)
         comp_all, _ = comparison_funcs.comp_allclose(pt_out_tensor, tt_out_tensor, atol=4, rtol=1e-1)
@@ -102,7 +112,7 @@ def compare_results(tt_tensor, golden_tensor, pcc=0.99):
 def compare_pcc(tt_tensor, golden_tensor, pcc=0.99):
     status = True
     for i in range(len(tt_tensor)):
-        tt_out_tensor = tt_tensor[i].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_out_tensor = tt_tensor[i].cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         pt_out_tensor = golden_tensor[i]
         comp_pass, comp_out = comparison_funcs.comp_pcc(pt_out_tensor, tt_out_tensor, pcc=pcc)
         logger.debug(comp_pass)
@@ -114,7 +124,7 @@ def compare_pcc(tt_tensor, golden_tensor, pcc=0.99):
 def compare_equal(tt_tensor, golden_tensor):
     status = True
     for i in range(len(tt_tensor)):
-        tt_out_tensor = tt_tensor[i].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_out_tensor = tt_tensor[i].cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         pt_out_tensor = golden_tensor[i]
         comp_pass, comp_out = comparison_funcs.comp_equal(pt_out_tensor, tt_out_tensor)
         logger.debug(comp_pass)
@@ -126,7 +136,7 @@ def compare_equal(tt_tensor, golden_tensor):
 def compare_all_close(tt_tensor, golden_tensor, atol=4, rtol=1e-1):
     status = True
     for i in range(len(tt_tensor)):
-        tt_out_tensor = tt_tensor[i].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_out_tensor = tt_tensor[i].cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         pt_out_tensor = golden_tensor[i]
         comp_all, comp_out = comparison_funcs.comp_allclose(pt_out_tensor, tt_out_tensor, atol=atol, rtol=rtol)
         logger.debug(comp_all)

@@ -10,8 +10,8 @@ from loguru import logger
 
 import torch
 
-import tt_lib as ttl
-from tt_lib.utils import untilize, tilize_to_list, print_diff_argmax, is_close
+import ttnn.deprecated as ttl
+from ttnn.deprecated.utils import untilize, tilize_to_list, print_diff_argmax, is_close
 
 
 def ref_stable_softmax(x):
@@ -47,11 +47,11 @@ def generate_attn_mask(N, C, W, dev, offs, dtype, mem_config):
     nc_tiles_pt = torch.Tensor(nc_tiles).reshape(N, C, 32, W)
     valtorch = torch.Tensor([(top_row if i % 2 else neg_top_row) for i in range(NC)]).reshape(N, C, 1, W)
     val = (
-        ttl.tensor.Tensor(
+        ttnn.experimental.tensor.Tensor(
             nc_tiles_pt,
             dtype,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.experimental.tensor.Layout.TILE)
         .to(
             dev,
             mem_config,
@@ -62,12 +62,12 @@ def generate_attn_mask(N, C, W, dev, offs, dtype, mem_config):
 
 
 def run_softmax_tests(dev, test_id, batch, dtype, in0_mem_config):
-    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
         pytest.skip("Skipping BFP8_B tests since output is incorrect")
     torch.manual_seed(123)
     random.seed(123)
 
-    tensor = ttl.tensor
+    tensor = ttnn.experimental.tensor
     device = ttl.device
 
     test_dims = ((batch, 1, 6144, 384),)
@@ -99,7 +99,7 @@ def run_softmax_tests(dev, test_id, batch, dtype, in0_mem_config):
         else:
             assert False
 
-        tt_unt = t1_fused.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_unt = t1_fused.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
 
         passing = is_close(tt_unt, ref_sm, rtol=5e-2, atol=5e-2)
         assert passing, "is_close check failed"
@@ -112,16 +112,20 @@ import pytest
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
 @pytest.mark.parametrize(
     "dtype",
     (
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.BFLOAT8_B,
     ),
     ids=["BFLOAT16", "BFLOAT8_B"],
 )

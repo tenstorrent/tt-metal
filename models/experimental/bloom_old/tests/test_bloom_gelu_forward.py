@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttm
+import ttnn.deprecated as ttm
 
 from transformers import BloomForCausalLM
 from models.utility_functions import print_diff_argmax

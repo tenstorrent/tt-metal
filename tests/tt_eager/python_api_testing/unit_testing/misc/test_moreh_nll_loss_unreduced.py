@@ -4,7 +4,7 @@
 
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import pytest
 from models.utility_functions import comp_allclose_and_pcc, is_wormhole_b0
 from loguru import logger
@@ -34,7 +34,7 @@ def get_torch_tensors(shape):
 
 
 def get_tt_tensors(torch_input, torch_target, torch_weight, torch_output, device):
-    npu_index_dtype = ttl.tensor.DataType.INT32
+    npu_index_dtype = ttnn.experimental.tensor.DataType.INT32
 
     tt_input = to_npu(torch_input, device)
     tt_target = to_npu(torch_target, device, npu_dtype=npu_index_dtype)
@@ -45,7 +45,7 @@ def get_tt_tensors(torch_input, torch_target, torch_weight, torch_output, device
 
 
 def get_tt_backward_tensors(torch_target, torch_weight, torch_output_grad, torch_input_grad, device):
-    npu_index_dtype = ttl.tensor.DataType.INT32
+    npu_index_dtype = ttnn.experimental.tensor.DataType.INT32
 
     tt_target = to_npu(torch_target, device, npu_dtype=npu_index_dtype)
     tt_weight = to_npu(torch_weight, device)

@@ -4,7 +4,7 @@
 
 import pytest
 from loguru import logger
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
@@ -55,7 +55,7 @@ from models.utility_functions import is_wormhole_b0, is_grayskull, skip_for_worm
 @pytest.mark.parametrize(
     "fidelity",
     [
-        ttl.tensor.MathFidelity.LoFi,
+        ttnn.experimental.tensor.MathFidelity.LoFi,
     ],
     ids=["LoFi"],
 )
@@ -108,13 +108,13 @@ def test_llama2_matmul(
     logger.debug("out block h w " + str(out_block_h * 32) + " " + str(out_block_w * 32))
     logger.debug("out subblock h w " + str(out_subblock_h * 32) + " " + str(out_subblock_w * 32))
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -123,18 +123,20 @@ def test_llama2_matmul(
 
     output_mem_config = sharded_mem_config
 
-    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT16)
+    in0_t = torch2tt_tensor(
+        in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16
+    )
     in1_t = torch2tt_tensor(
-        in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+        in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B
     )
 
     if in0_sharded:
-        in0_t = ttl.tensor.interleaved_to_sharded(
+        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M, int(in0_block_w * 32)],
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -149,7 +151,7 @@ def test_llama2_matmul(
         mcast_in0=True,
     )
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=fp32_acc_mode,
@@ -161,11 +163,11 @@ def test_llama2_matmul(
         in1_t,
         program_config=program_config,
         memory_config=output_mem_config,
-        dtype=ttl.tensor.DataType.BFLOAT8_B,
+        dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
-        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
@@ -190,8 +192,8 @@ def test_llama2_matmul(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             False,
             False,
         ),
@@ -203,8 +205,8 @@ def test_llama2_matmul(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             False,
             False,
         ),
@@ -216,8 +218,8 @@ def test_llama2_matmul(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             False,
             False,
         ),
@@ -229,8 +231,8 @@ def test_llama2_matmul(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             False,
             False,
         ),
@@ -242,8 +244,8 @@ def test_llama2_matmul(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             True,
             False,
         ),
@@ -255,8 +257,8 @@ def test_llama2_matmul(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             True,
             False,
         ),
@@ -268,8 +270,8 @@ def test_llama2_matmul(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             True,
             False,
         ),
@@ -281,8 +283,8 @@ def test_llama2_matmul(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             True,
             False,
         ),
@@ -295,8 +297,8 @@ def test_llama2_matmul(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             False,
             True,
         ),
@@ -308,8 +310,8 @@ def test_llama2_matmul(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             False,
             True,
         ),
@@ -321,8 +323,8 @@ def test_llama2_matmul(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             False,
             True,
         ),
@@ -334,8 +336,8 @@ def test_llama2_matmul(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             False,
             True,
         ),
@@ -347,8 +349,8 @@ def test_llama2_matmul(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             True,
             True,
         ),
@@ -360,8 +362,8 @@ def test_llama2_matmul(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             True,
             True,
         ),
@@ -373,8 +375,8 @@ def test_llama2_matmul(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             True,
             True,
         ),
@@ -386,8 +388,8 @@ def test_llama2_matmul(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             True,
             True,
         ),
@@ -431,17 +433,17 @@ def test_multi_core_matmul_2d_wh(
     logger.debug("out block h w " + str(out_block_h * 32) + " " + str(out_block_w * 32))
     logger.debug("out subblock h w " + str(out_subblock_h * 32) + " " + str(out_subblock_w * 32))
 
-    interleaved_mem_config_L1 = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    interleaved_mem_config_L1 = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
-    interleaved_mem_config_DRAM = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+    interleaved_mem_config_DRAM = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -454,12 +456,12 @@ def test_multi_core_matmul_2d_wh(
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config_L1
 
     if in0_sharded:
-        in0_t = ttl.tensor.interleaved_to_sharded(
+        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M // grid_size[1], K // grid_size[0]],
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -473,7 +475,7 @@ def test_multi_core_matmul_2d_wh(
         fused_activation=activation,
     )
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=fp32_acc_mode,
@@ -489,7 +491,7 @@ def test_multi_core_matmul_2d_wh(
     )
 
     if out_sharded:
-        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 
@@ -520,8 +522,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             False,
             False,
         ),
@@ -533,8 +535,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             False,
             False,
         ),
@@ -546,8 +548,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             False,
             False,
         ),
@@ -559,8 +561,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             False,
             False,
         ),
@@ -572,8 +574,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             True,
             False,
         ),
@@ -585,8 +587,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             True,
             False,
         ),
@@ -598,8 +600,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             True,
             False,
         ),
@@ -611,8 +613,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             True,
             False,
         ),
@@ -625,8 +627,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             False,
             True,
         ),
@@ -638,8 +640,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             False,
             True,
         ),
@@ -651,8 +653,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             False,
             True,
         ),
@@ -664,8 +666,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             False,
             True,
         ),
@@ -677,8 +679,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
             True,
             True,
         ),
@@ -690,8 +692,8 @@ def test_multi_core_matmul_2d_wh(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
             True,
             True,
         ),
@@ -703,8 +705,8 @@ def test_multi_core_matmul_2d_wh(
         #     8192,
         #     8192,
         #     None,
-        #     ttl.tensor.DataType.BFLOAT16,
-        #     ttl.tensor.MathFidelity.LoFi,
+        #     ttnn.experimental.tensor.DataType.BFLOAT16,
+        #     ttnn.experimental.tensor.MathFidelity.LoFi,
         #     True,
         #     True,
         # ),
@@ -716,8 +718,8 @@ def test_multi_core_matmul_2d_wh(
         #     8192,
         #     8192,
         #     None,
-        #     ttl.tensor.DataType.BFLOAT16,
-        #     ttl.tensor.MathFidelity.HiFi2,
+        #     ttnn.experimental.tensor.DataType.BFLOAT16,
+        #     ttnn.experimental.tensor.MathFidelity.HiFi2,
         #     True,
         #     True,
         # ),
@@ -762,13 +764,13 @@ def test_multi_core_matmul_1d_wh(
     logger.debug("out block h w " + str(out_block_h * 32) + " " + str(out_block_w * 32))
     logger.debug("out subblock h w " + str(out_subblock_h * 32) + " " + str(out_subblock_w * 32))
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -781,12 +783,12 @@ def test_multi_core_matmul_1d_wh(
     output_mem_config = sharded_mem_config
 
     if in0_sharded:
-        in0_t = ttl.tensor.interleaved_to_sharded(
+        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M, int(out_block_w * 32)],
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -801,7 +803,7 @@ def test_multi_core_matmul_1d_wh(
         mcast_in0=True,
     )
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=fp32_acc_mode,
@@ -817,7 +819,7 @@ def test_multi_core_matmul_1d_wh(
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
-        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
@@ -841,8 +843,8 @@ def test_multi_core_matmul_1d_wh(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
         ),
         (
             False,
@@ -852,8 +854,8 @@ def test_multi_core_matmul_1d_wh(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
         ),
         (
             False,
@@ -863,8 +865,8 @@ def test_multi_core_matmul_1d_wh(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
         ),
         (
             False,
@@ -874,8 +876,8 @@ def test_multi_core_matmul_1d_wh(
             2048,
             4096,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
         ),
         # 512 512 512 x 8 subblock 4 2
         (
@@ -886,8 +888,8 @@ def test_multi_core_matmul_1d_wh(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
         ),
         (
             False,
@@ -897,8 +899,8 @@ def test_multi_core_matmul_1d_wh(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
         ),
         (
             False,
@@ -908,8 +910,8 @@ def test_multi_core_matmul_1d_wh(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
         ),
         (
             False,
@@ -919,8 +921,8 @@ def test_multi_core_matmul_1d_wh(
             2048,
             2048,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
         ),
     ],
 )
@@ -962,17 +964,17 @@ def test_multi_core_matmul_2d_gs(
     logger.debug("out block w h " + str(out_block_w * 32) + " " + str(out_block_h * 32))
     logger.debug("out subblock w h " + str(out_subblock_w * 32) + " " + str(out_subblock_h * 32))
 
-    interleaved_mem_config_L1 = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    interleaved_mem_config_L1 = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
-    interleaved_mem_config_DRAM = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+    interleaved_mem_config_DRAM = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -980,25 +982,25 @@ def test_multi_core_matmul_2d_gs(
     bias = torch.randn(bias_shape).bfloat16().float()
 
     in0_t = torch2tt_tensor(
-        in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+        in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B
     )
 
     in1_t = torch2tt_tensor(
-        in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+        in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B
     )
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config_L1
     bias_t = pad_by_zero(
-        bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+        bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B
     )[0]
 
     if in0_sharded:
-        in0_t = ttl.tensor.interleaved_to_sharded(
+        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M // grid_size[0], K // grid_size[1]],
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttl.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -1012,7 +1014,9 @@ def test_multi_core_matmul_2d_gs(
         fused_activation=activation,
     )
 
-    compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(math_fidelity=fidelity, math_approx_mode=True)
+    compute_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
+        math_fidelity=fidelity, math_approx_mode=True
+    )
 
     if has_bias:
         output_t = ttnn.linear(
@@ -1033,7 +1037,7 @@ def test_multi_core_matmul_2d_gs(
         )
 
     if out_sharded:
-        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 
@@ -1063,8 +1067,8 @@ def test_multi_core_matmul_2d_gs(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
         ),
         (
             False,
@@ -1074,8 +1078,8 @@ def test_multi_core_matmul_2d_gs(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT8_B,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
         ),
         (
             False,
@@ -1085,8 +1089,8 @@ def test_multi_core_matmul_2d_gs(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.LoFi,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.LoFi,
         ),
         (
             False,
@@ -1096,8 +1100,8 @@ def test_multi_core_matmul_2d_gs(
             8192,
             8192,
             None,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.MathFidelity.HiFi2,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.MathFidelity.HiFi2,
         ),
     ],
 )
@@ -1134,13 +1138,13 @@ def test_multi_core_matmul_1d_gs(
     logger.debug("out block h w " + str(out_block_h * 32) + " " + str(out_block_w * 32))
     logger.debug("out subblock h w " + str(out_subblock_h * 32) + " " + str(out_subblock_w * 32))
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
     )
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -1153,12 +1157,12 @@ def test_multi_core_matmul_1d_gs(
     output_mem_config = sharded_mem_config
 
     if in0_sharded:
-        in0_t = ttl.tensor.interleaved_to_sharded(
+        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M, int(out_block_w * 32)],
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -1173,7 +1177,7 @@ def test_multi_core_matmul_1d_gs(
         mcast_in0=True,
     )
 
-    compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
+    compute_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
         math_fidelity=fidelity,
         math_approx_mode=True,
     )
@@ -1187,7 +1191,7 @@ def test_multi_core_matmul_1d_gs(
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
-        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)

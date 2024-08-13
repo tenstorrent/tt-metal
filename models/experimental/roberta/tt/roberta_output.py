@@ -9,7 +9,7 @@ import torch.nn as nn
 from functools import partial
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 
 from models.helper_funcs import Linear as TTLinear
 from models.utility_functions import (
@@ -27,8 +27,8 @@ class TtRobertaOutput(nn.Module):
         device,
     ):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
         self.device = device
 
@@ -54,11 +54,11 @@ class TtRobertaOutput(nn.Module):
     def linear(self, x, weight, bias):
         weight = ttnn.transpose(weight, -2, -1)
         x = ttnn.matmul(x, weight, memory_config=self.mem_config)
-        x = tt_lib.tensor.bcast(
+        x = ttnn.experimental.tensor.bcast(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
             output_mem_config=self.mem_config,
         )
         return x

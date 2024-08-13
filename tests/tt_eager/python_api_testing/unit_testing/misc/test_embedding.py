@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -20,7 +20,7 @@ def run_embeddings_tests(
 ):
     torch.manual_seed(1234)
 
-    tensor = ttl.tensor
+    tensor = ttnn.experimental.tensor
     dev = device
 
     input_rows_shape = [batch_size, 1, 1, num_rows]
@@ -30,7 +30,7 @@ def run_embeddings_tests(
     weights_shape = [1, 1, num_embeddings, embedding_dim]
     weights_torch = torch.randn(weights_shape).bfloat16()
 
-    input_tensor = tensor.Tensor(input_rows_torch, ttl.tensor.DataType.UINT32).to(dev, in0_mem_config)
+    input_tensor = tensor.Tensor(input_rows_torch, ttnn.experimental.tensor.DataType.UINT32).to(dev, in0_mem_config)
     weights_tensor = tensor.Tensor(weights_torch, dtype).to(dev, in0_mem_config)
 
     out_layout = ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT
@@ -38,7 +38,7 @@ def run_embeddings_tests(
     ttz = ttnn.reshape(ttz, [ttz.shape[0], 1, ttz.shape[1], ttz.shape[2]])
 
     if tilized:
-        tt_data = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_data = ttz.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
     else:
         tt_data = ttz.cpu().to_torch()
 
@@ -56,17 +56,25 @@ def run_embeddings_tests(
 
 @pytest.mark.parametrize(
     "out_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+    ),
     ids=["out_DRAM"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+    ),
     ids=["in0_DRAM"],
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttnn.experimental.tensor.DataType.BFLOAT16,),
     ids=["BFLOAT16"],
 )
 @pytest.mark.parametrize(

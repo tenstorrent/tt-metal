@@ -20,7 +20,7 @@ from models.experimental.ssd.tt.ssd_mobilenetv3_features import (
     TtMobileNetV3Features,
 )
 
-import tt_lib
+import ttnn.deprecated
 
 
 @pytest.mark.parametrize(

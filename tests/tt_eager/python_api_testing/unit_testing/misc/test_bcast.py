@@ -6,12 +6,12 @@ import pytest
 import torch
 import math
 import numpy as np  # remove this
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from loguru import logger
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout, update_process_id
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 import ttnn
-from tt_lib.utils import (
+from ttnn.deprecated.utils import (
     _nearest_y,
 )
 
@@ -40,7 +40,7 @@ from tt_lib.utils import (
 )
 @pytest.mark.parametrize(
     "op",
-    [ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpMath.MUL],
+    [ttnn.experimental.tensor.BcastOpMath.ADD, ttnn.experimental.tensor.BcastOpMath.MUL],
 )
 @pytest.mark.parametrize("in1_batch_size", [1, 2])
 @pytest.mark.parametrize("in0_batch_size", [1, 2])
@@ -123,9 +123,9 @@ def test_bcast(
 
     b_weights_shape = [in1_batch_size, 1, 1, input_width]
     B_pyt = torch.rand(size=b_weights_shape).bfloat16()
-    if op == ttl.tensor.BcastOpMath.ADD:
+    if op == ttnn.experimental.tensor.BcastOpMath.ADD:
         torch_ref_output = torch.add(input, B_pyt)
-    elif op == ttl.tensor.BcastOpMath.MUL:
+    elif op == ttnn.experimental.tensor.BcastOpMath.MUL:
         torch_ref_output = torch.mul(input, B_pyt)
 
     if in0_batch_size == 1 and in1_batch_size > 1:
@@ -133,11 +133,11 @@ def test_bcast(
 
     B_pyt = B_pyt.reshape(b_weights_shape)
     tt_weight = ttnn.from_torch(B_pyt, device=device, layout=ttnn.TILE_LAYOUT, dtype=in1_dtype)
-    tt_output = ttl.tensor.bcast(
+    tt_output = ttnn.experimental.tensor.bcast(
         tt_input,
         tt_weight,
         op,
-        ttl.tensor.BcastOpDim.H,
+        ttnn.experimental.tensor.BcastOpDim.H,
         output_mem_config=ttnn.get_memory_config(tt_input),
     )
 

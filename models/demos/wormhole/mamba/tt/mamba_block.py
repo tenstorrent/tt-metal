@@ -5,7 +5,7 @@
 import torch
 
 import ttnn
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from typing import Callable
 
 from models.demos.wormhole.mamba.reference.args import ModelArgs, ModelMode
@@ -96,8 +96,8 @@ class TtMambaBlock(torch.nn.Module):
 
         self.tt_ssm = TtMambaSSM(self.args, self.device, configs, load_fn)
 
-        self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+        self.compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )

@@ -4,8 +4,8 @@
 
 import torch
 from torch import nn
-from ttnn import experimental as tt_lib
-import tt_lib as ttl
+import ttnn.deprecated
+import ttnn.deprecated as ttl
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
 

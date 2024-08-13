@@ -10,10 +10,10 @@ import torch
 from transformers import BertForQuestionAnswering
 import numpy as np
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
-from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
-from tt_lib.fused_ops.softmax import softmax
+from ttnn.deprecated.utils import pad_activation, pad_weight, print_diff_argmax
+from ttnn.deprecated.fused_ops.softmax import softmax
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     comp_pcc,
@@ -29,13 +29,13 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
         size.insert(0, 1)
 
     tt_tensor = (
-        ttl.tensor.Tensor(
+        ttnn.experimental.tensor.Tensor(
             py_tensor.reshape(-1).tolist(),
             size,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.experimental.tensor.Layout.TILE)
         .to(tt_device)
     )
 
@@ -44,8 +44,8 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
 
 def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
-    if tt_output.get_layout() != ttl.tensor.Layout.ROW_MAJOR:
-        tt_output = tt_output.to(ttl.tensor.Layout.ROW_MAJOR)
+    if tt_output.get_layout() != ttnn.experimental.tensor.Layout.ROW_MAJOR:
+        tt_output = tt_output.to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
     return tt_output.to_torch()
 
 
@@ -64,11 +64,11 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     qkv_bias = torch2tt_tensor(qkv_bias, device)
 
     # Used to scale down the input to the softmax
-    reciprocal_of_sqrt_hidden_dim_tensor = ttl.tensor.Tensor(
+    reciprocal_of_sqrt_hidden_dim_tensor = ttnn.experimental.tensor.Tensor(
         [1 / math.sqrt(hidden_dim // num_heads)] + [0 for _ in range(32 * 32 - 1)],
         [1, 1, 32, 32],
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
         device,
     )
 
@@ -83,7 +83,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             #        return x.permute(0, 2, 1, 3)
 
             untilized_x = ttnn.untilize(x)
-            reshaped_unt = ttl.tensor.reshape(
+            reshaped_unt = ttnn.experimental.tensor.reshape(
                 untilized_x,
                 x.get_legacy_shape()[0],
                 x.get_legacy_shape()[2],
@@ -98,17 +98,19 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             return retilized
 
     def multiply_by_sqrt_hidden_dim(x):
-        return ttl.tensor.bcast(
+        return ttnn.experimental.tensor.bcast(
             x,
             reciprocal_of_sqrt_hidden_dim_tensor,
-            ttl.tensor.BcastOpMath.MUL,
-            ttl.tensor.BcastOpDim.HW,
+            ttnn.experimental.tensor.BcastOpMath.MUL,
+            ttnn.experimental.tensor.BcastOpDim.HW,
         )
 
     def op1_qkv_fused(activation, qkv_weight, qkv_bias):
         # profiler.start("___op1_qkv_fused")
         qkv = ttnn.matmul(activation, qkv_weight)
-        qkv = ttl.tensor.bcast(qkv, qkv_bias, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
+        qkv = ttnn.experimental.tensor.bcast(
+            qkv, qkv_bias, ttnn.experimental.tensor.BcastOpMath.ADD, ttnn.experimental.tensor.BcastOpDim.H
+        )
         # profiler.end("___op1_qkv_fused")
 
         return qkv
@@ -168,19 +170,19 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
         N, C, H, W = qkt.get_legacy_shape()
         new_shape = [N, 1, C * H, W]
-        ttl.tensor.reshape(qkt, *new_shape)
+        ttnn.experimental.tensor.reshape(qkt, *new_shape)
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
 
         if attention_mask is not None:
-            attention_score_input = ttl.tensor.bcast(
+            attention_score_input = ttnn.experimental.tensor.bcast(
                 attention_score_input,
                 attention_mask,
-                ttl.tensor.BcastOpMath.ADD,
-                ttl.tensor.BcastOpDim.H,
+                ttnn.experimental.tensor.BcastOpMath.ADD,
+                ttnn.experimental.tensor.BcastOpDim.H,
             )
 
         attention_scores = softmax(attention_score_input)
-        ttl.tensor.reshape(attention_scores, N, C, H, W)  # Reshape back to original shape
+        ttnn.experimental.tensor.reshape(attention_scores, N, C, H, W)  # Reshape back to original shape
         # profiler.end("___op8_scale_mask_softmax")
 
         return attention_scores
@@ -210,7 +212,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             # profiler.start("___op10_unmake_attention_heads")
             ctx = ttnn.transpose(x, 1, -2)
             ushape = ctx.get_legacy_shape()
-            reshaped = ttl.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
+            reshaped = ttnn.experimental.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
             retval = ttnn.tilize(reshaped)
             # profiler.end("___op10_unmake_attention_heads")
 
@@ -292,16 +294,16 @@ def run_mha_inference(device, model_version, batch, seq_len, pcc, model_location
     pytorch_out = pytorch_mha_model(mha_input.squeeze(1)).unsqueeze(1)
 
     pad_mha_input = pad_activation(mha_input)
-    tt_mha_input = ttl.tensor.Tensor(
+    tt_mha_input = ttnn.experimental.tensor.Tensor(
         pad_mha_input.reshape(-1).tolist(),
         pad_mha_input.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
+    ).to(ttnn.experimental.tensor.Layout.TILE)
     tt_mha_input = tt_mha_input.to(device)
 
     tt_out = tt_mha_model(tt_mha_input).cpu()
-    tt_out1 = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_out1 = tt_out.to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out1, pcc)
     logger.info(f"Output {output}")

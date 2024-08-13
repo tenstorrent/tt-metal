@@ -5,7 +5,7 @@
 from torch import nn
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 
 from models.utility_functions import torch_to_tt_tensor_rm
 from models.helper_funcs import Linear as TtLinear
@@ -20,7 +20,9 @@ class TtDeiTOutput(nn.Module):
         dense_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.bias"], device)
         self.dense = TtLinear(config.intermediate_size, config.hidden_size, dense_weight, dense_bias)
 
-    def forward(self, hidden_states: tt_lib.tensor.Tensor, input_tensor: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(
+        self, hidden_states: ttnn.experimental.tensor.Tensor, input_tensor: ttnn.experimental.tensor.Tensor
+    ) -> ttnn.experimental.tensor.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = ttnn.add(hidden_states, input_tensor)
 

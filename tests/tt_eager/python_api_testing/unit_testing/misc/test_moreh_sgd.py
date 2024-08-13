@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import pytest
 from models.utility_functions import comp_allclose_and_pcc, is_wormhole_b0
 from loguru import logger
@@ -26,16 +26,16 @@ def get_compute_kernel_options(fp32_dest_acc_en):
 
     if is_wormhole_b0():
         packer_l1_acc = False
-        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=packer_l1_acc,
         )
     else:
         # Grayskull doesn't support fp32 but test passing a GS config is ok
-        compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        compute_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
             math_approx_mode=True,
         )
     return compute_kernel_config
@@ -43,11 +43,11 @@ def get_compute_kernel_options(fp32_dest_acc_en):
 
 def create_tt_tensor(tensor, device):
     ret = (
-        ttl.tensor.Tensor(
+        ttnn.experimental.tensor.Tensor(
             tensor,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.experimental.tensor.Layout.TILE)
         .to(device)
     )
 
@@ -170,7 +170,7 @@ def test_moreh_sgd(
     assert dev_param_in.get_legacy_shape() == list(model.weight.shape)
 
     # check param_out
-    param_result = dev_param_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    param_result = dev_param_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(model.weight, param_result, pcc=0.99, rtol=rtol, atol=atol)
@@ -183,7 +183,7 @@ def test_moreh_sgd(
     # check momentum_out
     if momentum != 0:
         momentum_buffer_result = (
-            dev_momentum_buffer_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+            dev_momentum_buffer_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
         )
 
         passing, out = comp_allclose_and_pcc(cpu_momentum_out, momentum_buffer_result, pcc=0.99, rtol=rtol, atol=atol)
@@ -309,7 +309,7 @@ def test_moreh_sgd_callback(
     assert dev_param_in.get_legacy_shape() == list(model.weight.shape)
 
     # check param_out
-    param_result = dev_param_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    param_result = dev_param_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(model.weight, param_result, pcc=0.99, rtol=rtol, atol=atol)
@@ -322,7 +322,7 @@ def test_moreh_sgd_callback(
     # check momentum_out
     if momentum != 0:
         momentum_buffer_result = (
-            dev_momentum_buffer_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+            dev_momentum_buffer_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
         )
 
         passing, out = comp_allclose_and_pcc(cpu_momentum_out, momentum_buffer_result, pcc=0.99, rtol=rtol, atol=atol)

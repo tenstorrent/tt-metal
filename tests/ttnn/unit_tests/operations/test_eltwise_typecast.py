@@ -5,7 +5,7 @@
 import pytest
 import torch
 from functools import partial
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import skip_for_grayskull
 
 
@@ -18,35 +18,39 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
 )
 
 mem_configs = [
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+    ),
+    ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+    ),
 ]
 
 
 @pytest.mark.parametrize(
     "pt_input_dtype, tt_input_dtype, tt_output_dtype",
     (
-        (torch.bfloat16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
-        (torch.float32, ttl.tensor.DataType.FLOAT32, ttl.tensor.DataType.BFLOAT16),
-        (torch.bfloat16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.INT32),
-        (torch.int, ttl.tensor.DataType.INT32, ttl.tensor.DataType.BFLOAT16),
-        (torch.bfloat16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.UINT16),
-        (torch.int, ttl.tensor.DataType.UINT16, ttl.tensor.DataType.BFLOAT16),
-        (torch.bfloat16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.UINT32),
-        (torch.int, ttl.tensor.DataType.UINT32, ttl.tensor.DataType.BFLOAT16),
-        (torch.float32, ttl.tensor.DataType.FLOAT32, ttl.tensor.DataType.INT32),
-        (torch.int, ttl.tensor.DataType.INT32, ttl.tensor.DataType.FLOAT32),
-        (torch.float32, ttl.tensor.DataType.FLOAT32, ttl.tensor.DataType.UINT16),
-        (torch.int, ttl.tensor.DataType.UINT16, ttl.tensor.DataType.FLOAT32),
-        (torch.float32, ttl.tensor.DataType.FLOAT32, ttl.tensor.DataType.UINT32),
-        (torch.int, ttl.tensor.DataType.UINT32, ttl.tensor.DataType.FLOAT32),
-        (torch.bfloat16, ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.INT32),
-        (torch.int, ttl.tensor.DataType.INT32, ttl.tensor.DataType.BFLOAT8_B),
-        (torch.bfloat16, ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.UINT16),
-        (torch.int, ttl.tensor.DataType.UINT16, ttl.tensor.DataType.BFLOAT8_B),
-        (torch.bfloat16, ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.UINT32),
-        (torch.int, ttl.tensor.DataType.UINT32, ttl.tensor.DataType.BFLOAT8_B),
-        (torch.int, ttl.tensor.DataType.UINT16, ttl.tensor.DataType.UINT32),
+        (torch.bfloat16, ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.FLOAT32),
+        (torch.float32, ttnn.experimental.tensor.DataType.FLOAT32, ttnn.experimental.tensor.DataType.BFLOAT16),
+        (torch.bfloat16, ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.INT32),
+        (torch.int, ttnn.experimental.tensor.DataType.INT32, ttnn.experimental.tensor.DataType.BFLOAT16),
+        (torch.bfloat16, ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.UINT16),
+        (torch.int, ttnn.experimental.tensor.DataType.UINT16, ttnn.experimental.tensor.DataType.BFLOAT16),
+        (torch.bfloat16, ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.UINT32),
+        (torch.int, ttnn.experimental.tensor.DataType.UINT32, ttnn.experimental.tensor.DataType.BFLOAT16),
+        (torch.float32, ttnn.experimental.tensor.DataType.FLOAT32, ttnn.experimental.tensor.DataType.INT32),
+        (torch.int, ttnn.experimental.tensor.DataType.INT32, ttnn.experimental.tensor.DataType.FLOAT32),
+        (torch.float32, ttnn.experimental.tensor.DataType.FLOAT32, ttnn.experimental.tensor.DataType.UINT16),
+        (torch.int, ttnn.experimental.tensor.DataType.UINT16, ttnn.experimental.tensor.DataType.FLOAT32),
+        (torch.float32, ttnn.experimental.tensor.DataType.FLOAT32, ttnn.experimental.tensor.DataType.UINT32),
+        (torch.int, ttnn.experimental.tensor.DataType.UINT32, ttnn.experimental.tensor.DataType.FLOAT32),
+        (torch.bfloat16, ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.INT32),
+        (torch.int, ttnn.experimental.tensor.DataType.INT32, ttnn.experimental.tensor.DataType.BFLOAT8_B),
+        (torch.bfloat16, ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.UINT16),
+        (torch.int, ttnn.experimental.tensor.DataType.UINT16, ttnn.experimental.tensor.DataType.BFLOAT8_B),
+        (torch.bfloat16, ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.UINT32),
+        (torch.int, ttnn.experimental.tensor.DataType.UINT32, ttnn.experimental.tensor.DataType.BFLOAT8_B),
+        (torch.int, ttnn.experimental.tensor.DataType.UINT16, ttnn.experimental.tensor.DataType.UINT32),
     ),
 )
 @pytest.mark.parametrize(

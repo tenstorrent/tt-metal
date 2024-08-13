@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import tt2torch_tensor, comp_pcc
 from models.utility_functions import is_grayskull
 import torch
@@ -32,7 +32,7 @@ def run_create_qkv_heads_test(
     v_shape = [batch, 1, seq_len, num_kv_heads, head_dim]
 
     # torch reference vectors
-    if dtype == ttl.tensor.DataType.FLOAT32:
+    if dtype == ttnn.experimental.tensor.DataType.FLOAT32:
         torch_dtype = torch.float32
     else:
         torch_dtype = torch.bfloat16
@@ -43,12 +43,12 @@ def run_create_qkv_heads_test(
     QKV = torch.concat([Q.flatten(-2, -1), K.flatten(-2, -1), V.flatten(-2, -1)], -1)
     QKV_interleaved = torch.concat([Q, K, V], -1).flatten(-2, -1)
 
-    in0_shard_spec = ttl.tensor.ShardSpec(
-        ttl.tensor.CoreRangeSet(
+    in0_shard_spec = ttnn.experimental.tensor.ShardSpec(
+        ttnn.experimental.tensor.CoreRangeSet(
             {
-                ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, 0),
-                    ttl.tensor.CoreCoord(cores_w - 1, cores_h - 1),
+                ttnn.experimental.tensor.CoreRange(
+                    ttnn.experimental.tensor.CoreCoord(0, 0),
+                    ttnn.experimental.tensor.CoreCoord(cores_w - 1, cores_h - 1),
                 ),
             }
         ),
@@ -56,20 +56,28 @@ def run_create_qkv_heads_test(
             seq_len,
             QKV.shape[-1] // cores_w,
         ],
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
 
-    in0_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1, in0_shard_spec
+    in0_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.experimental.tensor.BufferType.L1,
+        in0_shard_spec,
     )
-    in0_t = ttl.tensor.Tensor(QKV_interleaved, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
+    in0_t = (
+        ttnn.experimental.tensor.Tensor(QKV_interleaved, dtype)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device, in0_mem_config)
+    )
 
     out_shard_spec = in0_shard_spec
-    out_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, out_shard_spec
+    out_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.experimental.tensor.BufferType.L1,
+        out_shard_spec,
     )
-    q, k, v = ttl.tensor.create_qkv_heads(
+    q, k, v = ttnn.experimental.tensor.create_qkv_heads(
         in0_t,
         num_q_heads=num_q_heads,
         num_kv_heads=num_kv_heads,
@@ -100,10 +108,10 @@ def run_create_qkv_heads_test(
     if transpose_k:
         ref_k = torch.transpose(ref_k, -2, -1)
 
-    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
         pcc = 0.99
     elif (
-        dtype == ttl.tensor.DataType.FLOAT32 and transpose_k
+        dtype == ttnn.experimental.tensor.DataType.FLOAT32 and transpose_k
     ):  # conversion from fp32 to tf32 when unpack writes to register for compute will decrease pcc in the transpose case
         pcc = 0.9999999
     else:
@@ -129,7 +137,11 @@ def run_create_qkv_heads_test(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    (
+        ttnn.experimental.tensor.DataType.BFLOAT8_B,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.FLOAT32,
+    ),
     ids=["BFLOAT8_B", "BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
@@ -160,7 +172,7 @@ def test_nlp_create_qkv_heads_test(
     dtype,
     device,
 ):
-    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+    if is_grayskull() and dtype == ttnn.experimental.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
     run_create_qkv_heads_test(
@@ -190,7 +202,7 @@ def run_create_q_and_kv_heads_test(
     v_shape = [batch, 1, kv_seq_len, num_kv_heads, head_dim]
 
     # torch reference vectors
-    if dtype == ttl.tensor.DataType.FLOAT32:
+    if dtype == ttnn.experimental.tensor.DataType.FLOAT32:
         torch_dtype = torch.float32
     else:
         torch_dtype = torch.bfloat16
@@ -203,12 +215,12 @@ def run_create_q_and_kv_heads_test(
     KV_interleaved = torch.concat([K, V], -1).flatten(-2, -1)
     Q_flattened = Q.flatten(-2, -1)
 
-    kv_shard_spec = ttl.tensor.ShardSpec(
-        ttl.tensor.CoreRangeSet(
+    kv_shard_spec = ttnn.experimental.tensor.ShardSpec(
+        ttnn.experimental.tensor.CoreRangeSet(
             {
-                ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, 0),
-                    ttl.tensor.CoreCoord(cores_w - 1, cores_h - 1),
+                ttnn.experimental.tensor.CoreRange(
+                    ttnn.experimental.tensor.CoreCoord(0, 0),
+                    ttnn.experimental.tensor.CoreCoord(cores_w - 1, cores_h - 1),
                 ),
             }
         ),
@@ -216,16 +228,16 @@ def run_create_q_and_kv_heads_test(
             kv_seq_len,
             KV_interleaved.shape[-1] // cores_w,
         ],
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
 
-    q_shard_spec = ttl.tensor.ShardSpec(
-        ttl.tensor.CoreRangeSet(
+    q_shard_spec = ttnn.experimental.tensor.ShardSpec(
+        ttnn.experimental.tensor.CoreRangeSet(
             {
-                ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, 0),
-                    ttl.tensor.CoreCoord(cores_w - 1, cores_h - 1),
+                ttnn.experimental.tensor.CoreRange(
+                    ttnn.experimental.tensor.CoreCoord(0, 0),
+                    ttnn.experimental.tensor.CoreCoord(cores_w - 1, cores_h - 1),
                 ),
             }
         ),
@@ -233,23 +245,33 @@ def run_create_q_and_kv_heads_test(
             q_seq_len,
             Q_flattened.shape[-1] // cores_w,
         ],
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
 
-    kv_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1, kv_shard_spec
+    kv_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttnn.experimental.tensor.BufferType.L1, kv_shard_spec
     )
-    kv_t = ttl.tensor.Tensor(KV_interleaved, dtype).to(ttl.tensor.Layout.TILE).to(device, kv_mem_config)
-
-    q_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1, q_shard_spec
+    kv_t = (
+        ttnn.experimental.tensor.Tensor(KV_interleaved, dtype)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device, kv_mem_config)
     )
-    q_t = ttl.tensor.Tensor(Q_flattened, dtype).to(ttl.tensor.Layout.TILE).to(device, q_mem_config)
 
-    out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
+    q_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttnn.experimental.tensor.BufferType.L1, q_shard_spec
+    )
+    q_t = (
+        ttnn.experimental.tensor.Tensor(Q_flattened, dtype)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device, q_mem_config)
+    )
 
-    q, k, v = ttl.tensor.create_qkv_heads_from_separate_tensors(
+    out_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1
+    )
+
+    q, k, v = ttnn.experimental.tensor.create_qkv_heads_from_separate_tensors(
         q_t,
         kv_t,
         num_q_heads=num_q_heads,
@@ -280,10 +302,10 @@ def run_create_q_and_kv_heads_test(
     if transpose_k:
         ref_k = torch.transpose(ref_k, -2, -1)
 
-    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
         pcc = 0.99
     elif (
-        dtype == ttl.tensor.DataType.FLOAT32 and transpose_k
+        dtype == ttnn.experimental.tensor.DataType.FLOAT32 and transpose_k
     ):  # conversion from fp32 to tf32 when unpack writes to register for compute will decrease pcc in the transpose case
         pcc = 0.9999999
     else:
@@ -308,7 +330,7 @@ def run_create_q_and_kv_heads_test(
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
+    (ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT16),
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
 @pytest.mark.parametrize(
@@ -337,9 +359,9 @@ def test_nlp_create_q_and_kv_heads_separate_test(
     dtype,
     device,
 ):
-    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+    if is_grayskull() and dtype == ttnn.experimental.tensor.DataType.FLOAT32:
         pytest.skip("Skipping float32 tests on Grayskull")
-    elif is_grayskull() and q_seq_len == 4096 and dtype == ttl.tensor.DataType.BFLOAT16:
+    elif is_grayskull() and q_seq_len == 4096 and dtype == ttnn.experimental.tensor.DataType.BFLOAT16:
         pytest.skip("Spec runs out of L1 on on Grayskull")
 
     run_create_q_and_kv_heads_test(

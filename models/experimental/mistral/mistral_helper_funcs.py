@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import tt_lib
+import ttnn.deprecated
 from typing import Optional
 from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm, tt2torch_tensor
 import torch
@@ -11,10 +11,10 @@ import ttnn
 def Linear(
     in_features: int,
     out_features: int,
-    weight: tt_lib.tensor.Tensor,
-    bias: Optional[tt_lib.tensor.Tensor] = None,
-    output_mem_config=tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    weight: ttnn.experimental.tensor.Tensor,
+    bias: Optional[ttnn.experimental.tensor.Tensor] = None,
+    output_mem_config=ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     ),
     device=None,
 ):
@@ -39,8 +39,12 @@ def Linear(
         output = ttnn.matmul(activation, weight_T, output_mem_config)
 
         if bias is not None:
-            output_plus_bias = tt_lib.tensor.bcast(
-                output, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H, output_mem_config
+            output_plus_bias = ttnn.experimental.tensor.bcast(
+                output,
+                bias,
+                ttnn.experimental.tensor.BcastOpMath.ADD,
+                ttnn.experimental.tensor.BcastOpDim.H,
+                output_mem_config,
             )
             return output_plus_bias
 
@@ -52,17 +56,23 @@ def Linear(
 def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
     if x.get_layout() == target_layout:
         return x
-    if x.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR and target_layout == tt_lib.tensor.Layout.TILE:
-        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
+    if (
+        x.get_layout() == ttnn.experimental.tensor.Layout.ROW_MAJOR
+        and target_layout == ttnn.experimental.tensor.Layout.TILE
+    ):
+        x_padded_shape = ttnn.experimental.tensor.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
         if x.get_legacy_shape() != x_padded_shape:
-            return tt_lib.tensor.format_input_tensor(
+            return ttnn.experimental.tensor.format_input_tensor(
                 x, device, x_padded_shape, pad_value, target_layout, output_mem_config
             )
         else:
             return ttnn.tilize(x, memory_config=output_mem_config, use_multicore=True)
-    elif x.get_layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
+    elif (
+        x.get_layout() == ttnn.experimental.tensor.Layout.TILE
+        and target_layout == ttnn.experimental.tensor.Layout.ROW_MAJOR
+    ):
         if x.get_legacy_shape() != x.shape_without_padding():
-            return tt_lib.tensor.format_output_tensor(
+            return ttnn.experimental.tensor.format_output_tensor(
                 x, x.shape_without_padding(), device, target_layout, output_mem_config
             )
         else:
@@ -76,8 +86,8 @@ def unpad_from_zero(x, desired_shape):
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
-        if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-            x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        if x.get_layout() != ttnn.experimental.tensor.Layout.ROW_MAJOR:
+            x = x.to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
         x = x.unpad(
             (0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1)
         )
@@ -105,13 +115,13 @@ def get_freqs_cis(freqs_cis: torch.Tensor, query_shape, key_shape, device=None, 
 
     freq_real = torch_to_tt_tensor_rm(freqs_cis.real, device)
     freq_img = torch_to_tt_tensor_rm(freqs_cis.imag, device)
-    freqs_cis = tt_lib.tensor.complex_tensor(freq_real, freq_img)
+    freqs_cis = ttnn.experimental.tensor.complex_tensor(freq_real, freq_img)
 
     freq_real.deallocate()
     freq_img.deallocate()
 
-    BCH = tt_lib.tensor.BcastOpDim.HW
-    BCMUL = tt_lib.tensor.BcastOpMath.MUL
+    BCH = ttnn.experimental.tensor.BcastOpDim.HW
+    BCMUL = ttnn.experimental.tensor.BcastOpMath.MUL
 
     t_one_xq = ttnn.ones(query_shape, memory_config=mem_config)
     t_one_xq = ttnn.permute(t_one_xq, (3, 1, 2, 0), memory_config=mem_config)
@@ -119,13 +129,13 @@ def get_freqs_cis(freqs_cis: torch.Tensor, query_shape, key_shape, device=None, 
     freqs_real = ttnn.permute(freqs_cis.real, (3, 1, 2, 0), memory_config=mem_config)
     freqs_imag = ttnn.permute(freqs_cis.imag, (3, 1, 2, 0), memory_config=mem_config)
 
-    bcast_freq_re_xq = tt_lib.tensor.bcast(t_one_xq, freqs_real, BCMUL, BCH, output_mem_config=mem_config)
-    bcast_freq_im_xq = tt_lib.tensor.bcast(t_one_xq, freqs_imag, BCMUL, BCH, output_mem_config=mem_config)
+    bcast_freq_re_xq = ttnn.experimental.tensor.bcast(t_one_xq, freqs_real, BCMUL, BCH, output_mem_config=mem_config)
+    bcast_freq_im_xq = ttnn.experimental.tensor.bcast(t_one_xq, freqs_imag, BCMUL, BCH, output_mem_config=mem_config)
     bcast_freq_re_xq = ttnn.permute(bcast_freq_re_xq, (3, 1, 2, 0), memory_config=mem_config)
     bcast_freq_im_xq = ttnn.permute(bcast_freq_im_xq, (3, 1, 2, 0), memory_config=mem_config)
     t_one_xq.deallocate()
 
-    bcast_freq_xq = tt_lib.tensor.complex_tensor(bcast_freq_re_xq, bcast_freq_im_xq)
+    bcast_freq_xq = ttnn.experimental.tensor.complex_tensor(bcast_freq_re_xq, bcast_freq_im_xq)
 
     bcast_freq_re_xq.deallocate()
     bcast_freq_im_xq.deallocate()
@@ -133,12 +143,12 @@ def get_freqs_cis(freqs_cis: torch.Tensor, query_shape, key_shape, device=None, 
     t_one_xk = ttnn.ones(key_shape, memory_config=mem_config)
     t_one_xk = ttnn.permute(t_one_xk, (3, 1, 2, 0), memory_config=mem_config)
 
-    bcast_freq_re_xk = tt_lib.tensor.bcast(t_one_xk, freqs_real, BCMUL, BCH, output_mem_config=mem_config)
-    bcast_freq_im_xk = tt_lib.tensor.bcast(t_one_xk, freqs_imag, BCMUL, BCH, output_mem_config=mem_config)
+    bcast_freq_re_xk = ttnn.experimental.tensor.bcast(t_one_xk, freqs_real, BCMUL, BCH, output_mem_config=mem_config)
+    bcast_freq_im_xk = ttnn.experimental.tensor.bcast(t_one_xk, freqs_imag, BCMUL, BCH, output_mem_config=mem_config)
     bcast_freq_re_xk = ttnn.permute(bcast_freq_re_xk, (3, 1, 2, 0), memory_config=mem_config)
     bcast_freq_im_xk = ttnn.permute(bcast_freq_im_xk, (3, 1, 2, 0), memory_config=mem_config)
 
-    bcast_freq_xk = tt_lib.tensor.complex_tensor(bcast_freq_re_xk, bcast_freq_im_xk)
+    bcast_freq_xk = ttnn.experimental.tensor.complex_tensor(bcast_freq_re_xk, bcast_freq_im_xk)
 
     t_one_xk.deallocate()
     bcast_freq_re_xk.deallocate()

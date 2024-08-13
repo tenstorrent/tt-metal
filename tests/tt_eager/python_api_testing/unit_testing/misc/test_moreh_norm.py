@@ -5,7 +5,7 @@
 import pytest
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import comp_allclose, is_wormhole_b0
 from loguru import logger
 

@@ -6,8 +6,8 @@ from typing import Union
 import torch.nn as nn
 import ttnn
 
-import tt_lib
-import tt_lib.fallback_ops as fallback_ops
+import ttnn.deprecated
+import ttnn.deprecated.fallback_ops as fallback_ops
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
@@ -64,7 +64,7 @@ class TtMobileNetV3ConvLayer(nn.Module):
         else:
             self.activation = None
 
-    def forward(self, features: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, features: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         features = self.convolution(features)
         features = self.normalization(features)
         if self.activation is not None:

@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttl
-import tt_lib.fallback_ops
+import ttnn.deprecated as ttl
+import ttnn.deprecated.fallback_ops
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
@@ -30,9 +30,9 @@ class TestBitwiseOps:
         # x = torch.randn(input_shape, dtype=torch.int8)
         x = torch.randint(low=0, high=100, size=input_shapes)
         # Test on host RM
-        t0 = ttl.tensor.Tensor(
+        t0 = ttnn.experimental.tensor.Tensor(
             x,
-            ttl.tensor.DataType.UINT32,
+            ttnn.experimental.tensor.DataType.UINT32,
         )
         if on_device:
             t0 = t0.to(device)
@@ -49,7 +49,7 @@ class TestBitwiseOps:
             t1 = ttl.fallback_ops.bitwise_not(t0)
             pt_out = torch.bitwise_not(x)
 
-        output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        output = t1.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, _ = comparison_funcs.comp_equal(pt_out, output)
         _, comp_out = comparison_funcs.comp_allclose_and_pcc(pt_out, output)
         logger.debug(comp_out)
@@ -62,15 +62,15 @@ class TestBitwiseOps:
         x = torch.randint(low=0, high=100, size=input_shapes)
         y = torch.randint(low=0, high=200, size=input_shapes)
         # Test on host RM
-        t0 = ttl.tensor.Tensor(
+        t0 = ttnn.experimental.tensor.Tensor(
             x,
-            ttl.tensor.DataType.UINT32,
+            ttnn.experimental.tensor.DataType.UINT32,
         )
         if on_device:
             t0 = t0.to(device)
-        t1 = ttl.tensor.Tensor(
+        t1 = ttnn.experimental.tensor.Tensor(
             y,
-            ttl.tensor.DataType.UINT32,
+            ttnn.experimental.tensor.DataType.UINT32,
         )
         if on_device:
             t1 = t1.to(device)
@@ -85,7 +85,7 @@ class TestBitwiseOps:
             tout = ttl.fallback_ops.binary_bitwise_xor(t0, t1)
             pt_out = torch.bitwise_xor(x, y)
 
-        output = tout.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        output = tout.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, _ = comparison_funcs.comp_equal(pt_out, output)
         _, comp_out = comparison_funcs.comp_allclose_and_pcc(pt_out, output)
         logger.debug(comp_out)

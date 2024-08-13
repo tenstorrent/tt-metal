@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 from transformers import VisionEncoderDecoderModel
 
-import tt_lib
+import ttnn.deprecated
 
 from models.experimental.trocr.tt.trocr_decoder_layer import TtTrOCRDecoderLayer
 from models.utility_functions import (
@@ -19,16 +19,13 @@ from models.utility_functions import (
 )
 
 
-
 @pytest.mark.parametrize(
     "pcc",
     ((0.99),),
 )
 def test_trocr_decoder_layer_inference(device, pcc, reset_seeds):
     with torch.no_grad():
-        model = VisionEncoderDecoderModel.from_pretrained(
-            "microsoft/trocr-base-handwritten"
-        )
+        model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-handwritten")
 
         config = model.decoder.config
 

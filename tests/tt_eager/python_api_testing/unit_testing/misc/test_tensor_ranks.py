@@ -4,7 +4,7 @@
 
 import pytest
 import ttnn
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import torch
 
 
@@ -23,12 +23,12 @@ import torch
 def test_tensor_ranks(shape, device):
     torch_input_tensor = torch.randint(low=0, high=100, size=shape).to(torch.bfloat16)
 
-    tt_tensor = ttl.tensor.Tensor(torch_input_tensor, ttl.tensor.DataType.BFLOAT16)
+    tt_tensor = ttnn.experimental.tensor.Tensor(torch_input_tensor, ttnn.experimental.tensor.DataType.BFLOAT16)
     tt_tensor = tt_tensor.pad_to_tile(0.0)
-    tt_tensor = tt_tensor.to(ttl.tensor.Layout.TILE)
+    tt_tensor = tt_tensor.to(ttnn.experimental.tensor.Layout.TILE)
     tt_tensor = tt_tensor.to(device)
     tt_tensor = tt_tensor.cpu()
-    tt_tensor = tt_tensor.to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_tensor = tt_tensor.to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
     tt_tensor = tt_tensor.unpad_from_tile(shape)
 
     assert tt_tensor.shape.rank == len(shape)

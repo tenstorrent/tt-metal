@@ -11,7 +11,7 @@ from models.utility_functions import (
 )
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     run_ttnn_conv_with_pre_and_post_tensor_formatting,
 )

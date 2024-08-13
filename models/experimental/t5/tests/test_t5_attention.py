@@ -8,7 +8,7 @@ import json
 from transformers import T5Model
 from loguru import logger
 
-import tt_lib
+import ttnn.deprecated
 import ttnn
 import pytest
 
@@ -19,7 +19,7 @@ from models.experimental.t5.tt.t5_attention import (
     t5_shape_tt,
     t5_shape_pt,
 )
-from tt_lib.fused_ops.softmax import softmax as tt_softmax
+from ttnn.deprecated.fused_ops.softmax import softmax as tt_softmax
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,

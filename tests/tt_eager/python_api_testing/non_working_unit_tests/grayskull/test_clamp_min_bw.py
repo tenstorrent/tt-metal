@@ -6,7 +6,7 @@ import random
 from loguru import logger
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -45,15 +45,17 @@ test_sweep_args = [
     (
         (6, 2, 124, 54),
         [
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         ],
-        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
+        [ttnn.experimental.tensor.Layout.ROW_MAJOR, ttnn.experimental.tensor.Layout.ROW_MAJOR],
         [
             None,
             None,
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
         764456,
         94.0,
     ),

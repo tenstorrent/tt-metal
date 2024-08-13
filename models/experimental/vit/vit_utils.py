@@ -4,13 +4,24 @@
 
 from models.helper_funcs import Linear as linear
 from models.utility_functions import torch_to_tt_tensor_rm
-import tt_lib
+import ttnn.deprecated
+
 
 def make_address(base_address, op_name):
     return op_name if base_address == "" else f"{base_address}.{op_name}"
 
 
-def make_linear(in_feature, out_feature, op_name, state_dict, base_address, device, mem_config=tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)):
+def make_linear(
+    in_feature,
+    out_feature,
+    op_name,
+    state_dict,
+    base_address,
+    device,
+    mem_config=ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+    ),
+):
     q_weight = state_dict[make_address(base_address, f"{op_name}.weight")]
     q_weight = torch_to_tt_tensor_rm(q_weight, device)
     if make_address(base_address, f"{op_name}.bias") in state_dict:

@@ -8,7 +8,7 @@ from loguru import logger
 import random
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -43,19 +43,31 @@ def run_eltwise_logit_test(input_shape, dtype, dlayout, in_mem_config, out_mem_c
 test_sweep_args = [
     (
         (9, 5, 160, 96),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE],
-        [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        [ttnn.experimental.tensor.DataType.BFLOAT16],
+        [ttnn.experimental.tensor.Layout.TILE],
+        [
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            )
+        ],
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
         0.64453125,
         7340822,
     ),
     (
         (12, 9, 64, 384),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE],
-        [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        [ttnn.experimental.tensor.DataType.BFLOAT16],
+        [ttnn.experimental.tensor.Layout.TILE],
+        [
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            )
+        ],
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
         0.140625,
         12484268,
     ),

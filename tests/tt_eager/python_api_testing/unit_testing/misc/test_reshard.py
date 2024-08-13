@@ -6,7 +6,7 @@ import pytest
 import torch
 import math
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
@@ -33,33 +33,40 @@ def run_reshard_test(
 ):
     input_shard_grid_set = set()
     for _input_shard_grid in input_shard_grid:
-        compute_grid_start = ttl.tensor.CoreCoord(_input_shard_grid[0][0], _input_shard_grid[0][1])
-        compute_grid_end = ttl.tensor.CoreCoord(_input_shard_grid[1][0], _input_shard_grid[1][1])
-        input_shard_grid_set.add(ttl.tensor.CoreRange(compute_grid_start, compute_grid_end))
+        compute_grid_start = ttnn.experimental.tensor.CoreCoord(_input_shard_grid[0][0], _input_shard_grid[0][1])
+        compute_grid_end = ttnn.experimental.tensor.CoreCoord(_input_shard_grid[1][0], _input_shard_grid[1][1])
+        input_shard_grid_set.add(ttnn.experimental.tensor.CoreRange(compute_grid_start, compute_grid_end))
 
-    input_shard_grid = ttl.tensor.CoreRangeSet(input_shard_grid_set)
+    input_shard_grid = ttnn.experimental.tensor.CoreRangeSet(input_shard_grid_set)
 
     output_shard_grid_set = set()
     for _output_shard_grid in output_shard_grid:
-        compute_grid_start = ttl.tensor.CoreCoord(_output_shard_grid[0][0], _output_shard_grid[0][1])
-        compute_grid_end = ttl.tensor.CoreCoord(_output_shard_grid[1][0], _output_shard_grid[1][1])
-        output_shard_grid_set.add(ttl.tensor.CoreRange(compute_grid_start, compute_grid_end))
+        compute_grid_start = ttnn.experimental.tensor.CoreCoord(_output_shard_grid[0][0], _output_shard_grid[0][1])
+        compute_grid_end = ttnn.experimental.tensor.CoreCoord(_output_shard_grid[1][0], _output_shard_grid[1][1])
+        output_shard_grid_set.add(ttnn.experimental.tensor.CoreRange(compute_grid_start, compute_grid_end))
 
-    output_shard_grid = ttl.tensor.CoreRangeSet(output_shard_grid_set)
+    output_shard_grid = ttnn.experimental.tensor.CoreRangeSet(output_shard_grid_set)
 
-    output_shard_spec = ttl.tensor.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation, False)
-    output_mem_config = ttl.tensor.MemoryConfig(output_sharding_scheme, ttl.tensor.BufferType.L1, output_shard_spec)
-    if input_layout == ttl.tensor.Layout.ROW_MAJOR and tt_dtype == ttl.tensor.DataType.BFLOAT8_B:
+    output_shard_spec = ttnn.experimental.tensor.ShardSpec(
+        output_shard_grid, output_shard_shape, output_shard_orientation, False
+    )
+    output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        output_sharding_scheme, ttnn.experimental.tensor.BufferType.L1, output_shard_spec
+    )
+    if (
+        input_layout == ttnn.experimental.tensor.Layout.ROW_MAJOR
+        and tt_dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B
+    ):
         pytest.skip("Illegal layout/dtype config")
 
-    dram_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+    dram_memory_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
     )
     torch_tensor = torch.randn(input_shape).bfloat16()
-    tt_tensor_sharded = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(input_layout)
+    tt_tensor_sharded = ttnn.experimental.tensor.Tensor(torch_tensor, tt_dtype).to(input_layout)
     tt_tensor_sharded = tt_tensor_sharded.to(device, dram_memory_config)
-    tt_tensor_sharded = ttl.tensor.interleaved_to_sharded(
+    tt_tensor_sharded = ttnn.experimental.tensor.interleaved_to_sharded(
         tt_tensor_sharded,
         input_shard_grid,
         input_shard_shape,
@@ -68,14 +75,14 @@ def run_reshard_test(
         output_dtype=tt_dtype,
     )
 
-    tt_tensor_reshard = ttl.tensor.reshard(tt_tensor_sharded, output_mem_config)
+    tt_tensor_reshard = ttnn.experimental.tensor.reshard(tt_tensor_sharded, output_mem_config)
 
-    tt_tensor_interleaved = ttl.tensor.sharded_to_interleaved(
+    tt_tensor_interleaved = ttnn.experimental.tensor.sharded_to_interleaved(
         tt_tensor_reshard,
         dram_memory_config,
     )
 
-    tt_tensor_interleaved = tt_tensor_interleaved.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_tensor_interleaved = tt_tensor_interleaved.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
     torch_tensor_after_round_trip = tt_tensor_interleaved.to_torch()
 
     return torch_tensor, torch_tensor_after_round_trip
@@ -87,79 +94,81 @@ def run_reshard_test(
     [
         (
             [1, 1, 64, 64],
-            ttl.tensor.Layout.TILE,
+            ttnn.experimental.tensor.Layout.TILE,
             [[(0, 0), (0, 1)]],
             (64, 32),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             [[(0, 0), (0, 1)]],
             (32, 64),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
         (
             [1, 1, 128, 64],
-            ttl.tensor.Layout.TILE,
+            ttnn.experimental.tensor.Layout.TILE,
             [[(0, 0), (0, 1)]],
             (64, 64),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             [[(0, 0), (1, 3)]],
             (32, 32),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
         (
             [1, 1, 32, 128],
-            ttl.tensor.Layout.TILE,
+            ttnn.experimental.tensor.Layout.TILE,
             [[(0, 0), (0, 3)]],
             (32, 32),
-            ttl.tensor.ShardOrientation.COL_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             [[(0, 0), (0, 1)]],
             (32, 64),
-            ttl.tensor.ShardOrientation.COL_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
         (
             [1, 1, 32, 2304],
-            ttl.tensor.Layout.TILE,
+            ttnn.experimental.tensor.Layout.TILE,
             [[(0, 0), (0, 7)]],
             (32, 288),
-            ttl.tensor.ShardOrientation.COL_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             [[(0, 0), (0, 1)]],
             (32, 1152),
-            ttl.tensor.ShardOrientation.COL_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
         (
             [1, 1, 32, 16],
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
             [[(0, 0), (0, 0)]],
             (32, 16),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             [[(0, 0), (0, 1)]],
             (16, 16),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
         (
             [1, 1, 32, 8192],
-            ttl.tensor.Layout.TILE,
+            ttnn.experimental.tensor.Layout.TILE,
             [[(0, 0), (7, 7)]],
             (32, 128),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             [[(0, 0), (0, 7)]],
             (32, 1024),
-            ttl.tensor.ShardOrientation.COL_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
     ],
 )
-@pytest.mark.parametrize("tt_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize(
+    "tt_dtype", [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B]
+)
 def test_reshard(
     device,
     input_shape,
@@ -190,7 +199,7 @@ def test_reshard(
     )
 
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
-    if tt_dtype != ttl.tensor.DataType.BFLOAT8_B:
+    if tt_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B:
         passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
     else:
         passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
@@ -203,19 +212,21 @@ def test_reshard(
     [
         (
             [1, 1, 62720, 256],
-            ttl.tensor.Layout.TILE,
+            ttnn.experimental.tensor.Layout.TILE,
             [[(0, 0), (7, 6)]],
             (1120, 256),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             [[(0, 0), (7, 5)], [(0, 6), (0, 6)]],
             (1280, 256),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
     ],
 )
-@pytest.mark.parametrize("tt_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize(
+    "tt_dtype", [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B]
+)
 def test_reshard_rn50(
     device,
     input_shape,
@@ -246,7 +257,7 @@ def test_reshard_rn50(
     )
 
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
-    if tt_dtype != ttl.tensor.DataType.BFLOAT8_B:
+    if tt_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B:
         passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
     else:
         passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
@@ -258,19 +269,21 @@ def test_reshard_rn50(
     [
         (
             [1, 1, 32, 6272],
-            ttl.tensor.Layout.TILE,
+            ttnn.experimental.tensor.Layout.TILE,
             [[(0, 0), (6, 6)]],
             (32, 128),
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
             [[(0, 0), (0, 6)]],
             (32, 1024),
-            ttl.tensor.ShardOrientation.COL_MAJOR,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ),
     ],
 )
-@pytest.mark.parametrize("tt_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize(
+    "tt_dtype", [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B]
+)
 def test_reshard_with_program_cache(
     device,
     use_program_cache,
@@ -302,7 +315,7 @@ def test_reshard_with_program_cache(
     )
 
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
-    if tt_dtype != ttl.tensor.DataType.BFLOAT8_B:
+    if tt_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B:
         passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
     else:
         passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
@@ -324,7 +337,7 @@ def test_reshard_with_program_cache(
     )
 
     assert torch_tensor1.shape == torch_tensor_after_round_trip1.shape
-    if tt_dtype != ttl.tensor.DataType.BFLOAT8_B:
+    if tt_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B:
         passing, output = comp_equal(torch_tensor1, torch_tensor_after_round_trip1)
     else:
         passing, output = comp_pcc(torch_tensor1, torch_tensor_after_round_trip1)

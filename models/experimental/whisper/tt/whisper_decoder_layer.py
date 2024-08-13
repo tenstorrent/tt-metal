@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from typing import Optional, Tuple, Union
 
 from transformers import WhisperConfig
@@ -38,8 +38,8 @@ class TtWhisperDecoderLayer(nn.Module):
 
         self.embed_dim = embed_dim
         self.decoder_ffn_dim = decoder_ffn_dim
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.out_mem_config_l1 = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
 
         # Do not use dropout for now
@@ -58,12 +58,12 @@ class TtWhisperDecoderLayer(nn.Module):
         gamma = torch2tt_tensor(
             self.state_dict[f"{base_address}.self_attn_layer_norm.weight"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         beta = torch2tt_tensor(
             self.state_dict[f"{base_address}.self_attn_layer_norm.bias"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
 
         self.self_attn_layer_norm = partial(
@@ -86,12 +86,12 @@ class TtWhisperDecoderLayer(nn.Module):
         gamma1 = torch2tt_tensor(
             self.state_dict[f"{base_address}.encoder_attn_layer_norm.weight"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         beta1 = torch2tt_tensor(
             self.state_dict[f"{base_address}.encoder_attn_layer_norm.bias"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
 
         self.encoder_attn_layer_norm = partial(ttnn.layer_norm, weight=gamma1, bias=beta1, epsilon=1e-05)
@@ -99,48 +99,48 @@ class TtWhisperDecoderLayer(nn.Module):
         self.fc1_weight = torch2tt_tensor(
             self.state_dict[f"{base_address}.fc1.weight"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         self.fc1_bias = torch2tt_tensor(
             state_dict[f"{base_address}.fc1.bias"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         self.fc2_weight = torch2tt_tensor(
             self.state_dict[f"{base_address}.fc2.weight"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         self.fc2_bias = torch2tt_tensor(
             state_dict[f"{base_address}.fc2.bias"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
 
         gamma2 = torch2tt_tensor(
             self.state_dict[f"{base_address}.final_layer_norm.weight"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         beta2 = torch2tt_tensor(
             self.state_dict[f"{base_address}.final_layer_norm.bias"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         self.final_layer_norm = partial(ttnn.layer_norm, weight=gamma2, bias=beta2, epsilon=1e-05)
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
+        hidden_states: ttnn.experimental.tensor.Tensor,
+        attention_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
+        encoder_hidden_states: Optional[ttnn.experimental.tensor.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
         layer_head_mask: Optional[torch.Tensor] = None,
         cross_attn_layer_head_mask: Optional[torch.Tensor] = None,
-        past_key_value: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        past_key_value: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = True,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor]:
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
@@ -221,7 +221,7 @@ class TtWhisperDecoderLayer(nn.Module):
         if self.use_torch_gelu:
             torch_hidden_states = tt2torch_tensor(hidden_states)
             torch_hidden_states = torch.nn.functional.gelu(torch_hidden_states)
-            hidden_states = torch2tt_tensor(torch_hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
+            hidden_states = torch2tt_tensor(torch_hidden_states, self.device, ttnn.experimental.tensor.Layout.ROW_MAJOR)
         else:
             hidden_states = ttnn.gelu(hidden_states)
 

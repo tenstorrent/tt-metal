@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn.deprecated
 import ttnn
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_model as bloom_model
@@ -12,8 +12,8 @@ from typing import Optional
 
 class TtBloomForQuestionAnswering:
     def __init__(self, config, state_dict, device):
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
         self.transformer = bloom_model.TtBloomModel(config, state_dict, "transformer", device)
         self.qa_outputs_weight = bloom_utils.torch2tt_tensor(state_dict["qa_outputs.weight"], device)
@@ -64,11 +64,11 @@ class TtBloomForQuestionAnswering:
         sequence_output = outputs[0]
 
         logits = ttnn.matmul(sequence_output, self.qa_outputs_weight, output_mem_config=self.mem_config)
-        logits = tt_lib.tensor.bcast(
+        logits = ttnn.experimental.tensor.bcast(
             logits,
             self.qa_outputs_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
             self.mem_config,
         )
         logits = bloom_utils.tt2torch_tensor(logits)

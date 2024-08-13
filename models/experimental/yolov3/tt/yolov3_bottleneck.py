@@ -13,8 +13,8 @@ from models.experimental.yolov3.reference.models.common import autopad
 from models.experimental.yolov3.tt.yolov3_conv import TtConv
 
 import ttnn
-import tt_lib
-from tt_lib.fallback_ops import fallback_ops
+import ttnn.deprecated
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 

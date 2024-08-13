@@ -10,7 +10,7 @@ from functools import partial
 import torch
 import torch.nn.functional as F
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from loguru import logger
 from models.demos.falcon7b_common.reference.hf_modeling_falcon import FalconConfig
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
@@ -116,7 +116,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 
 def synchronize_devices(devices):
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.deprecated.device.Synchronize(device)
 
 
 def run_falcon_demo_kv(

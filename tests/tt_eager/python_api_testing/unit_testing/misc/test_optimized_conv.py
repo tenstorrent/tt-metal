@@ -9,8 +9,8 @@ from loguru import logger
 
 import numpy as np
 
-import tt_lib as ttl
-from tt_lib.utils import (
+import ttnn.deprecated as ttl
+from ttnn.deprecated.utils import (
     tilize_to_list,
     tilize,
     untilize,
@@ -156,7 +156,7 @@ def test_run_optimized_conv(
             untilize_out=untilize_out,
             has_bias=has_bias,
             fuse_relu=fuse_relu,
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
             parallelization_config=ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
                 grid_size=(1, 1),
                 num_cores_nhw=1,
@@ -173,11 +173,13 @@ def test_run_optimized_conv(
         if not untilize_out:
             out_unpadded_shape = [1, 1, N * OH * OW, K]
             assert out_unpadded_shape == list(out.shape_without_padding())
-            out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
+            out = ttnn.experimental.tensor.format_output_tensor(
+                out, out.shape_without_padding(), device, ttnn.experimental.tensor.Layout.ROW_MAJOR
+            )
             out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
         out = out.cpu()
         assert list(out.get_legacy_shape()) == conv_output_shape
-        assert out.get_layout() == ttl.tensor.Layout.ROW_MAJOR
+        assert out.get_layout() == ttnn.experimental.tensor.Layout.ROW_MAJOR
 
         # Copy output to host and convert tt tensor to pytorch tensor
         out_result = out.to_torch().float()

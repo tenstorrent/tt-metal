@@ -6,7 +6,7 @@ import json
 import pytest
 import torch
 from loguru import logger
-import tt_lib
+import ttnn.deprecated
 import transformers
 import ttnn
 import evaluate

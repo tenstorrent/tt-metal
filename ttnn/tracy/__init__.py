@@ -33,7 +33,7 @@ DEFAULT_CHILD_CALLS = ["CompileProgram", "HWCommandQueue_write_buffer"]
 
 
 def signpost(header, message=None):
-    from tt_lib import profiler
+    from ttnn.deprecated import profiler
 
     if message:
         profiler.tracy_message(f"`TT_SIGNPOST: {header}\n{message}`")

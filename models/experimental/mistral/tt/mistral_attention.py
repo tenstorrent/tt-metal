@@ -4,9 +4,9 @@
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple
-import tt_lib
+import ttnn.deprecated
 import ttnn
-from tt_lib import fallback_ops
+from ttnn.deprecated import fallback_ops
 from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, torch_to_tt_tensor
 from models.experimental.mistral.mistral_helper_funcs import Linear as TtLinear, format_tensor, unpad_from_zero
@@ -34,7 +34,7 @@ class TtAttention(nn.Module):
 
         self.scale = self.args.head_dim**-0.5
 
-        self.wq_weights = tt_lib.tensor.load_tensor(
+        self.wq_weights = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + base_address + "wq.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.wq = TtLinear(
@@ -45,7 +45,7 @@ class TtAttention(nn.Module):
             output_mem_config=self.args.out_mem_config,
         )
 
-        self.wk_weights = tt_lib.tensor.load_tensor(
+        self.wk_weights = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + base_address + "wk.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.wk = TtLinear(
@@ -56,7 +56,7 @@ class TtAttention(nn.Module):
             output_mem_config=self.args.out_mem_config,
         )
 
-        self.wv_weights = tt_lib.tensor.load_tensor(
+        self.wv_weights = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + base_address + "wv.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.wv = TtLinear(
@@ -67,7 +67,7 @@ class TtAttention(nn.Module):
             output_mem_config=self.args.out_mem_config,
         )
 
-        self.wo_weights = tt_lib.tensor.load_tensor(
+        self.wo_weights = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + base_address + "wo.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.wo = TtLinear(
@@ -89,20 +89,20 @@ class TtAttention(nn.Module):
         else:
             cache_k = ttnn.empty(
                 [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
-                layout=tt_lib.tensor.Layout.ROW_MAJOR,
+                layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 device=self.device,
                 memory_config=self.args.out_mem_config,
             )
             self.cache_k = tt_to_torch_tensor(cache_k).to(torch.float32)
             cache_v = ttnn.empty(
                 [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
-                layout=tt_lib.tensor.Layout.ROW_MAJOR,
+                layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 device=self.device,
                 memory_config=self.args.out_mem_config,
             )
             self.cache_v = tt_to_torch_tensor(cache_v).to(torch.float32)
 
-    def repeat_kv(self, keys: torch.Tensor, values: torch.Tensor, repeats: int) -> tt_lib.tensor.Tensor:
+    def repeat_kv(self, keys: torch.Tensor, values: torch.Tensor, repeats: int) -> ttnn.experimental.tensor.Tensor:
         dim = 2
         keys = torch_to_tt_tensor_rm(keys, self.device)
         values = torch_to_tt_tensor_rm(values, self.device)
@@ -112,13 +112,13 @@ class TtAttention(nn.Module):
 
     def forward(
         self,
-        x: tt_lib.tensor.Tensor,
-        bcast_freq_xq: tt_lib.tensor.complex_tensor,
-        bcast_freq_xk: tt_lib.tensor.complex_tensor,
-        positions: tt_lib.tensor.Tensor,
+        x: ttnn.experimental.tensor.Tensor,
+        bcast_freq_xq: ttnn.experimental.tensor.complex_tensor,
+        bcast_freq_xk: ttnn.experimental.tensor.complex_tensor,
+        positions: ttnn.experimental.tensor.Tensor,
         mask: Optional[torch.Tensor],
         seqlen: int,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         _, bsz, _, _ = x.get_legacy_shape()
 
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
@@ -135,9 +135,9 @@ class TtAttention(nn.Module):
         xk = torch_to_tt_tensor_rm(xk, self.device, put_on_device=True)
         xv = torch_to_tt_tensor_rm(xv, self.device, put_on_device=True)
 
-        xq = tt_lib.tensor.reshape(xq, bsz, seqlen, self.n_heads, self.args.head_dim)
-        xk = tt_lib.tensor.reshape(xk, bsz, seqlen, self.n_kv_heads, self.args.head_dim)
-        xv = tt_lib.tensor.reshape(xv, bsz, seqlen, self.n_kv_heads, self.args.head_dim)
+        xq = ttnn.experimental.tensor.reshape(xq, bsz, seqlen, self.n_heads, self.args.head_dim)
+        xk = ttnn.experimental.tensor.reshape(xk, bsz, seqlen, self.n_kv_heads, self.args.head_dim)
+        xv = ttnn.experimental.tensor.reshape(xv, bsz, seqlen, self.n_kv_heads, self.args.head_dim)
 
         xq = tt_to_torch_tensor(xq).to(torch.float32)
         xk = tt_to_torch_tensor(xk).to(torch.float32)
@@ -184,15 +184,15 @@ class TtAttention(nn.Module):
         desired_score_shape[-1] = key.get_legacy_shape()[1]
         xq.deallocate()
 
-        key = format_tensor(key, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
+        key = format_tensor(key, ttnn.experimental.tensor.Layout.TILE, self.device, self.output_mem_config)
         key = ttnn.permute(key, [0, 2, 3, 1])
-        key = format_tensor(key, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
+        key = format_tensor(key, ttnn.experimental.tensor.Layout.TILE, self.device, self.output_mem_config)
 
-        value = format_tensor(value, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
+        value = format_tensor(value, ttnn.experimental.tensor.Layout.TILE, self.device, self.output_mem_config)
         value = ttnn.transpose(value, 1, -2, memory_config=self.args.out_mem_config)
-        value = format_tensor(value, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
+        value = format_tensor(value, ttnn.experimental.tensor.Layout.TILE, self.device, self.output_mem_config)
 
-        query = format_tensor(query, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
+        query = format_tensor(query, ttnn.experimental.tensor.Layout.TILE, self.device, self.output_mem_config)
 
         scores = ttnn.matmul(query, key, memory_config=self.args.out_mem_config)
         key.deallocate()
@@ -202,11 +202,11 @@ class TtAttention(nn.Module):
             mask = ttnn.permute(mask, [2, 3, 0, 1])
             scores = ttnn.permute(scores, [2, 3, 0, 1])
 
-            scores = tt_lib.tensor.bcast(
+            scores = ttnn.experimental.tensor.bcast(
                 scores,
                 mask,
-                tt_lib.tensor.BcastOpMath.ADD,
-                tt_lib.tensor.BcastOpDim.HW,
+                ttnn.experimental.tensor.BcastOpMath.ADD,
+                ttnn.experimental.tensor.BcastOpDim.HW,
                 output_mem_config=self.output_mem_config,
             )
             scores = ttnn.permute(scores, [2, 3, 0, 1])
@@ -231,7 +231,7 @@ class TtAttention(nn.Module):
         output = fallback_ops.reshape(output, 1, bsz, seqlen, -1)
 
         desired_output_shape = output.get_legacy_shape()
-        output = format_tensor(output, tt_lib.tensor.Layout.TILE, self.device, self.output_mem_config)
+        output = format_tensor(output, ttnn.experimental.tensor.Layout.TILE, self.device, self.output_mem_config)
         output = self.wo(output)
         return output
 
@@ -242,21 +242,21 @@ def apply_rotary_emb(
     xq_real = torch_to_tt_tensor_rm(t_xq[..., :, :, ::2], device)
     xq_img = torch_to_tt_tensor_rm(t_xq[..., :, :, 1::2], device)
 
-    xq = tt_lib.tensor.complex_tensor(xq_real, xq_img)
+    xq = ttnn.experimental.tensor.complex_tensor(xq_real, xq_img)
 
     xq_real.deallocate()
     xq_img.deallocate()
 
     xk_real = torch_to_tt_tensor_rm(t_xk[..., :, :, ::2], device)
     xk_img = torch_to_tt_tensor_rm(t_xk[..., :, :, 1::2], device)
-    xk = tt_lib.tensor.complex_tensor(xk_real, xk_img)
+    xk = ttnn.experimental.tensor.complex_tensor(xk_real, xk_img)
 
     xk_real.deallocate()
     xk_img.deallocate()
 
-    xq_out = tt_lib.tensor.complex_mul(xq, bcast_freq_xq, output_mem_config=mem_config)
+    xq_out = ttnn.experimental.tensor.complex_mul(xq, bcast_freq_xq, output_mem_config=mem_config)
 
-    xk_out = tt_lib.tensor.complex_mul(xk, bcast_freq_xk, output_mem_config=mem_config)
+    xk_out = ttnn.experimental.tensor.complex_mul(xk, bcast_freq_xk, output_mem_config=mem_config)
 
     xq_out = ttnn.concat([xq_out.real, xq_out.imag], -1, memory_config=mem_config)
     xk_out = ttnn.concat([xk_out.real, xk_out.imag], -1, memory_config=mem_config)

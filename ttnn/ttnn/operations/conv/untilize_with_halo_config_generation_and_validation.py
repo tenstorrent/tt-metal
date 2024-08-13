@@ -6,7 +6,7 @@ import torch
 import numpy as np
 from loguru import logger
 
-from tt_lib._internal.comparison_funcs import comp_equal
+from ttnn.deprecated._internal.comparison_funcs import comp_equal
 
 
 def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(conv_params, input_nchw_shape):

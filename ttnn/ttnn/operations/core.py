@@ -9,7 +9,7 @@ from typing import Union, Tuple, Optional, Any, Callable, Dict
 from loguru import logger
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 import ttnn
 import ttnn.decorators
@@ -245,9 +245,9 @@ def from_torch(
 
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
-        tensor = ttl.tensor.Tensor(shards, dtype, mesh_mapper.config())
+        tensor = ttnn.experimental.tensor.Tensor(shards, dtype, mesh_mapper.config())
     else:
-        tensor = ttl.tensor.Tensor(tensor, dtype)
+        tensor = ttnn.experimental.tensor.Tensor(tensor, dtype)
 
     if layout is not None:
         tensor = ttnn.to_layout(tensor, layout, device=device)
@@ -280,7 +280,7 @@ class TorchTensor(torch.Tensor):
         # this tells torch to treat TorchTensor just like torch.Tensor's.
         # Otherwise, torch will complain that it doesn't know how to handle it.
         types = tuple(torch.Tensor if t == TorchTensor else t for t in types)
-        func = ttl.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
+        func = ttnn.experimental.tensor.decorate_external_operation(func, function_name=f"(torch) {func.__name__}")
         return super().__torch_function__(func, types, func_args, func_kwargs)
 
 
@@ -341,7 +341,7 @@ def _golden_function(tensor, *args, **kwargs):
 doc = """
 to_device(tensor: ttnn.Tensor, device: ttnn.Device, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.Device`.
+Copies the `ttnn.Tensor` :attr:`tensor` to the `ttnn.deprecated.device.Device`.
 The tensor may be placed in DRAM or L1 memory.
 
 Currently memory_config must be of an Interleaved tensor (not sharded)
@@ -472,7 +472,7 @@ def clone(tensor, memory_config: ttnn.MemoryConfig, dtype: ttnn.DataType):
         >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16, layout=ttnn.TILE_LAYOUT)), device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         >>> output = ttnn.clone(tensor, tnn.DRAM_MEMORY_CONFIG, tnn.bfloat8_b)
     """
-    return ttl.tensor.clone(tensor, output_mem_config=memory_config, output_dtype=dtype)
+    return ttnn.experimental.tensor.clone(tensor, output_mem_config=memory_config, output_dtype=dtype)
 
 
 def _golden_function(input_tensor):
@@ -491,7 +491,7 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = No
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
     if not file_name.is_file():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file is not a file.")
-    return ttl.tensor.load_tensor(str(file_name), device)
+    return ttnn.experimental.tensor.load_tensor(str(file_name), device)
 
 
 @ttnn.register_python_operation(name="ttnn.dump_tensor")
@@ -499,7 +499,7 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, distri
     if distribute is None:
         distribute = dict()
     file_name = pathlib.Path(file_name)
-    ttl.tensor.dump_tensor(str(file_name), tensor, distribute)
+    ttnn.experimental.tensor.dump_tensor(str(file_name), tensor, distribute)
 
 
 @ttnn.register_python_operation(name="ttnn.as_tensor")

@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from typing import Optional
 from models.experimental.mistral.tt.mistral_attention import TtAttention
 from models.experimental.mistral.tt.mistral_feed_forward import TtFeedForward
@@ -61,13 +61,13 @@ class TtTransformerBlock(nn.Module):
 
     def forward(
         self,
-        x: tt_lib.tensor.Tensor,
-        bcast_freq_xq: tt_lib.tensor.complex_tensor,
-        bcast_freq_xk: tt_lib.tensor.complex_tensor,
-        positions: tt_lib.tensor.Tensor,
+        x: ttnn.experimental.tensor.Tensor,
+        bcast_freq_xq: ttnn.experimental.tensor.complex_tensor,
+        bcast_freq_xk: ttnn.experimental.tensor.complex_tensor,
+        positions: ttnn.experimental.tensor.Tensor,
         mask: Optional[torch.Tensor],
         seqlen: int,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         r = self.attention.forward(self.attention_norm(x), bcast_freq_xq, bcast_freq_xk, positions, mask, seqlen)
         h = ttnn.add(x, r)
         x.deallocate()

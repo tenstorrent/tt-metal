@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import torch
-from tt_lib.utils import _nearest_32 as nearest_32, tilize as tilize_util, untilize as untilize_util
+from ttnn.deprecated.utils import _nearest_32 as nearest_32, tilize as tilize_util, untilize as untilize_util
 from tests.tt_eager.python_api_testing.sweep_tests.reference_optimizer import (
     lamb_optimizer_kernel,
 )
@@ -1455,47 +1455,110 @@ def eltwise_identity(x, *args, **kwargs):
 
 
 def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
-    if tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT16 and tt_output_dtype[0] == ttl.tensor.DataType.UINT16:
+    if (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT16
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.UINT16
+    ):
         return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
-    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT16 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT16:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.UINT16
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT16
+    ):
         return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.INT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT16:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.INT32
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT16
+    ):
         return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT16 and tt_output_dtype[0] == ttl.tensor.DataType.INT32:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT16
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.INT32
+    ):
         return x.to(torch.int32)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT16 and tt_output_dtype[0] == ttl.tensor.DataType.FLOAT32:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT16
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.FLOAT32
+    ):
         return x.to(torch.bfloat16).to(torch.float32)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.FLOAT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT16:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.FLOAT32
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT16
+    ):
         return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.FLOAT32 and tt_output_dtype[0] == ttl.tensor.DataType.UINT16:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.FLOAT32
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.UINT16
+    ):
         return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
-    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT16 and tt_output_dtype[0] == ttl.tensor.DataType.FLOAT32:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.UINT16
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.FLOAT32
+    ):
         return x.to(torch.float32)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.FLOAT32 and tt_output_dtype[0] == ttl.tensor.DataType.INT32:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.FLOAT32
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.INT32
+    ):
         return x.to(torch.int32)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.INT32 and tt_output_dtype[0] == ttl.tensor.DataType.FLOAT32:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.INT32
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.FLOAT32
+    ):
         return x.to(torch.float32)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT8_B and tt_output_dtype[0] == ttl.tensor.DataType.UINT16:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT8_B
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.UINT16
+    ):
         return torch.clamp(x.to(torch.bfloat16).to(torch.int32), min=0, max=65535)  # due to no uint16 support
-    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT16 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT8_B:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.UINT16
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT8_B
+    ):
         return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT8_B and tt_output_dtype[0] == ttl.tensor.DataType.INT32:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT8_B
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.INT32
+    ):
         return x.to(torch.bfloat16).to(torch.int32)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.INT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT8_B:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.INT32
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT8_B
+    ):
         return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT16 and tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT16
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.UINT32
+    ):
         return torch.relu(x.to(torch.int32))  # due to no uint32 support
-    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT16:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.UINT32
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT16
+    ):
         return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.FLOAT32 and tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.FLOAT32
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.UINT32
+    ):
         return torch.relu(x.to(torch.int32))  # due to no uint32 support
-    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT32 and tt_output_dtype[0] == ttl.tensor.DataType.FLOAT32:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.UINT32
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.FLOAT32
+    ):
         return x.to(torch.float32)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.BFLOAT8_B and tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT8_B
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.UINT32
+    ):
         return torch.relu(x.to(torch.int32))  # due to no uint32 support
-    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT32 and tt_output_dtype[0] == ttl.tensor.DataType.BFLOAT8_B:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.UINT32
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.BFLOAT8_B
+    ):
         return x.to(torch.bfloat16)
-    elif tt_input_dtype[0] == ttl.tensor.DataType.UINT16 and tt_output_dtype[0] == ttl.tensor.DataType.UINT32:
+    elif (
+        tt_input_dtype[0] == ttnn.experimental.tensor.DataType.UINT16
+        and tt_output_dtype[0] == ttnn.experimental.tensor.DataType.UINT32
+    ):
         return torch.clamp(x.to(torch.int32), min=0, max=65535)
     else:
         return x
@@ -2156,8 +2219,8 @@ def rotary_embedding(x, *args, **kwargs):
     torch.manual_seed(0)
 
     cache_size = 2048
-    input_dtype = ttl.tensor.DataType.BFLOAT16
-    sincos_dtype = ttl.tensor.DataType.BFLOAT16
+    input_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
+    sincos_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     sin_cos_shape = (1, 1, cache_size, 64)
     cos_cached = torch.randn(sin_cos_shape).bfloat16().float()

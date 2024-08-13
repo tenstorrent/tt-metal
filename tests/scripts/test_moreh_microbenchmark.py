@@ -17,7 +17,7 @@ import pytest
 import numpy as np
 import sys
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 

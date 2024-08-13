@@ -5,7 +5,7 @@
 import torch
 import json
 import numpy as np
-import tt_lib as ttm
+import ttnn.deprecated as ttm
 from models.utility_functions import (
     pad_activation,
     pad_weight,

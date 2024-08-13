@@ -5,7 +5,7 @@
 from typing import List, Optional, Tuple, Union
 import torch
 import ttnn
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import torch2tt_tensor
 
 
@@ -20,31 +20,31 @@ class TtEmbeddings:
 
         base_address = "bert.embeddings"
         if tt_cache_path is not None:
-            self.word_embeddings_weight = ttl.tensor.load_tensor(
+            self.word_embeddings_weight = ttnn.experimental.tensor.load_tensor(
                 str(
                     tt_cache_path
                     / f"{base_address}.word_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
                 )
             ).to(device, self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
-            self.position_embeddings_weight = ttl.tensor.load_tensor(
+            self.position_embeddings_weight = ttnn.experimental.tensor.load_tensor(
                 str(
                     tt_cache_path
                     / f"{base_address}.position_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
                 )
             ).to(device, self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
-            self.token_type_embeddings_weight = ttl.tensor.load_tensor(
+            self.token_type_embeddings_weight = ttnn.experimental.tensor.load_tensor(
                 str(
                     tt_cache_path
                     / f"{base_address}.token_type_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
                 )
             ).to(device, self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
-            self.layerNorm_gamma = ttl.tensor.load_tensor(
+            self.layerNorm_gamma = ttnn.experimental.tensor.load_tensor(
                 str(
                     tt_cache_path
                     / f"{base_address}.LayerNorm.weight_{self.model_config['EMBEDDINGS_LAYERNORM_GAMMA_DTYPE'].name}.bin"
                 )
             ).to(device, self.model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"])
-            self.layerNorm_beta = ttl.tensor.load_tensor(
+            self.layerNorm_beta = ttnn.experimental.tensor.load_tensor(
                 str(
                     tt_cache_path
                     / f"{base_address}.LayerNorm.beta_{self.model_config['EMBEDDINGS_LAYERNORM_BETA_DTYPE'].name}.bin"
@@ -54,7 +54,7 @@ class TtEmbeddings:
             self.word_embeddings_weight = torch2tt_tensor(
                 state_dict[f"{base_address}.word_embeddings.weight"],
                 device,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
             )
@@ -62,7 +62,7 @@ class TtEmbeddings:
             self.position_embeddings_weight = torch2tt_tensor(
                 state_dict[f"{base_address}.position_embeddings.weight"],
                 device,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
             )
@@ -70,7 +70,7 @@ class TtEmbeddings:
             self.token_type_embeddings_weight = torch2tt_tensor(
                 state_dict[f"{base_address}.token_type_embeddings.weight"],
                 device,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
             )
@@ -78,7 +78,7 @@ class TtEmbeddings:
             self.layerNorm_gamma = torch2tt_tensor(
                 state_dict[f"{base_address}.LayerNorm.weight"].reshape([1, 1, -1, 32]),
                 device,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"],
                 model_config["EMBEDDINGS_LAYERNORM_GAMMA_DTYPE"],
             )
@@ -86,7 +86,7 @@ class TtEmbeddings:
             self.layerNorm_beta = torch2tt_tensor(
                 state_dict[f"{base_address}.LayerNorm.bias"].reshape([1, 1, -1, 32]),
                 device,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"],
                 model_config["EMBEDDINGS_LAYERNORM_BETA_DTYPE"],
             )
@@ -111,9 +111,11 @@ class TtEmbeddings:
         seq_length = input_shape[1]
         input_ids_shape = (batch_size, 1, 1, seq_length)
         input_ids_torch = torch.reshape(input_ids, input_ids_shape)
-        input_tt_tensor = ttl.tensor.Tensor(input_ids_torch, ttl.tensor.DataType.UINT32)
+        input_tt_tensor = ttnn.experimental.tensor.Tensor(input_ids_torch, ttnn.experimental.tensor.DataType.UINT32)
         token_type_ids_torch = torch.reshape(token_type_ids, input_ids_shape)
-        token_type_ids_tt_tensor = ttl.tensor.Tensor(token_type_ids_torch, ttl.tensor.DataType.UINT32)
+        token_type_ids_tt_tensor = ttnn.experimental.tensor.Tensor(
+            token_type_ids_torch, ttnn.experimental.tensor.DataType.UINT32
+        )
         position_ids_tt_tensor = None
         if position_ids is None:
             position_ids = self.position_ids[:, past_key_values_length : seq_length + past_key_values_length]
@@ -121,7 +123,9 @@ class TtEmbeddings:
         if self.position_embedding_type == "absolute":
             position_ids_torch = torch.reshape(position_ids, (1, 1, seq_length))
             position_ids_torch = position_ids_torch.unsqueeze(0).repeat(batch_size, 1, 1, 1)
-            position_ids_tt_tensor = ttl.tensor.Tensor(position_ids_torch, ttl.tensor.DataType.UINT32)
+            position_ids_tt_tensor = ttnn.experimental.tensor.Tensor(
+                position_ids_torch, ttnn.experimental.tensor.DataType.UINT32
+            )
         return {
             "input_ids": input_tt_tensor,
             "token_type_ids": token_type_ids_tt_tensor,
@@ -130,10 +134,10 @@ class TtEmbeddings:
 
     def __call__(
         self,
-        input_ids: ttl.tensor.Tensor,
-        token_type_ids: ttl.tensor.Tensor,
-        position_ids: Optional[ttl.tensor.Tensor] = None,
-    ) -> ttl.tensor.Tensor:
+        input_ids: ttnn.experimental.tensor.Tensor,
+        token_type_ids: ttnn.experimental.tensor.Tensor,
+        position_ids: Optional[ttnn.experimental.tensor.Tensor] = None,
+    ) -> ttnn.experimental.tensor.Tensor:
         inputs_embeds = ttnn.embedding(
             input_ids,
             self.word_embeddings_weight,

@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 
-import tt_lib
+import ttnn.deprecated
 import ttnn
 
 from models.helper_funcs import Linear as TTLinear
@@ -19,8 +19,8 @@ class TtRobertaClassificationHead(nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
 
         self.dense_weight = pad_by_zero(state_dict[f"{base_address}.dense.weight"], self.device)[0]
@@ -50,11 +50,11 @@ class TtRobertaClassificationHead(nn.Module):
     def linear(self, x, weight, bias):
         weight = ttnn.transpose(weight, -2, -1)
         x = ttnn.matmul(x, weight, memory_config=self.mem_config)
-        x = tt_lib.tensor.bcast(
+        x = ttnn.experimental.tensor.bcast(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
             output_mem_config=self.mem_config,
         )
         return x

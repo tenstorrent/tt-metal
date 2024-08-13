@@ -2,18 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import ttnn.deprecated
 import ttnn
 
 
 def linear(
-    x: tt_lib.tensor.Tensor,
-    weight: tt_lib.tensor.Tensor,
-    bias: tt_lib.tensor.Tensor = None,
-) -> tt_lib.tensor.Tensor:
+    x: ttnn.experimental.tensor.Tensor,
+    weight: ttnn.experimental.tensor.Tensor,
+    bias: ttnn.experimental.tensor.Tensor = None,
+) -> ttnn.experimental.tensor.Tensor:
     weight = ttnn.transpose(weight, -2, -1)
     x = ttnn.matmul(x, weight)
 
     if bias is not None:
-        x = tt_lib.tensor.bcast(x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
+        x = ttnn.experimental.tensor.bcast(
+            x, bias, ttnn.experimental.tensor.BcastOpMath.ADD, ttnn.experimental.tensor.BcastOpDim.H
+        )
     return x

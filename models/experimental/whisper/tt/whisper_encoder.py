@@ -4,7 +4,7 @@
 
 from functools import partial
 import math
-import tt_lib
+import ttnn.deprecated
 import torch
 import torch.nn as nn
 import random
@@ -23,15 +23,15 @@ from models.experimental.whisper.tt.whisper_encoder_layer import (
     TtWhisperEncoderLayer,
 )
 
-# from tt_lib.fallback_ops import fallback_ops
-import tt_lib.fallback_ops as fallback_ops
+# from ttnn.deprecated.fallback_ops import fallback_ops
+import ttnn.deprecated.fallback_ops as fallback_ops
 
 
 @dataclass
 class TtWhisperEncoderOutput:
-    last_hidden_state: tt_lib.tensor.Tensor = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    last_hidden_state: ttnn.experimental.tensor.Tensor = None
+    hidden_states: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None
 
 
 class TtWhisperEncoder(nn.Module):
@@ -41,7 +41,7 @@ class TtWhisperEncoder(nn.Module):
 
     Args:
         reference_model: WhisperModel
-        device: device: tt_lib.device.Device
+        device: device: ttnn.deprecated.device.Device
         config: WhisperConfig
     """
 
@@ -90,12 +90,12 @@ class TtWhisperEncoder(nn.Module):
         gamma = torch2tt_tensor(
             self.state_dict[f"{base_address}.layer_norm.weight"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         beta = torch2tt_tensor(
             self.state_dict[f"{base_address}.layer_norm.bias"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         self.layer_norm = partial(ttnn.layer_norm, weight=gamma, bias=beta, epsilon=1e-05)
 
@@ -114,13 +114,13 @@ class TtWhisperEncoder(nn.Module):
 
     def forward(
         self,
-        input_features: tt_lib.tensor.Tensor,  # bc of shape
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,  #  NOT used in whisper
+        input_features: ttnn.experimental.tensor.Tensor,  # bc of shape
+        attention_mask: Optional[ttnn.experimental.tensor.Tensor] = None,  #  NOT used in whisper
         head_mask: Optional[torch.Tensor] = None,  # bc of shape []
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtWhisperEncoderOutput]:
+    ) -> Union[Tuple[ttnn.experimental.tensor.Tensor], TtWhisperEncoderOutput]:
         """
         Args:
             input_features (`torch.LongTensor` of shape `(batch_size, feature_size, sequence_length)`):
@@ -165,7 +165,7 @@ class TtWhisperEncoder(nn.Module):
         """PyTorch implementation end"""
 
         """TT implementation"""
-        hidden_states = torch2tt_tensor(hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
+        hidden_states = torch2tt_tensor(hidden_states, self.device, ttnn.experimental.tensor.Layout.ROW_MAJOR)
 
         # TODO: Not suppporting dropout at moment
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -213,7 +213,7 @@ class TtWhisperEncoder(nn.Module):
                             torch2tt_tensor(
                                 head_mask[idx],
                                 self.device,
-                                tt_lib.tensor.Layout.ROW_MAJOR,
+                                ttnn.experimental.tensor.Layout.ROW_MAJOR,
                             )
                             if head_mask is not None
                             else None

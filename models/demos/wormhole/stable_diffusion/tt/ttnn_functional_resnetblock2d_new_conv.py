@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import tt_lib as ttl
-from tt_lib.fallback_ops import fallback_ops
+import ttnn.deprecated as ttl
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
@@ -461,8 +461,9 @@ class resnetBlock2D:
                             hidden_states.shape[2] - 1,
                             output_tensor_end_width_dim - 1,
                         ],
-                        memory_config=ttl.tensor.MemoryConfig(
-                            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+                        memory_config=ttnn.experimental.tensor.MemoryConfig(
+                            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+                            ttnn.experimental.tensor.BufferType.L1,
                         ),
                     )
                 )

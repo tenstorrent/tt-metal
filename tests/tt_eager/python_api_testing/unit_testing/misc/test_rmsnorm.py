@@ -9,9 +9,9 @@ import torch
 
 import ttnn
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
-from tt_lib.utils import (
+from ttnn.deprecated.utils import (
     pad_weight,
     tilize_to_list,
     untilize,
@@ -27,7 +27,7 @@ def rmsnorm(x, gamma, beta, eps):
 def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(1234)
 
-    tensor = ttl.tensor
+    tensor = ttnn.experimental.tensor
     dev = device
 
     epsf = 1e-2
@@ -110,22 +110,30 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttnn.experimental.tensor.DataType.BFLOAT16,),
     ids=["BFLOAT16"],
 )
 @pytest.mark.parametrize(

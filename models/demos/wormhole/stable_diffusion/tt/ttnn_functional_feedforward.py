@@ -7,7 +7,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_geglu import gegl
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     determine_largest_subblock_size,
 )
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import torch
 import math
 

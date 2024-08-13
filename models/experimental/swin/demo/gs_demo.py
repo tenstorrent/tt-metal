@@ -14,7 +14,7 @@ from models.utility_functions import (
 )
 from transformers import SwinForImageClassification as HF_SwinForImageClassification
 from transformers import AutoFeatureExtractor
-import tt_lib
+import ttnn.deprecated
 from models.experimental.swin.tt.swin import *
 
 

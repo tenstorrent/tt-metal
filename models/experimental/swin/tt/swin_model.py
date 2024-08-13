@@ -12,8 +12,8 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
-import tt_lib
-from tt_lib.fallback_ops import fallback_ops
+import ttnn.deprecated
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.experimental.swin.tt.swin_encoder import TtSwinEncoder
 from models.experimental.swin.tt.swin_embeddings import TtSwinEmbeddings
 from dataclasses import dataclass
@@ -21,11 +21,11 @@ from dataclasses import dataclass
 
 @dataclass
 class TtSwinModelOutput:
-    last_hidden_state: tt_lib.tensor.Tensor = None
-    pooler_output: Optional[tt_lib.tensor.Tensor] = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    reshaped_hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    last_hidden_state: ttnn.experimental.tensor.Tensor = None
+    pooler_output: Optional[ttnn.experimental.tensor.Tensor] = None
+    hidden_states: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None
+    reshaped_hidden_states: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None
 
 
 class TtSwinModel(nn.Module):
@@ -83,10 +83,10 @@ class TtSwinModel(nn.Module):
 
     def get_head_mask(
         self,
-        head_mask: Optional[tt_lib.tensor.Tensor],
+        head_mask: Optional[ttnn.experimental.tensor.Tensor],
         num_hidden_layers: int,
         is_attention_chunked: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         if head_mask is not None:
             torch_head_mask = tt_to_torch_tensor(head_mask)
         else:
@@ -107,9 +107,9 @@ class TtSwinModel(nn.Module):
 
     def forward(
         self,
-        pixel_values: Optional[tt_lib.tensor.Tensor] = None,
-        bool_masked_pos: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        pixel_values: Optional[ttnn.experimental.tensor.Tensor] = None,
+        bool_masked_pos: Optional[ttnn.experimental.tensor.Tensor] = None,
+        head_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,

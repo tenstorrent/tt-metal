@@ -6,7 +6,7 @@ import copy
 import torch
 import warnings
 from torch import nn
-import tt_lib
+import ttnn.deprecated
 import ttnn
 import json
 from typing import Optional, Tuple

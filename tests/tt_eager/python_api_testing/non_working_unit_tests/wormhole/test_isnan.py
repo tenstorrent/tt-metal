@@ -8,7 +8,7 @@ from loguru import logger
 import random
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
@@ -42,18 +42,26 @@ def run_eltwise_isnan_test(input_shape, dtype, dlayout, in_mem_config, out_mem_c
 test_sweep_args = [
     (
         (7, 14, 32, 160),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE],
-        [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        [ttnn.experimental.tensor.DataType.BFLOAT16],
+        [ttnn.experimental.tensor.Layout.TILE],
+        [
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            )
+        ],
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
         16305027,
     ),
     (
         (6, 11, 3, 190),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
+        [ttnn.experimental.tensor.DataType.BFLOAT16],
+        [ttnn.experimental.tensor.Layout.ROW_MAJOR],
         [None],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
         17290030,
     ),
 ]

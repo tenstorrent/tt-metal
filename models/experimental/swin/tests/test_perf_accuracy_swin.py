@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn.deprecated
 import pytest
 import evaluate
 
@@ -65,7 +65,7 @@ def run_swin_perf(device, model_name, iterations, model_location_generator):
         torch_input = transform(image_examples[0].image)
         torch_input = torch.unsqueeze(torch_input, 0)
         torch_output = torch_model(torch_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.deprecated.device.Synchronize(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
@@ -84,7 +84,7 @@ def run_swin_perf(device, model_name, iterations, model_location_generator):
         del tt_output
 
         profiler.start(third_key)
-        tt_lib.device.Synchronize(device)
+        ttnn.deprecated.device.Synchronize(device)
         for i in range(iterations):
             input_image = image_examples[i].image
             input = image_processor(input_image, return_tensors="pt")

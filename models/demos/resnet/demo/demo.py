@@ -8,7 +8,7 @@ from loguru import logger
 from torchvision import models
 from transformers import AutoImageProcessor
 import pytest
-import tt_lib
+import ttnn.deprecated
 
 
 from models.utility_functions import (
@@ -24,9 +24,9 @@ from loguru import logger
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 
 resnet_model_config = {
-    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.LoFi,
-    "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
-    "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
+    "MATH_FIDELITY": ttnn.experimental.tensor.MathFidelity.LoFi,
+    "WEIGHTS_DTYPE": ttnn.experimental.tensor.DataType.BFLOAT8_B,
+    "ACTIVATIONS_DTYPE": ttnn.experimental.tensor.DataType.BFLOAT8_B,
 }
 
 
@@ -161,7 +161,7 @@ def run_resnet_inference(
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
     tt_out = tt_resnet50(tt_inputs)
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
     profiler.end("first_model_run_with_compile", force_enable=True)
     tt_out.deallocate()
     del tt_out
@@ -172,7 +172,7 @@ def run_resnet_inference(
     ##### Run Forward on TT Model Start
     profiler.start(f"model_run_for_inference")
     tt_out = tt_resnet50(tt_inputs)
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
     profiler.end(f"model_run_for_inference")
 
     profiler.start(f"post_processing")

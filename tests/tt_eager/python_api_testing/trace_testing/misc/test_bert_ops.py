@@ -7,7 +7,7 @@ import torch
 import math
 import ttnn
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
@@ -19,7 +19,9 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
 
 @pytest.mark.skipif(is_wormhole_b0(), reason="Unsupported parallelizations for WH B0")
 @pytest.mark.parametrize(
-    "fidelity", [ttl.tensor.MathFidelity.LoFi, ttl.tensor.MathFidelity.HiFi2], ids=["LoFi", "HiFi2"]
+    "fidelity",
+    [ttnn.experimental.tensor.MathFidelity.LoFi, ttnn.experimental.tensor.MathFidelity.HiFi2],
+    ids=["LoFi", "HiFi2"],
 )
 @pytest.mark.parametrize(
     "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation",
@@ -86,39 +88,51 @@ class TestBertOpsTrace:
         logger.debug("out block w h " + str(out_block_w * 32) + " " + str(out_block_h * 32))
         logger.debug("out subblock w h " + str(out_subblock_w * 32) + " " + str(out_subblock_h * 32))
 
-        interleaved_mem_config_L1 = ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+        interleaved_mem_config_L1 = ttnn.experimental.tensor.MemoryConfig(
+            memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.experimental.tensor.BufferType.L1,
         )
-        interleaved_mem_config_DRAM = ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.DRAM,
+        interleaved_mem_config_DRAM = ttnn.experimental.tensor.MemoryConfig(
+            memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
         )
-        sharded_mem_config = ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            buffer_type=ttl.tensor.BufferType.L1,
+        sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            buffer_type=ttnn.experimental.tensor.BufferType.L1,
         )
 
         in0 = torch.randn(in0_shape).bfloat16().float()
         in1 = torch.randn(in1_shape).bfloat16().float()
         bias = torch.randn(bias_shape).bfloat16().float()
         in0_t_res = torch2tt_tensor(
-            in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+            in0,
+            device,
+            tt_memory_config=interleaved_mem_config_DRAM,
+            tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
         )
 
         if in1_in_dram:
             in1_t = torch2tt_tensor(
-                in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+                in1,
+                device,
+                tt_memory_config=interleaved_mem_config_DRAM,
+                tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             )
         else:
             in1_t = torch2tt_tensor(
-                in1, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+                in1,
+                device,
+                tt_memory_config=interleaved_mem_config_L1,
+                tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             )
 
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config_L1
 
         bias_t = pad_by_zero(
-            bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+            bias,
+            device,
+            tt_memory_config=interleaved_mem_config_L1,
+            tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
         )[0]
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -133,21 +147,23 @@ class TestBertOpsTrace:
             fused_activation=activation,
         )
 
-        compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(math_fidelity=fidelity, math_approx_mode=True)
+        compute_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
+            math_fidelity=fidelity, math_approx_mode=True
+        )
 
         trace_loops = 4
 
         def run_ops(in0_t_res):
             if in0_sharded:
-                in0_t = ttl.tensor.interleaved_to_sharded(
+                in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
                     in0_t_res,
                     grid_size,
                     [M // grid_size[0], K // grid_size[1]],
-                    ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                    ttl.tensor.ShardOrientation.COL_MAJOR,
+                    ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+                    ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
                 )
             else:
-                in0_t = ttl.tensor.clone(in0_t_res, interleaved_mem_config_L1)
+                in0_t = ttnn.experimental.tensor.clone(in0_t_res, interleaved_mem_config_L1)
 
             if has_bias:
                 output_t = ttnn.linear(
@@ -167,7 +183,7 @@ class TestBertOpsTrace:
                     compute_kernel_config=compute_kernel_config,
                 )
             if out_sharded:
-                output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+                output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
             return output_t
 
         # Compile
@@ -182,9 +198,12 @@ class TestBertOpsTrace:
         for iter in range(trace_loops):
             in0 = torch.randn(in0_shape).bfloat16().float()
             in0_t_updated = torch2tt_tensor(
-                in0, None, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+                in0,
+                None,
+                tt_memory_config=interleaved_mem_config_DRAM,
+                tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
             )
-            ttl.tensor.write_tensor(in0_t_updated, in0_t_res)
+            ttnn.experimental.tensor.write_tensor(in0_t_updated, in0_t_res)
             logger.info(f"Running iteration {iter}")
             ttl.device.ReplayTrace(device, cq_id, tid, True)
 

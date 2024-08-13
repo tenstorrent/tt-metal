@@ -8,7 +8,7 @@ import timm
 from torchvision.utils import save_image
 from loguru import logger
 
-import tt_lib
+import ttnn.deprecated
 
 from models.experimental.vovnet.tt.vovnet import vovnet_for_image_classification
 from models.utility_functions import (
@@ -16,13 +16,12 @@ from models.utility_functions import (
     tt_to_torch_tensor,
 )
 
+
 @pytest.mark.parametrize(
     "model_name",
     (("hf_hub:timm/ese_vovnet19b_dw.ra_in1k"),),
 )
-def test_vovnet_model_inference(
-    device, imagenet_sample_input, imagenet_label_dict, model_name, reset_seeds
-):
+def test_vovnet_model_inference(device, imagenet_sample_input, imagenet_label_dict, model_name, reset_seeds):
     model = timm.create_model(model_name, pretrained=True)
 
     torch_model = model

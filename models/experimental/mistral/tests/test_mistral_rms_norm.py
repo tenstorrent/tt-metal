@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import tt_lib
+import ttnn.deprecated
 import pytest
 from loguru import logger
 import json
@@ -33,8 +33,8 @@ def test_mistral_rms_norm_inference(pcc, model_location_generator, device, reset
     model_args.max_batch_size = 1
     reference_model = RMSNorm(dim=dim)
     reference_model.load_state_dict(state_dict)
-    output_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     )
     tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
     tt_model = TtRMSNorm(

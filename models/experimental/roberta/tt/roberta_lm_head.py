@@ -6,17 +6,19 @@
 import torch
 import torch.nn as nn
 
-import tt_lib
+import ttnn.deprecated
 import ttnn
 
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.utility_functions import (
     tt2torch_tensor,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
-mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+mem_config = ttnn.experimental.tensor.MemoryConfig(
+    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+)
 
 
 class TtRobertaLMHead(nn.Module):
@@ -60,11 +62,11 @@ class TtRobertaLMHead(nn.Module):
     def linear(self, x, weight, bias):
         weight = ttnn.transpose(weight, -2, -1)
         x = ttnn.matmul(x, weight, memory_config=mem_config)
-        x = tt_lib.tensor.bcast(
+        x = ttnn.experimental.tensor.bcast(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
             output_mem_config=mem_config,
         )
         return x

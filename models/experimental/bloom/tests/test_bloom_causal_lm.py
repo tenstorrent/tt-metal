@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn.deprecated
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (

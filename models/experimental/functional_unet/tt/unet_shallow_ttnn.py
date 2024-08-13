@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 import ttnn
 
-import tt_lib.fallback_ops
-from tt_lib import profiler
+import ttnn.deprecated.fallback_ops
+from ttnn.deprecated import profiler
 
 from loguru import logger
 

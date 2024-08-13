@@ -6,7 +6,7 @@ import random
 from loguru import logger
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -45,30 +45,36 @@ test_sweep_args = [
     (
         (6, 2, 224, 192),
         [
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         ],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [ttnn.experimental.tensor.Layout.TILE, ttnn.experimental.tensor.Layout.TILE],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            ),
             None,
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
         17493725,
         -88.5,
     ),
     (
         (4, 7, 32, 96),
         [
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         ],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [ttnn.experimental.tensor.Layout.TILE, ttnn.experimental.tensor.Layout.TILE],
         [
             None,
             None,
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
         16934480,
         -94.0,
     ),

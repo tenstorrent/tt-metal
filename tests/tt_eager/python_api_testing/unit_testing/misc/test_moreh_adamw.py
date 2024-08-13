@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 import pytest
 from models.utility_functions import (
@@ -26,17 +26,19 @@ from loguru import logger
 def create_tt_tensors(cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max_exp_avg_sq, amsgrad, device):
     def create_tt_tensor(x, device):
         ret = (
-            ttl.tensor.Tensor(
+            ttnn.experimental.tensor.Tensor(
                 x,
-                ttl.tensor.DataType.BFLOAT16,
+                ttnn.experimental.tensor.DataType.BFLOAT16,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.experimental.tensor.Layout.TILE)
             .to(device)
         )
         return ret
 
     def create_empty_tensor(x, device):
-        ret = ttnn.empty(x.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+        ret = ttnn.empty(
+            x.shape, ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.Layout.TILE, device
+        )
         return ret
 
     # input tensors
@@ -143,12 +145,14 @@ def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, 
 
     assert tt_param_out.get_legacy_shape() == list(model.weight.shape)
 
-    param_result = tt_param_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
-    exp_avg_result = tt_exp_avg_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
-    exp_avg_sq_result = tt_exp_avg_sq_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    param_result = tt_param_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    exp_avg_result = tt_exp_avg_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    exp_avg_sq_result = (
+        tt_exp_avg_sq_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    )
     if amsgrad:
         max_exp_avg_sq_result = (
-            tt_max_exp_avg_sq_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+            tt_max_exp_avg_sq_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
         )
     else:
         max_exp_avg_sq_result = None

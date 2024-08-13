@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch.nn as nn
-import tt_lib
+import ttnn.deprecated
 
 import ttnn
 
@@ -22,8 +22,8 @@ class TtRMSNorm(nn.Module):
         self.device = device
         self.output_mem_config = output_mem_config
         # bfp8 reduces PCC for so using weights in bfloat16
-        self.weight = tt_lib.tensor.load_tensor(tt_cache_path + base_address + "weightDataType.BFLOAT16.bin")
+        self.weight = ttnn.experimental.tensor.load_tensor(tt_cache_path + base_address + "weightDataType.BFLOAT16.bin")
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         x = ttnn.rms_norm(x, epsilon=self.eps, weight=self.weight)
         return x

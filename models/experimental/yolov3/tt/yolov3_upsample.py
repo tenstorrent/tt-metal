@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn.deprecated
 from loguru import logger
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
@@ -22,12 +22,10 @@ class TtUpsample(torch.nn.Module):
     ):
         super().__init__()
         self.device = device
-        self.upsample = torch.nn.Upsample(
-            size=size, scale_factor=scale_factor, mode=mode
-        )
+        self.upsample = torch.nn.Upsample(size=size, scale_factor=scale_factor, mode=mode)
 
     def forward(self, x):
         x = tt2torch_tensor(x)
         x = self.upsample(x)
-        x = torch2tt_tensor(x, self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        x = torch2tt_tensor(x, self.device, tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR)
         return x

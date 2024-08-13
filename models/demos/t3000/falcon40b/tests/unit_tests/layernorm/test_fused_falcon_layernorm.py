@@ -8,7 +8,7 @@ import math
 from loguru import logger
 from torch import nn
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
@@ -47,25 +47,25 @@ class TtFusedFalconLayernorm:
         self.model_config = model_config
 
         if gamma_beta_rm:
-            ln_attn_gamma_host = ttl.tensor.Tensor(
+            ln_attn_gamma_host = ttnn.experimental.tensor.Tensor(
                 gamma1.reshape([1, 1, 1, -1]),
                 self.model_config["LN_ATTN_WEIGHTS_DTYPE"],
             )
             self.ln_attn_gamma = ln_attn_gamma_host.to(device, self.model_config["LN_ATTN_WEIGHTS_MEMCFG"])
 
-            ln_attn_beta_host = ttl.tensor.Tensor(
+            ln_attn_beta_host = ttnn.experimental.tensor.Tensor(
                 beta1.reshape([1, 1, 1, -1]),
                 self.model_config["LN_ATTN_BIAS_DTYPE"],
             )
             self.ln_attn_beta = ln_attn_beta_host.to(device, self.model_config["LN_ATTN_BIAS_MEMCFG"])
 
-            ln_mlp_gamma_host = ttl.tensor.Tensor(
+            ln_mlp_gamma_host = ttnn.experimental.tensor.Tensor(
                 gamma2.reshape([1, 1, 1, -1]),
                 self.model_config["LN_MLP_WEIGHTS_DTYPE"],
             )
             self.ln_mlp_gamma = ln_mlp_gamma_host.to(device, self.model_config["LN_MLP_WEIGHTS_MEMCFG"])
 
-            ln_mlp_beta_host = ttl.tensor.Tensor(
+            ln_mlp_beta_host = ttnn.experimental.tensor.Tensor(
                 beta2.reshape([1, 1, 1, -1]),
                 self.model_config["LN_MLP_BIAS_DTYPE"],
             )
@@ -260,46 +260,46 @@ def run_test_FalconLayernorm_inference(pcc, devices, model_location_generator, g
 
     input_torch = (torch.rand(input_shape) * 2) - 1
     input = torch2tt_tensor(
-        input_torch, None, tt_dtype=ttl.tensor.DataType.BFLOAT16
-    )  # tt_dtype=ttl.tensor.DataType.BFLOAT16  # ttl.tensor.DataType.BFLOAT8_B
+        input_torch, None, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16
+    )  # tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16  # ttnn.experimental.tensor.DataType.BFLOAT8_B
     input = input.to(devices[0], model_config["DEFAULT_MEMCFG"])
 
     # block sharded hardcoded for S=128 and 8x4 grid of cores
-    shard_spec_cores_grid = ttl.tensor.CoreRangeSet(
+    shard_spec_cores_grid = ttnn.experimental.tensor.CoreRangeSet(
         {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(7, 7),
+            ttnn.experimental.tensor.CoreRange(
+                ttnn.experimental.tensor.CoreCoord(0, 0),
+                ttnn.experimental.tensor.CoreCoord(7, 7),
             ),
         }
     )
-    block_sharded_memconfig = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
+    block_sharded_memconfig = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.experimental.tensor.BufferType.L1,
+        ttnn.experimental.tensor.ShardSpec(
             shard_spec_cores_grid,
             [
                 seqlen // 8,
                 H // 8,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    # width_sharded_memconfig = ttl.tensor.MemoryConfig(
-    #     ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-    #     ttl.tensor.BufferType.L1,
-    #     ttl.tensor.ShardSpec(
+    # width_sharded_memconfig = ttnn.experimental.tensor.MemoryConfig(
+    #     ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+    #     ttnn.experimental.tensor.BufferType.L1,
+    #     ttnn.experimental.tensor.ShardSpec(
     #         shard_spec_cores_grid,
     #         [
     #             seqlen,
     #             H // 64,
     #         ],
-    #         ttl.tensor.ShardOrientation.ROW_MAJOR,
+    #         ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
     #         False,
     #     ),
     # )
-    input = ttl.tensor.interleaved_to_sharded(input, sharded_mem_config=block_sharded_memconfig)
+    input = ttnn.experimental.tensor.interleaved_to_sharded(input, sharded_mem_config=block_sharded_memconfig)
 
     # PyTorch output --------------------------------------------------------------------
     pytorch_FalconLayernorm_model = PytorchFusedLayernorm(hugging_face_reference_model)

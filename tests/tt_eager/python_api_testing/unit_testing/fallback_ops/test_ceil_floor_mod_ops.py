@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttl
-import tt_lib.fallback_ops
+import ttnn.deprecated as ttl
+import ttnn.deprecated.fallback_ops
 from models.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
@@ -26,18 +26,18 @@ class TestMathOps:
         pt_out = torch.ceil(x)
 
         # Test on host RM
-        t0 = ttl.tensor.Tensor(
+        t0 = ttnn.experimental.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         if on_device:
             t0 = t0.to(device)
 
         t1 = ttl.fallback_ops.ceil(t0)
 
-        output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        output = t1.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
         _, comp_out = comp_allclose_and_pcc(pt_out, output)
         logger.debug(comp_out)
@@ -50,18 +50,18 @@ class TestMathOps:
         pt_out = torch.floor(x)
 
         # Test on host RM
-        t0 = ttl.tensor.Tensor(
+        t0 = ttnn.experimental.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         if on_device:
             t0 = t0.to(device)
 
         t1 = ttl.fallback_ops.floor(t0)
 
-        output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        output = t1.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
         _, comp_out = comp_allclose_and_pcc(pt_out, output)
         logger.debug(comp_out)
@@ -75,18 +75,18 @@ class TestMathOps:
         pt_out = torch.fmod(x, other)
 
         # Test on host RM
-        t0 = ttl.tensor.Tensor(
+        t0 = ttnn.experimental.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         if on_device:
             t0 = t0.to(device)
 
         t1 = ttl.fallback_ops.unary_fmod(t0, other)
 
-        output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        output = t1.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
         _, comp_out = comp_allclose_and_pcc(pt_out, output)
         logger.debug(comp_out)
@@ -101,17 +101,17 @@ class TestMathOps:
         pt_out = torch.fmod(x, y)
 
         # Test on host RM
-        t0 = ttl.tensor.Tensor(
+        t0 = ttnn.experimental.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
-        t1 = ttl.tensor.Tensor(
+        t1 = ttnn.experimental.tensor.Tensor(
             y.reshape(-1).tolist(),
             y.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         if on_device:
             t0 = t0.to(device)
@@ -119,7 +119,7 @@ class TestMathOps:
 
         tout = ttl.fallback_ops.binary_fmod(t0, t1)
 
-        output = tout.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        output = tout.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
         _, comp_out = comp_allclose_and_pcc(pt_out, output)
         logger.debug(comp_out)

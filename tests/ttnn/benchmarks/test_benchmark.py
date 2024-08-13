@@ -7,7 +7,7 @@ import time
 import pytest
 import torch
 import ttnn
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 
 # fmt: off

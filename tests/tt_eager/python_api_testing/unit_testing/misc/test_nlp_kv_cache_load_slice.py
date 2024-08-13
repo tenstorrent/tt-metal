@@ -8,7 +8,7 @@ from loguru import logger
 import numpy as np
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.utility_functions import is_grayskull, comp_pcc
 
 
@@ -19,24 +19,24 @@ def unpadding_test(
     device,
     dtype,
 ):
-    if dtype == ttl.tensor.DataType.FLOAT32:
+    if dtype == ttnn.experimental.tensor.DataType.FLOAT32:
         inp = torch.rand(*kv_cache_shape, dtype=torch.float)
     else:
         inp = torch.rand(*kv_cache_shape, dtype=torch.bfloat16)
 
     test_tensor = (
-        ttl.tensor.Tensor(
+        ttnn.experimental.tensor.Tensor(
             inp.reshape(-1).tolist(),
             inp.shape,
             dtype,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.experimental.tensor.Layout.TILE)
         .to(device)
     )
-    test_tensor_tt = ttl.tensor.nlp_kv_cache_load_slice(test_tensor, seq_len_start, seq_len_end)
+    test_tensor_tt = ttnn.experimental.tensor.nlp_kv_cache_load_slice(test_tensor, seq_len_start, seq_len_end)
 
-    test_tensor_pt = test_tensor_tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    test_tensor_pt = test_tensor_tt.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
 
     # Pytorch reference
     test_tensor_ref = inp[:, :, seq_len_start:seq_len_end]
@@ -46,7 +46,11 @@ def unpadding_test(
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    (
+        ttnn.experimental.tensor.DataType.BFLOAT8_B,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.DataType.FLOAT32,
+    ),
     ids=["bfloat8_b", "bfloat16", "float"],
 )
 @pytest.mark.parametrize(
@@ -87,37 +91,37 @@ def test_run_unpadding_test(
         # shift input/output tensor by creating very small tensor between loop
         inp = torch.rand(1, 1, 32, 32)
         test_tensor = (
-            ttl.tensor.Tensor(
+            ttnn.experimental.tensor.Tensor(
                 inp.reshape(-1).tolist(),
                 inp.shape,
                 dtype,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.experimental.tensor.Layout.TILE)
             .to(device)
         )
-        shard_spec_1_cores_grid = ttl.tensor.CoreRangeSet(
+        shard_spec_1_cores_grid = ttnn.experimental.tensor.CoreRangeSet(
             {
-                ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, 0),
-                    ttl.tensor.CoreCoord(0, 0),
+                ttnn.experimental.tensor.CoreRange(
+                    ttnn.experimental.tensor.CoreCoord(0, 0),
+                    ttnn.experimental.tensor.CoreCoord(0, 0),
                 ),
             }
         )
-        test_mem_cfg = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
+        test_mem_cfg = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.experimental.tensor.BufferType.L1,
+            ttnn.experimental.tensor.ShardSpec(
                 shard_spec_1_cores_grid,  # Volume must match # of attn heads
                 [
                     32,  # Each core has 32 users
                     32,  # head dim
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
-        test_tensor = ttl.tensor.interleaved_to_sharded(test_tensor, sharded_mem_config=test_mem_cfg)
+        test_tensor = ttnn.experimental.tensor.interleaved_to_sharded(test_tensor, sharded_mem_config=test_mem_cfg)
 
         a_pt, a_ref, memory_config, num_cache_entries = unpadding_test(
             kv_cache_shape,
@@ -128,7 +132,7 @@ def test_run_unpadding_test(
         )
         assert a_pt.shape == a_ref.shape
         assert num_cache_entries == 2
-        if dtype == ttl.tensor.DataType.BFLOAT8_B:
+        if dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
             # inevitable precision loss for bfloat8_b
             eq, pcc = comp_pcc(a_pt, a_ref, 0.999)
             logger.info(f"comp_pcc: {pcc}")
@@ -137,8 +141,8 @@ def test_run_unpadding_test(
         assert eq
 
         logger.info(memory_config)
-        assert memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-        assert memory_config.buffer_type == ttl.tensor.BufferType.L1
+        assert memory_config.memory_layout == ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+        assert memory_config.buffer_type == ttnn.experimental.tensor.BufferType.L1
         assert memory_config.shard_spec.shape[0] == a_ref.shape[-2]
         assert memory_config.shard_spec.shape[1] == a_ref.shape[-1]
 
@@ -156,7 +160,7 @@ def test_run_unpadding_test(
         )
         assert a_pt.shape == a_ref.shape
         assert num_cache_entries == 3
-        if dtype == ttl.tensor.DataType.BFLOAT8_B:
+        if dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
             # inevitable precision loss for bfloat8_b
             eq, pcc = comp_pcc(a_pt, a_ref, 0.999)
             logger.info(f"comp_pcc: {pcc}")
@@ -165,20 +169,20 @@ def test_run_unpadding_test(
         assert eq
 
         logger.info(memory_config)
-        assert memory_config.memory_layout == ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-        assert memory_config.buffer_type == ttl.tensor.BufferType.L1
+        assert memory_config.memory_layout == ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+        assert memory_config.buffer_type == ttnn.experimental.tensor.BufferType.L1
         assert memory_config.shard_spec.shape[0] == a_ref.shape[-2]
         assert memory_config.shard_spec.shape[1] == a_ref.shape[-1]
 
         # shift input/output tensor by creating very small tensor between loop
         inp = torch.rand(1, 1, 32, 32)
         test_tensor = (
-            ttl.tensor.Tensor(
+            ttnn.experimental.tensor.Tensor(
                 inp.reshape(-1).tolist(),
                 inp.shape,
                 dtype,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.experimental.tensor.Layout.TILE)
             .to(device)
         )

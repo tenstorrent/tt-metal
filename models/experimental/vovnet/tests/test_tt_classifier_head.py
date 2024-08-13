@@ -8,7 +8,7 @@ import timm
 
 from loguru import logger
 
-import tt_lib
+import ttnn.deprecated
 
 from models.experimental.vovnet.tt.classifier_head import TtClassifierHead
 from models.utility_functions import (
@@ -17,6 +17,7 @@ from models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )
+
 
 @pytest.mark.parametrize(
     "pcc",

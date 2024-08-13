@@ -3,11 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Union, Optional
-from tt_lib import tensor
-import tt_lib as ttl
+from ttnn.deprecated import tensor
+import ttnn.deprecated as ttl
 import ttnn
 from loguru import logger
-import tt_lib
+import ttnn.deprecated
 
 
 def Linear(
@@ -15,8 +15,8 @@ def Linear(
     out_features: int,
     weight: tensor.Tensor,
     bias: Optional[tensor.Tensor] = None,
-    output_mem_config=tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    output_mem_config=ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     ),
 ):
     """

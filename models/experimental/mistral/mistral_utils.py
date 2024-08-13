@@ -9,10 +9,10 @@ from models.experimental.mistral.tt.mistral_transformer import TtTransformer
 from sentencepiece import SentencePieceProcessor
 from pathlib import Path
 from models.utility_functions import tt_to_torch_tensor
-import tt_lib
+import ttnn.deprecated
 import json
 from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
-from tt_lib.utils import pad_weight
+from ttnn.deprecated.utils import pad_weight
 
 
 class Tokenizer:
@@ -100,18 +100,18 @@ def cache_weights_in_weka(model_location_generator, device, dtype, reset_seeds):
         else:
             value = value.unsqueeze(0).unsqueeze(0)
         if value.shape[-2] % 32 == 0 and value.shape[-1] % 32 == 0:
-            value = tt_lib.tensor.Tensor(
+            value = ttnn.experimental.tensor.Tensor(
                 value.reshape(-1).tolist(),
                 value.shape,
                 weights_dtype,
-                tt_lib.tensor.Layout.ROW_MAJOR,
-            ).to(tt_lib.tensor.Layout.TILE)
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
+            ).to(ttnn.experimental.tensor.Layout.TILE)
         else:
             value = pad_weight(value)
-            value = tt_lib.tensor.Tensor(
+            value = ttnn.experimental.tensor.Tensor(
                 value.reshape(-1).tolist(),
                 value.shape,
                 weights_dtype,
-                tt_lib.tensor.Layout.ROW_MAJOR,
-            ).to(tt_lib.tensor.Layout.TILE)
-        tt_lib.tensor.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
+            ).to(ttnn.experimental.tensor.Layout.TILE)
+        ttnn.experimental.tensor.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)

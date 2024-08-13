@@ -4,7 +4,7 @@
 
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import pytest
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
@@ -37,7 +37,7 @@ def get_torch_tensors(shape):
 def get_tt_tensors(torch_input, torch_target, torch_weight, torch_divisor, torch_output, device):
     C = torch_input.shape[1]
 
-    npu_index_dtype = ttl.tensor.DataType.INT32
+    npu_index_dtype = ttnn.experimental.tensor.DataType.INT32
 
     tt_input = to_npu(torch_input, device)
     tt_target = to_npu(torch_target, device, npu_dtype=npu_index_dtype)

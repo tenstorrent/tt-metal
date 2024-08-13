@@ -7,7 +7,7 @@ import pytest
 import math
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
@@ -95,9 +95,11 @@ class TtDistributedLayernorm:
         ln_weights_str = f"ln.weight"
         ln_bias_str = f"ln.bias"
 
-        dtype = ttl.tensor.DataType.BFLOAT16
-        # dtype = ttl.tensor.DataType.BFLOAT8_B
-        dram_memcfg = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+        dtype = ttnn.experimental.tensor.DataType.BFLOAT16
+        # dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
+        dram_memcfg = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        )
         self.dram_memcfg = dram_memcfg
 
         num_devices = len(devices)
@@ -107,46 +109,46 @@ class TtDistributedLayernorm:
         for i in range(num_devices):
             ln_weights_path = tt_cache_path / f"{ln_weights_str}_{dtype.name}_{i}_{num_devices}.bin"
             if (ln_weights_path).exists():
-                ln_gamma_host = ttl.tensor.load_tensor(str(ln_weights_path))
+                ln_gamma_host = ttnn.experimental.tensor.load_tensor(str(ln_weights_path))
                 self.ln_gamma.append(ln_gamma_host.to(devices[i], dram_memcfg))
             else:
                 ln_gamma_host = torch2tt_tensor(
                     gammas[i],
                     None,
-                    tt_layout=ttl.tensor.Layout.ROW_MAJOR,
+                    tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
                     tt_memory_config=dram_memcfg,
                     tt_dtype=dtype,
                 )
 
                 self.ln_gamma.append(ln_gamma_host.to(devices[i], dram_memcfg))
 
-                ttl.tensor.dump_tensor(
+                ttnn.experimental.tensor.dump_tensor(
                     str(ln_weights_path),
                     ln_gamma_host,
                 )
 
             ln_bias_path = tt_cache_path / f"{ln_bias_str}_{dtype.name}_{i}_{num_devices}.bin"
             if (ln_bias_path).exists():
-                ln_beta_host = ttl.tensor.load_tensor(str(ln_bias_path))
+                ln_beta_host = ttnn.experimental.tensor.load_tensor(str(ln_bias_path))
                 self.ln_beta.append(ln_beta_host.to(devices[i], dram_memcfg))
             else:
                 ln_beta_host = torch2tt_tensor(
                     betas[i],
                     None,
-                    tt_layout=ttl.tensor.Layout.ROW_MAJOR,
+                    tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
                     tt_memory_config=dram_memcfg,
                     tt_dtype=dtype,
                 )
                 self.ln_beta.append(ln_beta_host.to(devices[i], dram_memcfg))
 
-                ttl.tensor.dump_tensor(
+                ttnn.experimental.tensor.dump_tensor(
                     str(ln_bias_path),
                     ln_beta_host,
                 )
 
         self.ln_eps = epsilon
 
-    def __call__(self, xs: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def __call__(self, xs: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         num_devices = len(xs)
 
         counts = []
@@ -160,8 +162,11 @@ class TtDistributedLayernorm:
             total_count += count_local
             counts.append(count_local)
 
-            meanx_local = ttl.tensor.reduce(
-                xs[i], ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
+            meanx_local = ttnn.experimental.tensor.reduce(
+                xs[i],
+                ttnn.experimental.tensor.ReduceOpMath.SUM,
+                ttnn.experimental.tensor.ReduceOpDim.W,
+                scaler=1.0 / counts[i],
             )
             meanxs.append(meanx_local)
 
@@ -169,8 +174,11 @@ class TtDistributedLayernorm:
         meanx2s = []
         for i in range(num_devices):
             x2_local = ttnn.pow(xs[i], 2)
-            meanx2_local = ttl.tensor.reduce(
-                x2_local, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
+            meanx2_local = ttnn.experimental.tensor.reduce(
+                x2_local,
+                ttnn.experimental.tensor.ReduceOpMath.SUM,
+                ttnn.experimental.tensor.ReduceOpDim.W,
+                scaler=1.0 / counts[i],
             )
             meanx2s.append(meanx2_local)
 
@@ -179,7 +187,7 @@ class TtDistributedLayernorm:
         for i in range(num_devices):
             meanxs[i] = ttnn.multiply(meanxs[i], counts[i])
         # AllGather
-        meanxs = ttl.tensor.all_gather(
+        meanxs = ttnn.experimental.tensor.all_gather(
             meanxs,
             dim=3,
             num_links=1,
@@ -190,8 +198,11 @@ class TtDistributedLayernorm:
         mean = []
         for i in range(num_devices):
             mean.append(
-                ttl.tensor.reduce(
-                    meanxs[i], ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / total_count
+                ttnn.experimental.tensor.reduce(
+                    meanxs[i],
+                    ttnn.experimental.tensor.ReduceOpMath.SUM,
+                    ttnn.experimental.tensor.ReduceOpDim.W,
+                    scaler=1.0 / total_count,
                 )
             )
 
@@ -199,7 +210,7 @@ class TtDistributedLayernorm:
         for i in range(num_devices):
             meanx2s[i] = ttnn.multiply(meanx2s[i], counts[i])
         # AllGather
-        meanx2s = ttl.tensor.all_gather(
+        meanx2s = ttnn.experimental.tensor.all_gather(
             meanx2s,
             dim=3,
             num_links=1,
@@ -210,8 +221,11 @@ class TtDistributedLayernorm:
         meanx2 = []
         for i in range(num_devices):
             meanx2.append(
-                ttl.tensor.reduce(
-                    meanx2s[i], ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / total_count
+                ttnn.experimental.tensor.reduce(
+                    meanx2s[i],
+                    ttnn.experimental.tensor.ReduceOpMath.SUM,
+                    ttnn.experimental.tensor.ReduceOpDim.W,
+                    scaler=1.0 / total_count,
                 )
             )
 
@@ -236,14 +250,22 @@ class TtDistributedLayernorm:
         nominators = []
         for i in range(num_devices):
             nominators.append(
-                ttl.tensor.bcast(xs[i], mean[i], math_op=ttl.tensor.BcastOpMath.SUB, dim=ttl.tensor.BcastOpDim.W)
+                ttnn.experimental.tensor.bcast(
+                    xs[i],
+                    mean[i],
+                    math_op=ttnn.experimental.tensor.BcastOpMath.SUB,
+                    dim=ttnn.experimental.tensor.BcastOpDim.W,
+                )
             )
 
         x_hat = []
         for i in range(num_devices):
             x_hat.append(
-                ttl.tensor.bcast(
-                    nominators[i], denominators[i], math_op=ttl.tensor.BcastOpMath.MUL, dim=ttl.tensor.BcastOpDim.W
+                ttnn.experimental.tensor.bcast(
+                    nominators[i],
+                    denominators[i],
+                    math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
+                    dim=ttnn.experimental.tensor.BcastOpDim.W,
                 )
             )
             nominators[i].deallocate(True)
@@ -251,12 +273,18 @@ class TtDistributedLayernorm:
 
         # Scale and shift: x_hat = self.gammas * x_hat + self.betas_torch
         for i in range(num_devices):
-            x_hat[i] = ttl.tensor.bcast(
-                x_hat[i], self.ln_gamma[i], math_op=ttl.tensor.BcastOpMath.MUL, dim=ttl.tensor.BcastOpDim.H
+            x_hat[i] = ttnn.experimental.tensor.bcast(
+                x_hat[i],
+                self.ln_gamma[i],
+                math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
+                dim=ttnn.experimental.tensor.BcastOpDim.H,
             )
         for i in range(num_devices):
-            x_hat[i] = ttl.tensor.bcast(
-                x_hat[i], self.ln_beta[i], math_op=ttl.tensor.BcastOpMath.ADD, dim=ttl.tensor.BcastOpDim.H
+            x_hat[i] = ttnn.experimental.tensor.bcast(
+                x_hat[i],
+                self.ln_beta[i],
+                math_op=ttnn.experimental.tensor.BcastOpMath.ADD,
+                dim=ttnn.experimental.tensor.BcastOpDim.H,
             )
 
         return x_hat
@@ -308,7 +336,7 @@ def run_test_DistributedLayernorm_inference(pcc, devices, model_location_generat
 
     tt_inputs = []
     for i in range(len(devices)):
-        tt_input_host = torch2tt_tensor(inputs_torch[i], None, tt_dtype=ttl.tensor.DataType.BFLOAT16)
+        tt_input_host = torch2tt_tensor(inputs_torch[i], None, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16)
         tt_inputs.append(tt_input_host.to(devices[i], model_config["DEFAULT_MEMCFG"]))
 
     # PyTorch basic layernorm output --------------------------------------------------------------------

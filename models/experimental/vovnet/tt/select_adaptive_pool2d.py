@@ -5,8 +5,8 @@
 import torch.nn as nn
 from typing import Union, Tuple
 
-import tt_lib
-import tt_lib.fallback_ops
+import ttnn.deprecated
+import ttnn.deprecated.fallback_ops
 
 
 class TtSelectAdaptivePool2d(nn.Module):
@@ -23,19 +23,17 @@ class TtSelectAdaptivePool2d(nn.Module):
         super(TtSelectAdaptivePool2d, self).__init__()
         self.device = device
         assert input_fmt in ("NCHW", "NHWC")
-        self.pool_type = (
-            pool_type or ""
-        )  # convert other falsy values to empty string for consistent TS typing
+        self.pool_type = pool_type or ""  # convert other falsy values to empty string for consistent TS typing
         if not pool_type:
             self.pool = nn.Identity()  # pass through
             self.flatten = nn.Flatten(1)
         else:
             assert input_fmt == "NCHW"
             if pool_type != "max":
-                self.pool = tt_lib.fallback_ops.AdaptiveAvgPool2d(output_size)
+                self.pool = ttnn.deprecated.fallback_ops.AdaptiveAvgPool2d(output_size)
         self.shape = (1, 1, 1, 1024)
 
     def forward(self, x):
         x = self.pool(x)
-        x = tt_lib.fallback_ops.reshape(x, *self.shape)
+        x = ttnn.deprecated.fallback_ops.reshape(x, *self.shape)
         return x

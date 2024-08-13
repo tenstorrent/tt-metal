@@ -6,7 +6,7 @@ import pytest
 import torch
 from functools import partial
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 from models.utility_functions import is_wormhole_b0
@@ -24,7 +24,9 @@ shape1 = [
     shape1,
 )
 @pytest.mark.parametrize("bcast_op_type", ("add", "sub", "mul"))
-@pytest.mark.parametrize("dtype", (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B))
+@pytest.mark.parametrize(
+    "dtype", (ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B)
+)
 def test_run_bcast_h_test(input_shapes, bcast_op_type, dtype, device, function_level_defaults):
     datagen_func = [
         generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
@@ -38,13 +40,15 @@ def test_run_bcast_h_test(input_shapes, bcast_op_type, dtype, device, function_l
         device,
         {
             "dtype": [dtype, dtype],
-            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            "layout": [ttnn.experimental.tensor.Layout.TILE, ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ]
             * 2,
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
         },
     )
@@ -62,7 +66,9 @@ if is_wormhole_b0():
 
 @pytest.mark.parametrize("input_shapes", shape2)
 @pytest.mark.parametrize("bcast_op_type", ("add", "sub", "mul"))
-@pytest.mark.parametrize("dtype", (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B))
+@pytest.mark.parametrize(
+    "dtype", (ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B)
+)
 def test_run_bcast_w_test(input_shapes, bcast_op_type, dtype, device, function_level_defaults):
     datagen_func = [
         generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
@@ -76,13 +82,15 @@ def test_run_bcast_w_test(input_shapes, bcast_op_type, dtype, device, function_l
         device,
         {
             "dtype": [dtype, dtype],
-            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            "layout": [ttnn.experimental.tensor.Layout.TILE, ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ]
             * 2,
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
         },
     )
@@ -100,7 +108,9 @@ if is_wormhole_b0():
 
 @pytest.mark.parametrize("input_shapes", shapes3)
 @pytest.mark.parametrize("bcast_op_type", ("add", "sub", "mul"))
-@pytest.mark.parametrize("dtype", (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B))
+@pytest.mark.parametrize(
+    "dtype", (ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B)
+)
 def test_run_bcast_hw_test(input_shapes, bcast_op_type, dtype, device, function_level_defaults):
     datagen_func = [
         generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
@@ -114,13 +124,15 @@ def test_run_bcast_hw_test(input_shapes, bcast_op_type, dtype, device, function_
         device,
         {
             "dtype": [dtype, dtype],
-            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            "layout": [ttnn.experimental.tensor.Layout.TILE, ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ]
             * 2,
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
         },
     )

@@ -9,7 +9,7 @@ import math
 import torch.nn.functional as F
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from models.experimental.llama2_70b.reference.llama.llama import Llama
 from models.experimental.llama2_70b.reference.llama.llama.model import repeat_kv
 from models.experimental.llama2_70b.tt.model_config import (
@@ -84,7 +84,7 @@ class TtLlamaSDPA(torch.nn.Module):
         # attn_mask = [seq_len, n_heads, batch,cache_len + seqlen]
 
         keys = ttnn.transpose(keys, -1, -2)  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
-        attn = tt_lib.operations.primary.transformers.group_attn_matmul(
+        attn = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
             xq,
             keys,
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
@@ -105,7 +105,7 @@ class TtLlamaSDPA(torch.nn.Module):
         scale = 1 / math.sqrt(self.head_dim)
         attn = self.scale_mask_softmax_decomposed(attn, scale, attn_mask)
 
-        attn_output = tt_lib.operations.primary.transformers.group_attn_matmul(
+        attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
             attn,
             values,
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
@@ -113,7 +113,7 @@ class TtLlamaSDPA(torch.nn.Module):
             # output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
         )  # seqlen, n_heads, batch, dhead
 
-        attn_output = tt_lib.tensor.nlp_concat_heads(
+        attn_output = ttnn.experimental.tensor.nlp_concat_heads(
             attn_output,
             # output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )  # seqlen, 1, batch, hidden_size
@@ -235,7 +235,7 @@ def run_test_LlamaSDPA(
     # attn_mask_shard_shape[-1] = max_seq_len
     # attn_mask_mem_config.shard_spec.shape = attn_mask_shard_shape
 
-    # attn_mask = tt_lib.tensor.interleaved_to_sharded(attn_mask, attn_mask_mem_config)
+    # attn_mask = ttnn.experimental.tensor.interleaved_to_sharded(attn_mask, attn_mask_mem_config)
     # tt_inp[3] = attn_mask
 
     tt_out = tt_model(*tt_inp)

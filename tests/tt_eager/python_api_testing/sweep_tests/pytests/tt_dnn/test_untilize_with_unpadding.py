@@ -11,12 +11,14 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, gene
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 
 def create_grid(x, y):
-    core_range = ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(x - 1, y - 1))
-    return ttl.tensor.CoreRangeSet({core_range})
+    core_range = ttnn.experimental.tensor.CoreRange(
+        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(x - 1, y - 1)
+    )
+    return ttnn.experimental.tensor.CoreRangeSet({core_range})
 
 
 params = [
@@ -32,13 +34,15 @@ params += [
     pytest.param(
         [[1, 1, 128, 7328]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.TILE],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+                )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
             ),
             "output_tensor_end": [0, 0, 119, 7299],
         },
@@ -50,19 +54,23 @@ params += [
     pytest.param(
         [[1, 1, 128, 32]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.TILE],
+            "dtype": [ttnn.experimental.tensor.DataType.BFLOAT16],
+            "layout": [ttnn.experimental.tensor.Layout.TILE],
             "input_mem_config": [
-                ttl.tensor.MemoryConfig(
-                    ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttl.tensor.BufferType.L1,
-                    ttl.tensor.ShardSpec(create_grid(1, 2), [64, 32], ttl.tensor.ShardOrientation.ROW_MAJOR, False),
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.experimental.tensor.BufferType.L1,
+                    ttnn.experimental.tensor.ShardSpec(
+                        create_grid(1, 2), [64, 32], ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+                    ),
                 )
             ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.BufferType.L1,
-                ttl.tensor.ShardSpec(create_grid(1, 2), [64, 16], ttl.tensor.ShardOrientation.ROW_MAJOR, False),
+            "output_mem_config": ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.experimental.tensor.BufferType.L1,
+                ttnn.experimental.tensor.ShardSpec(
+                    create_grid(1, 2), [64, 16], ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
+                ),
             ),
             "output_tensor_start": [0, 0, 0, 0],
             "output_tensor_end": [0, 0, 127, 15],

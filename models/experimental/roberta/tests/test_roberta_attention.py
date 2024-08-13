@@ -7,7 +7,7 @@ import torch
 from transformers import RobertaModel
 from loguru import logger
 
-import tt_lib
+import ttnn.deprecated
 
 from models.experimental.roberta.tt.roberta_attention import TtRobertaAttention
 from models.utility_functions import (
@@ -16,6 +16,7 @@ from models.utility_functions import (
     comp_pcc,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
+
 
 def test_roberta_attention_inference(device):
     torch.manual_seed(1234)

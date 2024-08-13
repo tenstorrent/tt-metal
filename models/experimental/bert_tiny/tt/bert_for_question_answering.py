@@ -4,7 +4,7 @@
 
 import torch.nn as nn
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from typing import Optional
 from models.experimental.bert_tiny.tt.bert import TtBert
 
@@ -21,8 +21,8 @@ class TtBertforqa(nn.Module):
         super().__init__()
         self.device = device
         self.config = config
-        self.output_mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+        self.output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
         )
 
         self.bert = TtBert(config=self.config, state_dict=state_dict, device=device, mem_config=self.output_mem_config)

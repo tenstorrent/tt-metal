@@ -6,9 +6,9 @@ from torch import nn
 from typing import Optional, Tuple, Union
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_attention import TtDeiTAttention
 from models.experimental.deit.tt.deit_intermediate import TtDeiTIntermediate
@@ -45,10 +45,12 @@ class TtDeiTLayer(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        hidden_states: ttnn.experimental.tensor.Tensor,
+        head_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Union[Tuple[tt_lib.tensor.Tensor, tt_lib.tensor.Tensor], Tuple[tt_lib.tensor.Tensor]]:
+    ) -> Union[
+        Tuple[ttnn.experimental.tensor.Tensor, ttnn.experimental.tensor.Tensor], Tuple[ttnn.experimental.tensor.Tensor]
+    ]:
         self_attention_outputs = self.attention(
             self.layernorm_before(hidden_states),  # in DeiT, layernorm is applied before self-attention
             head_mask,

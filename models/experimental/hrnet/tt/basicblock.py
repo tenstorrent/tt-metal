@@ -5,8 +5,8 @@
 import torch.nn as nn
 
 import ttnn
-import tt_lib
-from tt_lib.fallback_ops import fallback_ops
+import ttnn.deprecated
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm
 from models.experimental.hrnet.hrnet_utils import create_batchnorm
 

@@ -8,8 +8,8 @@ from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering
 import ttnn
-import tt_lib as ttl
-from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
+import ttnn.deprecated as ttl
+from ttnn.deprecated.utils import pad_activation, pad_weight, print_diff_argmax
 from models.experimental.bert.fused_ops.linear import Linear as TtLinear
 from models.utility_functions import comp_pcc, comp_allclose
 
@@ -47,23 +47,23 @@ class TtFeedForwardModel(torch.nn.Module):
         encoder0_ff1_bias_shape = encoder0_ff1_bias.shape
 
         encoder0_ff1_weight = (
-            ttl.tensor.Tensor(
+            ttnn.experimental.tensor.Tensor(
                 encoder0_ff1_weight.reshape(-1).tolist(),
                 encoder0_ff1_weight.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.DataType.BFLOAT16,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.experimental.tensor.Layout.TILE)
             .to(device)
         )
         encoder0_ff1_bias = (
-            ttl.tensor.Tensor(
+            ttnn.experimental.tensor.Tensor(
                 encoder0_ff1_bias.reshape(-1).tolist(),
                 encoder0_ff1_bias.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.DataType.BFLOAT16,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.experimental.tensor.Layout.TILE)
             .to(device)
         )
 
@@ -75,23 +75,23 @@ class TtFeedForwardModel(torch.nn.Module):
         encoder0_ff2_bias_shape = encoder0_ff2_bias.shape
 
         encoder0_ff2_weight = (
-            ttl.tensor.Tensor(
+            ttnn.experimental.tensor.Tensor(
                 encoder0_ff2_weight.reshape(-1).tolist(),
                 encoder0_ff2_weight.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.DataType.BFLOAT16,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.experimental.tensor.Layout.TILE)
             .to(device)
         )
         encoder0_ff2_bias = (
-            ttl.tensor.Tensor(
+            ttnn.experimental.tensor.Tensor(
                 encoder0_ff2_bias.reshape(-1).tolist(),
                 encoder0_ff2_bias.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.DataType.BFLOAT16,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.experimental.tensor.Layout.TILE)
             .to(device)
         )
 
@@ -145,16 +145,16 @@ def run_ffn_inference(device, model_version, batch, seq_len, pcc, model_location
     pytorch_out = pytorch_ffn_model(ffn_input)
 
     pad_ffn_input = pad_activation(ffn_input)
-    tilized_ffn_input = ttl.tensor.Tensor(
+    tilized_ffn_input = ttnn.experimental.tensor.Tensor(
         pad_ffn_input.reshape(-1).tolist(),
         pad_ffn_input.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
+    ).to(ttnn.experimental.tensor.Layout.TILE)
     tilized_ffn_input = tilized_ffn_input.to(device)
 
     tt_out = tt_ffn_model(tilized_ffn_input).cpu()
-    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_out = tt_out.to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")

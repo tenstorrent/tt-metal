@@ -2,4 +2,4 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_lib.fused_ops.add_and_norm import *
+from ttnn.deprecated.fused_ops.add_and_norm import *

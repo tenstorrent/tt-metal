@@ -5,7 +5,7 @@
 import pytest
 import torch
 import json
-import tt_lib
+import ttnn.deprecated
 from loguru import logger
 
 from transformers import T5Model

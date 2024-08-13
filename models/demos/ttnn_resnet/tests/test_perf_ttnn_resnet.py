@@ -8,7 +8,7 @@ import torchvision
 from transformers import AutoImageProcessor
 import pytest
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
@@ -37,10 +37,10 @@ except ModuleNotFoundError:
     use_signpost = False
 
 # TODO: Create ttnn apis for these
-ttnn.create_event = tt_lib.device.CreateEvent
-ttnn.wait_for_event = tt_lib.device.WaitForEvent
-ttnn.record_event = tt_lib.device.RecordEvent
-ttnn.dump_device_profiler = tt_lib.device.DumpDeviceProfiler
+ttnn.create_event = ttnn.deprecated.device.CreateEvent
+ttnn.wait_for_event = ttnn.deprecated.device.WaitForEvent
+ttnn.record_event = ttnn.deprecated.device.RecordEvent
+ttnn.dump_device_profiler = ttnn.deprecated.device.DumpDeviceProfiler
 
 model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,

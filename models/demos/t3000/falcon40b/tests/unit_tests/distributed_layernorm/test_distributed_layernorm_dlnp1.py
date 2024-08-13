@@ -8,7 +8,7 @@ import math
 from loguru import logger
 from torch import nn
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
@@ -53,7 +53,7 @@ class TtDistributedLayernormDLNP1:
     def __init__(self):
         super().__init__()
 
-    def __call__(self, xs: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def __call__(self, xs: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         num_devices = len(xs)
 
         counts = []
@@ -67,8 +67,11 @@ class TtDistributedLayernormDLNP1:
             total_count += count_local
             counts.append(count_local)
 
-            meanx_local = ttl.tensor.reduce(
-                xs[i], ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
+            meanx_local = ttnn.experimental.tensor.reduce(
+                xs[i],
+                ttnn.experimental.tensor.ReduceOpMath.SUM,
+                ttnn.experimental.tensor.ReduceOpDim.W,
+                scaler=1.0 / counts[i],
             )
             meanxs.append(meanx_local)
 
@@ -76,8 +79,11 @@ class TtDistributedLayernormDLNP1:
         meanx2s = []
         for i in range(num_devices):
             x2_local = ttnn.pow(xs[i], 2)
-            meanx2_local = ttl.tensor.reduce(
-                x2_local, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
+            meanx2_local = ttnn.experimental.tensor.reduce(
+                x2_local,
+                ttnn.experimental.tensor.ReduceOpMath.SUM,
+                ttnn.experimental.tensor.ReduceOpDim.W,
+                scaler=1.0 / counts[i],
             )
             meanx2s.append(meanx2_local)
 
@@ -107,11 +113,13 @@ def run_test_DistributedLayernorm_inference(pcc, devices, model_location_generat
     input_torch = (torch.rand(input_shape) * 2) - 1
     inputs_torch = torch.chunk(input_torch, len(devices), -1)
 
-    dram_memcfg = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    dram_memcfg = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+    )
 
     tt_inputs = []
     for i in range(len(devices)):
-        tt_input_host = torch2tt_tensor(inputs_torch[i], None, tt_dtype=ttl.tensor.DataType.BFLOAT16)
+        tt_input_host = torch2tt_tensor(inputs_torch[i], None, tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16)
         tt_inputs.append(tt_input_host.to(devices[i], dram_memcfg))
 
     # PyTorch distributed layernorm output --------------------------------------------------------------------

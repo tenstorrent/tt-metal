@@ -8,10 +8,10 @@ import torch.nn as nn
 
 from typing import Optional, Tuple
 
-import tt_lib
+import ttnn.deprecated
 import ttnn
 
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.helper_funcs import Linear as TTLinear
 from models.utility_functions import (
     tt2torch_tensor,
@@ -29,8 +29,8 @@ class TtRobertaSelfAttention(nn.Module):
                 f"heads ({config.num_attention_heads})"
             )
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
 
         self.num_attention_heads = config.num_attention_heads
@@ -75,7 +75,7 @@ class TtRobertaSelfAttention(nn.Module):
             self.value_bias,
         )
 
-    def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def transpose_for_scores(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         # x must be 4d originaly
         # 1 is appended to the beggining
         # so create tensor shape by ommiting the first dimension
@@ -90,25 +90,25 @@ class TtRobertaSelfAttention(nn.Module):
     def linear(self, x, weight, bias):
         weight = ttnn.transpose(weight, -2, -1)
         x = ttnn.matmul(x, weight, memory_config=self.mem_config)
-        x = tt_lib.tensor.bcast(
+        x = ttnn.experimental.tensor.bcast(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
             output_mem_config=self.mem_config,
         )
         return x
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_value: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        hidden_states: ttnn.experimental.tensor.Tensor,
+        attention_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
+        head_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
+        encoder_hidden_states: Optional[ttnn.experimental.tensor.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
+        past_key_value: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
         output_attentions: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.experimental.tensor.Tensor]:
         mixed_query_layer = self.query_linear(hidden_states)
 
         # If this is instantiated as a cross-attention module, the keys
@@ -199,11 +199,11 @@ class TtRobertaSelfAttention(nn.Module):
                 torch_attention_scores = torch_attention_scores + torch_attention_mask
                 attention_scores = torch2tt_tensor(torch_attention_scores, self.device)
             else:
-                tt_lib.tensor.bcast(
+                ttnn.experimental.tensor.bcast(
                     attention_scores,
                     attention_mask,
-                    tt_lib.tensor.BcastOpMath.ADD,
-                    tt_lib.tensor.BcastOpDim.H,
+                    ttnn.experimental.tensor.BcastOpMath.ADD,
+                    ttnn.experimental.tensor.BcastOpDim.H,
                     self.mem_config,
                 )
         # Normalize the attention scores to probabilities.

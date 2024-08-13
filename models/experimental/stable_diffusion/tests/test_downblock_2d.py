@@ -10,7 +10,7 @@ from diffusers import StableDiffusionPipeline
 from loguru import logger
 
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import pytest
 
 from models.utility_functions import (

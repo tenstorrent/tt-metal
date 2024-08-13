@@ -5,7 +5,7 @@
 import torch
 from typing import List, Tuple, Union, Optional
 from .conversion_wrapper import convert_tt_tensors_wrapper
-from tt_lib import tensor as ttl_tensor
+from ttnn.deprecated import tensor as ttl_tensor
 
 # python 3.10 has types.EllipsisType
 EllipsisType = type(Ellipsis)
@@ -14,7 +14,7 @@ EllipsisType = type(Ellipsis)
 @convert_tt_tensors_wrapper
 def full(size: List[int], fill_value: float) -> ttl_tensor.Tensor:
     """
-    Creates a ``tt_lib.tensor.Tensor`` of shape ``size`` filled with ``fill_value`` value.
+    Creates a ``ttnn.experimental.tensor.Tensor`` of shape ``size`` filled with ``fill_value`` value.
 
     +------------+-----------------------------------------+-------------+-----------------+----------+
     | Argument   | Description                             | Data type   | Valid range     | Required |
@@ -30,7 +30,7 @@ def full(size: List[int], fill_value: float) -> ttl_tensor.Tensor:
 @convert_tt_tensors_wrapper
 def tensor_slice(input: ttl_tensor.Tensor, slices: List[Union[slice, EllipsisType]]) -> ttl_tensor.Tensor:
     """
-    Creates a ``tt_lib.tensor.Tensor`` from ``input`` using ``slices``.
+    Creates a ``ttnn.experimental.tensor.Tensor`` from ``input`` using ``slices``.
     To use ``...``, pass in ``...`` or ``Ellipsis``.
     To use ``:``, pass in ``slice(None)``.
 
@@ -56,7 +56,7 @@ def reshape(
     output_on_device: Optional[bool] = True,
 ) -> ttl_tensor.Tensor:
     """
-    Returns a new ``tt_lib.tensor.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
+    Returns a new ``ttnn.experimental.tensor.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
 
     +------------------+-----------------------------------------------+-------------+-----------------+----------+
     | Argument         | Description                                   | Data type   | Valid range     | Required |
@@ -87,7 +87,7 @@ def permute(
     output_on_device: Optional[bool] = True,
 ) -> ttl_tensor.Tensor:
     """
-    Returns a new ``tt_lib.tensor.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
+    Returns a new ``ttnn.experimental.tensor.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
 
     +------------------+-----------------------------------------------+-------------+-----------------+----------+
     | Argument         | Description                                   | Data type   | Valid range     | Required |
@@ -107,7 +107,7 @@ def permute(
 @convert_tt_tensors_wrapper
 def chunk(input: ttl_tensor.Tensor, chunks: int, dim: int = 0) -> List[ttl_tensor.Tensor]:
     """
-    Attempts to split a ``tt_lib.tensor.Tensor`` into the specified number of chunks. Each chunk is a new copy of part of the input tensor.
+    Attempts to split a ``ttnn.experimental.tensor.Tensor`` into the specified number of chunks. Each chunk is a new copy of part of the input tensor.
 
     If the tensor size along the given dimension ``dim`` is divisible by ``chunks``, all returned chunks will be the same size.
 

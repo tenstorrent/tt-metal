@@ -6,9 +6,9 @@ import torch.nn as nn
 import ttnn
 from typing import Optional
 
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.experimental.stable_diffusion.sd_utils import make_linear
 
 
@@ -36,8 +36,8 @@ class TtGEGLU(nn.Module):
 
         weights = state_dict[f"{base_address}.proj.weight"]
         bias = state_dict[f"{base_address}.proj.bias"]
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        self.out_mem_config_l1 = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
 
         self.proj = make_linear(
@@ -48,10 +48,10 @@ class TtGEGLU(nn.Module):
             device=device,
         )
 
-    def gelu(self, gate: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def gelu(self, gate: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         return ttnn.gelu(gate)
 
-    def forward(self, hidden_states: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         hidden_states = self.proj(hidden_states)
         # hidden_states, gate = fallback_ops.chunk(hidden_states, 2, -1)
         hidden_states, gate = ttnn.split(hidden_states, 2, 3)
@@ -91,8 +91,8 @@ class TtFeedForward(nn.Module):
         assert activation_fn == "geglu", "except GEGLU, other activation functions are not supported."
         inner_dim = int(dim * mult)
         dim_out = dim_out if dim_out is not None else dim
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        self.out_mem_config_l1 = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
 
         if activation_fn == "geglu":
@@ -119,6 +119,6 @@ class TtFeedForward(nn.Module):
             device=device,
         )
 
-    def forward(self, hidden_states: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         hidden_states = self.act_fn(hidden_states)
         return self.linear(hidden_states)

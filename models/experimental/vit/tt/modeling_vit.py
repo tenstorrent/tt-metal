@@ -28,10 +28,10 @@ from typing import Union, Optional, Tuple, Dict
 from transformers import ViTForImageClassification
 
 import ttnn
-import tt_lib
-import tt_lib.fallback_ops as fallback_ops
+import ttnn.deprecated
+import ttnn.deprecated.fallback_ops as fallback_ops
 
-from tt_lib import tensor
+from ttnn.deprecated import tensor
 from models.experimental.vit.tt.configuration_vit import ViTConfig
 from models.experimental.vit.tt.activations import ACT2FN
 from models.experimental.vit.vit_utils import make_address, make_linear
@@ -42,14 +42,14 @@ from models.utility_functions import (
 )
 
 
-tt_tensor = tt_lib.tensor.Tensor
+tt_tensor = ttnn.experimental.tensor.Tensor
 
 
 class TtViTOutput(nn.Module):
     def __init__(self, config: ViTConfig, base_address, state_dict, device) -> None:
         super().__init__()
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.out_mem_config_l1 = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
 
         self.dense = make_linear(
@@ -62,7 +62,9 @@ class TtViTOutput(nn.Module):
             self.out_mem_config_l1,
         )
 
-    def forward(self, hidden_states: tt_lib.tensor.Tensor, input_tensor: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(
+        self, hidden_states: ttnn.experimental.tensor.Tensor, input_tensor: ttnn.experimental.tensor.Tensor
+    ) -> ttnn.experimental.tensor.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = ttnn.add(hidden_states, input_tensor, memory_config=self.out_mem_config_l1)
         return hidden_states
@@ -72,8 +74,8 @@ class TtViTSelfAttention(nn.Module):
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
         self.device = device
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.out_mem_config_l1 = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
 
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
@@ -123,7 +125,7 @@ class TtViTSelfAttention(nn.Module):
             self.num_attention_heads,
             self.attention_head_size,
         )
-        x = tt_lib.fallback_ops.reshape(x, *new_x_shape)
+        x = ttnn.deprecated.fallback_ops.reshape(x, *new_x_shape)
         return ttnn.permute(x, (0, 2, 1, 3))
 
     def forward(
@@ -142,16 +144,16 @@ class TtViTSelfAttention(nn.Module):
         key_layer_T = ttnn.transpose(key_layer, -2, -1, self.out_mem_config_l1)
         attention_scores = ttnn.matmul(query_layer, key_layer_T, memory_config=self.out_mem_config_l1)
 
-        attention_scores = tt_lib.tensor.bcast(
+        attention_scores = ttnn.experimental.tensor.bcast(
             attention_scores,
             self.recip_sqrt_attention_head_size_tensor,
-            tt_lib.tensor.BcastOpMath.MUL,
-            tt_lib.tensor.BcastOpDim.HW,
+            ttnn.experimental.tensor.BcastOpMath.MUL,
+            ttnn.experimental.tensor.BcastOpDim.HW,
             self.out_mem_config_l1,
         )
 
         # Normalize the attention scores to probabilities.
-        attention_probs = tt_lib.fallback_ops.softmax(attention_scores, dim=-1)
+        attention_probs = ttnn.deprecated.fallback_ops.softmax(attention_scores, dim=-1)
 
         # Mask heads if we want to
         if head_mask is not None:
@@ -176,8 +178,8 @@ class TtViTSelfOutput(nn.Module):
 
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.out_mem_config_l1 = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
 
         self.dense = make_linear(
@@ -219,8 +221,8 @@ class TtViTAttention(nn.Module):
 class TtViTIntermediate(nn.Module):
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.out_mem_config_l1 = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
 
         self.dense = make_linear(
@@ -249,8 +251,8 @@ class TtViTLayer(nn.Module):
 
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.out_mem_config_l1 = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
@@ -597,8 +599,8 @@ class TtViTForImageClassification(nn.Module):
         super().__init__()
         self.config = config
         self.num_labels = config.num_labels
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.out_mem_config_l1 = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
 
         self.vit = TtViTModel(

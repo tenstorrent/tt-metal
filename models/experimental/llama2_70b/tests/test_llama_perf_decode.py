@@ -9,7 +9,7 @@ from loguru import logger
 from pathlib import Path
 import torch
 from torch import nn
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
 
@@ -190,7 +190,7 @@ def run_test_LlamaModel_end_to_end(
 
     for i in device_mesh.get_device_ids():
         device = device_mesh.get_device(i)
-        tt_lib.device.Synchronize(device)
+        ttnn.deprecated.device.Synchronize(device)
 
     profiler.end("TT_llama_model_setup")
 

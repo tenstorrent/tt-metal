@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn.deprecated
 from models.experimental.nanogpt.nanogpt_utils import get_tt_cache_path, store_weights
 from pathlib import Path
 import os
@@ -26,7 +26,7 @@ from models.utility_functions import (
 
 @pytest.mark.parametrize(
     "dtype",
-    (tt_lib.tensor.DataType.BFLOAT16,),
+    (ttnn.experimental.tensor.DataType.BFLOAT16,),
 )
 @pytest.mark.parametrize(
     "pcc",

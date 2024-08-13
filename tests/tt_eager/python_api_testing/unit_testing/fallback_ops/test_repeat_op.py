@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttl
-import tt_lib.fallback_ops
+import ttnn.deprecated as ttl
+import ttnn.deprecated.fallback_ops
 from models.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
@@ -26,18 +26,18 @@ def test_repeat_fallback(input_shape, sizes, on_device, device):
     pt_out = x.repeat(sizes)
 
     # Test on host RM
-    t0 = ttl.tensor.Tensor(
+    t0 = ttnn.experimental.tensor.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.ROW_MAJOR,
     )
     if on_device:
         t0 = t0.to(device)
 
     t1 = ttl.fallback_ops.repeat(t0, sizes)
 
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    output = t1.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.debug(comp_out)

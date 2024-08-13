@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import tt_lib
+import ttnn.deprecated
 import pytest
 from loguru import logger
 import json
@@ -18,7 +18,7 @@ from models.utility_functions import (
 
 @pytest.mark.parametrize(
     "dtype",
-    (tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B),
+    (ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B),
 )
 @pytest.mark.parametrize(
     "pcc",
@@ -36,8 +36,8 @@ def test_mistral_feed_forward_inference(pcc, model_location_generator, device, d
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = FeedForward(args=model_args)
     reference_model.load_state_dict(state_dict)
-    output_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     )
     tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
 

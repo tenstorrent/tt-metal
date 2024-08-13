@@ -5,7 +5,7 @@
 import torch
 from torch.nn import functional as F
 
-import tt_lib
+import ttnn.deprecated
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_model as bloom_model
 from typing import Optional, Tuple, Union

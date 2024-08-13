@@ -6,8 +6,8 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
-import tt_lib as ttl
+import ttnn.deprecated
+import ttnn.deprecated as ttl
 import ttnn
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
@@ -15,9 +15,13 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 FF_DIM = int(32 * 1024 / 8)
 USE_ACC = True
 
-DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
-WIDTH_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1)
+DRAM_MEMCFG = ttnn.experimental.tensor.MemoryConfig(
+    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+)
+BFP8_DTYPE = ttnn.experimental.tensor.DataType.BFLOAT8_B
+WIDTH_SHARDED_MEMCFG = ttnn.experimental.tensor.MemoryConfig(
+    ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttnn.experimental.tensor.BufferType.L1
+)
 
 
 class TtFF1:
@@ -78,15 +82,15 @@ def run_test_ff1(
         mcast_in0=True,
     )
 
-    inp_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    inp_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.experimental.tensor.BufferType.L1,
+        ttnn.experimental.tensor.ShardSpec(
+            ttnn.experimental.tensor.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(*start_idx),
-                        ttl.tensor.CoreCoord(*end_idx),
+                    ttnn.experimental.tensor.CoreRange(
+                        ttnn.experimental.tensor.CoreCoord(*start_idx),
+                        ttnn.experimental.tensor.CoreCoord(*end_idx),
                     ),
                 }
             ),
@@ -94,7 +98,7 @@ def run_test_ff1(
                 32,
                 int(8 * 1024 / n_cores),
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )

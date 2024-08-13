@@ -6,7 +6,7 @@ import pytest
 import torch
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from models.utility_functions import untilize, comp_pcc
 from models.utility_functions import is_grayskull

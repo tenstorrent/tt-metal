@@ -6,7 +6,7 @@ import torch
 
 from loguru import logger
 
-import tt_lib
+import ttnn.deprecated
 
 
 from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
@@ -36,9 +36,7 @@ def test_bottleneck_module(model_location_generator, device):
     model_config_path = str(data_path / "yolov3.yaml")
     weights_loc = str(model_path / "yolov3.pt")
 
-    reference_model = DetectMultiBackend(
-        weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False
-    )
+    reference_model = DetectMultiBackend(weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False)
 
     state_dict = reference_model.state_dict()
 

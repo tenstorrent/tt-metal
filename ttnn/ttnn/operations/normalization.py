@@ -7,8 +7,8 @@ from typing import Optional, Union
 
 import ttnn
 
-import tt_lib as ttl
-from tt_lib.utils import find_closest_largest_divisor
+import ttnn.deprecated as ttl
+from ttnn.deprecated.utils import find_closest_largest_divisor
 import math
 
 

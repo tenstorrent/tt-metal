@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -42,22 +42,22 @@ def run_test_concat_head(devices, n_local_heads, padded_local_heads, head_dim, b
     # Prepare input
     concat_head_input = torch.rand(1, batch, padded_local_heads, head_dim)
 
-    shard_grid = ttl.tensor.CoreRangeSet({num_to_corerange(batch)})
-    SCORES_BATCHED_MM_OUTPUT_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
+    shard_grid = ttnn.experimental.tensor.CoreRangeSet({num_to_corerange(batch)})
+    SCORES_BATCHED_MM_OUTPUT_MEMCFG = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.experimental.tensor.BufferType.L1,
+        ttnn.experimental.tensor.ShardSpec(
             shard_grid,
             [
                 padded_local_heads,  # Each core has padded_local_heads
                 head_dim,  # head dim
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    WIDTH_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1
+    WIDTH_SHARDED_MEMCFG = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttnn.experimental.tensor.BufferType.L1
     )
 
     # Prepare tt input
@@ -65,7 +65,7 @@ def run_test_concat_head(devices, n_local_heads, padded_local_heads, head_dim, b
         device=devices[0], mem_config=SCORES_BATCHED_MM_OUTPUT_MEMCFG
     )
 
-    concat_head_output = ttl.tensor.nlp_concat_heads_decode(
+    concat_head_output = ttnn.experimental.tensor.nlp_concat_heads_decode(
         concat_head_input_tt,
         num_heads=n_local_heads,
     )  # seqlen, 1, batch, hidden_size

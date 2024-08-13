@@ -5,9 +5,9 @@
 
 import torch
 
-import tt_lib
+import ttnn.deprecated
 import ttnn
-from tt_lib.utils import pad_weight
+from ttnn.deprecated.utils import pad_weight
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
 
 
@@ -76,7 +76,7 @@ def feed_forward(
             )
             return output_plus_bias
 
-    def feed_forward_(activation: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def feed_forward_(activation: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         ff1_output_plus_bias_act = op9_MM_bias_gelu(activation, ff1_weighta, ff1_biasa)
 
         # Don't deallocate activations here since it is used by more ops in encoder
@@ -96,18 +96,18 @@ class TtFeedForwardModel:
         encoder_ff1_str = f"{layer_name}.intermediate.dense"
         encoder_ff2_str = f"{layer_name}.output.dense"
         if tt_cache_path is not None:
-            encoder0_ff1_weight = tt_lib.tensor.load_tensor(
+            encoder0_ff1_weight = ttnn.experimental.tensor.load_tensor(
                 str(tt_cache_path / f"{encoder_ff1_str}.weight_{model_config['OP9_FF1_MM_WEIGHTS_DTYPE'].name}.bin")
             ).to(device, model_config["OP9_FF1_MM_WEIGHTS_MEMCFG"])
-            encoder0_ff1_bias = tt_lib.tensor.load_tensor(
+            encoder0_ff1_bias = ttnn.experimental.tensor.load_tensor(
                 str(tt_cache_path / f"{encoder_ff1_str}.bias_{model_config['OP9_FF1_MM_BIAS_DTYPE'].name}.bin")
             ).to(device, model_config["OP9_FF1_MM_BIAS_MEMCFG"])
             encoder0_ff1_weight_shape = encoder0_ff1_weight.get_legacy_shape()
 
-            encoder0_ff2_weight = tt_lib.tensor.load_tensor(
+            encoder0_ff2_weight = ttnn.experimental.tensor.load_tensor(
                 str(tt_cache_path / f"{encoder_ff2_str}.weight_{model_config['OP10_FF2_MM_WEIGHTS_DTYPE'].name}.bin")
             ).to(device, model_config["OP10_FF2_MM_WEIGHTS_MEMCFG"])
-            encoder0_ff2_bias = tt_lib.tensor.load_tensor(
+            encoder0_ff2_bias = ttnn.experimental.tensor.load_tensor(
                 str(tt_cache_path / f"{encoder_ff2_str}.bias_{model_config['OP10_FF2_MM_BIAS_DTYPE'].name}.bin")
             ).to(device, model_config["OP10_FF2_MM_BIAS_MEMCFG"])
         else:
@@ -124,23 +124,23 @@ class TtFeedForwardModel:
             encoder0_ff1_bias_shape = encoder0_ff1_bias.shape
 
             encoder0_ff1_weight = (
-                tt_lib.tensor.Tensor(
+                ttnn.experimental.tensor.Tensor(
                     encoder0_ff1_weight.reshape(-1).tolist(),
                     encoder0_ff1_weight.shape,
                     model_config["OP9_FF1_MM_WEIGHTS_DTYPE"],
-                    tt_lib.tensor.Layout.ROW_MAJOR,
+                    ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 )
-                .to(tt_lib.tensor.Layout.TILE)
+                .to(ttnn.experimental.tensor.Layout.TILE)
                 .to(device, model_config["OP9_FF1_MM_WEIGHTS_MEMCFG"])
             )
             encoder0_ff1_bias = (
-                tt_lib.tensor.Tensor(
+                ttnn.experimental.tensor.Tensor(
                     encoder0_ff1_bias.reshape(-1).tolist(),
                     encoder0_ff1_bias.shape,
                     model_config["OP9_FF1_MM_BIAS_DTYPE"],
-                    tt_lib.tensor.Layout.ROW_MAJOR,
+                    ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 )
-                .to(tt_lib.tensor.Layout.TILE)
+                .to(ttnn.experimental.tensor.Layout.TILE)
                 .to(device, model_config["OP9_FF1_MM_BIAS_MEMCFG"])
             )
 
@@ -158,23 +158,23 @@ class TtFeedForwardModel:
             encoder0_ff2_bias_shape = encoder0_ff2_bias.shape
 
             encoder0_ff2_weight = (
-                tt_lib.tensor.Tensor(
+                ttnn.experimental.tensor.Tensor(
                     encoder0_ff2_weight.reshape(-1).tolist(),
                     encoder0_ff2_weight.shape,
                     model_config["OP10_FF2_MM_WEIGHTS_DTYPE"],
-                    tt_lib.tensor.Layout.ROW_MAJOR,
+                    ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 )
-                .to(tt_lib.tensor.Layout.TILE)
+                .to(ttnn.experimental.tensor.Layout.TILE)
                 .to(device, model_config["OP10_FF2_MM_WEIGHTS_MEMCFG"])
             )
             encoder0_ff2_bias = (
-                tt_lib.tensor.Tensor(
+                ttnn.experimental.tensor.Tensor(
                     encoder0_ff2_bias.reshape(-1).tolist(),
                     encoder0_ff2_bias.shape,
                     model_config["OP10_FF2_MM_BIAS_DTYPE"],
-                    tt_lib.tensor.Layout.ROW_MAJOR,
+                    ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 )
-                .to(tt_lib.tensor.Layout.TILE)
+                .to(ttnn.experimental.tensor.Layout.TILE)
                 .to(device, model_config["OP10_FF2_MM_BIAS_MEMCFG"])
             )
 
@@ -188,5 +188,5 @@ class TtFeedForwardModel:
             model_config,
         )
 
-    def __call__(self, activation: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def __call__(self, activation: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         return self.ffn(activation)

@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 from typing import Union, List
 import ttnn

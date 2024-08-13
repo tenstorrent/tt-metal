@@ -68,7 +68,7 @@ def _setup_env(site_pkgs_ttnn):
 
     # jit build needs linker script under $TT_METAL_HOME/build/hw/toolchain/,
     # so when TT_METAL_HOME is site-packags,
-    # it needs to softlink build/ from site-packages/tt_lib
+    # it needs to softlink build/ from site-packages/ttnn.deprecated
     build_soft_link = site_pkgs_ttnn / ".." / "build"
     build_soft_link_src = site_pkgs_ttnn / "build"
     if not os.path.exists(build_soft_link) and os.path.exists(build_soft_link_src):

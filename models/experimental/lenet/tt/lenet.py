@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import ttnn.deprecated
 import ttnn
 import torch
 import torch.nn as nn
@@ -10,7 +10,7 @@ import torch.nn as nn
 
 from models.experimental.lenet.lenet_utils import load_torch_lenet
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 
 
 class TtLeNet5(nn.Module):
@@ -74,42 +74,42 @@ class TtLeNet5(nn.Module):
         self.fc_weights = torch2tt_tensor(
             fc_weights.reshape(list((1, 1) + fc_weights.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         fc_bias = state_dict[f"fc.bias"]
         self.fc_bias = torch2tt_tensor(
             fc_bias.reshape(list((1, 1, 1) + fc_bias.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
 
         fc1_weights = state_dict[f"fc1.weight"]
         self.fc1_weights = torch2tt_tensor(
             fc1_weights.reshape(list((1, 1) + fc1_weights.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         fc1_bias = state_dict[f"fc1.bias"]
         self.fc1_bias = torch2tt_tensor(
             fc1_bias.reshape(list((1, 1, 1) + fc1_bias.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
 
         fc2_weights = state_dict[f"fc2.weight"]
         self.fc2_weights = torch2tt_tensor(
             fc2_weights.reshape(list((1, 1) + fc2_weights.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
         fc2_bias = state_dict[f"fc2.bias"]
         self.fc2_bias = torch2tt_tensor(
             fc2_bias.reshape(list((1, 1, 1) + fc2_bias.shape)),
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         out = self.conv1(x)  # HOST (fallback)
 
         out = self.batch_norm1(out)  # HOST (fallback)
@@ -135,11 +135,11 @@ class TtLeNet5(nn.Module):
         # fc
         weight_T = ttnn.transpose(self.fc_weights, -2, -1)
         output = ttnn.matmul(out, weight_T)
-        out = tt_lib.tensor.bcast(
+        out = ttnn.experimental.tensor.bcast(
             output,
             self.fc_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
         )
         # relu 2
         out = self.relu2(out)
@@ -147,11 +147,11 @@ class TtLeNet5(nn.Module):
         # fc1
         weight_T = ttnn.transpose(self.fc1_weights, -2, -1)
         output = ttnn.matmul(out, weight_T)
-        out = tt_lib.tensor.bcast(
+        out = ttnn.experimental.tensor.bcast(
             output,
             self.fc1_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
         )
 
         # relu 2
@@ -160,11 +160,11 @@ class TtLeNet5(nn.Module):
         # fc2
         weight_T = ttnn.transpose(self.fc2_weights, -2, -1)
         output = ttnn.matmul(out, weight_T)
-        out = tt_lib.tensor.bcast(
+        out = ttnn.experimental.tensor.bcast(
             output,
             self.fc2_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
         )
 
         return out

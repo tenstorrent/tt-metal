@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range
 
@@ -22,7 +22,9 @@ def test_bw_hardsigmoid(input_shapes, device):
     in_data = torch.Tensor(size=input_shapes).uniform_()
     in_data.requires_grad = True
     input_tensor = (
-        tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        ttnn.experimental.tensor.Tensor(in_data, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
     )
 
     tt_output_tensor_on_device = ttnn.hardsigmoid_bw(grad_tensor, input_tensor)

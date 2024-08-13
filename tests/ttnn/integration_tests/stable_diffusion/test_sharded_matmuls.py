@@ -7,7 +7,7 @@ import math
 import pytest
 import ttnn
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     skip_for_grayskull,
@@ -1618,20 +1618,22 @@ def test_matmul(
     if bias:
         in_2_torch = torch.randn(in_2_shape)
 
-    dram_interleaved_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+    dram_interleaved_memory_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
     )
-    l1_interleaved_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    l1_interleaved_memory_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
 
-    block_sharded_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttl.tensor.BufferType.L1
+    block_sharded_memory_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
-    height_sharded_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttl.tensor.BufferType.L1
+    height_sharded_memory_config = ttnn.experimental.tensor.MemoryConfig(
+        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.experimental.tensor.BufferType.L1,
     )
 
     # compare output to regular case
@@ -1659,8 +1661,8 @@ def test_matmul(
             tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
         )
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,

@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Union, Optional
-from tt_lib import tensor
+from ttnn.deprecated import tensor
 from ttnn import matmul
 import ttnn
+
 
 def Linear(
     in_features: int,

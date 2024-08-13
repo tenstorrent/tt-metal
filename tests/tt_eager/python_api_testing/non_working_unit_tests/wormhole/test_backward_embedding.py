@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn.deprecated
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
@@ -35,17 +35,21 @@ def test_embedding_bw(input_shapes, device):
     grad_data = torch.randn(grad_shape, requires_grad=True)
 
     grad_tensor = (
-        tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
+        ttnn.experimental.tensor.Tensor(grad_data, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
+        .to(device)
     )
 
-    input_tensor = tt_lib.tensor.Tensor(input_index, tt_lib.tensor.DataType.UINT32).to(device)
+    input_tensor = ttnn.experimental.tensor.Tensor(input_index, ttnn.experimental.tensor.DataType.UINT32).to(device)
 
     weights_tensor = (
-        tt_lib.tensor.Tensor(weights, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
+        ttnn.experimental.tensor.Tensor(weights, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
+        .to(device)
     )
 
-    tt_output_tensor_on_device = tt_lib.tensor.embedding_bw(grad_tensor, input_tensor, weights_tensor)
-    tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_output_tensor_on_device = ttnn.experimental.tensor.embedding_bw(grad_tensor, input_tensor, weights_tensor)
+    tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
 
     weights.retain_grad()
 

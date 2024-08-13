@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_lib import tensor
+from ttnn.deprecated import tensor
 from models.experimental.bert.fused_ops.layernorm import Layernorm
 
 

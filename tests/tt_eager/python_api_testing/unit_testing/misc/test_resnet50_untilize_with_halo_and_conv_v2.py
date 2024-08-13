@@ -6,7 +6,7 @@ from loguru import logger
 
 import torch
 import pytest
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.demos.resnet.tt.metalResnetBlock50 import (
@@ -440,16 +440,18 @@ hardcoded_conv_blocking_and_parallelization_config = {
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B],
     ids=["weights_BFLOAT16", "weights_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B],
     ids=["activations_BFLOAT16", "activations_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
-    "math_fidelity", [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.LoFi], ids=["HiFi4", "LoFi"]
+    "math_fidelity",
+    [ttnn.experimental.tensor.MathFidelity.HiFi4, ttnn.experimental.tensor.MathFidelity.LoFi],
+    ids=["HiFi4", "LoFi"],
 )
 def test_resnet50_conv(
     device,
@@ -469,22 +471,26 @@ def test_resnet50_conv(
     pad_h,
     pad_w,
 ):
-    if math_fidelity != tt_lib.tensor.MathFidelity.LoFi:
+    if math_fidelity != ttnn.experimental.tensor.MathFidelity.LoFi:
         pytest.skip(
             "By default, only run tests with LoFi math for pipelines. For local unit testing, enable the other variants by uncommenting the skip here!"
         )
 
     if (
-        activations_dtype == tt_lib.tensor.DataType.BFLOAT16
+        activations_dtype == ttnn.experimental.tensor.DataType.BFLOAT16
         and N == 20
         and (
-            K == 64 or (stride_h == 2 and (K == 256 or (K == 128 and weights_dtype == tt_lib.tensor.DataType.BFLOAT16)))
+            K == 64
+            or (
+                stride_h == 2
+                and (K == 256 or (K == 128 and weights_dtype == ttnn.experimental.tensor.DataType.BFLOAT16))
+            )
         )
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
-    interleaved_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    interleaved_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     )
 
     for i in range(1):  # increase num of iterations to test op caching
@@ -580,19 +586,19 @@ def test_resnet50_conv(
             math_fidelity=math_fidelity,
         )
 
-        conv_input_on_device = tt_lib.tensor.Tensor(
+        conv_input_on_device = ttnn.experimental.tensor.Tensor(
             conv_input_pyt_nhwc.reshape(-1).tolist(),
             conv_input_pyt_nhwc.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         ).to(device, interleaved_mem_config)
 
         output_on_device = conv(conv_input_on_device)
 
         # convert tiled output to RM
-        assert output_on_device.get_layout() == tt_lib.tensor.Layout.TILE
+        assert output_on_device.get_layout() == ttnn.experimental.tensor.Layout.TILE
         output_on_device = format_tensor(
-            output_on_device, tt_lib.tensor.Layout.ROW_MAJOR, device, interleaved_mem_config
+            output_on_device, ttnn.experimental.tensor.Layout.ROW_MAJOR, device, interleaved_mem_config
         )
         output_on_device = output_on_device.reshape(
             conv_output_shape[0],
@@ -603,7 +609,7 @@ def test_resnet50_conv(
 
         # Copy to host
         out = output_on_device.cpu()
-        assert out.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR
+        assert out.get_layout() == ttnn.experimental.tensor.Layout.ROW_MAJOR
 
         out_result = out.to_torch()
         # NHWC to NCHW
@@ -627,17 +633,21 @@ def test_resnet50_conv(
         is_1d_systolic = act_c_num_blocks == 1
         reader_patterns_cache = {}
 
-        tt_tensor_conv_weight = tt_lib.tensor.Tensor(
+        tt_tensor_conv_weight = ttnn.experimental.tensor.Tensor(
             conv_weight_pyt.reshape(-1).tolist(),
             conv_weight_pyt.shape,
-            weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            weights_dtype
+            if weights_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B
+            else ttnn.experimental.tensor.DataType.FLOAT32,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
-        tt_tensor_conv_bias = tt_lib.tensor.Tensor(
+        tt_tensor_conv_bias = ttnn.experimental.tensor.Tensor(
             conv_bias_pyt.reshape(-1).tolist(),
             conv_bias_pyt.shape,
-            weights_dtype if weights_dtype != tt_lib.tensor.DataType.BFLOAT8_B else tt_lib.tensor.DataType.FLOAT32,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            weights_dtype
+            if weights_dtype != ttnn.experimental.tensor.DataType.BFLOAT8_B
+            else ttnn.experimental.tensor.DataType.FLOAT32,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
 
         conv = TTPyCompositeConv(
@@ -658,11 +668,11 @@ def test_resnet50_conv(
             padded_input_channels=16 if C == 16 else None,
         )
 
-        conv_input = tt_lib.tensor.Tensor(
+        conv_input = ttnn.experimental.tensor.Tensor(
             conv_input_pyt_nhwc.reshape(-1).tolist(),
             conv_input_pyt_nhwc.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
 
         # Convert activation RM to tile layout
@@ -674,7 +684,7 @@ def test_resnet50_conv(
         ).to(device, interleaved_mem_config)
         if C >= 32:
             conv_input_on_device = format_tensor(
-                conv_input_on_device, tt_lib.tensor.Layout.TILE, device, interleaved_mem_config
+                conv_input_on_device, ttnn.experimental.tensor.Layout.TILE, device, interleaved_mem_config
             )
 
         input_size_to_shard_evenly = _nearest_y(
@@ -683,38 +693,38 @@ def test_resnet50_conv(
         untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
         # Convert interleaved to sharded
         if act_c_num_blocks > 1:  # 2D conv
-            conv_input_on_device = tt_lib.tensor.interleaved_to_sharded(
+            conv_input_on_device = ttnn.experimental.tensor.interleaved_to_sharded(
                 conv_input_on_device,
                 grid_size,
                 [
                     untilize_with_halo_input_shard_height,
                     (int)(C / act_c_num_blocks),
                 ],  # act_block_w_datums may include reads of multiple pixels in window
-                tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                tt_lib.tensor.ShardOrientation.COL_MAJOR,
+                ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.experimental.tensor.ShardOrientation.COL_MAJOR,
             )
         else:
-            conv_input_on_device = tt_lib.tensor.interleaved_to_sharded(
+            conv_input_on_device = ttnn.experimental.tensor.interleaved_to_sharded(
                 conv_input_on_device,
                 grid_size,
                 [
                     untilize_with_halo_input_shard_height,
                     C,
                 ],  # act_block_w_datums may include reads of multiple pixels in window
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
             )
 
         # Optimized conv v2
         output_on_device = conv(conv_input_on_device)
 
         # Convert sharded output to tiled interleaved
-        output_on_device = tt_lib.tensor.sharded_to_interleaved(output_on_device, interleaved_mem_config)
+        output_on_device = ttnn.experimental.tensor.sharded_to_interleaved(output_on_device, interleaved_mem_config)
 
         # convert tiled output to RM
-        assert output_on_device.get_layout() == tt_lib.tensor.Layout.TILE
+        assert output_on_device.get_layout() == ttnn.experimental.tensor.Layout.TILE
         output_on_device = format_tensor(
-            output_on_device, tt_lib.tensor.Layout.ROW_MAJOR, device, interleaved_mem_config
+            output_on_device, ttnn.experimental.tensor.Layout.ROW_MAJOR, device, interleaved_mem_config
         )
         output_on_device = output_on_device.reshape(
             conv_output_shape[0],
@@ -725,7 +735,7 @@ def test_resnet50_conv(
 
         # Copy to host and compare against pytorch
         out = output_on_device.cpu()
-        assert out.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR
+        assert out.get_layout() == ttnn.experimental.tensor.Layout.ROW_MAJOR
 
         out_result = out.to_torch()
         # NHWC to NCHW
@@ -750,7 +760,7 @@ def test_resnet50_conv(
         assert passing_pcc
 
         # Compare baseline to output (should be identical)
-        if activations_dtype == tt_lib.tensor.DataType.BFLOAT8_B and (K == 256 or K == 512):
+        if activations_dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B and (K == 256 or K == 512):
             pytest.xfail("PCC of output baseline is slightly lower than with new conv. DEBUG!")
         else:
             ## NOTE: the "old conv" is too old now. We get better PCC with current version.

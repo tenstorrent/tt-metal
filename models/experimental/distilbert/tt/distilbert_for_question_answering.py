@@ -11,7 +11,7 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
-import tt_lib
+import ttnn.deprecated
 from dataclasses import dataclass
 from models.experimental.distilbert.tt.distilbert_model import TtDistilBertModel
 from models.helper_funcs import Linear as TtLinear
@@ -19,11 +19,11 @@ from models.helper_funcs import Linear as TtLinear
 
 @dataclass
 class TtQuestionAnsweringModelOutput:
-    loss: Optional[tt_lib.tensor.Tensor] = None
-    start_logits: tt_lib.tensor.Tensor = None
-    end_logits: tt_lib.tensor.Tensor = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    loss: Optional[ttnn.experimental.tensor.Tensor] = None
+    start_logits: ttnn.experimental.tensor.Tensor = None
+    end_logits: ttnn.experimental.tensor.Tensor = None
+    hidden_states: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None
 
 
 class TtDistilBertForQuestionAnswering(nn.Module):
@@ -51,16 +51,16 @@ class TtDistilBertForQuestionAnswering(nn.Module):
 
     def forward(
         self,
-        input_ids: Optional[tt_lib.tensor.Tensor] = None,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        inputs_embeds: Optional[tt_lib.tensor.Tensor] = None,
-        start_positions: Optional[tt_lib.tensor.Tensor] = None,
-        end_positions: Optional[tt_lib.tensor.Tensor] = None,
+        input_ids: Optional[ttnn.experimental.tensor.Tensor] = None,
+        attention_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
+        head_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
+        inputs_embeds: Optional[ttnn.experimental.tensor.Tensor] = None,
+        start_positions: Optional[ttnn.experimental.tensor.Tensor] = None,
+        end_positions: Optional[ttnn.experimental.tensor.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[TtQuestionAnsweringModelOutput, Tuple[tt_lib.tensor.Tensor, ...]]:
+    ) -> Union[TtQuestionAnsweringModelOutput, Tuple[ttnn.experimental.tensor.Tensor, ...]]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         distilbert_output = self.distilbert(

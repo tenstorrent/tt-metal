@@ -7,9 +7,9 @@ import math
 import torch
 
 from typing import Optional
-import tt_lib
+import ttnn.deprecated
 import ttnn
-from tt_lib.utils import pad_weight
+from ttnn.deprecated.utils import pad_weight
 from models.utility_functions import torch2tt_tensor
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
 
@@ -129,7 +129,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         if num_heads == 1:
             return x
         else:
-            retval = tt_lib.tensor.nlp_concat_heads(
+            retval = ttnn.experimental.tensor.nlp_concat_heads(
                 x,
                 output_mem_config=model_config["OP6_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"],
             )
@@ -140,10 +140,12 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         if reserve_split_heads_shape is not None:
             temp = ttnn.empty(
                 reserve_split_heads_shape,
-                tt_lib.tensor.DataType.BFLOAT16,
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                ttnn.experimental.tensor.DataType.BFLOAT16,
+                ttnn.experimental.tensor.Layout.ROW_MAJOR,
                 activation.device(),
-                tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
+                ttnn.experimental.tensor.MemoryConfig(
+                    ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+                ),
             )
         qkv = op1_qkv_fused(activation, qkv_weight, qkv_bias)
         if reserve_split_heads_shape is not None:
@@ -182,13 +184,13 @@ class TtMultiHeadAttentionModel:
             interleaved_str = ""
             if "QKV_INTERLEAVED" in model_config:
                 interleaved_str = f"interleaved_{model_config['QKV_INTERLEAVED']}_"
-            qkv_weight = tt_lib.tensor.load_tensor(
+            qkv_weight = ttnn.experimental.tensor.load_tensor(
                 str(
                     tt_cache_path
                     / f"{layer_name}.qkv.weight_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
                 )
             ).to(device, model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"])
-            qkv_bias = tt_lib.tensor.load_tensor(
+            qkv_bias = ttnn.experimental.tensor.load_tensor(
                 str(
                     tt_cache_path
                     / f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.bin"
@@ -227,7 +229,7 @@ class TtMultiHeadAttentionModel:
             qkv_weight = torch2tt_tensor(
                 qkv_weight,
                 device,
-                tt_layout=tt_lib.tensor.Layout.TILE,
+                tt_layout=ttnn.experimental.tensor.Layout.TILE,
                 tt_memory_config=model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"],
                 tt_dtype=model_config["OP1_FUSED_QKV_MM_WEIGHTS_DTYPE"],
             )
@@ -235,7 +237,7 @@ class TtMultiHeadAttentionModel:
             qkv_bias = torch2tt_tensor(
                 qkv_bias,
                 device,
-                tt_layout=tt_lib.tensor.Layout.TILE,
+                tt_layout=ttnn.experimental.tensor.Layout.TILE,
                 tt_memory_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
                 tt_dtype=model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
             )
@@ -253,7 +255,9 @@ class TtMultiHeadAttentionModel:
         )
 
     def __call__(
-        self, activation: tt_lib.tensor.Tensor, attention_mask: Optional[tt_lib.tensor.Tensor] = None
-    ) -> tt_lib.tensor.Tensor:
+        self,
+        activation: ttnn.experimental.tensor.Tensor,
+        attention_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
+    ) -> ttnn.experimental.tensor.Tensor:
         result = self.mha(activation, attention_mask)
         return result

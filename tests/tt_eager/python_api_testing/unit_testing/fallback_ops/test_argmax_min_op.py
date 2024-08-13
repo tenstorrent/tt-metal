@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttl
-import tt_lib.fallback_ops
+import ttnn.deprecated as ttl
+import ttnn.deprecated.fallback_ops
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
@@ -32,9 +32,9 @@ class TestArgMaxMinOps:
         if keepdim == False:
             x = x.unsqueeze(0)
         # Test on host RM
-        t0 = ttl.tensor.Tensor(
+        t0 = ttnn.experimental.tensor.Tensor(
             x,
-            ttl.tensor.DataType.UINT32,
+            ttnn.experimental.tensor.DataType.UINT32,
         )
         if on_device:
             t0 = t0.to(device)
@@ -45,7 +45,7 @@ class TestArgMaxMinOps:
             t1 = ttl.fallback_ops.torch_argmin(t0, dim, keepdim)
             pt_out = torch.argmin(x, dim, keepdim)
 
-        output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        output = t1.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
         comp_pass, comp_out = comparison_funcs.comp_equal(pt_out, output)
         logger.debug(comp_out)
         assert comp_pass

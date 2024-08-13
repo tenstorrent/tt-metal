@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaModel
 
-import tt_lib
+import ttnn.deprecated
 import pytest
 
 from models.experimental.roberta.tt.roberta_model import TtRobertaModel

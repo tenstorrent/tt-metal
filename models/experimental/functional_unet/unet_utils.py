@@ -5,9 +5,9 @@
 import torch
 import ttnn
 
-import tt_lib as ttl
-import tt_lib.fallback_ops
-from tt_lib import profiler
+import ttnn.deprecated as ttl
+import ttnn.deprecated.fallback_ops
+from ttnn.deprecated import profiler
 
 from loguru import logger
 from ttnn.model_preprocessing import preprocess_model, preprocess_conv2d, fold_batch_norm2d_into_conv2d

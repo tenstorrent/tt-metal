@@ -7,12 +7,12 @@ import torch
 
 import ttnn
 
-import tt_lib as ttl
-from tt_lib import tensor as tt
+import ttnn.deprecated as ttl
+from ttnn.deprecated import tensor as tt
 
 from models.utility_functions import skip_for_wormhole_b0, torch2tt_tensor, tt2torch_tensor
 
-from tt_lib.utils import (
+from ttnn.deprecated.utils import (
     tilize_to_list,
     tilize,
     untilize,
@@ -123,14 +123,14 @@ def pad_and_fold_with_permute_and_reshape_on_device(
     activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     # reshape
     n, w, c, h = activation_pyt_padded.shape
-    activation_pyt_padded = ttl.tensor.reshape(
+    activation_pyt_padded = ttnn.experimental.tensor.reshape(
         activation_pyt_padded, n, w // stride_w, c * stride_w, h, output_mem_config=ttnn.L1_MEMORY_CONFIG
     )
     # transpose
     activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
     # reshape
     n, w, h, c = activation_pyt_padded.shape
-    activation_pyt_padded = ttl.tensor.reshape(
+    activation_pyt_padded = ttnn.experimental.tensor.reshape(
         activation_pyt_padded, n, w, h // stride_h, c * stride_h, output_mem_config=ttnn.L1_MEMORY_CONFIG
     )
     # transpose
@@ -174,7 +174,7 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor_padded, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    tt_output_tensor = ttl.tensor.fold(
+    tt_output_tensor = ttnn.experimental.tensor.fold(
         tt_input_tensor,
         stride_h,
         stride_w,

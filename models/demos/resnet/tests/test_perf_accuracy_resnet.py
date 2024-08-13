@@ -8,7 +8,7 @@ from transformers import AutoImageProcessor
 import pytest
 import numpy as np
 from loguru import logger
-import tt_lib
+import ttnn.deprecated
 
 from models.utility_functions import (
     enable_persistent_kernel_cache,
@@ -23,9 +23,9 @@ from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 from datasets import load_dataset
 
 model_config = {
-    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.HiFi2,
-    "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
-    "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
+    "MATH_FIDELITY": ttnn.experimental.tensor.MathFidelity.HiFi2,
+    "WEIGHTS_DTYPE": ttnn.experimental.tensor.DataType.BFLOAT8_B,
+    "ACTIVATIONS_DTYPE": ttnn.experimental.tensor.DataType.BFLOAT8_B,
 }
 
 

@@ -4,7 +4,7 @@
 
 import torch
 import json
-import tt_lib
+import ttnn.deprecated
 import pytest
 from loguru import logger
 

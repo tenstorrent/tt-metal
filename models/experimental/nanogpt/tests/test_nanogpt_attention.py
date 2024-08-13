@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn.deprecated
 import os
 from pathlib import Path
 
@@ -27,7 +27,7 @@ from models.utility_functions import (
 @pytest.mark.skip(reason="Test is hanging gs, see issue #7534")
 @pytest.mark.parametrize(
     "dtype",
-    (tt_lib.tensor.DataType.BFLOAT16,),
+    (ttnn.experimental.tensor.DataType.BFLOAT16,),
 )
 @pytest.mark.parametrize(
     "pcc",

@@ -13,7 +13,7 @@ from models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )
-import tt_lib
+import ttnn.deprecated
 from models.experimental.swin.tt.swin_stage import TtSwinStage
 from models.experimental.swin.tt.swin_patch_merging import TtSwinPatchMerging
 from transformers import SwinModel

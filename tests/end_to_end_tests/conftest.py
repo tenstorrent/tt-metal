@@ -8,15 +8,15 @@ import pytest
 import torch
 import numpy as np
 
-import tt_lib
+import ttnn.deprecated
 
 
 @pytest.fixture(scope="function")
 def first_grayskull_device():
-    device = tt_lib.device.CreateDevice(0)
+    device = ttnn.deprecated.device.CreateDevice(0)
     yield device
 
-    tt_lib.device.CloseDevice(device)
+    ttnn.deprecated.device.CloseDevice(device)
 
 
 @pytest.fixture(scope="function")

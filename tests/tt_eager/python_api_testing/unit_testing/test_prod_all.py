@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 from functools import partial
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc
 
@@ -22,14 +22,18 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
 
 def get_tensors(input_shape, output_shape, device):
     torch.manual_seed(2023)
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
+    npu_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
     cpu_dtype = torch.bfloat16
-    npu_layout = ttl.tensor.Layout.TILE
+    npu_layout = ttnn.experimental.tensor.Layout.TILE
 
     torch_input = torch.randint(1, 5, input_shape, dtype=cpu_dtype)
     torch_output = torch.randint(1, 5, output_shape, dtype=cpu_dtype)
-    tt_input = ttl.tensor.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-    tt_output = ttl.tensor.Tensor(torch_output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    tt_input = (
+        ttnn.experimental.tensor.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    )
+    tt_output = (
+        ttnn.experimental.tensor.Tensor(torch_output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    )
 
     return tt_input, tt_output, torch_input
 
@@ -52,7 +56,7 @@ def test_prod(shapes, device):
 
     torch_output = torch.prod(torch_input)
 
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.experimental.tensor.Layout.ROW_MAJOR
     tt_output_cpu = (
         ttnn.prod(tt_input, all_dimensions=True).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
     )

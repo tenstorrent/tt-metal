@@ -9,7 +9,7 @@ from loguru import logger
 from transformers import WhisperModel, WhisperForAudioClassification
 
 
-import tt_lib
+import ttnn.deprecated
 import pytest
 
 from models.experimental.whisper.tt.whisper_encoder_layer import (
@@ -46,7 +46,9 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
 
     hidden_state_input_tensor = torch.rand(1, 1500, embed_dim)
     attention_mask_input_tensor = None
-    ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device, tt_lib.tensor.Layout.ROW_MAJOR)
+    ttm_tensor_hidden_state = torch2tt_tensor(
+        hidden_state_input_tensor, device, ttnn.experimental.tensor.Layout.ROW_MAJOR
+    )
     ttm_tensor_attention_mask = None
     layer_head_mask_input_tensor = None
 
@@ -61,7 +63,7 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
 
     # layer_head_mask_input_tensor has size [6] and is equal to number of encoder_attention_heads
     # Stays torch tensor and then is used in attention mechanism approprietly for now
-    # Because can't convert 1d tensor of size [6] to tt_lib
+    # Because can't convert 1d tensor of size [6] to ttnn.deprecated
 
     tt_whisper_encoder_layer = TtWhisperEncoderLayer(
         base_address=base_address,

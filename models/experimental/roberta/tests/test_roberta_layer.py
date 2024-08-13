@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 from transformers import RobertaModel
 
-import tt_lib
+import ttnn.deprecated
 import pytest
 
 from models.experimental.roberta.tt.roberta_layer import TtRobertaLayer

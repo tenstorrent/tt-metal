@@ -9,7 +9,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
 )
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from loguru import logger
 import pytest
@@ -23,14 +23,14 @@ def is_watcher_enabled():
 def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     torch.manual_seed(1234)
 
-    program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+    program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
     )
 
-    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-        math_fidelity=tt_lib.tensor.MathFidelity.HiFi2,
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
@@ -48,14 +48,14 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
     logger.debug(f"V: {V.shape}")
     logger.debug(f"attn_mask: {attn_mask.shape}")
 
-    tt_Q = tt_lib.tensor.Tensor(Q, dtype).to(tt_lib.tensor.Layout.TILE).to(device)
-    tt_K = tt_lib.tensor.Tensor(K, dtype).to(tt_lib.tensor.Layout.TILE).to(device)
-    tt_V = tt_lib.tensor.Tensor(V, dtype).to(tt_lib.tensor.Layout.TILE).to(device)
-    tt_attn_mask = tt_lib.tensor.Tensor(attn_mask, dtype).to(tt_lib.tensor.Layout.TILE).to(device)
-    tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention(
+    tt_Q = ttnn.experimental.tensor.Tensor(Q, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device)
+    tt_K = ttnn.experimental.tensor.Tensor(K, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device)
+    tt_V = ttnn.experimental.tensor.Tensor(V, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device)
+    tt_attn_mask = ttnn.experimental.tensor.Tensor(attn_mask, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device)
+    tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
         tt_Q, tt_K, tt_V, tt_attn_mask, is_causal=True, program_config=program_config
     )
-    tt_back = tt_back.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_back = tt_back.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
 
     gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, attn_mask, is_causal=False)
 
@@ -68,7 +68,9 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
-    "dtype", [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16], ids=["bfp8", "bf16"]
+    "dtype",
+    [ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT16],
+    ids=["bfp8", "bf16"],
 )
 @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
@@ -87,7 +89,7 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
-    tt_lib.device.DisablePersistentKernelCache()
+    ttnn.deprecated.device.DisablePersistentKernelCache()
     run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
 
 
@@ -95,7 +97,9 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
-    "dtype", [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16], ids=["bfp8", "bf16"]
+    "dtype",
+    [ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT16],
+    ids=["bfp8", "bf16"],
 )
 @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
@@ -162,8 +166,8 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype):
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
 
-    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-        math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
@@ -190,7 +194,7 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype):
         scale = d**-0.5
 
         k_chunk_size = get_chunk_size(start_idx)
-        program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+        program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
             q_chunk_size=padded_num_heads,
             k_chunk_size=k_chunk_size,
@@ -218,7 +222,7 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype):
             attn_mask, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
         )
 
-        tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention(
+        tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
             tt_Q,
             tt_K,
             tt_V,
@@ -254,7 +258,7 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype):
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16],
+    [ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT16],
     ids=["bfp8", "bf16"],
 )
 @pytest.mark.parametrize(
@@ -266,7 +270,7 @@ def run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype):
     ),
 )
 def test_sdpa_decode(device, b, nh, nkv, s, d, dtype):
-    tt_lib.device.DisablePersistentKernelCache()
+    ttnn.deprecated.device.DisablePersistentKernelCache()
     run_test_sdpa_decode(device, b, nh, nkv, s, d, dtype)
 
 
@@ -274,8 +278,8 @@ def run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype):
     padded_num_heads = nearest_pow_2(nearest_n(nh, n=32))
     torch.manual_seed(1234)
 
-    compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-        math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
@@ -300,7 +304,7 @@ def run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype):
     scale = d**-0.5
 
     k_chunk_size = get_chunk_size(start_idx)
-    program_config = tt_lib.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+    program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=padded_num_heads,
         k_chunk_size=k_chunk_size,
@@ -326,7 +330,7 @@ def run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype):
         attn_mask, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg
     )
 
-    tt_back = tt_lib.operations.primary.transformers.scaled_dot_product_attention(
+    tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
         tt_Q,
         tt_K,
         tt_V,
@@ -360,7 +364,7 @@ def run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype):
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B, tt_lib.tensor.DataType.BFLOAT16],
+    [ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT16],
     ids=["bfp8", "bf16"],
 )
 @pytest.mark.parametrize(
@@ -368,7 +372,7 @@ def run_test_sdpa_decode_single_iter(device, b, nh, nkv, s, d, dtype):
     ([16, 8, 1, 8192, 128],),  # Llama2-70B
 )
 def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_cache):
-    tt_lib.device.DisablePersistentKernelCache()
+    ttnn.deprecated.device.DisablePersistentKernelCache()
 
     dummy_tensors = []
     for _ in range(2):

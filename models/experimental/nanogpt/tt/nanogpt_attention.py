@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import tt_lib
+import ttnn.deprecated
 import ttnn
 import math
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.helper_funcs import Linear
 
 from models.utility_functions import (
@@ -25,11 +25,11 @@ class TtCausalSelfAttention(nn.Module):
 
         self.device = device
         # Get the weights
-        self.tt_weight_c_attn = tt_lib.tensor.load_tensor(
+        self.tt_weight_c_attn = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + base_address + ".c_attn.weight" + str(dtype) + ".bin"
         )
 
-        self.tt_weight_c_proj = tt_lib.tensor.load_tensor(
+        self.tt_weight_c_proj = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + base_address + ".c_proj.weight" + str(dtype) + ".bin"
         )
 
@@ -37,11 +37,11 @@ class TtCausalSelfAttention(nn.Module):
         self.tt_weight_c_proj = ttnn.transpose(self.tt_weight_c_proj, -2, -1)
 
         # Load biases
-        self.tt_bias_c_attn = tt_lib.tensor.load_tensor(
+        self.tt_bias_c_attn = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + base_address + ".c_attn.bias" + str(dtype) + ".bin"
         )
 
-        self.tt_bias_c_proj = tt_lib.tensor.load_tensor(
+        self.tt_bias_c_proj = ttnn.experimental.tensor.load_tensor(
             tt_cache_path + base_address + ".c_proj.bias" + str(dtype) + ".bin"
         )
 
@@ -71,7 +71,7 @@ class TtCausalSelfAttention(nn.Module):
     def const_tensor(self, shape, value):
         return ttnn.full(shape, value)
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         (
             _,
             B,
@@ -88,16 +88,16 @@ class TtCausalSelfAttention(nn.Module):
         q, k, v = pt_x1.split(self.n_embd, dim=2)
 
         k = torch_to_tt_tensor_rm(k, self.device)
-        k = tt_lib.tensor.reshape(k, B, T, self.n_head, C // self.n_head)
+        k = ttnn.experimental.tensor.reshape(k, B, T, self.n_head, C // self.n_head)
         k = ttnn.transpose(k, 1, 2)
 
         q = torch_to_tt_tensor_rm(q, self.device)
-        q = tt_lib.tensor.reshape(q, B, T, self.n_head, C // self.n_head)
+        q = ttnn.experimental.tensor.reshape(q, B, T, self.n_head, C // self.n_head)
         q = ttnn.transpose(q, 1, 2)
 
         v = torch_to_tt_tensor_rm(v, self.device)
 
-        v = tt_lib.tensor.reshape(v, B, T, self.n_head, C // self.n_head)
+        v = ttnn.experimental.tensor.reshape(v, B, T, self.n_head, C // self.n_head)
         v = ttnn.transpose(v, 1, 2)
 
         # manual implementation of attention
@@ -118,7 +118,7 @@ class TtCausalSelfAttention(nn.Module):
         tt_y = ttnn.matmul(tt_att, v)
 
         tt_y = ttnn.transpose(tt_y, 1, -2)
-        tt_y = tt_lib.tensor.reshape(tt_y, 1, B, T, C)
+        tt_y = ttnn.experimental.tensor.reshape(tt_y, 1, B, T, C)
 
         # output projection
         x2 = self.c_proj(tt_y)

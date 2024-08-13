@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn.deprecated
 from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.reference_optimizer import (
     lamb_optimizer_kernel,
@@ -31,19 +31,31 @@ def test_lamb_kernel(input_shapes, beta1, beta2, step_size, eps, weight_decay, d
     exp_avg_data = torch.Tensor(size=input_shapes).uniform_(1, 100)
     exp_avg_sq_data = torch.Tensor(size=input_shapes).uniform_(1, 100)
 
-    param = tt_lib.tensor.Tensor(param_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+    param = (
+        ttnn.experimental.tensor.Tensor(param_data, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
+    )
 
-    grad = tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+    grad = (
+        ttnn.experimental.tensor.Tensor(grad_data, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
+    )
 
     exp_avg = (
-        tt_lib.tensor.Tensor(exp_avg_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        ttnn.experimental.tensor.Tensor(exp_avg_data, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
     )
 
     exp_avg_sq = (
-        tt_lib.tensor.Tensor(exp_avg_sq_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        ttnn.experimental.tensor.Tensor(exp_avg_sq_data, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
     )
 
-    tt_output_tensor_on_device = tt_lib.tensor.lamb_optimizer(
+    tt_output_tensor_on_device = ttnn.experimental.tensor.lamb_optimizer(
         param,
         grad,
         exp_avg,
@@ -54,9 +66,9 @@ def test_lamb_kernel(input_shapes, beta1, beta2, step_size, eps, weight_decay, d
         eps=eps,
         weight_decay=weight_decay,
     )
-    tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
-    tt_output_tensor_b = tt_output_tensor_on_device[1].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
-    tt_output_tensor_c = tt_output_tensor_on_device[2].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_output_tensor_b = tt_output_tensor_on_device[1].cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_output_tensor_c = tt_output_tensor_on_device[2].cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
 
     exp_avg_out, exp_avg_sq_out, param = lamb_optimizer_kernel.lamb_kernel(
         param_data,

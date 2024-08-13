@@ -7,7 +7,7 @@ import pytest
 import torch
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor, skip_for_grayskull
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
@@ -67,8 +67,8 @@ def referencefp32(x, n_devices, is_rmsnorm):
 
 
 def ln_pre_allgather_op(xs, n_devices, is_rmsnorm, out_dtpe):
-    kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,  # Highest fidelity
+    kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -96,7 +96,7 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
 
     torch.manual_seed(42)
 
-    if input_dtype == ttl.tensor.DataType.FLOAT32:
+    if input_dtype == ttnn.experimental.tensor.DataType.FLOAT32:
         canon_inp = torch.randn(inp_shape)
     else:
         canon_inp = torch.randn(inp_shape).bfloat16()
@@ -111,7 +111,9 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
     # out_torchfp32 = referencefp32(inp_chunked, n_devices, is_rmsnorm)
     # out_torchfp32 = torch.concat(out_torchfp32, -1)
 
-    dram_memcfg = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    dram_memcfg = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+    )
 
     tt_inp = []
     for d in range(n_devices):
@@ -120,7 +122,7 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
                 inp_chunked[d],
                 tt_dtype=input_dtype,
                 tt_device=device,
-                tt_layout=ttl.tensor.Layout.TILE,
+                tt_layout=ttnn.experimental.tensor.Layout.TILE,
                 tt_memory_config=dram_memcfg,
             )
         )
@@ -198,12 +200,12 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
 @skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "input_dtype",
-    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
+    (ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B),
     ids=["BFLOAT16", "BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "output_dtype",
-    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
+    (ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B),
     ids=["BFLOAT16", "BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
@@ -235,12 +237,12 @@ def test_layernorm_part_1_with_program_cache(
 @skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "input_dtype",
-    [ttl.tensor.DataType.BFLOAT16],
+    [ttnn.experimental.tensor.DataType.BFLOAT16],
     ids=["BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "output_dtype",
-    [ttl.tensor.DataType.BFLOAT16],
+    [ttnn.experimental.tensor.DataType.BFLOAT16],
     ids=["BFLOAT16"],
 )
 @pytest.mark.parametrize(
@@ -263,7 +265,9 @@ def test_layernorm_part_1_with_program_cache2(
 ):
     dummy_tensors = []
 
-    dram_memcfg = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    dram_memcfg = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+    )
 
     for i in range(2):
         if i > 0:
@@ -272,7 +276,7 @@ def test_layernorm_part_1_with_program_cache2(
                     torch.randn(inp_shape),
                     tt_dtype=input_dtype,
                     tt_device=device,
-                    tt_layout=ttl.tensor.Layout.TILE,
+                    tt_layout=ttnn.experimental.tensor.Layout.TILE,
                     tt_memory_config=dram_memcfg,
                 )
             )

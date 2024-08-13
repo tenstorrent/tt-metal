@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 
 
 @pytest.mark.parametrize(
@@ -31,9 +31,13 @@ def test_sum_for_dim_hw(device, use_program_cache, shape_dim):
     value = x.sum(dim=dim, keepdim=True)[0, 0, 0, 0]
     # print(f"x.sum = {value}")
 
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-    tt_npu = ttl.tensor.sum(dev_x, dim)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    dev_x = (
+        ttnn.experimental.tensor.Tensor(x, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
+    )
+    tt_npu = ttnn.experimental.tensor.sum(dev_x, dim)
+    tt_dev = tt_npu.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev[0, 0, 0, 0], torch.Tensor([value]).bfloat16()[0])
 
 
@@ -60,7 +64,11 @@ def test_sum_global(device, use_program_cache, shape_dim):
 
     value = x.sum()
 
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-    tt_npu = ttl.tensor.global_sum(dev_x)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    dev_x = (
+        ttnn.experimental.tensor.Tensor(x, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
+    )
+    tt_npu = ttnn.experimental.tensor.global_sum(dev_x)
+    tt_dev = tt_npu.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev[0, 0, 0, 0].bfloat16(), torch.Tensor([value]).bfloat16()[0])

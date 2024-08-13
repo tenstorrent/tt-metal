@@ -25,8 +25,8 @@ from ttnn.operations.conv.sliding_window_op_utils import (
 
 from typing import Union, Tuple, Dict
 
-from tt_lib.utils import _nearest_32
-import tt_lib as ttl
+from ttnn.deprecated.utils import _nearest_32
+import ttnn.deprecated as ttl
 
 import math
 import torch
@@ -398,7 +398,7 @@ class TTPyMaxPool(TTPyOp):
         padded_nhw = self.input_sharded_memory_config.shard_spec.shape[0] * self.sliding_window_op_params.num_cores_nhw
         if padded_nhw != act_shape[-2]:
             padded_shape = ttnn.Shape(act_shape, (1, 1, padded_nhw, in_c))
-            act_reshaped = ttl.tensor.format_input_tensor(
+            act_reshaped = ttnn.experimental.tensor.format_input_tensor(
                 act_reshaped,
                 self.device,
                 padded_shape,
@@ -412,7 +412,7 @@ class TTPyMaxPool(TTPyOp):
         shard_shape[1] = in_c
         mem_config.shard_spec.shape = shard_shape
         act_reshaped = act_reshaped.to(self.device, interleaved_mem_config)
-        return ttl.tensor.interleaved_to_sharded(
+        return ttnn.experimental.tensor.interleaved_to_sharded(
             act_reshaped,
             mem_config,
             input.get_dtype(),
@@ -420,7 +420,7 @@ class TTPyMaxPool(TTPyOp):
 
     def copy_output_from_device(self, output_d: ttnn.Tensor):
         interleaved_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-        output_d = ttl.tensor.sharded_to_interleaved(output_d, interleaved_mem_config)
+        output_d = ttnn.experimental.tensor.sharded_to_interleaved(output_d, interleaved_mem_config)
         return output_d.cpu()
 
 

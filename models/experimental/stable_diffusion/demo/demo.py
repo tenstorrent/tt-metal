@@ -30,7 +30,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
 )
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.experimental.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
 from models.experimental.stable_diffusion.tt.experimental_ops import UseDeviceConv
 

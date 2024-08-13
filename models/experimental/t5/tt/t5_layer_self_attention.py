@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-import tt_lib
+import ttnn.deprecated
 
 from models.utility_functions import (
     torch2tt_tensor,

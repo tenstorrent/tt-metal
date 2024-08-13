@@ -6,7 +6,7 @@ import torch
 from loguru import logger
 from transformers import AutoImageProcessor
 import pytest
-import tt_lib
+import ttnn.deprecated
 
 from models.utility_functions import is_e75, profiler, divup, disable_persistent_kernel_cache, skip_for_wormhole_b0
 from models.perf.perf_utils import prep_perf_report
@@ -16,9 +16,9 @@ from models.demos.resnet.tests.demo_utils import load_resnet50_model
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 
 model_config = {
-    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.LoFi,
-    "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
-    "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
+    "MATH_FIDELITY": ttnn.experimental.tensor.MathFidelity.LoFi,
+    "WEIGHTS_DTYPE": ttnn.experimental.tensor.DataType.BFLOAT8_B,
+    "ACTIVATIONS_DTYPE": ttnn.experimental.tensor.DataType.BFLOAT8_B,
 }
 
 
@@ -26,216 +26,218 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
     profiler.start("compile")
     _ = tt_resnet50(tt_inputs).cpu(blocking=True)
     profiler.end("compile")
-    tt_lib.device.DumpDeviceProfiler(device)
+    ttnn.deprecated.device.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
         _ = tt_resnet50(tt_inputs).cpu(blocking=True)
-        tt_lib.device.DumpDeviceProfiler(device)
+        ttnn.deprecated.device.DumpDeviceProfiler(device)
 
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
         outputs.append(tt_resnet50(tt_inputs).cpu(blocking=False))
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
     profiler.end(f"run")
-    tt_lib.device.DumpDeviceProfiler(device)
+    ttnn.deprecated.device.DumpDeviceProfiler(device)
 
 
 def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
     input_shape = tt_inputs.get_legacy_shape()
-    shard_spec = tt_lib.tensor.ShardSpec(
+    shard_spec = ttnn.experimental.tensor.ShardSpec(
         tt_resnet50.dram_shard_grid,
         [
             divup(tt_inputs.volume() // input_shape[3], tt_resnet50.n_dram_cores),
             input_shape[3],
         ],
-        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    sharded_mem_config_DRAM = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.DRAM, shard_spec
+    sharded_mem_config_DRAM = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.DRAM, shard_spec
     )
-    tt_image_res = tt_lib.tensor.allocate_tensor_on_device(
+    tt_image_res = ttnn.experimental.tensor.allocate_tensor_on_device(
         tt_inputs.shape, tt_inputs.dtype, tt_inputs.layout, device, sharded_mem_config_DRAM
     )
-    op_event = tt_lib.device.CreateEvent()
-    write_event = tt_lib.device.CreateEvent()
+    op_event = ttnn.deprecated.device.CreateEvent()
+    write_event = ttnn.deprecated.device.CreateEvent()
     # Initialize the op event so we can write
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.deprecated.device.RecordEvent(device, 0, op_event)
 
     profiler.start("compile")
-    tt_lib.device.WaitForEvent(device, 1, op_event)
-    tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+    ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+    ttnn.deprecated.device.RecordEvent(device, 1, write_event)
     _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
     profiler.end("compile")
-    tt_lib.device.DumpDeviceProfiler(device)
+    ttnn.deprecated.device.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
-        tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+        ttnn.deprecated.device.RecordEvent(device, 1, write_event)
         _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
-        tt_lib.device.DumpDeviceProfiler(device)
+        ttnn.deprecated.device.DumpDeviceProfiler(device)
 
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
-        tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+        ttnn.deprecated.device.RecordEvent(device, 1, write_event)
         outputs.append(tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=False))
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
     profiler.end(f"run")
-    tt_lib.device.DumpDeviceProfiler(device)
+    ttnn.deprecated.device.DumpDeviceProfiler(device)
 
 
 def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
     input_shape = tt_inputs.get_legacy_shape()
-    shard_spec = tt_lib.tensor.ShardSpec(
+    shard_spec = ttnn.experimental.tensor.ShardSpec(
         tt_resnet50.dram_shard_grid,
         [
             divup(tt_inputs.volume() // input_shape[3], tt_resnet50.n_dram_cores),
             input_shape[3],
         ],
-        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    sharded_mem_config_DRAM = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.DRAM, shard_spec
+    sharded_mem_config_DRAM = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.DRAM, shard_spec
     )
-    tt_image_res = tt_lib.tensor.allocate_tensor_on_device(
+    tt_image_res = ttnn.experimental.tensor.allocate_tensor_on_device(
         tt_inputs.shape, tt_inputs.dtype, tt_inputs.layout, device, sharded_mem_config_DRAM
     )
     # Compile
     profiler.start("compile")
-    tt_lib.tensor.write_tensor(tt_inputs, tt_image_res)
+    ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res)
     tt_resnet50(tt_image_res).cpu(blocking=True)
     profiler.end("compile")
-    tt_lib.device.DumpDeviceProfiler(device)
+    ttnn.deprecated.device.DumpDeviceProfiler(device)
 
     # Capture
-    tid = tt_lib.device.BeginTraceCapture(device, 0)
+    tid = ttnn.deprecated.device.BeginTraceCapture(device, 0)
     tt_output_res = tt_resnet50(tt_image_res)
-    tt_lib.device.EndTraceCapture(device, 0, tid)
-    tt_lib.device.DumpDeviceProfiler(device)
+    ttnn.deprecated.device.EndTraceCapture(device, 0, tid)
+    ttnn.deprecated.device.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
-        tt_lib.tensor.write_tensor(tt_inputs, tt_image_res)
-        tt_lib.device.ReplayTrace(device, 0, tid, False)
+        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res)
+        ttnn.deprecated.device.ReplayTrace(device, 0, tid, False)
         _ = tt_output_res.cpu(blocking=True)
-        tt_lib.device.DumpDeviceProfiler(device)
+        ttnn.deprecated.device.DumpDeviceProfiler(device)
 
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
-        tt_lib.tensor.write_tensor(tt_inputs, tt_image_res)
-        tt_lib.device.ReplayTrace(device, 0, tid, False)
+        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res)
+        ttnn.deprecated.device.ReplayTrace(device, 0, tid, False)
         outputs.append(tt_output_res.cpu(blocking=False))
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
     profiler.end(f"run")
-    tt_lib.device.DumpDeviceProfiler(device)
+    ttnn.deprecated.device.DumpDeviceProfiler(device)
 
 
 def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
     input_shape = tt_inputs.get_legacy_shape()
-    shard_spec = tt_lib.tensor.ShardSpec(
+    shard_spec = ttnn.experimental.tensor.ShardSpec(
         tt_resnet50.dram_shard_grid,
         [
             divup(tt_inputs.volume() // input_shape[3], tt_resnet50.n_dram_cores),
             input_shape[3],
         ],
-        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    sharded_mem_config_DRAM = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.DRAM, shard_spec
+    sharded_mem_config_DRAM = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.DRAM, shard_spec
     )
-    tt_image_res = tt_lib.tensor.allocate_tensor_on_device(
+    tt_image_res = ttnn.experimental.tensor.allocate_tensor_on_device(
         tt_inputs.shape, tt_inputs.dtype, tt_inputs.layout, device, sharded_mem_config_DRAM
     )
 
     tt_image_res_shape = tt_image_res.get_legacy_shape()
-    reshard_shard_spec = tt_lib.tensor.ShardSpec(
+    reshard_shard_spec = ttnn.experimental.tensor.ShardSpec(
         tt_resnet50.shard_grid,
         [
             tt_image_res_shape[2] // tt_resnet50.first_conv_num_cores_nhw,
             tt_image_res_shape[3],
         ],
-        tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    reshard_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, reshard_shard_spec
+    reshard_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.experimental.tensor.BufferType.L1,
+        reshard_shard_spec,
     )
-    interleaved_dram_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    interleaved_dram_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     )
 
-    op_event = tt_lib.device.CreateEvent()
-    write_event = tt_lib.device.CreateEvent()
+    op_event = ttnn.deprecated.device.CreateEvent()
+    write_event = ttnn.deprecated.device.CreateEvent()
     # Initialize the op event so we can write
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.deprecated.device.RecordEvent(device, 0, op_event)
 
     # Compile
     profiler.start("compile")
-    tt_lib.device.WaitForEvent(device, 1, op_event)
-    tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+    ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+    ttnn.deprecated.device.RecordEvent(device, 1, write_event)
 
-    tt_lib.device.WaitForEvent(device, 0, write_event)
-    reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config)
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.deprecated.device.WaitForEvent(device, 0, write_event)
+    reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config)
+    ttnn.deprecated.device.RecordEvent(device, 0, op_event)
     first_out_addr = reshard_out.buffer_address()
     tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config).cpu(blocking=True)
     profiler.end("compile")
-    tt_lib.device.DumpDeviceProfiler(device)
+    ttnn.deprecated.device.DumpDeviceProfiler(device)
 
     # Capture
-    tt_lib.device.WaitForEvent(device, 1, op_event)
-    tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+    ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+    ttnn.deprecated.device.RecordEvent(device, 1, write_event)
 
-    tt_lib.device.WaitForEvent(device, 0, write_event)
-    reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config)
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.deprecated.device.WaitForEvent(device, 0, write_event)
+    reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config)
+    ttnn.deprecated.device.RecordEvent(device, 0, op_event)
 
-    tid = tt_lib.device.BeginTraceCapture(device, 0)
+    tid = ttnn.deprecated.device.BeginTraceCapture(device, 0)
     tt_output_res = tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config)
-    reshard_out = tt_lib.tensor.allocate_tensor_on_device(
+    reshard_out = ttnn.experimental.tensor.allocate_tensor_on_device(
         reshard_out.shape, reshard_out.dtype, reshard_out.layout, device, reshard_mem_config
     )
-    tt_lib.device.EndTraceCapture(device, 0, tid)
+    ttnn.deprecated.device.EndTraceCapture(device, 0, tid)
     assert first_out_addr == reshard_out.buffer_address()
-    tt_lib.device.DumpDeviceProfiler(device)
+    ttnn.deprecated.device.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
-        tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+        ttnn.deprecated.device.RecordEvent(device, 1, write_event)
 
-        tt_lib.device.WaitForEvent(device, 0, write_event)
-        reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
-        tt_lib.device.RecordEvent(device, 0, op_event)
-        tt_lib.device.ReplayTrace(device, 0, tid, False)
+        ttnn.deprecated.device.WaitForEvent(device, 0, write_event)
+        reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
+        ttnn.deprecated.device.RecordEvent(device, 0, op_event)
+        ttnn.deprecated.device.ReplayTrace(device, 0, tid, False)
         _ = tt_output_res.cpu(blocking=True)
-        tt_lib.device.DumpDeviceProfiler(device)
+        ttnn.deprecated.device.DumpDeviceProfiler(device)
 
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
-        tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.deprecated.device.WaitForEvent(device, 1, op_event)
+        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+        ttnn.deprecated.device.RecordEvent(device, 1, write_event)
 
-        tt_lib.device.WaitForEvent(device, 0, write_event)
-        reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
-        tt_lib.device.RecordEvent(device, 0, op_event)
-        tt_lib.device.ReplayTrace(device, 0, tid, False)
+        ttnn.deprecated.device.WaitForEvent(device, 0, write_event)
+        reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
+        ttnn.deprecated.device.RecordEvent(device, 0, op_event)
+        ttnn.deprecated.device.ReplayTrace(device, 0, tid, False)
         outputs.append(tt_output_res.cpu(blocking=False))
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
     profiler.end(f"run")
-    tt_lib.device.DumpDeviceProfiler(device)
+    ttnn.deprecated.device.DumpDeviceProfiler(device)
 
 
 def run_perf_resnet(
@@ -288,7 +290,7 @@ def run_perf_resnet(
         model_config=model_config,
         sharded=sharded,
     )
-    tt_lib.device.Synchronize(device)
+    ttnn.deprecated.device.Synchronize(device)
 
     num_warmup_iterations = 5
     num_measurement_iterations = 15

@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-import tt_lib
+import ttnn.deprecated
 
 from ttnn.model_preprocessing import preprocess_model, preprocess_model_parameters
 import transformers
@@ -23,10 +23,10 @@ from tests.tt_eager.python_api_testing.sweep_tests.model_tests import (
 
 
 def layout_to_ttnn(layout):
-    if layout == tt_lib.tensor.Layout.TILE:
+    if layout == ttnn.experimental.tensor.Layout.TILE:
         return ttnn.TILE_LAYOUT
 
-    elif layout == tt_lib.tensor.Layout.ROW_MAJOR:
+    elif layout == ttnn.experimental.tensor.Layout.ROW_MAJOR:
         return ttnn.ROW_MAJOR_LAYOUT
 
     else:
@@ -34,25 +34,25 @@ def layout_to_ttnn(layout):
 
 
 def dtype_to_ttnn(dtype):
-    if dtype == tt_lib.tensor.DataType.BFLOAT16:
+    if dtype == ttnn.experimental.tensor.DataType.BFLOAT16:
         return ttnn.bfloat16
 
-    elif dtype == tt_lib.tensor.DataType.BFLOAT8_B:
+    elif dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
         return ttnn.bfloat8_b
 
-    elif dtype == tt_lib.tensor.DataType.UINT32:
+    elif dtype == ttnn.experimental.tensor.DataType.UINT32:
         return ttnn.uint32
 
-    elif dtype == tt_lib.tensor.DataType.UINT16:
+    elif dtype == ttnn.experimental.tensor.DataType.UINT16:
         return ttnn.uint16
 
-    elif dtype == tt_lib.tensor.DataType.INT32:
+    elif dtype == ttnn.experimental.tensor.DataType.INT32:
         return ttnn.int32
 
-    elif dtype == tt_lib.tensor.DataType.FLOAT32:
+    elif dtype == ttnn.experimental.tensor.DataType.FLOAT32:
         return ttnn.float32
 
-    elif dtype == tt_lib.tensor.DataType.BFLOAT4_B:
+    elif dtype == ttnn.experimental.tensor.DataType.BFLOAT4_B:
         return ttnn.bfloat4_b
 
     else:
@@ -63,10 +63,10 @@ def memory_config_to_ttnn(mem_config):
     if mem_config is None:
         return None
 
-    if mem_config.buffer_type == tt_lib.tensor.BufferType.DRAM:
+    if mem_config.buffer_type == ttnn.experimental.tensor.BufferType.DRAM:
         return ttnn.DRAM_MEMORY_CONFIG
 
-    elif mem_config.buffer_type == tt_lib.tensor.BufferType.L1:
+    elif mem_config.buffer_type == ttnn.experimental.tensor.BufferType.L1:
         return ttnn.L1_MEMORY_CONFIG
 
     else:
@@ -2697,8 +2697,8 @@ def rotary_embedding(
     torch.manual_seed(0)
 
     cache_size = 2048
-    input_dtype = tt_lib.tensor.DataType.BFLOAT16
-    sincos_dtype = tt_lib.tensor.DataType.BFLOAT16
+    input_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
+    sincos_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     sin_cos_shape = (1, 1, cache_size, 64)
 

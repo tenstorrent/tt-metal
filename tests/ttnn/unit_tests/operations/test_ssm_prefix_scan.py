@@ -5,7 +5,7 @@
 import torch
 
 import ttnn
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import pytest
 from loguru import logger
 
@@ -37,31 +37,33 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     if num_availible_cores < num_cores:
         pytest.skip(f"Not enough cores availible (was {num_availible_cores} but need {num_cores})")
 
-    shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
-    shard_spec = ttl.tensor.ShardSpec(
+    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
+    )
+    shard_spec = ttnn.experimental.tensor.ShardSpec(
         shard_grid,
         [L, E * N // num_cores],
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    memory_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, shard_spec
+    memory_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttnn.experimental.tensor.BufferType.L1, shard_spec
     )
-    a = ttl.tensor.Tensor(a, dtype).to(ttl.tensor.Layout.TILE).to(device, memory_config)
-    bx = ttl.tensor.Tensor(bx, dtype).to(ttl.tensor.Layout.TILE).to(device, memory_config)
+    a = ttnn.experimental.tensor.Tensor(a, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, memory_config)
+    bx = ttnn.experimental.tensor.Tensor(bx, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, memory_config)
 
-    h_shard_spec = ttl.tensor.ShardSpec(
+    h_shard_spec = ttnn.experimental.tensor.ShardSpec(
         shard_grid,
         [1, E * N // num_cores],
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    h_memory_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, h_shard_spec
+    h_memory_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttnn.experimental.tensor.BufferType.L1, h_shard_spec
     )
     h_prev = (
-        ttl.tensor.Tensor(h_prev, ttl.tensor.DataType.BFLOAT16)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
+        ttnn.experimental.tensor.Tensor(h_prev, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
         .to(device, h_memory_config)
     )
 
@@ -85,7 +87,7 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
 @skip_for_grayskull("Grayskull not supported")
 @pytest.mark.parametrize(
     "dtype",
-    [ttl.tensor.DataType.BFLOAT8_B],
+    [ttnn.experimental.tensor.DataType.BFLOAT8_B],
 )
 @pytest.mark.parametrize(
     "L, E, N, num_cores",
@@ -129,32 +131,36 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
     if num_availible_cores < num_cores:
         pytest.skip(f"Not enough cores availible (was {num_availible_cores} but need {num_cores})")
 
-    shard_grid = ttl.tensor.CoreRangeSet(ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
-    shard_spec = ttl.tensor.ShardSpec(
+    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
+    )
+    shard_spec = ttnn.experimental.tensor.ShardSpec(
         shard_grid,
         [L, E * N // num_cores],
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    memory_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, shard_spec
+    memory_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttnn.experimental.tensor.BufferType.L1, shard_spec
     )
 
     def to_device(x):
-        return ttl.tensor.Tensor(x, dtype).to(ttl.tensor.Layout.TILE).to(device, memory_config)
+        return (
+            ttnn.experimental.tensor.Tensor(x, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, memory_config)
+        )
 
-    h_shard_spec = ttl.tensor.ShardSpec(
+    h_shard_spec = ttnn.experimental.tensor.ShardSpec(
         shard_grid,
         [1, E * N // num_cores],
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
         False,
     )
-    h_memory_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1, h_shard_spec
+    h_memory_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttnn.experimental.tensor.BufferType.L1, h_shard_spec
     )
     h_prev = (
-        ttl.tensor.Tensor(h_prev, ttl.tensor.DataType.BFLOAT16)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
+        ttnn.experimental.tensor.Tensor(h_prev, ttnn.experimental.tensor.DataType.BFLOAT16)
+        .to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
         .to(device, h_memory_config)
     )
 
@@ -177,7 +183,7 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
 @skip_for_grayskull("Grayskull not supported")
 @pytest.mark.parametrize(
     "dtype",
-    [ttl.tensor.DataType.BFLOAT8_B],
+    [ttnn.experimental.tensor.DataType.BFLOAT8_B],
 )
 @pytest.mark.parametrize(
     "L, E, N, chunk_size, num_cores",
@@ -189,7 +195,7 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
     ),
 )
 def test_chunked_ssm_prefix_scan(
-    L: int, E: int, N: int, chunk_size: int, num_cores: int, dtype: ttl.tensor.DataType, device
+    L: int, E: int, N: int, chunk_size: int, num_cores: int, dtype: ttnn.experimental.tensor.DataType, device
 ):
     run_chunked_ssm_prefix_scan(L, E, N, chunk_size, num_cores, dtype, device)
 
@@ -198,17 +204,21 @@ def test_chunked_ssm_prefix_scan(
 def test_ssm_prefix_scan_with_program_cache(device, use_program_cache):
     L, E, N = 32, 64, 32
     num_cores = 1
-    dtype = ttl.tensor.DataType.BFLOAT8_B
+    dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
     run_ssm_prefix_scan(L, E, N, num_cores, dtype, device)
 
-    dummy_memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    dummy_memory_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+    )
     dummy_shape = [1, 1, 128, 128]
 
     for _ in range(2):
         run_ssm_prefix_scan(L, E, N, num_cores, dtype, device)
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = (
-            ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, dummy_memory_config)
+            ttnn.experimental.tensor.Tensor(py_dummy_tensor, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, dummy_memory_config)
         )
 
     assert device.num_program_cache_entries() == 1

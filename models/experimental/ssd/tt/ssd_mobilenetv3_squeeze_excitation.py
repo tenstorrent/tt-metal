@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn.deprecated
 import ttnn
-import tt_lib.fallback_ops as fallback_ops
+import ttnn.deprecated.fallback_ops as fallback_ops
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
@@ -59,11 +59,13 @@ class TtSqueezeExcitation(torch.nn.Module):
         self.activation = ttnn.relu
         self.scale_activation = ttnn.hardsigmoid
 
-    def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, input: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         scale = self.avgpool(input)
         scale = self.fc1(scale)
         scale = self.activation(scale)
         scale = self.fc2(scale)
         scale = self.scale_activation(scale)
-        final_out = tt_lib.tensor.bcast(input, scale, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        final_out = ttnn.experimental.tensor.bcast(
+            input, scale, ttnn.experimental.tensor.BcastOpMath.MUL, ttnn.experimental.tensor.BcastOpDim.HW
+        )
         return final_out

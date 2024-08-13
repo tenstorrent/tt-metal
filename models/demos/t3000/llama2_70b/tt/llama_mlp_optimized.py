@@ -5,7 +5,7 @@
 from loguru import logger
 from typing import List
 import torch
-from ttnn import experimental as tt_lib
+import ttnn.deprecated
 import ttnn
 from ttnn import ShardTensorToMesh
 
@@ -118,7 +118,7 @@ class TtLlamaMLP_optimized:
             cache_file_name=self.cache_path / w3_dram_shard_str,
         )
 
-    def __call__(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
+    def __call__(self, x: List[ttnn.experimental.tensor.Tensor]) -> List[ttnn.experimental.tensor.Tensor]:
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         if self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(x)
@@ -128,7 +128,7 @@ class TtLlamaMLP_optimized:
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def prefill_forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
+    def prefill_forward(self, x: List[ttnn.experimental.tensor.Tensor]) -> List[ttnn.experimental.tensor.Tensor]:
         # Prefill Reshape fix
         _, _, seq_len, _ = x.shape
         max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
@@ -175,7 +175,7 @@ class TtLlamaMLP_optimized:
 
         return hidden_states
 
-    def decode_forward(self, x: List[tt_lib.tensor.Tensor]) -> List[tt_lib.tensor.Tensor]:
+    def decode_forward(self, x: List[ttnn.experimental.tensor.Tensor]) -> List[ttnn.experimental.tensor.Tensor]:
         hidden_states = []
 
         w1_out = ttnn.matmul(

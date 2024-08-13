@@ -7,7 +7,7 @@ from loguru import logger
 from transformers import AutoImageProcessor
 import pytest
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
@@ -39,27 +39,27 @@ except ModuleNotFoundError:
 def create_event(device):
     event = []
     if isinstance(device, ttnn.Device):
-        event.append(tt_lib.device.CreateEvent())
+        event.append(ttnn.deprecated.device.CreateEvent())
     else:
         for dev in device.get_device_ids():
-            event.append(tt_lib.device.CreateEvent())
+            event.append(ttnn.deprecated.device.CreateEvent())
     return event
 
 
 def wait_for_event(device, cq_id, event):
     if isinstance(device, ttnn.Device):
-        tt_lib.device.WaitForEvent(device, cq_id, event)
+        ttnn.deprecated.device.WaitForEvent(device, cq_id, event)
     else:
         for dev, eve in zip(device.get_device_ids(), event):
-            tt_lib.device.WaitForEvent(device.get_device(dev), cq_id, eve)
+            ttnn.deprecated.device.WaitForEvent(device.get_device(dev), cq_id, eve)
 
 
 def record_event(device, cq_id, event):
     if isinstance(device, ttnn.Device):
-        tt_lib.device.RecordEvent(device, cq_id, event)
+        ttnn.deprecated.device.RecordEvent(device, cq_id, event)
     else:
         for dev, eve in zip(device.get_device_ids(), event):
-            tt_lib.device.RecordEvent(device.get_device(dev), cq_id, eve)
+            ttnn.deprecated.device.RecordEvent(device.get_device(dev), cq_id, eve)
 
 
 def buffer_address(tensor):
@@ -71,10 +71,10 @@ def buffer_address(tensor):
 
 def dump_device_profiler(device):
     if isinstance(device, ttnn.Device):
-        tt_lib.device.DumpDeviceProfiler(device)
+        ttnn.deprecated.device.DumpDeviceProfiler(device)
     else:
         for dev in device.get_device_ids():
-            tt_lib.device.DumpDeviceProfiler(device.get_device(dev))
+            ttnn.deprecated.device.DumpDeviceProfiler(device.get_device(dev))
 
 
 # TODO: Create ttnn apis for these

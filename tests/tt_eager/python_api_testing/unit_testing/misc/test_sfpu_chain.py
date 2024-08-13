@@ -5,7 +5,7 @@
 
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from models.utility_functions import comp_pcc
 from loguru import logger
@@ -20,13 +20,13 @@ def test_eltwise_unary_chain(device):
     x = torch.randn((N, C, H, W)).bfloat16().float()
 
     xt = (
-        ttl.tensor.Tensor(
+        ttnn.experimental.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.experimental.tensor.Layout.TILE)
         .to(device)
     )
 
@@ -40,7 +40,7 @@ def test_eltwise_unary_chain(device):
     )
     assert list(xtt.get_legacy_shape()) == [N, C, H, W]
 
-    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_got_back = xtt.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
 
     pt_ref = torch.pow(torch.exp(torch.nn.functional.relu(x)), 2)
 
@@ -58,23 +58,23 @@ def test_eltwise_binary_fused(device):
     y = torch.randn((N, C, H, W)).bfloat16().float()
 
     xt = (
-        ttl.tensor.Tensor(
+        ttnn.experimental.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.experimental.tensor.Layout.TILE)
         .to(device)
     )
     yt = (
-        ttl.tensor.Tensor(
+        ttnn.experimental.tensor.Tensor(
             y.reshape(-1).tolist(),
             y.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.experimental.tensor.Layout.TILE)
         .to(device)
     )
 
@@ -85,7 +85,7 @@ def test_eltwise_binary_fused(device):
     )
     assert list(xtt.get_legacy_shape()) == [N, C, H, W]
 
-    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_got_back = xtt.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
 
     pt_ref = torch.pow(torch.nn.functional.relu(x + y), 2)
 

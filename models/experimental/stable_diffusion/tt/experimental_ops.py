@@ -4,12 +4,12 @@
 
 import copy
 import torch
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 from contextlib import AbstractContextManager
 from loguru import logger
 from functools import wraps
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 from models.utility_functions import (
     run_conv_on_device_wrapper,
     is_conv_supported_on_device,
@@ -117,9 +117,9 @@ def concat(tensors, dim=0):
     new_tensors = []
     for t in tensors:
         if torch.is_tensor(t):
-            t = ttl.tensor.Tensor(t, ttl.tensor.DataType.BFLOAT16).to(device)
-        assert isinstance(t, ttl.tensor.Tensor)
-        if t.storage_type() != ttl.tensor.StorageType.DEVICE:
+            t = ttnn.experimental.tensor.Tensor(t, ttnn.experimental.tensor.DataType.BFLOAT16).to(device)
+        assert isinstance(t, ttnn.experimental.tensor.Tensor)
+        if t.storage_type() != ttnn.experimental.tensor.StorageType.DEVICE:
             t = t.to(device)
         new_tensors.append(t)
 

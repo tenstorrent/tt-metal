@@ -4,11 +4,11 @@
 
 import torch
 import ttnn
-import tt_lib
+import ttnn.deprecated
 
 import copy
 from typing import List, Sequence, Union, Tuple, Optional, Any
-from tt_lib.fallback_ops import fallback_ops
+from ttnn.deprecated.fallback_ops import fallback_ops
 import torchvision
 from functools import partial
 from loguru import logger
@@ -151,7 +151,7 @@ class TtEfficientNet(torch.nn.Module):
         self.classifier_weight = torch2tt_tensor(
             state_dict["fc.weight" if is_lite else "classifier.1.weight"],
             device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
         )
 
         bias_key = "fc.bias" if is_lite else "classifier.1.bias"
@@ -160,7 +160,7 @@ class TtEfficientNet(torch.nn.Module):
             self.classifier_bias = torch2tt_tensor(
                 state_dict[bias_key],
                 device,
-                tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+                tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
             )
         else:
             self.classifier_bias = None
@@ -172,8 +172,8 @@ class TtEfficientNet(torch.nn.Module):
         x = self.avgpool(x)
 
         last_shape = x.get_legacy_shape()[-1] * x.get_legacy_shape()[-2] * x.get_legacy_shape()[-3]
-        # tt_lib.tensor.reshape won't work here since input tensor is of shape [1, n, 1, 1]
-        x = tt_lib.fallback_ops.reshape(x, x.get_legacy_shape()[0], 1, 1, last_shape)
+        # ttnn.experimental.tensor.reshape won't work here since input tensor is of shape [1, n, 1, 1]
+        x = ttnn.deprecated.fallback_ops.reshape(x, x.get_legacy_shape()[0], 1, 1, last_shape)
 
         x = ttnn.matmul(x, self.classifier_weight)
 

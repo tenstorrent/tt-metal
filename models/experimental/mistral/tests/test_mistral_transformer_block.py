@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import tt_lib
+import ttnn.deprecated
 import pytest
 from loguru import logger
 import json
@@ -20,7 +20,7 @@ from models.utility_functions import (
 
 @pytest.mark.parametrize(
     "dtype",
-    (tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B),
+    (ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B),
 )
 @pytest.mark.parametrize(
     "pcc",
@@ -39,8 +39,8 @@ def test_mistral_transformer_block_inference(pcc, model_location_generator, devi
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = TransformerBlock(args=model_args)
     reference_model.load_state_dict(state_dict)
-    output_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     )
     tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
 
@@ -61,15 +61,15 @@ def test_mistral_transformer_block_inference(pcc, model_location_generator, devi
     bcast_freq_xq, bcast_freq_xk = get_freqs_cis(freqs_cis, query_shape, key_shape, device, output_mem_config)
     positions = torch.arange(0, 11)
     mask = torch.randn(11, 11)
-    output_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    output_mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
     )
     reference_output = reference_model(input, freqs_cis, positions, mask=mask)
 
     tt_input = torch_to_tt_tensor_rm(input, device)
-    tt_input = format_tensor(tt_input, tt_lib.tensor.Layout.TILE, device, output_mem_config)
+    tt_input = format_tensor(tt_input, ttnn.experimental.tensor.Layout.TILE, device, output_mem_config)
     mask = torch_to_tt_tensor_rm(mask, device, put_on_device=False)
-    mask = format_tensor(mask, tt_lib.tensor.Layout.TILE, device, output_mem_config, pad_value=-10000)
+    mask = format_tensor(mask, ttnn.experimental.tensor.Layout.TILE, device, output_mem_config, pad_value=-10000)
 
     tt_position = torch_to_tt_tensor_rm(positions, device, put_on_device=False)
     tt_output = tt_model(tt_input, bcast_freq_xq, bcast_freq_xk, tt_position, mask, seqlen)

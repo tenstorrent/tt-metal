@@ -4,7 +4,7 @@
 
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import pytest
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
@@ -48,16 +48,16 @@ def test_getitem_RAW_MJOR_one_index(shape_index_dim, dtype, index_size, device):
     torch.manual_seed(2)
 
     if dtype == torch.int32:
-        tt_dtype = ttl.tensor.DataType.INT32
+        tt_dtype = ttnn.experimental.tensor.DataType.INT32
     if dtype == torch.bfloat16:
-        tt_dtype = ttl.tensor.DataType.BFLOAT16
+        tt_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     x = torch.randint(low=0, high=10, size=shape).to(dtype)
-    dev_x = ttl.tensor.Tensor(x, tt_dtype).to(device)
+    dev_x = ttnn.experimental.tensor.Tensor(x, tt_dtype).to(device)
 
     idx_value_max = shape[index_dim] - 1
     idx = torch.randint(-idx_value_max - 1, idx_value_max, (index_size,))
-    dev_idx = ttl.tensor.Tensor(idx, ttl.tensor.DataType.INT32).to(device)
+    dev_idx = ttnn.experimental.tensor.Tensor(idx, ttnn.experimental.tensor.DataType.INT32).to(device)
 
     if index_dim == 0:
         tt_cpu = x[idx]
@@ -106,19 +106,19 @@ def test_getitem_RAW_MAJOR_two_indices(shape_index_dims, dtype, index_size, devi
     torch.manual_seed(1)
 
     if dtype == torch.int32:
-        tt_dtype = ttl.tensor.DataType.INT32
+        tt_dtype = ttnn.experimental.tensor.DataType.INT32
     if dtype == torch.bfloat16:
-        tt_dtype = ttl.tensor.DataType.BFLOAT16
+        tt_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     x = torch.randint(low=0, high=10, size=shape).to(dtype)
-    dev_x = ttl.tensor.Tensor(x, tt_dtype).to(device)
+    dev_x = ttnn.experimental.tensor.Tensor(x, tt_dtype).to(device)
 
     indices = []
     dev_indices = []
     for index_dim in index_dims:
         idx_value_max = shape[index_dim] - 1
         idx = torch.randint(-idx_value_max - 1, idx_value_max, (index_size,))
-        dev_idx = ttl.tensor.Tensor(idx, ttl.tensor.DataType.INT32).to(device)
+        dev_idx = ttnn.experimental.tensor.Tensor(idx, ttnn.experimental.tensor.DataType.INT32).to(device)
         indices.append(idx)
         dev_indices.append(dev_idx)
 
@@ -161,19 +161,19 @@ def test_getitem_RAW_MAJOR_three_indices(shape_index_dims, dtype, index_size, de
     torch.manual_seed(1)
 
     if dtype == torch.int32:
-        tt_dtype = ttl.tensor.DataType.INT32
+        tt_dtype = ttnn.experimental.tensor.DataType.INT32
     if dtype == torch.bfloat16:
-        tt_dtype = ttl.tensor.DataType.BFLOAT16
+        tt_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     x = torch.randint(low=0, high=10, size=shape).to(dtype)
-    dev_x = ttl.tensor.Tensor(x, tt_dtype).to(device)
+    dev_x = ttnn.experimental.tensor.Tensor(x, tt_dtype).to(device)
 
     indices = []
     dev_indices = []
     for index_dim in index_dims:
         idx_value_max = shape[index_dim] - 1
         idx = torch.randint(-idx_value_max - 1, idx_value_max, (index_size,))
-        dev_idx = ttl.tensor.Tensor(idx, ttl.tensor.DataType.INT32).to(device)
+        dev_idx = ttnn.experimental.tensor.Tensor(idx, ttnn.experimental.tensor.DataType.INT32).to(device)
         indices.append(idx)
         dev_indices.append(dev_idx)
 
@@ -236,26 +236,30 @@ def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, row_major
     torch.manual_seed(2)
 
     if dtype == torch.int32:
-        tt_dtype = ttl.tensor.DataType.INT32
+        tt_dtype = ttnn.experimental.tensor.DataType.INT32
     if dtype == torch.bfloat16:
-        tt_dtype = ttl.tensor.DataType.BFLOAT16
+        tt_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     x = torch.randint(low=0, high=10, size=shape).to(dtype)
 
     dev_x = (
-        ttl.tensor.Tensor(x, tt_dtype).reshape(shape).pad_to_tile(float("nan")).to(ttl.tensor.Layout.TILE).to(device)
+        ttnn.experimental.tensor.Tensor(x, tt_dtype)
+        .reshape(shape)
+        .pad_to_tile(float("nan"))
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
     )
 
     idx_value_max = shape[index_dim] - 1
     idx = torch.randint(-idx_value_max - 1, idx_value_max, (index_size,))
     if row_major_index:
-        dev_idx = ttl.tensor.Tensor(idx, ttl.tensor.DataType.INT32).to(device)
+        dev_idx = ttnn.experimental.tensor.Tensor(idx, ttnn.experimental.tensor.DataType.INT32).to(device)
     else:
         dev_idx = (
-            ttl.tensor.Tensor(idx, ttl.tensor.DataType.INT32)
+            ttnn.experimental.tensor.Tensor(idx, ttnn.experimental.tensor.DataType.INT32)
             .reshape(1, 1, 1, index_size)
             .pad_to_tile(float("nan"))
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.experimental.tensor.Layout.TILE)
             .to(device)
         )
 
@@ -269,7 +273,7 @@ def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, row_major
         tt_cpu = x[:, :, :, idx]
 
     tt_npu = ttl.operations.primary.moreh_getitem(dev_x, [dev_idx], [index_dim])
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_npu = tt_npu.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
 
     cpu_4d_shape = to_output_4d_shape(shape, [index_dim], index_size)
 
@@ -318,14 +322,18 @@ def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, row_ma
     torch.manual_seed(2)
 
     if dtype == torch.int32:
-        tt_dtype = ttl.tensor.DataType.INT32
+        tt_dtype = ttnn.experimental.tensor.DataType.INT32
     if dtype == torch.bfloat16:
-        tt_dtype = ttl.tensor.DataType.BFLOAT16
+        tt_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     x = torch.randint(low=0, high=10, size=shape).to(dtype)
 
     dev_x = (
-        ttl.tensor.Tensor(x, tt_dtype).reshape(shape).pad_to_tile(float("nan")).to(ttl.tensor.Layout.TILE).to(device)
+        ttnn.experimental.tensor.Tensor(x, tt_dtype)
+        .reshape(shape)
+        .pad_to_tile(float("nan"))
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
     )
 
     indices = []
@@ -334,13 +342,13 @@ def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, row_ma
         idx_value_max = shape[index_dim] - 1
         idx = torch.randint(-idx_value_max - 1, idx_value_max, (index_size,))
         if row_major_index:
-            dev_idx = ttl.tensor.Tensor(idx, ttl.tensor.DataType.INT32).to(device)
+            dev_idx = ttnn.experimental.tensor.Tensor(idx, ttnn.experimental.tensor.DataType.INT32).to(device)
         else:
             dev_idx = (
-                ttl.tensor.Tensor(idx, ttl.tensor.DataType.INT32)
+                ttnn.experimental.tensor.Tensor(idx, ttnn.experimental.tensor.DataType.INT32)
                 .reshape(1, 1, 1, index_size)
                 .pad_to_tile(float("nan"))
-                .to(ttl.tensor.Layout.TILE)
+                .to(ttnn.experimental.tensor.Layout.TILE)
                 .to(device)
             )
         indices.append(idx)
@@ -354,7 +362,7 @@ def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, row_ma
         tt_cpu = x[:, :, indices[0], indices[1]]
 
     tt_npu = ttl.operations.primary.moreh_getitem(dev_x, dev_indices, index_dims)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_npu = tt_npu.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
 
     output_4d_shape = to_output_4d_shape(shape, index_dims, index_size)
 
@@ -402,14 +410,18 @@ def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, row_
     torch.manual_seed(2)
 
     if dtype == torch.int32:
-        tt_dtype = ttl.tensor.DataType.INT32
+        tt_dtype = ttnn.experimental.tensor.DataType.INT32
     if dtype == torch.bfloat16:
-        tt_dtype = ttl.tensor.DataType.BFLOAT16
+        tt_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     x = torch.randint(low=0, high=10, size=shape).to(dtype)
 
     dev_x = (
-        ttl.tensor.Tensor(x, tt_dtype).reshape(shape).pad_to_tile(float("nan")).to(ttl.tensor.Layout.TILE).to(device)
+        ttnn.experimental.tensor.Tensor(x, tt_dtype)
+        .reshape(shape)
+        .pad_to_tile(float("nan"))
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
     )
 
     indices = []
@@ -418,13 +430,13 @@ def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, row_
         idx_value_max = shape[index_dim] - 1
         idx = torch.randint(-idx_value_max - 1, idx_value_max, (index_size,))
         if row_major_index:
-            dev_idx = ttl.tensor.Tensor(idx, ttl.tensor.DataType.INT32).to(device)
+            dev_idx = ttnn.experimental.tensor.Tensor(idx, ttnn.experimental.tensor.DataType.INT32).to(device)
         else:
             dev_idx = (
-                ttl.tensor.Tensor(idx, ttl.tensor.DataType.INT32)
+                ttnn.experimental.tensor.Tensor(idx, ttnn.experimental.tensor.DataType.INT32)
                 .reshape(1, 1, 1, index_size)
                 .pad_to_tile(float("nan"))
-                .to(ttl.tensor.Layout.TILE)
+                .to(ttnn.experimental.tensor.Layout.TILE)
                 .to(device)
             )
         indices.append(idx)
@@ -436,7 +448,7 @@ def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, row_
         tt_cpu = x[:, indices[0], indices[1], indices[2]]
 
     tt_npu = ttl.operations.primary.moreh_getitem(dev_x, dev_indices, index_dims)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_npu = tt_npu.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
 
     output_4d_shape = to_output_4d_shape(shape, index_dims, index_size)
 
@@ -481,14 +493,18 @@ def test_getitem_tilized_four_indices(shape_index_dims, dtype, index_size, row_m
     torch.manual_seed(2)
 
     if dtype == torch.int32:
-        tt_dtype = ttl.tensor.DataType.INT32
+        tt_dtype = ttnn.experimental.tensor.DataType.INT32
     if dtype == torch.bfloat16:
-        tt_dtype = ttl.tensor.DataType.BFLOAT16
+        tt_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     x = torch.randint(low=0, high=10, size=shape).to(dtype)
 
     dev_x = (
-        ttl.tensor.Tensor(x, tt_dtype).reshape(shape).pad_to_tile(float("nan")).to(ttl.tensor.Layout.TILE).to(device)
+        ttnn.experimental.tensor.Tensor(x, tt_dtype)
+        .reshape(shape)
+        .pad_to_tile(float("nan"))
+        .to(ttnn.experimental.tensor.Layout.TILE)
+        .to(device)
     )
 
     indices = []
@@ -497,13 +513,13 @@ def test_getitem_tilized_four_indices(shape_index_dims, dtype, index_size, row_m
         idx_value_max = shape[index_dim] - 1
         idx = torch.randint(-idx_value_max - 1, idx_value_max, (index_size,))
         if row_major_index:
-            dev_idx = ttl.tensor.Tensor(idx, ttl.tensor.DataType.INT32).to(device)
+            dev_idx = ttnn.experimental.tensor.Tensor(idx, ttnn.experimental.tensor.DataType.INT32).to(device)
         else:
             dev_idx = (
-                ttl.tensor.Tensor(idx, ttl.tensor.DataType.INT32)
+                ttnn.experimental.tensor.Tensor(idx, ttnn.experimental.tensor.DataType.INT32)
                 .reshape(1, 1, 1, index_size)
                 .pad_to_tile(float("nan"))
-                .to(ttl.tensor.Layout.TILE)
+                .to(ttnn.experimental.tensor.Layout.TILE)
                 .to(device)
             )
         indices.append(idx)
@@ -512,7 +528,7 @@ def test_getitem_tilized_four_indices(shape_index_dims, dtype, index_size, row_m
     tt_cpu = x[indices[0], indices[1], indices[2], indices[3]]
 
     tt_npu = ttl.operations.primary.moreh_getitem(dev_x, dev_indices, index_dims)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_npu = tt_npu.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR)
 
     output_4d_shape = to_output_4d_shape(shape, index_dims, index_size)
 

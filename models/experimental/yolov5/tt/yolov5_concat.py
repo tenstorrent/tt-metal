@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 
 

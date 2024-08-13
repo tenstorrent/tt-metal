@@ -7,8 +7,8 @@ import math
 import torch
 
 import ttnn
-from tt_lib import tensor, device
-from tt_lib.utils import (
+from ttnn.deprecated import tensor, device
+from ttnn.deprecated.utils import (
     pad_activation,
     pad_weight,
     tilize,

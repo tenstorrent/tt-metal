@@ -11,7 +11,7 @@ from ttnn.model_preprocessing import (
 
 import ttnn
 
-# import tt_lib as ttl
+# import ttnn.deprecated as ttl
 from ttnn.dot_access import DotAccessDict
 
 

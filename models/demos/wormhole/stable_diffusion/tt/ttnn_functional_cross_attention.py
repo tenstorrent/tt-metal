@@ -6,7 +6,7 @@ import math
 import ttnn
 import torch
 import os
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from ttnn import squeeze, unsqueeze_to_4D
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     is_tile_dim_alligned,
@@ -402,8 +402,8 @@ class cross_attention:
                     mm_slice = ttl.operations.primary.bcast(
                         mm_slice,
                         self.scale,
-                        ttl.tensor.BcastOpMath.MUL,
-                        ttl.tensor.BcastOpDim.HW,
+                        ttnn.experimental.tensor.BcastOpMath.MUL,
+                        ttnn.experimental.tensor.BcastOpDim.HW,
                         output_mem_config=self.height_sharded_memory_config,
                         in_place=True,
                     )
@@ -540,8 +540,8 @@ class cross_attention:
             attention_scores = ttl.operations.primary.bcast(
                 attention_scores,
                 self.scale,
-                ttl.tensor.BcastOpMath.MUL,
-                ttl.tensor.BcastOpDim.HW,
+                ttnn.experimental.tensor.BcastOpMath.MUL,
+                ttnn.experimental.tensor.BcastOpDim.HW,
                 output_mem_config=attention_scores.memory_config(),
                 in_place=True,
             )

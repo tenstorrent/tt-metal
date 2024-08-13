@@ -7,10 +7,10 @@ import math
 from torch.nn import functional as F
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_merge_heads as bloom_merge_heads
-from tt_lib.fused_ops.softmax import softmax as tt_softmax
+from ttnn.deprecated.fused_ops.softmax import softmax as tt_softmax
 
 import models.experimental.bloom.tt.baddbmm as baddbmm
 from typing import Optional, Tuple, Union
@@ -201,8 +201,8 @@ def merge_heads(x: torch.Tensor, num_heads, head_dim) -> torch.Tensor:
 class TtBloomAttention(torch.nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
         self.device = device
         self.hidden_size = config.hidden_size
@@ -257,11 +257,11 @@ class TtBloomAttention(torch.nn.Module):
     ):
         # fused_qkv = self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
         fused_qkv = bloom_utils.tt_matmul(hidden_states, self.weight_q, device)
-        fused_qkv = tt_lib.tensor.bcast(
+        fused_qkv = ttnn.experimental.tensor.bcast(
             fused_qkv,
             self.bias_q,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
             self.mem_config,
         )
         fused_qkv = bloom_utils.tt2torch_tensor(fused_qkv)
@@ -278,18 +278,20 @@ class TtBloomAttention(torch.nn.Module):
 
         query_layer = query_layer.transpose(1, 2)
         query_layer = bloom_utils.torch2tt_tensor(query_layer, device)
-        reshaped_query_layer = tt_lib.tensor.reshape(
+        reshaped_query_layer = ttnn.experimental.tensor.reshape(
             query_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
         )
 
         key_layer = key_layer.permute(0, 2, 3, 1)
 
         key_layer = bloom_utils.torch2tt_tensor(key_layer, device)
-        reshaped_key_layer = tt_lib.tensor.reshape(key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length)
+        reshaped_key_layer = ttnn.experimental.tensor.reshape(
+            key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length
+        )
 
         value_layer = value_layer.transpose(1, 2)
         value_layer = bloom_utils.torch2tt_tensor(value_layer, device)
-        reshaped_value_layer = tt_lib.tensor.reshape(
+        reshaped_value_layer = ttnn.experimental.tensor.reshape(
             value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
         )
 
@@ -305,7 +307,9 @@ class TtBloomAttention(torch.nn.Module):
         )
 
         # change view to [batch_size, num_heads, q_length, kv_length]
-        attention_scores = tt_lib.tensor.reshape(matmul_result, batch_size, self.num_heads, q_length, kv_length)
+        attention_scores = ttnn.experimental.tensor.reshape(
+            matmul_result, batch_size, self.num_heads, q_length, kv_length
+        )
         attention_scores = bloom_utils.tt2torch_tensor(attention_scores)
 
         if self.use_tt_softmax:
@@ -323,10 +327,10 @@ class TtBloomAttention(torch.nn.Module):
 
         if head_mask is not None:
             head_mask = bloom_utils.torch2tt_tensor(head_mask, device)
-            attention_probs = tt_lib.mul(attention_probs, head_mask)
+            attention_probs = ttnn.deprecated.mul(attention_probs, head_mask)
 
         # change view [batch_size x num_heads, q_length, kv_length]
-        attention_probs_reshaped = tt_lib.tensor.reshape(
+        attention_probs_reshaped = ttnn.experimental.tensor.reshape(
             attention_probs, 1, batch_size * self.num_heads, q_length, kv_length
         )
 
@@ -342,11 +346,11 @@ class TtBloomAttention(torch.nn.Module):
 
         # output_tensor = self.dense(merged_context_layer)
         output_tensor = bloom_utils.tt_matmul(tt_context_layer, self.weight_d, device)
-        output_tensor = tt_lib.tensor.bcast(
+        output_tensor = ttnn.experimental.tensor.bcast(
             output_tensor,
             self.bias_d,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
             self.mem_config,
         )
 

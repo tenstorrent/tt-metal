@@ -4,7 +4,7 @@
 import os
 import torch
 import json
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import pytest
 from loguru import logger
 from time import time
@@ -201,7 +201,7 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
     finished_generation = [False] * batch_size
 
     # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
-    # Alternatively, send the output back to device: tt_lib.tensor.Tensor.to()
+    # Alternatively, send the output back to device: ttnn.experimental.tensor.Tensor.to()
     ttl.device.SetDefaultDevice(device_mesh.get_device(0))
 
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded

@@ -46,7 +46,7 @@ class TtLlamaRotary(torch.nn.Module):
         # n_head = 1 for K
 
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            # math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            # math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
             fp32_dest_acc_en=(True if self.head_dim <= 128 else False),

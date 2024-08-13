@@ -5,7 +5,7 @@
 import torch
 import pytest
 import timm
-import tt_lib
+import ttnn.deprecated
 
 from loguru import logger
 

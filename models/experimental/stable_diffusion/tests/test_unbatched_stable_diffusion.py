@@ -20,7 +20,7 @@ from models.utility_functions import (
     tt_to_torch_tensor,
     skip_for_wormhole_b0,
 )
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.experimental.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
 )

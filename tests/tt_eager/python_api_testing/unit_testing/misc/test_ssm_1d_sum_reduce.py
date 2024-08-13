@@ -5,7 +5,7 @@
 
 import torch
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import pytest
 from loguru import logger
 
@@ -19,7 +19,7 @@ def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config
     x = torch.randn(input_shape)
     expected = torch.sum(x.reshape((1, 1, H, W // latent_size, latent_size)), dim=-1)
 
-    x = ttl.tensor.Tensor(x, dtype).to(ttl.tensor.Layout.TILE).to(device, in_mem_config)
+    x = ttnn.experimental.tensor.Tensor(x, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in_mem_config)
     actual = ttl.operations.primary.transformers.ssm_1d_sum_reduce(
         x, output_mem_config=out_mem_config, output_dtype=dtype
     )
@@ -38,20 +38,28 @@ def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
 )
 @pytest.mark.parametrize(
     "in_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
+    (ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B),
 )
 @pytest.mark.parametrize(
     "H, W, latent_size",
@@ -68,8 +76,10 @@ def test_ssm_reduce(H, W, latent_size, dtype, out_mem_config, in_mem_config, dev
 
 def test_ssm_1d_sum_reduce_with_program_cache(device, use_program_cache):
     H, W, latent = 32, 163840, 32
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
-    dtype = ttl.tensor.DataType.BFLOAT16
+    mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+    )
+    dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     for _ in range(2):
         H, W, latent = 32, 163840, 32
@@ -78,6 +88,10 @@ def test_ssm_1d_sum_reduce_with_program_cache(device, use_program_cache):
         run_ssm_1d_sum_reduce(H, W, latent, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
+        tt_dummy_tensor = (
+            ttnn.experimental.tensor.Tensor(py_dummy_tensor, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, mem_config)
+        )
 
     assert device.num_program_cache_entries() == 2

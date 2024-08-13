@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_lib import tensor as ttl_tensor, device as ttl_device
+from ttnn.deprecated import tensor as ttl_tensor, device as ttl_device
 import torch
 from functools import wraps
 from loguru import logger
@@ -22,7 +22,7 @@ def check_log_pytorch_warning(arg):
 def custom_tensor_print_handler(tensor_cls):
     def custom_tt_tensor_to_str_fn(tensor):
         # We just report that this was a tt tensor and its shape as detailed information is already reported in other columns
-        return f"tt_lib.tensor.Tensor({'_'.join(map(str, tensor.get_legacy_shape()))})"
+        return f"ttnn.experimental.tensor.Tensor({'_'.join(map(str, tensor.get_legacy_shape()))})"
 
     def custom_pt_tensor_to_str_fn(tensor):
         return f"torch.Tensor({'|'.join(['_'.join(map(str, tensor.shape)), str(tensor.layout), str(tensor.dtype), str(tensor.device)])})"

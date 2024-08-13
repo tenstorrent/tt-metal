@@ -6,7 +6,7 @@ import torch
 from torch.nn import functional as F
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_gelu_forward as bloom_gelu_forward
 from models.utility_functions import pad_by_zero
@@ -15,8 +15,8 @@ from models.utility_functions import pad_by_zero
 class TtBloomMLP(torch.nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
         self.hidden_size = config.hidden_size
         self.hidden_dropout = config.hidden_dropout
@@ -45,11 +45,11 @@ class TtBloomMLP(torch.nn.Module):
     def forward(self, hidden_states, residual, device):
         # h4h = self.dense_h_to_4h(hidden_states)
         h4h = bloom_utils.tt_matmul(hidden_states, self.tt_weight_mlp_h4h, device)
-        h4h = tt_lib.tensor.bcast(
+        h4h = ttnn.experimental.tensor.bcast(
             h4h,
             self.tt_bias_mlp_h4h,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
             self.mem_config,
         )
 
@@ -61,11 +61,11 @@ class TtBloomMLP(torch.nn.Module):
             hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
 
         intermediate_output = bloom_utils.tt_matmul(hidden_states, self.tt_weight_mlp_4hh, device)
-        intermediate_output = tt_lib.tensor.bcast(
+        intermediate_output = ttnn.experimental.tensor.bcast(
             intermediate_output,
             self.tt_bias_mlp_4hh,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
             self.mem_config,
         )
 

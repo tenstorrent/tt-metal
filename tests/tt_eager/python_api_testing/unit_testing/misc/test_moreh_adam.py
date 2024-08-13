@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import pytest
 from models.utility_functions import skip_for_wormhole_b0, comp_allclose_and_pcc, comp_pcc, is_wormhole_b0
 from loguru import logger
@@ -19,11 +19,11 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
 
 def create_tt_tensor(tensor, device):
     ret = (
-        ttl.tensor.Tensor(
+        ttnn.experimental.tensor.Tensor(
             tensor,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.experimental.tensor.Layout.TILE)
         .to(device)
     )
 
@@ -79,11 +79,11 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
 
     cpu_grad = model.weight.grad.clone()
     dev_grad = (
-        ttl.tensor.Tensor(
+        ttnn.experimental.tensor.Tensor(
             cpu_grad,
-            ttl.tensor.DataType.BFLOAT16,
+            ttnn.experimental.tensor.DataType.BFLOAT16,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.experimental.tensor.Layout.TILE)
         .to(device)
     )
 
@@ -123,12 +123,14 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
 
     assert dev_param.get_legacy_shape() == list(model.weight.shape)
 
-    param_result = dev_param_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
-    exp_avg_result = dev_exp_avg_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
-    exp_avg_sq_result = dev_exp_avg_sq_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    param_result = dev_param_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    exp_avg_result = dev_exp_avg_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    exp_avg_sq_result = (
+        dev_exp_avg_sq_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    )
     if "max_exp_avg_sq" in optimizer_state_dict["state"][0]:
         max_exp_avg_sq_result = (
-            dev_max_exp_avg_sq_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+            dev_max_exp_avg_sq_out.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
         )
     else:
         max_exp_avg_sq_result = None

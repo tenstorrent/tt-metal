@@ -7,8 +7,8 @@ from loguru import logger
 
 import numpy as np
 
-import tt_lib as ttl
-from tt_lib.utils import (
+import ttnn.deprecated as ttl
+from ttnn.deprecated.utils import (
     tilize_to_list,
     tilize,
     untilize,

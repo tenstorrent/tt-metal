@@ -18,9 +18,9 @@ from models.experimental.functional_unet.tt import unet_shallow_ttnn
 from models.experimental.functional_unet.unet_utils import create_custom_preprocessor
 
 import time
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import os
-from tt_lib import profiler
+from ttnn.deprecated import profiler
 
 import ttnn
 

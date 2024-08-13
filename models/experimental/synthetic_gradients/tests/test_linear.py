@@ -7,7 +7,7 @@ from torch import nn
 from torchvision import transforms, datasets
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
 
@@ -47,28 +47,28 @@ def run_linear_test(in_features, out_features, device):
     inputs_targ = torch.zeros(1, 1, 32, inputs_reshape.shape[3])
     inputs_targ[:, :, :1, :] = inputs_reshape
     tilized_inputs = tilize_to_list(inputs_targ)
-    inputs_tt = tt_lib.tensor.Tensor(
+    inputs_tt = ttnn.experimental.tensor.Tensor(
         tilized_inputs,
         inputs_targ.shape,
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
         device,
     )
 
     weight_tt = tilize_to_list(weight_tt)
     bias_tt = tilize_to_list(bias_tt)
-    weight_tt = tt_lib.tensor.Tensor(
+    weight_tt = ttnn.experimental.tensor.Tensor(
         weight_tt,
         [1, 1, out_features, in_features],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
         device,
     )
-    bias_tt = tt_lib.tensor.Tensor(
+    bias_tt = ttnn.experimental.tensor.Tensor(
         bias_tt,
         [1, 1, 32, out_features],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
         device,
     )
 

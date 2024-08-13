@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import tt_lib
+import ttnn.deprecated
 import torch
-import tt_lib
+import ttnn.deprecated
 import pytest
 from loguru import logger
 import json
@@ -22,7 +22,7 @@ from models.utility_functions import (
 
 @pytest.mark.parametrize(
     "dtype",
-    (tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B),
+    (ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B),
 )
 @pytest.mark.parametrize(
     "pcc",

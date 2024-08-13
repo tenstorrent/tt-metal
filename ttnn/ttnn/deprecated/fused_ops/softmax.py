@@ -7,13 +7,13 @@ import math
 import torch
 
 import ttnn
-from tt_lib import tensor, device
-from tt_lib.utils import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax
+from ttnn.deprecated import tensor, device
+from ttnn.deprecated.utils import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax
 
 
 def softmax(x: tensor.Tensor, stable=False):
     """
-    Performs Softmax on a ``tt_lib.tensor.Tensor``.
+    Performs Softmax on a ``ttnn.experimental.tensor.Tensor``.
     """
 
     RMAX = tensor.ReduceOpMath.MAX

@@ -9,8 +9,8 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 import ttnn
-import tt_lib
-from tt_lib import fallback_ops
+import ttnn.deprecated
+from ttnn.deprecated import fallback_ops
 
 
 class TtEffectiveSEModule(nn.Module):
@@ -51,7 +51,7 @@ class TtEffectiveSEModule(nn.Module):
 
         self.activation = ttnn.hardsigmoid
 
-    def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, input: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
         out = tt_to_torch_tensor(input)
         out = out.mean((2, 3), keepdim=True)
         if self.add_maxpool:
@@ -60,5 +60,7 @@ class TtEffectiveSEModule(nn.Module):
         out = torch_to_tt_tensor_rm(out, self.device, put_on_device=False)
         out = self.fc(out)
         out = self.activation(out)
-        out = tt_lib.tensor.bcast(input, out, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        out = ttnn.experimental.tensor.bcast(
+            input, out, ttnn.experimental.tensor.BcastOpMath.MUL, ttnn.experimental.tensor.BcastOpDim.HW
+        )
         return out

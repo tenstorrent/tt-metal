@@ -6,7 +6,7 @@ from loguru import logger
 import random
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
@@ -60,13 +60,19 @@ def run_eltwise_logical_andi_tests(
 test_sweep_args = [
     (
         (6, 9, 192, 128),
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT16],
+        [ttnn.experimental.tensor.Layout.TILE, ttnn.experimental.tensor.Layout.TILE],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            ),
+            ttnn.experimental.tensor.MemoryConfig(
+                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+            ),
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
         14854324,
     ),
 ]

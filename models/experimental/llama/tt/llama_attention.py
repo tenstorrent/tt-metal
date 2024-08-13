@@ -8,7 +8,7 @@ import torch
 from torch import nn
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from typing import Optional, Tuple
 from loguru import logger
 
@@ -21,13 +21,13 @@ from models.utility_functions import (
 
 
 def shape_tt(
-    states: tt_lib.tensor.Tensor,
+    states: ttnn.experimental.tensor.Tensor,
     batch_size: int,
     seq_len: int,
     n_heads: int,
     head_dim: int,
 ):
-    tt_out = tt_lib.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
+    tt_out = ttnn.experimental.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
     tt_out = ttnn.transpose(tt_out, 1, -2)
 
     return tt_out
@@ -39,7 +39,7 @@ def shape_pt(tensor: torch.Tensor, seq_len: int, bsz: int):
     return tensor.view(bsz, seq_len, num_heads, head_dim).transpose(1, 2).contiguous()
 
 
-def test_lamma_shape(device: tt_lib.device.Device):
+def test_lamma_shape(device: ttnn.deprecated.device.Device):
     batch_size = 1
     n_heads = 32
     seq_len = 128
@@ -188,7 +188,7 @@ class TtLlamaAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.experimental.tensor.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
@@ -248,7 +248,9 @@ class TtLlamaAttention(nn.Module):
         mul = ttnn.matmul(query_states_tt, key_states_tt_transposed)
 
         # TODO: Fuse into softmax
-        attn_weights = tt_lib.tensor.bcast(mul, self.scalar, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        attn_weights = ttnn.experimental.tensor.bcast(
+            mul, self.scalar, ttnn.experimental.tensor.BcastOpMath.MUL, ttnn.experimental.tensor.BcastOpDim.HW
+        )
 
         if attn_weights.get_legacy_shape() != [bsz, self.num_heads, q_len, kv_seq_len]:
             raise ValueError(
@@ -270,7 +272,7 @@ class TtLlamaAttention(nn.Module):
             attn_weights = tt_to_torch_tensor(attn_weights)
             attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
 
-        if not isinstance(attn_weights, tt_lib.tensor.Tensor):
+        if not isinstance(attn_weights, ttnn.experimental.tensor.Tensor):
             attn_weights = pad_by_zero(attn_weights, self.device)[0]
         value_states = torch_to_tt_tensor_rm(value_states, self.device)
 
@@ -284,7 +286,7 @@ class TtLlamaAttention(nn.Module):
             )
 
         attn_output = ttnn.transpose(attn_output, 1, -2)
-        attn_output = tt_lib.tensor.reshape(attn_output, bsz, 1, q_len, self.hidden_size)
+        attn_output = ttnn.experimental.tensor.reshape(attn_output, bsz, 1, q_len, self.hidden_size)
         attn_output = self.attn_linear(attn_output)
 
         if not output_attentions:

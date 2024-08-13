@@ -15,7 +15,7 @@ from models.utility_functions import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
-import tt_lib
+import ttnn.deprecated
 import math
 import os
 import torch.nn as nn

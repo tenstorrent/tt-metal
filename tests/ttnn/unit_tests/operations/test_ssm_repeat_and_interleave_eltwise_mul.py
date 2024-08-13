@@ -6,7 +6,7 @@
 import torch
 import ttnn
 
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import pytest
 from loguru import logger
 
@@ -25,8 +25,12 @@ def run_ssm_eltwise_mul_test(batch_size, in0_W, in1_W, dtype, in0_mem_config, in
     B = torch.randn(B_shape)
     X = torch.randn(X_shape)
 
-    tt_input_tensor_B = ttl.tensor.Tensor(B, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
-    tt_input_tensor_X = ttl.tensor.Tensor(X, dtype).to(ttl.tensor.Layout.TILE).to(device, in1_mem_config)
+    tt_input_tensor_B = (
+        ttnn.experimental.tensor.Tensor(B, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in0_mem_config)
+    )
+    tt_input_tensor_X = (
+        ttnn.experimental.tensor.Tensor(X, dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in1_mem_config)
+    )
 
     tt_out = ttnn.experimental.repeat_and_interleave_eltwise_mul(
         tt_input_tensor_B, tt_input_tensor_X, memory_config=out_mem_config, dtype=dtype
@@ -56,27 +60,39 @@ def run_ssm_eltwise_mul_test(batch_size, in0_W, in1_W, dtype, in0_mem_config, in
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
 )
 @pytest.mark.parametrize(
     "in1_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
+        ),
+        ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+        ),
     ),
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
+    (ttnn.experimental.tensor.DataType.BFLOAT16, ttnn.experimental.tensor.DataType.BFLOAT8_B),
 )
 @pytest.mark.parametrize(
     "in0_W, in1_W",
@@ -95,8 +111,10 @@ def test_ssm_eltwise_mul(batch, in0_W, in1_W, dtype, in0_mem_config, in1_mem_con
 
 
 def test_ssm_eltwise_mul_with_program_cache(device, use_program_cache):
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
-    dtype = ttl.tensor.DataType.BFLOAT16
+    mem_config = ttnn.experimental.tensor.MemoryConfig(
+        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
+    )
+    dtype = ttnn.experimental.tensor.DataType.BFLOAT16
 
     for _ in range(2):
         batch, in0_W, in1_W = 64, 32, 5120
@@ -107,6 +125,10 @@ def test_ssm_eltwise_mul_with_program_cache(device, use_program_cache):
         run_ssm_eltwise_mul_test(batch, in0_W, in1_W, dtype, mem_config, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
+        tt_dummy_tensor = (
+            ttnn.experimental.tensor.Tensor(py_dummy_tensor, dtype)
+            .to(ttnn.experimental.tensor.Layout.TILE)
+            .to(device, mem_config)
+        )
 
     assert device.num_program_cache_entries() == 3

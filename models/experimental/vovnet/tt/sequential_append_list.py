@@ -6,7 +6,7 @@ import torch.nn as nn
 
 from typing import List
 
-import tt_lib
+import ttnn.deprecated
 
 from models.experimental.vovnet.tt.separable_conv_norm_act import (
     TtSeparableConvNormAct,
@@ -45,7 +45,9 @@ class TtSequentialAppendList(nn.Sequential):
             )
             self.mid_convs.append(conv)
 
-    def forward(self, x: tt_lib.tensor.Tensor, concat_list: List[tt_lib.tensor.Tensor]) -> tt_lib.tensor.Tensor:
+    def forward(
+        self, x: ttnn.experimental.tensor.Tensor, concat_list: List[ttnn.experimental.tensor.Tensor]
+    ) -> ttnn.experimental.tensor.Tensor:
         for i, module in enumerate(self.mid_convs):
             if i == 0:
                 concat_list.append(module(x))

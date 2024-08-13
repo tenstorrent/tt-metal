@@ -7,7 +7,7 @@ from torch import nn
 from torchvision import transforms, datasets
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
 epsilon = 1e-5
@@ -60,11 +60,11 @@ def run_btchnorm_inference(bn_size, device):
     weight_bn_tt = torch.zeros(1, 1, 32, bn_size)
     weight_bn_tt[:, :, :1, :] = weight_bn_src
     tilized_weight_bn_tt = tilize_to_list(weight_bn_tt)
-    gamma = tt_lib.tensor.Tensor(
+    gamma = ttnn.experimental.tensor.Tensor(
         tilized_weight_bn_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
         device,
     )
 
@@ -72,11 +72,11 @@ def run_btchnorm_inference(bn_size, device):
     bias_bn_tt = torch.zeros(1, 1, 32, bn_size)
     bias_bn_tt[:, :, :1, :] = bias_bn_src
     tilized_bias_bn_tt = tilize_to_list(bias_bn_tt)
-    beta = tt_lib.tensor.Tensor(
+    beta = ttnn.experimental.tensor.Tensor(
         tilized_bias_bn_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
         device,
     )
 
@@ -84,11 +84,11 @@ def run_btchnorm_inference(bn_size, device):
     running_mean_bn_tt = torch.zeros(1, 1, 32, bn_size)
     running_mean_bn_tt[:, :, :1, :] = running_mean_bn_src
     tilized_running_mean_tt = tilize_to_list(running_mean_bn_tt)
-    running_mean_tt = tt_lib.tensor.Tensor(
+    running_mean_tt = ttnn.experimental.tensor.Tensor(
         tilized_running_mean_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
         device,
     )
 
@@ -96,11 +96,11 @@ def run_btchnorm_inference(bn_size, device):
     running_var_bn_tt = torch.zeros(1, 1, 32, bn_size)
     running_var_bn_tt[:, :, :1, :] = running_var_bn_src
     tilized_running_var_tt = tilize_to_list(running_var_bn_tt)
-    running_var_tt = tt_lib.tensor.Tensor(
+    running_var_tt = ttnn.experimental.tensor.Tensor(
         tilized_running_var_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
         device,
     )
 
@@ -108,11 +108,11 @@ def run_btchnorm_inference(bn_size, device):
     epsilon_tor = torch.zeros(1, 1, 32, bn_size)
     epsilon_tor[:, :, :1, :] = epsilon_torch
     tilized_eps_tt = tilize_to_list(epsilon_tor)
-    eps_tt = tt_lib.tensor.Tensor(
+    eps_tt = ttnn.experimental.tensor.Tensor(
         tilized_eps_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
         device,
     )
 
@@ -120,11 +120,11 @@ def run_btchnorm_inference(bn_size, device):
     inputs_bn_tt = torch.zeros(1, 1, 32, bn_size)
     inputs_bn_tt[:, :, :1, :] = inputs_bn_src
     tilized_inputs_tt = tilize_to_list(inputs_bn_tt)
-    X_tt = tt_lib.tensor.Tensor(
+    X_tt = ttnn.experimental.tensor.Tensor(
         tilized_inputs_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.experimental.tensor.DataType.BFLOAT16,
+        ttnn.experimental.tensor.Layout.TILE,
         device,
     )
 

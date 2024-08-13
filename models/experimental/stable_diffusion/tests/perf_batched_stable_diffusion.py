@@ -18,7 +18,7 @@ from models.utility_functions import (
 )
 from models.utility_functions import Profiler
 from models.perf.perf_utils import prep_perf_report
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 from models.experimental.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
 )

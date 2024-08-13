@@ -5,7 +5,7 @@
 import pytest
 import torch
 from functools import partial
-import tt_lib as ttl
+import ttnn.deprecated as ttl
 import numpy as np
 
 

@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 
-import tt_lib
+import ttnn.deprecated
 from models.experimental.swin.tt.swin_for_image_classification import (
     TtSwinForImageClassification,
 )

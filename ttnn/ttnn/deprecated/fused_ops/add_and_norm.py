@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_lib import tensor
+from ttnn.deprecated import tensor
 from .layernorm import Layernorm
 
 
 def AddAndNorm(gamma: tensor.Tensor, beta: tensor.Tensor, epsilon, H, W, device):
     """
     Returns a function that performs Eltwise-binary add two
-    ``tt_lib.tensor.Tensor`` s and then LayerNorm the result.
+    ``ttnn.experimental.tensor.Tensor`` s and then LayerNorm the result.
     """
 
     layernorm = Layernorm(gamma, beta, epsilon, H, W, device, 1)

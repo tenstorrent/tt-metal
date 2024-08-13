@@ -10,7 +10,7 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
-import tt_lib
+import ttnn.deprecated
 import ttnn
 from dataclasses import dataclass
 
@@ -20,9 +20,9 @@ from models.experimental.distilbert.tt.distilbert_transformer import TtTransform
 
 @dataclass
 class TtBaseModelOutput:
-    last_hidden_state: tt_lib.tensor.Tensor = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    last_hidden_state: ttnn.experimental.tensor.Tensor = None
+    hidden_states: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None
 
 
 class TtDistilBertModel(nn.Module):
@@ -59,10 +59,10 @@ class TtDistilBertModel(nn.Module):
 
     def get_head_mask(
         self,
-        head_mask: Optional[tt_lib.tensor.Tensor],
+        head_mask: Optional[ttnn.experimental.tensor.Tensor],
         num_hidden_layers: int,
         is_attention_chunked: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.experimental.tensor.Tensor:
         if head_mask is not None:
             torch_head_mask = tt_to_torch_tensor(head_mask)
         else:
@@ -83,14 +83,14 @@ class TtDistilBertModel(nn.Module):
 
     def forward(
         self,
-        input_ids: Optional[tt_lib.tensor.Tensor] = None,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        inputs_embeds: Optional[tt_lib.tensor.Tensor] = None,
+        input_ids: Optional[ttnn.experimental.tensor.Tensor] = None,
+        attention_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
+        head_mask: Optional[ttnn.experimental.tensor.Tensor] = None,
+        inputs_embeds: Optional[ttnn.experimental.tensor.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[TtBaseModelOutput, Tuple[tt_lib.tensor.Tensor, ...]]:
+    ) -> Union[TtBaseModelOutput, Tuple[ttnn.experimental.tensor.Tensor, ...]]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states

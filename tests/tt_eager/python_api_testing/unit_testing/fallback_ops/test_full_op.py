@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttl
-import tt_lib.fallback_ops
+import ttnn.deprecated as ttl
+import ttnn.deprecated.fallback_ops
 from models.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
@@ -23,7 +23,7 @@ def test_full_fallback(input_shape, fill_value, device):
 
     t0 = ttl.fallback_ops.full(input_shape, fill_value)
 
-    output = t0.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    output = t0.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
     comp_pass, _ = comp_pcc(pt_out, output, 0.9999)
     _, comp_out = comp_allclose_and_pcc(pt_out, output)
     logger.debug(comp_out)

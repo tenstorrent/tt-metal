@@ -7,7 +7,7 @@ import torch.nn as nn
 from functools import partial
 
 import ttnn
-import tt_lib
+import ttnn.deprecated
 
 from models.helper_funcs import Linear as TTLinear
 from models.utility_functions import (
@@ -18,8 +18,8 @@ from models.utility_functions import (
 class TtRobertaSelfOutput(nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        self.mem_config = ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
         )
         self.device = device
 
@@ -42,16 +42,18 @@ class TtRobertaSelfOutput(nn.Module):
     def linear(self, x, weight, bias):
         weight = ttnn.transpose(weight, -2, -1)
         x = ttnn.matmul(x, weight, memory_config=self.mem_config)
-        x = tt_lib.tensor.bcast(
+        x = ttnn.experimental.tensor.bcast(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
+            ttnn.experimental.tensor.BcastOpMath.ADD,
+            ttnn.experimental.tensor.BcastOpDim.H,
             self.mem_config,
         )
         return x
 
-    def forward(self, hidden_states: tt_lib.tensor.Tensor, input_tensor: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(
+        self, hidden_states: ttnn.experimental.tensor.Tensor, input_tensor: ttnn.experimental.tensor.Tensor
+    ) -> ttnn.experimental.tensor.Tensor:
         hidden_states = self.dense_linear(hidden_states)
         # TODO: Add dropout when supported
         # hidden_states = self.dropout(hidden_states)
