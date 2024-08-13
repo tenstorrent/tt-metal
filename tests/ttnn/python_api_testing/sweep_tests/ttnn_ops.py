@@ -4437,7 +4437,6 @@ def eltwise_unary_div_no_nan(
     return ttnn_tensor_to_torch(t1)
 
 
-
 def complex_conj(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = ttnn.complex_tensor(
         setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
@@ -4456,10 +4455,11 @@ def complex_abs(x, *args, device, dtype, layout, input_mem_config, output_mem_co
         setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
         setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
     )
-    
+
     t1 = ttnn.abs(t0, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1)
+
 
 def complex_polar(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = ttnn.complex_tensor(
