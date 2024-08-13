@@ -291,6 +291,7 @@ def to_torch(
     torch_rank: Optional[int] = None,
     mesh_composer: Optional[ttnn.MeshToTensor] = None,
     device: Optional[ttnn.Device] = None,
+    cq_id: Optional[int] = 0,
 ) -> "torch.Tensor":
     """
     to_torch(tensor: ttnn.Tensor, torch_rank: Optional[int] = None) -> torch.Tensor
@@ -309,7 +310,7 @@ def to_torch(
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
     if ttnn.is_tensor_storage_on_device(tensor):
-        tensor = ttnn.from_device(tensor)
+        tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
     if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
         tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)

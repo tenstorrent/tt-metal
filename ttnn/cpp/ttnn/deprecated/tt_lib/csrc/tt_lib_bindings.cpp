@@ -283,30 +283,6 @@ void DeviceModule(py::module &m_device) {
         Release captured Trace on Device handle
     )doc");
 
-    auto pyEvent = py::class_<Event, std::shared_ptr<Event>>(m_device, "Event", "Event class");
-    m_device.def("CreateEvent",
-        [] () {
-            return std::make_shared<Event>();
-        }, R"doc(
-        Create new event
-    )doc");
-    m_device.def("RecordEvent",
-        [] (Device* device, const uint8_t cq_id, std::shared_ptr<Event> event) {
-            device->push_work([device, cq_id, event] {
-                EnqueueRecordEvent(device->command_queue(cq_id), event);
-            });
-        }, R"doc(
-        Record an event
-    )doc");
-    m_device.def("WaitForEvent",
-        [] (Device* device, const uint8_t cq_id, std::shared_ptr<Event> event) {
-            device->push_work([device, cq_id, event] {
-                EnqueueWaitForEvent(device->command_queue(cq_id), event);
-            });
-        }, R"doc(
-        Wait for an event
-    )doc");
-
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
     m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);
 }
