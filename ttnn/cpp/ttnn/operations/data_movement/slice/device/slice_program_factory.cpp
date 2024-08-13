@@ -335,7 +335,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_unpadded; i++) {
         CoreCoord core;
         if (row_major) {
-            core = {i / num_cores_x_unpadded, i % num_cores_x_unpadded};
+            core = {i % num_cores_x_unpadded, i / num_cores_x_unpadded};
         } else {
             core = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
         }
@@ -530,7 +530,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     for (uint32_t i = 0; i < num_cores_unpadded; i++) {
         CoreCoord core;
         if (row_major) {
-            core = {i / num_cores_x_unpadded, i % num_cores_x_unpadded};
+            core = {i % num_cores_x_unpadded, i / num_cores_x_unpadded};
         } else {
             core = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
         }
