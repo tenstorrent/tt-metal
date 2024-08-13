@@ -29,9 +29,9 @@ using namespace tt::constants;
 namespace ttnn {
 
 using namespace experimental::ccl;
+using Tensors = std::vector<Tensor>;
 
-
-std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
+std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>, std::optional<operation::OverrideRuntimeArgumentsCallback<Tensors>>> setup_datacopy(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     const Tensor& all_gather_output_tensor,
@@ -138,8 +138,30 @@ std::tuple<std::vector<CoreCoord>, std::vector<uint32_t>> setup_datacopy(
         datacopy_rt_args
     );
 
+    auto override_runtime_arguments_callback = [datacopy_kernel_id, all_datacopy_cores] (
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
+    ) {
+
+        auto datacopy_output_buffer = output_tensors[2].buffer();
+        auto all_gather_output_buffer = output_tensors[0].buffer();
+
+        auto &cached_args = GetRuntimeArgs(program, datacopy_kernel_id);
+
+        for (auto core : all_datacopy_cores) {
+            auto &cached_rt_args = cached_args.at(core.x).at(core.y);
+
+            cached_rt_args[0] = static_cast<uint32_t>(all_gather_output_buffer->address());
+            cached_rt_args[1] = static_cast<uint32_t>(datacopy_output_buffer->address());
+        }
+
+    };
+
     // Return the core coordinates and semaphore address
-    return {all_datacopy_cores, {datacopy_signal_semaphore_id_dir0, datacopy_signal_semaphore_id_dir1}};
+    return {all_datacopy_cores, {datacopy_signal_semaphore_id_dir0, datacopy_signal_semaphore_id_dir1}, override_runtime_arguments_callback};
 }
 
 
@@ -154,11 +176,35 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
 
     const std::vector<CoreCoord>& datacopy_cores = std::get<0>(datacopy_params);
     const std::vector<uint32_t> datacopy_signal_semaphore_ids = std::get<1>(datacopy_params);
+    const auto& datacopy_override_runtime_arguments_callback = std::get<2>(datacopy_params);
 
     std::optional<AllGatherFusedOpSignaler> fused_op_signaler = AllGatherFusedOpSignaler(datacopy_cores, datacopy_signal_semaphore_ids);
 
     // Pass in the datacopy cores and sempahore address (Using optional arguments)
-    return ttnn::all_gather_multi_core_with_workers_helper(program, input_tensor, all_gather_output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, fused_op_signaler, core_grid_offset);
+    operation::ProgramWithCallbacks program_with_callbacks = ttnn::all_gather_multi_core_with_workers_helper(program, input_tensor, all_gather_output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, fused_op_signaler, core_grid_offset);
+    auto all_gather_override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback;
+
+    // Fuse the datacopy and all-gather overriden runtime arguments callbacks
+    auto override_runtime_arguments_callback = [all_gather_override_runtime_arguments_callback, datacopy_override_runtime_arguments_callback] (
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
+    ) {
+
+        if (all_gather_override_runtime_arguments_callback.has_value()) {
+            all_gather_override_runtime_arguments_callback.value()(operation, program, input_tensors, optional_input_tensors, output_tensors);
+        }
+
+        if (datacopy_override_runtime_arguments_callback.has_value()) {
+            datacopy_override_runtime_arguments_callback.value()(operation, program, input_tensors, optional_input_tensors, output_tensors);
+        }
+    };
+
+    program_with_callbacks.override_runtime_arguments_callback = override_runtime_arguments_callback;
+
+    return program_with_callbacks;
 }
 
 }  // namespace ttnn
