@@ -1161,6 +1161,10 @@ bool process_cmd(uint32_t& cmd_ptr,
         stride = process_debug_cmd(cmd_ptr);
         break;
 
+    case CQ_PREFETCH_CMD_WAIT_FOR_EVENT:
+        stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+        break;
+
     case CQ_PREFETCH_CMD_TERMINATE:
         //DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();;
         ASSERT(!exec_buf);
@@ -1301,13 +1305,10 @@ void kernel_main_h() {
             // prefetch_h will stop execution until it recieves an event update from the
             // dispatch_d core assigned to the other CQ
             uint32_t stride = process_prefetch_h_wait_cmd(cmd_ptr);
-            cmd_ptr += stride;
         }
-        else {
-            // Infer that an exec_buf command is to be executed based on the stall state.
-            bool is_exec_buf = (stall_state == STALLED);
-            cmd_ptr = process_relay_inline_all(cmd_ptr, fence, is_exec_buf);
-        }
+        // Infer that an exec_buf command is to be executed based on the stall state.
+        bool is_exec_buf = (stall_state == STALLED);
+        cmd_ptr = process_relay_inline_all(cmd_ptr, fence, is_exec_buf);
 
         // Note: one fetch_q entry can contain multiple commands
         // The code below assumes these commands arrive individually, packing them would require parsing all cmds
