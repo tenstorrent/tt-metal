@@ -2,6 +2,7 @@
 FROM ubuntu:22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG UBUNTU_VERSION=22.04
 ENV DOXYGEN_VERSION=1.9.6
 
 RUN apt update -y && apt install software-properties-common gpg-agent -y
@@ -10,7 +11,7 @@ RUN apt update -y && apt install software-properties-common gpg-agent -y
 RUN add-apt-repository ppa:deadsnakes/ppa 
 
 # Install build and runtime deps
-COPY /scripts/docker/requirements-22.04.txt /opt/tt_metal_infra/scripts/docker/requirements.txt
+COPY /scripts/docker/requirements-${UBUNTU_VERSION}.txt /opt/tt_metal_infra/scripts/docker/requirements.txt
 RUN apt-get -y update \
     && xargs -a /opt/tt_metal_infra/scripts/docker/requirements.txt apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
