@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn
 
 from models.utility_functions import (
     torch2tt_tensor,
@@ -24,15 +24,11 @@ class TtYolov5Upsample(torch.nn.Module):
     ):
         super().__init__()
         self.device = device
-        self.upsample = torch.nn.Upsample(
-            size=size, scale_factor=scale_factor, mode=mode
-        )
+        self.upsample = torch.nn.Upsample(size=size, scale_factor=scale_factor, mode=mode)
 
     def forward(self, x):
         x = tt2torch_tensor(x)
         x = self.upsample(x)
-        x = torch2tt_tensor(
-            x, tt_device=self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        x = torch2tt_tensor(x, tt_device=self.device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
         return x
