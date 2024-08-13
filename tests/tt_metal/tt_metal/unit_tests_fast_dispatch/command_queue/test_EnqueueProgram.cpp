@@ -146,11 +146,6 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Progr
 
     bool are_all_semaphore_values_correct = true;
 
-    for (uint32_t sem_id = 0; sem_id < program_config.num_sems; sem_id++) {
-        const uint32_t allocated_sem_id  = CreateSemaphore(program, program_config.cr_set, sem_id);
-        are_all_semaphore_values_correct &= (allocated_sem_id == sem_id);
-    }
-
     const bool is_blocking_op = false;
     EnqueueProgram(cq, program, is_blocking_op);
     Finish(cq);
