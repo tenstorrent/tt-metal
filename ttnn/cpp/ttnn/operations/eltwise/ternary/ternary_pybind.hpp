@@ -35,6 +35,16 @@ void bind_ternary_composite_float(py::module& module, const ternary_operation_t&
                 * :attr:`value` (float) : Default value is 1.0
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
 
+            Supported dtypes and layouts:
+
+            +----------------------------+---------------------------------+-------------------+
+            |     Dtypes                 |         Layouts                 |     Ranks         |
+            +----------------------------+---------------------------------+-------------------+
+            |    BFLOAT16                |          TILE                   |      2, 3, 4      |
+            +----------------------------+---------------------------------+-------------------+
+
+            Note : bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
+
             Example:
 
                 >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
@@ -81,6 +91,16 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
                 * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
                 * :attr:`queue_id` (Optional[uint8]): command queue id
+
+            Supported dtypes and layouts:
+
+            +----------------------------+---------------------------------+-------------------+
+            |     Dtypes                 |         Layouts                 |     Ranks         |
+            +----------------------------+---------------------------------+-------------------+
+            |    BFLOAT16                |          TILE                   |      2, 3, 4      |
+            +----------------------------+---------------------------------+-------------------+
+
+            Note : bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
             Example:
 
@@ -175,8 +195,20 @@ void bind_ternary_lerp(py::module& module, const ternary_operation_t& operation,
                 * :attr:`input_tensor_a`
                 * :attr:`input_tensor_b`
                 * :attr:`input_tensor_c` (ttnn.Tensor or Number):
+
             Keyword Args:
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+
+            Supported dtypes and layouts:
+
+            +----------------------------+---------------------------------+-------------------+
+            |     Dtypes                 |         Layouts                 |     Ranks         |
+            +----------------------------+---------------------------------+-------------------+
+            |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+            +----------------------------+---------------------------------+-------------------+
+
+            Note : bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
+
             Example:
                 >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
                 >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
@@ -228,8 +260,20 @@ void bind_ternary_mac(py::module& module, const ternary_operation_t& operation, 
                 * :attr:`input_tensor_a`
                 * :attr:`input_tensor_b` (ttnn.Tensor or Number):
                 * :attr:`input_tensor_c` (ttnn.Tensor or Number):
+
             Keyword Args:
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+
+            Supported dtypes and layouts:
+
+            +----------------------------+---------------------------------+-------------------+
+            |     Dtypes                 |         Layouts                 |     Ranks         |
+            +----------------------------+---------------------------------+-------------------+
+            |    BFLOAT16                |          TILE                   |      2, 3, 4      |
+            +----------------------------+---------------------------------+-------------------+
+
+            Note : bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
+
             Example:
                 >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
                 >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
