@@ -16,12 +16,12 @@ namespace ttnn::operations::sliding_window {
 
 owned_buffer::Buffer<bfloat16> ref_conv_op(
     const Tensor &input_padded_tensor,
-    Shape input_nchw_shape,
+    const Shape &input_nchw_shape,
     uint32_t stride_h,
     uint32_t stride_w,
     const std::vector<float> &filter_vector,
-    Shape filter_pyt_tensor_shape,
-    Shape out_golden_pyt_tensor_shape) {
+    const Shape &filter_pyt_tensor_shape,
+    const Shape &out_golden_pyt_tensor_shape) {
     uint32_t input_n, input_h, input_w;
     uint32_t filter_h, filter_w;
     uint32_t output_n, output_h, output_w;
