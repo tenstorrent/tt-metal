@@ -29,6 +29,7 @@ void py_bind_rotate_half(pybind11::module& module) {
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("input"),
+            py::kw_only(),
             py::arg("memory_config") = std::nullopt});
 }
 

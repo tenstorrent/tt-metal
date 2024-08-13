@@ -10,7 +10,7 @@ namespace ttnn {
 namespace operations::experimental::transformer {
 
 struct RotateHalfOperation {
-    static Tensor operator()(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    static Tensor operator()(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace operations::experimental::transformer
