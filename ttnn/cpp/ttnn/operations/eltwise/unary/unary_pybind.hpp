@@ -1248,7 +1248,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::log);
     detail::bind_unary_operation(module, ttnn::log10);
     detail::bind_unary_operation(module, ttnn::log2);
-    detail::bind_unary_operation(module, ttnn::logical_not);
+    detail::bind_unary_operation(module, ttnn::logical_not, R"doc(Supports bfloat16 dtype and both TILE and ROW_MAJOR layout)doc");
     detail::bind_unary_operation(module, ttnn::ltz);
     detail::bind_unary_operation(module, ttnn::neg);
     detail::bind_unary_operation(module, ttnn::nez);
