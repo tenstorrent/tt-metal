@@ -683,8 +683,7 @@ void process_write_packed_large() {
         uint32_t length = sub_cmd_ptr->length;
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align(length, alignment) - length;
-        // TODO: Enable linking across subcmds after writes to prefetcher is switched to other NOC
-        uint32_t unlink = true; // sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
+        uint32_t unlink = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
 
         // Only re-init state after we have unlinked the last transaction
         // Otherwise we assume NOC coord hasn't changed
@@ -692,7 +691,7 @@ void process_write_packed_large() {
         if (init_state) {
             uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
             // TODO: Linking should be set to true once atomic txn is handled properly
-            cq_noc_async_write_init_state<CQ_NOC_sNdl, true, false>(0, get_noc_addr_helper(dst_noc, dst_addr));
+            cq_noc_async_write_init_state<CQ_NOC_sNdl, true, true>(0, get_noc_addr_helper(dst_noc, dst_addr));
         }
 
         sub_cmd_ptr++;
