@@ -6,7 +6,7 @@ import torch
 
 from loguru import logger
 
-import tt_lib
+import ttnn
 
 from models.experimental.yolov3.reference.models.common import (
     autopad,
@@ -38,9 +38,7 @@ def test_conv2d_module(device, model_location_generator):
     model_config_path = str(data_path / "yolov3.yaml")
     weights_loc = str(model_path / "yolov3.pt")
 
-    reference_model = DetectMultiBackend(
-        weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False
-    )
+    reference_model = DetectMultiBackend(weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False)
     state_dict = reference_model.state_dict()
     torch_model = reference_model.model.model[INDEX].conv
 
@@ -93,7 +91,7 @@ def test_conv2d_module(device, model_location_generator):
 
     # Compare PCC
     tt_out = tt_out.cpu()
-    tt_out = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_out = tt_out.to(ttnn.ROW_MAJOR_LAYOUT)
 
     tt_out = tt2torch_tensor(tt_out)
 

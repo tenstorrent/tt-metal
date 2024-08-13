@@ -9,8 +9,6 @@ import cv2
 from pathlib import Path
 from loguru import logger
 
-import tt_lib
-
 from models.experimental.yolov3.reference.models.common import DetectMultiBackend
 from models.experimental.yolov3.tt.yolov3_detection_model import (
     yolov3_fused_model,
@@ -32,6 +30,7 @@ from models.utility_functions import torch2tt_tensor
 
 f = f"{Path(__file__).parent}"
 
+
 def test_gs_demo(model_location_generator, device):
     torch.manual_seed(1234)
 
@@ -44,9 +43,7 @@ def test_gs_demo(model_location_generator, device):
     model_config_path = str(data_path / "yolov3.yaml")
     weights_loc = str(model_path / "yolov3.pt")
 
-    reference_model = DetectMultiBackend(
-        weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False
-    )
+    reference_model = DetectMultiBackend(weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False)
     reference_model = reference_model.model
 
     tt_module = yolov3_fused_model(device, model_location_generator)
@@ -77,9 +74,7 @@ def test_gs_demo(model_location_generator, device):
         conf_thres, iou_thres = 0.25, 0.45
         classes = None  # filter by class
         agnostic_nms = False
-        pred = non_max_suppression(
-            pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=1000
-        )
+        pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=1000)
 
         # Process predictions
         for i, det in enumerate(pred):  # per image
@@ -107,11 +102,7 @@ def test_gs_demo(model_location_generator, device):
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
                     if True:  # Write to file
-                        xywh = (
-                            (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn)
-                            .view(-1)
-                            .tolist()
-                        )  # normalized xywh
+                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh)  # label format
                     # Add bbox to image
                     c = int(cls)  # integer class

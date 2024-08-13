@@ -6,7 +6,7 @@ import torch
 
 from loguru import logger
 
-import tt_lib
+import ttnn
 
 from models.experimental.yolov3.reference.models.common import (
     autopad,
@@ -34,9 +34,7 @@ def test_detection_model(device, model_location_generator):
     data_coco = str(data_path / "coco128.yaml")
     weights_loc = str(model_path / "yolov3.pt")
 
-    reference_model = DetectMultiBackend(
-        weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False
-    )
+    reference_model = DetectMultiBackend(weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False)
     reference_model = reference_model.model
 
     tt_module = yolov3_fused_model(device, model_location_generator)
@@ -59,7 +57,7 @@ def test_detection_model(device, model_location_generator):
         # Inference- fused torch
         pt_out = reference_model(im)
         # Inference- fused tt
-        tt_im = torch2tt_tensor(im, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        tt_im = torch2tt_tensor(im, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
         tt_out = tt_module(tt_im)
 
     # Check all outputs PCC
