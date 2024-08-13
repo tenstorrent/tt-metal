@@ -3,8 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-
-import tt_lib as ttl
+import ttnn
 
 
 class Complex:
@@ -82,7 +81,7 @@ def random_complex_tensor(shape, real_range=(-100, 100), imag_range=(-100, 100))
 
 def convert_to_torch_tensor(tt_dev):
     for i in range(len(tt_dev)):
-        tt_dev_r = tt_dev[i].real.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-        tt_dev_i = tt_dev[i].imag.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_dev_r = tt_dev[i].real.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        tt_dev_i = tt_dev[i].imag.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         tt_dev[i] = Complex(re=tt_dev_r, im=tt_dev_i).metal
     return tt_dev
