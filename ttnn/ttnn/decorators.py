@@ -150,18 +150,14 @@ def get_all_tensors(object_value):
     return get_tensors(object_value, (ttnn.Tensor, torch.Tensor))
 
 
-TENSOR_ID = 0
-
-
 def set_tensor_id(tensor, force=False):
     import torch
 
-    global TENSOR_ID
     if isinstance(tensor, (ttnn.Tensor, torch.Tensor)):
         if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
             return
-        tensor.tensor_id = TENSOR_ID
-        TENSOR_ID += 1
+        tensor.tensor_id = ttnn._ttnn.get_tensor_id()
+        ttnn._ttnn.increment_tensor_id()
     elif isinstance(tensor, (list, tuple)):
         for element in tensor:
             set_tensor_id(element, force)
@@ -382,24 +378,6 @@ class Operation:
 
             return call_wrapper
 
-        def operation_history_decorator(function):
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                original_operation_history_json = os.environ.get("OPERATION_HISTORY_JSON", None)
-                os.environ["OPERATION_HISTORY_JSON"] = str(
-                    ttnn.CONFIG.report_path / ttnn.database.OPERATION_HISTORY_JSON
-                )
-                output = function(*function_args, **function_kwargs)
-                if hasattr(ttnn._ttnn.deprecated.operations, "dump_operation_history_to_json"):
-                    ttnn._ttnn.deprecated.operations.dump_operation_history_to_json()
-                if original_operation_history_json is not None:
-                    os.environ["OPERATION_HISTORY_JSON"] = original_operation_history_json
-                else:
-                    del os.environ["OPERATION_HISTORY_JSON"]
-                return output
-
-            return call_wrapper
-
         def comparison_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
@@ -485,12 +463,18 @@ class Operation:
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
                 if ttnn.CONFIG.report_path is not None:
-                    previous_operation = ttnn.database.query_latest_operation(ttnn.CONFIG.report_path)
-                    if previous_operation is not None:
-                        operation_id = previous_operation.operation_id + 1
-                        ttnn._ttnn.set_operation_id(operation_id)
+                    # If the database already exists, get the operation_id from the latest operation
+                    latest_operation = ttnn.database.query_latest_operation(ttnn.CONFIG.report_path)
+                    if latest_operation is not None:
+                        operation_id = latest_operation.operation_id + 1
+                        ttnn._ttnn.set_python_operation_id(operation_id)
 
-                operation_id = ttnn._ttnn.get_operation_id()
+                    latest_tensor = ttnn.database.query_latest_tensor(ttnn.CONFIG.report_path)
+                    if latest_tensor is not None:
+                        tensor_id = latest_tensor.tensor_id + 1
+                        ttnn._ttnn.set_tensor_id(tensor_id)
+
+                operation_id = ttnn._ttnn.get_python_operation_id()
                 is_top_level_operation = len(OPERATION_CALL_STACK) == 1
 
                 decorated_function = function
@@ -527,7 +511,6 @@ class Operation:
                     logger.debug(f"Started {self.python_fully_qualified_name:50}")
 
                     if ttnn.CONFIG.report_path is not None:
-                        decorated_function = operation_history_decorator(decorated_function)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, None)
                         ttnn.database.insert_stack_trace(
                             ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
@@ -544,7 +527,7 @@ class Operation:
 
                 ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
                 output = decorated_function(*function_args, **function_kwargs)
-                graph_capture = ttnn.graph.end_graph_capture()
+                captured_graph = ttnn.graph.end_graph_capture()
 
                 local_tensor_comparison_records = []
                 local_golden_function_output = []
@@ -595,6 +578,7 @@ class Operation:
                                 file_name=ttnn.CONFIG.report_path / ttnn.database.GRAPHS_PATH / f"{operation_id}.svg",
                             )
                             # ttnn.database.store_graph(operation_id, ttnn.tracer.GRAPH_STACK[-1])
+                        ttnn.database.insert_captured_graph(ttnn.CONFIG.report_path, operation_id, captured_graph)
 
                 for hook in POST_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs, output)
@@ -613,7 +597,7 @@ class Operation:
     def __call__(self, *function_args, **function_kwargs):
         try:
             if not OPERATION_CALL_STACK:
-                ttnn._ttnn.increment_operation_id()
+                ttnn._ttnn.increment_python_operation_id()
             OPERATION_CALL_STACK.append(self.python_fully_qualified_name)
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:

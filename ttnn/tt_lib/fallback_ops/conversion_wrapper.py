@@ -134,8 +134,6 @@ def convert_pt_tensors_to_tt_tensors(args, output_format):
 def convert_tt_tensors_wrapper(func):
     @wraps(func)
     def wrap(*args, **kwargs):
-        ttl_tensor.log_external_operation(func, *args, **kwargs)
-
         output_format = {}
         if "output_on_device" in kwargs:
             output_format["on_device"] = kwargs["output_on_device"]
