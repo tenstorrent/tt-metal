@@ -38,7 +38,7 @@ struct Conv2dConfig {
     bool deallocate_activation = false;
     bool reallocate_halo_output = false;
     uint32_t act_block_h_override = 0;
-    uint32_t act_block_w_div = 1;
+    uint32_t act_block_w_div = 1; //Amount by which the maximum possible act_block_width is divided. Max act_block_w = (in_channels * window_w * window_h)/total_num_cores;
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
     TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED; // used only if override_sharding_config is true
