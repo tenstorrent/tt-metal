@@ -18,7 +18,7 @@ from elastic_config import *
 @click.option("--suite-name", default=None, help="Suite name to filter by.")
 @click.option("--vector-id", default=None, help="Individual Vector ID to filter by.")
 @click.option("--run-id", default=None, help="Individual Run ID to filter by.")
-@click.option("--elastic", default=ELASTIC_DEFAULT_URL, help="Elastic Connection String")
+@click.option("--elastic", default="corp", help="Elastic Connection String. Available presets are ['corp', 'cloud']")
 @click.option(
     "--all", is_flag=True, default=False, help="Displays total run statistics instead of the most recent run."
 )
@@ -30,7 +30,7 @@ def cli(ctx, module_name, suite_name, vector_id, run_id, elastic, all):
     ctx.obj["suite_name"] = suite_name
     ctx.obj["vector_id"] = vector_id
     ctx.obj["run_id"] = run_id
-    ctx.obj["elastic"] = elastic
+    ctx.obj["elastic"] = get_elastic_url(elastic)
     ctx.obj["all"] = all
 
 

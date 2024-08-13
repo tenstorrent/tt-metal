@@ -19,12 +19,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--elastic",
         required=False,
-        default=ELASTIC_DEFAULT_URL,
-        help="Elastic Connection String for the vector and results database.",
+        default="corp",
+        help="Elastic Connection String for the vector and results database. Available presets are ['corp', 'cloud']",
     )
     args = parser.parse_args(sys.argv[1:])
 
-    ELASTIC_CONNECTION_STRING = args.elastic
+    ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
     DUMP_PATH = "tests/sweep_framework/sqlite_dump/"
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
     es_client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
