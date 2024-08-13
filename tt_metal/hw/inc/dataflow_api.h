@@ -1520,9 +1520,9 @@ void noc_async_writes_flushed() {
  * Return value: None
  */
 FORCE_INLINE
-void noc_async_atomic_barrier() {
+void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
     DEBUG_STATUS("NABW");
-    while (!ncrisc_noc_nonposted_atomics_flushed(noc_index))
+    while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx))
         ;
     DEBUG_STATUS("NABD");
 }
@@ -1643,7 +1643,7 @@ void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF) {
  * | incr      | The value to increment by                                      | uint32_t | Any uint32_t value                                            | True     |
  */
 inline
-void noc_semaphore_inc(uint64_t addr, uint32_t incr) {
+void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_idx = noc_index) {
     /*
     [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]
     Generic increment with 32-bit wrap.
@@ -1651,7 +1651,7 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr) {
     DEBUG_STATUS("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(addr, 4);
     DEBUG_INSERT_DELAY(TransactionAtomic);
-    noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, addr, NOC_UNICAST_WRITE_VC, incr, 31 /*wrap*/, false /*linked*/, false /*posted*/);
+    noc_fast_atomic_increment(noc_idx, NCRISC_AT_CMD_BUF, addr, NOC_UNICAST_WRITE_VC, incr, 31 /*wrap*/, false /*linked*/, false /*posted*/);
     DEBUG_STATUS("NSID");
 }
 
