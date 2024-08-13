@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-import tt_lib
 import ttnn
 
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
@@ -22,9 +21,7 @@ def test_bw_where(input_shapes, device):
     condition_data = torch.zeros(input_shapes, dtype=torch.bool)
     condition_data.view(-1)[::2] = True
 
-    condition_tensor = (
-        tt_lib.tensor.Tensor(condition_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
+    condition_tensor = ttnn.Tensor(condition_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -1, 1, device, True)
@@ -52,9 +49,7 @@ def test_bw_where_output(input_shapes, are_required_outputs, device):
     condition_data = torch.zeros(input_shapes, dtype=torch.bool)
     condition_data.view(-1)[::2] = True
 
-    condition_tensor = (
-        tt_lib.tensor.Tensor(condition_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-    )
+    condition_tensor = ttnn.Tensor(condition_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -1, 1, device, True)
