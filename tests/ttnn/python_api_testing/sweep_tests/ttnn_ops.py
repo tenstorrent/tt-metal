@@ -4435,3 +4435,16 @@ def eltwise_unary_div_no_nan(
     t1 = ttnn.div_no_nan(t0, value, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1)
+
+
+def complex_conj(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+
+    t1 = ttnn.conj(t0, memory_config=output_mem_config)
+
+    return torch.complex(
+        ttnn_tensor_to_torch(t1.real).to(torch.float32), ttnn_tensor_to_torch(t1.imag).to(torch.float32)
+    )

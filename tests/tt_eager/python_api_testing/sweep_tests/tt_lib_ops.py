@@ -2742,17 +2742,6 @@ def complex_mul(x, y, *args, device, dtype, layout, input_mem_config, output_mem
 
 
 @setup_host_and_device
-def complex_conj(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    temp = torch.cat([x.real, x.imag], -1)
-    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
-
-    tt_result = ttl.tensor.conj(t0, output_mem_config=output_mem_config)
-    result = ttl_complex_2_torch_complex(tt_result)
-
-    return result
-
-
-@setup_host_and_device
 def complex_abs(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     temp = torch.cat([x.real, x.imag], -1)
     t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])

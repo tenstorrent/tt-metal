@@ -886,10 +886,6 @@ op_map = {
         "tt_op": tt_lib_ops.complex_mul,
         "pytorch_op": pytorch_ops.complex_mul,
     },
-    "complex-conj": {
-        "tt_op": tt_lib_ops.complex_conj,
-        "pytorch_op": pytorch_ops.complex_conj,
-    },
     "complex-abs": {
         "tt_op": tt_lib_ops.complex_abs,
         "pytorch_op": pytorch_ops.complex_abs,
