@@ -16,7 +16,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
     check_device_mesh,
 )
-from models.demos.tg.llama3_70b.demo.demo import main, construct_arg
+from models.demos.tg.llama3_70b.demo.demo import run_demo, construct_arg
 
 
 @pytest.mark.timeout(240000)
@@ -124,4 +124,4 @@ def test_llama3_tg_nightly_demo(
         print_output_as_generated=False,
         print_output_at_end=True,
     )
-    main(args)
+    run_demo(args)

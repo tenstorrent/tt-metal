@@ -76,7 +76,7 @@ def construct_arg(**kwargs):
     return DemoArgs(model=model_args, tt=tt_args, data=data_args)
 
 
-def main(args):
+def run_demo(args):
     # Set random reproducible seed
     torch.manual_seed(0)
 
@@ -436,7 +436,6 @@ def test_LlamaModel_demo(
 
     check_device_mesh(device_mesh, model_config)
 
-    # TODO: Renable when issue #11089 is resolved
     for i in device_mesh.get_device_ids():
         device = device_mesh.get_device(i)
         device.enable_async(True)
@@ -464,4 +463,4 @@ def test_LlamaModel_demo(
         decode_only=decode_only,
         ground_truth=ground_truth,
     )
-    main(args)
+    run_demo(args)
