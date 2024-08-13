@@ -584,6 +584,8 @@ def run_tranpose_hc_sharded(device, n, c, h, w, grid_size):
         (2, 8, 4, 32, ttnn.CoreGrid(y=8, x=4)),
         (2, 2, 8, 64, ttnn.CoreGrid(y=8, x=1)),
         (16, 4, 224, 224, ttnn.CoreGrid(y=8, x=8)),
+        (20, 4, 224, 224, ttnn.CoreGrid(y=8, x=7)),
+        (24, 3, 224, 224, ttnn.CoreGrid(y=8, x=7)),
     ],
 )
 def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, use_program_cache):
