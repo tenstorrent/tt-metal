@@ -12,7 +12,9 @@ import torch
 
 
 @pytest.mark.parametrize("num_devices", [1, 2, 8], ids=["1chips", "2chips", "8chips"])
-def test_reproduce_lm_head_nd_32(all_devices, num_devices, use_program_cache, determinism_check_enabled=False):
+def test_reproduce_lm_head_nd_32(
+    all_devices, num_devices, use_program_cache, determinism_check_enabled=False, determinism_check_iterations=1
+):
     devices = []
     if num_devices == 8:
         devices = get_devices_for_t3000(all_devices, num_devices)
@@ -138,7 +140,7 @@ def test_reproduce_lm_head_nd_32(all_devices, num_devices, use_program_cache, de
                 print("End single device sync")
 
         # check if the output matches the first run output
-        if determinism_check_enabled:
+        if determinism_check_enabled and i % determinism_check_iterations == 0:
             for device_idx in range(num_devices):
                 pt_out = tt2torch_tensor(out[device_idx])
                 if torch.equal(reference_out[device_idx], pt_out):
@@ -200,12 +202,14 @@ def test_specific_chip_lm_head_nd_32_t3000(all_devices, logical_chip_index, use_
 
 
 @pytest.mark.parametrize("num_devices", [1, 2, 8], ids=["1chips", "2chips", "8chips"])
-def test_determinism(
-    all_devices,
-    num_devices,
-    use_program_cache,
-):
-    test_reproduce_lm_head_nd_32(all_devices, num_devices, use_program_cache, determinism_check_enabled=True)
+def test_determinism(all_devices, num_devices, use_program_cache, determinism_check_iterations):
+    test_reproduce_lm_head_nd_32(
+        all_devices,
+        num_devices,
+        use_program_cache,
+        determinism_check_enabled=True,
+        determinism_check_iterations=determinism_check_iterations,
+    )
 
 
 @pytest.mark.parametrize(
@@ -222,11 +226,7 @@ def test_determinism(
         "logical_chip7",
     ],
 )
-def test_determinism_specific_chip(
-    all_devices,
-    logical_chip_index,
-    use_program_cache,
-):
+def test_determinism_specific_chip(all_devices, logical_chip_index, use_program_cache, determinism_check_iterations):
     num_devices_t3000 = 8
     if len(all_devices) != num_devices_t3000:
         pytest.skip("Test is only valid for t3000 machines")
@@ -251,4 +251,10 @@ def test_determinism_specific_chip(
     target_device = devices[logical_chip_index]
     devices = [target_device]
 
-    test_reproduce_lm_head_nd_32(devices, 1, use_program_cache, determinism_check_enabled=True)
+    test_reproduce_lm_head_nd_32(
+        devices,
+        1,
+        use_program_cache,
+        determinism_check_enabled=True,
+        determinism_check_iterations=determinism_check_iterations,
+    )

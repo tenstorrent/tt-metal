@@ -34,6 +34,7 @@ def test_reproduce_matmul_2d_hang(
     loop_count,
     use_program_cache,
     determinism_check_enabled=False,
+    determinism_check_iterations=1,
 ):
     devices = []
     if num_devices == 8:
@@ -182,7 +183,7 @@ def test_reproduce_matmul_2d_hang(
                 print("End single device sync")
 
         # check if the output matches the first run output
-        if determinism_check_enabled:
+        if determinism_check_enabled and i % determinism_check_iterations == 0:
             device_idx = 0
             for device_idx in range(num_devices):
                 pt_out = tt2torch_tensor(out[device_idx])
@@ -265,6 +266,7 @@ def test_determinism(
     out_subblock_w,
     loop_count,
     use_program_cache,
+    determinism_check_iterations,
 ):
     test_reproduce_matmul_2d_hang(
         num_devices,
@@ -280,6 +282,7 @@ def test_determinism(
         loop_count,
         use_program_cache,
         determinism_check_enabled=True,
+        determinism_check_iterations=determinism_check_iterations,
     )
 
 
@@ -317,6 +320,7 @@ def test_determinism_specific_chip(
     out_subblock_w,
     loop_count,
     use_program_cache,
+    determinism_check_iterations,
 ):
     num_devices_t3000 = 8
     if len(all_devices) != num_devices_t3000:
@@ -356,4 +360,5 @@ def test_determinism_specific_chip(
         loop_count,
         use_program_cache,
         determinism_check_enabled=True,
+        determinism_check_iterations=determinism_check_iterations,
     )
