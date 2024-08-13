@@ -303,6 +303,10 @@ Pointwise Binary
    ttnn/nez
    ttnn/eqz
    ttnn/gt
+   ttnn/gt_
+   ttnn/lt_
+   ttnn/ge_
+   ttnn/le_
    ttnn/ge
    ttnn/lt
    ttnn/le
