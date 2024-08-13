@@ -10,9 +10,7 @@ import sys
 import torch
 
 from models.experimental.yolov3.reference.models.common import autopad
-import tt_lib
 import ttnn
-from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
