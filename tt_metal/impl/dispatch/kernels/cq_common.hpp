@@ -217,14 +217,12 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
 
-    static uint32_t available = 0;
+    static uint32_t counter = 0;
+    static uint32_t sem = 0;
 
-    if (available == 0) {
-        // Ensure last sem_inc has landed
-        noc_async_atomic_barrier();
-
+    if (counter == sem) {
         uint32_t heartbeat = 0;
-        while ((available = *sem_addr) == 0) {
+        while ((sem = *sem_addr) == counter) {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
         }
         DEBUG_STATUS("UAPD");
@@ -232,10 +230,10 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
 
     // Set a fence to limit how much is processed at once
     uint32_t limit = (block_next_start_addr[rd_block_idx] - cb_fence) >> cb_log_page_size;
+    uint32_t available = sem - counter;
     uint32_t usable = (available > limit) ? limit : available;
 
-    noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -usable);
-    available -= usable;
+    counter += usable;
 
     return usable;
 }
