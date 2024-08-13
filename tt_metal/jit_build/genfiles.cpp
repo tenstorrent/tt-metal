@@ -580,7 +580,8 @@ static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& co
     string end_of_line = " \\\n    ( \\";
     for (const auto& core : cores) {
         ss << end_of_line << endl;
-        ss << "    ((x) == NOC_X((uint32_t)" << core.x << ") && (y) == NOC_Y((uint32_t)" << core.y << "))";
+        ss << "    ((x) == NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << core.x
+           << ") && (y) == NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << core.y << "))";
         end_of_line = " || \\";
     }
     ss << ")" << endl;
@@ -628,18 +629,18 @@ static string generate_noc_addr_ranges_string(
 
     if (not has_pcie_cores) {
         // If the address range is 0, then there are no PCIe cores (non-mmio device)
-        ss << "#define NOC_PCIE_XY_P(x, y) false" << endl;
+        ss << "#define NOC_PCIE_XY_P(noc_idx, x, y) false" << endl;
     } else {
-        ss << "#define NOC_PCIE_XY_P(x, y)";
+        ss << "#define NOC_PCIE_XY_P(noc_idx, x, y)";
         ss << generate_noc_core_xy_range_define(pcie_cores);
     }
     ss << endl;
 
-    ss << "#define NOC_DRAM_XY_P(x, y)";
+    ss << "#define NOC_DRAM_XY_P(noc_idx, x, y)";
     ss << generate_noc_core_xy_range_define(dram_cores);
     ss << endl;
 
-    ss << "#define NOC_ETH_XY_P(x, y)";
+    ss << "#define NOC_ETH_XY_P(noc_idx, x, y)";
     if (ethernet_cores.size() == 0) {
         ss << " false" << endl;
     } else {
@@ -647,33 +648,28 @@ static string generate_noc_addr_ranges_string(
     }
     ss << endl;
 
-    ss << "#define NOC_HARVESTED_Y_P(y)";
+    ss << "#define NOC_HARVESTED_Y_P(noc_idx, y)";
     if (harvested_rows.size() == 0) {
         ss << " false" << endl;
     } else {
         string join = " \\\n    ( \\\n";
         for (const auto& y : harvested_rows) {
-            ss << join << "     (NOC_Y((y)) == " << y << ")";
+            ss << join << "     (NOC_0_Y(noc_idx, noc_size_y, (y)) == " << y << ")";
             join = " || \\\n";
         }
         ss << ")" << endl;
     }
     ss << endl;
 
-    ss << "#define NOC_WORKER_XY_P(x, y) \\" << endl;
-    ss << "    (!NOC_PCIE_XY_P(x, y) && \\" << endl;
-    ss << "     !NOC_DRAM_XY_P(x, y) && \\" << endl;
-    ss << "     !NOC_ETH_XY_P(x, y) && \\" << endl;
-    ss << "     !NOC_HARVESTED_Y_P(y) && \\" << endl;
-    ss << "     ((noc_index == 0) ? \\" << endl;
-    ss << "      ((x) >= NOC_X((uint32_t)" << 1 << ") && \\" << endl;
-    ss << "       (x) <= NOC_X((uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
-    ss << "       (y) >= NOC_Y((uint32_t)" << 1 << ") && \\" << endl;
-    ss << "       (y) <= NOC_Y((uint32_t)" << grid_size.y - 1 << ")) : \\" << endl;
-    ss << "      ((x) <= NOC_X((uint32_t)" << 1 << ") && \\" << endl;
-    ss << "       (x) >= NOC_X((uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
-    ss << "       (y) <= NOC_Y((uint32_t)" << 1 << ") && \\" << endl;
-    ss << "       (y) >= NOC_Y((uint32_t)" << grid_size.y - 1<< "))))";
+    ss << "#define NOC_WORKER_XY_P(noc_idx, x, y) \\" << endl;
+    ss << "    (!NOC_PCIE_XY_P(noc_idx, x, y) && \\" << endl;
+    ss << "     !NOC_DRAM_XY_P(noc_idx, x, y) && \\" << endl;
+    ss << "     !NOC_ETH_XY_P(noc_idx, x, y) && \\" << endl;
+    ss << "     !NOC_HARVESTED_Y_P(noc_idx, y) && \\" << endl;
+    ss << "     ((x) >= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << 1 << ") && \\" << endl;
+    ss << "      (x) <= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
+    ss << "      (y) >= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << 1 << ") && \\" << endl;
+    ss << "      (y) <= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << grid_size.y - 1 << ")))" << endl;
     ss << endl;
     ss << endl;
 

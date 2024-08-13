@@ -20,12 +20,12 @@
 // print server.
 #if !defined(SKIP_NOC_LOGGING)
 #define LOG_LEN(l) DPRINT << NOC_LOG_XFER(l);
-#define LOG_READ_LEN_FROM_STATE() LOG_LEN(NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
-#define LOG_WRITE_LEN_FROM_STATE() LOG_LEN(NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
+#define LOG_READ_LEN_FROM_STATE(noc_id) LOG_LEN(NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
+#define LOG_WRITE_LEN_FROM_STATE(noc_id) LOG_LEN(NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
 #else
 #define LOG_LEN(l)
-#define LOG_READ_LEN_FROM_STATE()
-#define LOG_WRITE_LEN_FROM_STATE()
+#define LOG_READ_LEN_FROM_STATE(noc_id)
+#define LOG_WRITE_LEN_FROM_STATE(noc_id)
 #endif
 
 #if (                                                                                          \
@@ -69,16 +69,21 @@ typedef bool debug_sanitize_noc_cast_t;
 //  - this isn't racy w/ the host so long as invalid is written last
 //  - this isn't racy between riscvs so long as each gets their own noc_index
 inline void debug_sanitize_post_noc_addr_and_hang(
-    uint64_t noc_addr, uint32_t l1_addr, uint32_t len, debug_sanitize_noc_cast_t multicast, uint16_t invalid) {
+    uint8_t noc_id,
+    uint64_t noc_addr,
+    uint32_t l1_addr,
+    uint32_t len,
+    debug_sanitize_noc_cast_t multicast,
+    uint16_t invalid) {
     debug_sanitize_noc_addr_msg_t tt_l1_ptr *v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize_noc);
 
-    if (v[noc_index].invalid == DebugSanitizeNocInvalidOK) {
-        v[noc_index].noc_addr = noc_addr;
-        v[noc_index].l1_addr = l1_addr;
-        v[noc_index].len = len;
-        v[noc_index].which = debug_get_which_riscv();
-        v[noc_index].multicast = multicast;
-        v[noc_index].invalid = invalid;
+    if (v[noc_id].invalid == DebugSanitizeNocInvalidOK) {
+        v[noc_id].noc_addr = noc_addr;
+        v[noc_id].l1_addr = l1_addr;
+        v[noc_id].len = len;
+        v[noc_id].which = debug_get_which_riscv();
+        v[noc_id].multicast = multicast;
+        v[noc_id].invalid = invalid;
     }
 
     // Update launch msg to show that we've exited.
@@ -100,6 +105,7 @@ inline void debug_sanitize_post_noc_addr_and_hang(
 // even if it's different than the inherent L1 alignment requirements.
 // Direction is specified because reads and writes may have different L1 requirements (see noc_parameters.h).
 uint32_t debug_sanitize_noc_addr(
+    uint8_t noc_id,
     uint64_t noc_addr,
     uint32_t l1_addr,
     uint32_t noc_len,
@@ -121,9 +127,9 @@ uint32_t debug_sanitize_noc_addr(
         uint32_t x_end = NOC_MCAST_ADDR_END_X(noc_addr);
         uint32_t y_end = NOC_MCAST_ADDR_END_Y(noc_addr);
 
-        if (!NOC_WORKER_XY_P(x, y) || !NOC_WORKER_XY_P(x_end, y_end) || (x > x_end || y > y_end)) {
+        if (!NOC_WORKER_XY_P(noc_id, x, y) || !NOC_WORKER_XY_P(noc_id, x_end, y_end) || (x > x_end || y > y_end)) {
             debug_sanitize_post_noc_addr_and_hang(
-                noc_addr, l1_addr, noc_len, multicast, DebugSanitizeNocInvalidMulticast);
+                noc_id, noc_addr, l1_addr, noc_len, multicast, DebugSanitizeNocInvalidMulticast);
         }
     }
 
@@ -132,59 +138,60 @@ uint32_t debug_sanitize_noc_addr(
     // Reads and writes may have different alignment requirements, see noc_parameters.h for details.
     uint32_t alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) - 1;  // Default alignment, only override in ceratin cases.
     uint32_t invalid = multicast ? DebugSanitizeNocInvalidMulticast : DebugSanitizeNocInvalidUnicast;
-    if (NOC_PCIE_XY_P(x, y)) {
+    if (NOC_PCIE_XY_P(noc_id, x, y)) {
         alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
         if (!DEBUG_VALID_PCIE_ADDR(noc_local_addr, noc_len)) {
-            debug_sanitize_post_noc_addr_and_hang(noc_addr, l1_addr, noc_len, multicast, invalid);
+            debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
         }
-    } else if (NOC_DRAM_XY_P(x, y)) {
+    } else if (NOC_DRAM_XY_P(noc_id, x, y)) {
         alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES) - 1;
         if (!DEBUG_VALID_DRAM_ADDR(noc_local_addr, noc_len)) {
-            debug_sanitize_post_noc_addr_and_hang(noc_addr, l1_addr, noc_len, multicast, invalid);
+            debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
         }
-    } else if (NOC_ETH_XY_P(x, y)) {
+    } else if (NOC_ETH_XY_P(noc_id, x, y)) {
         if (!DEBUG_VALID_REG_ADDR(noc_local_addr, noc_len) && !DEBUG_VALID_ETH_ADDR(noc_local_addr, noc_len)) {
-            debug_sanitize_post_noc_addr_and_hang(noc_addr, l1_addr, noc_len, multicast, invalid);
+            debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
         }
-    } else if (NOC_WORKER_XY_P(x, y)) {
+    } else if (NOC_WORKER_XY_P(noc_id, x, y)) {
         if (!DEBUG_VALID_REG_ADDR(noc_local_addr, noc_len) && !DEBUG_VALID_WORKER_ADDR(noc_local_addr, noc_len)) {
-            debug_sanitize_post_noc_addr_and_hang(noc_addr, l1_addr, noc_len, multicast, invalid);
+            debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
         }
     } else {
         // Bad XY
-        debug_sanitize_post_noc_addr_and_hang(noc_addr, l1_addr, noc_len, multicast, invalid);
+        debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
     }
 
     return alignment_mask;
 }
 
-void debug_sanitize_worker_addr(uint32_t addr, uint32_t len) {
+void debug_sanitize_worker_addr(uint8_t noc_id, uint32_t addr, uint32_t len) {
     // Regs are exempt from standard L1 validation
     if (DEBUG_VALID_REG_ADDR(addr, len))
         return;
 
     if (!DEBUG_VALID_WORKER_ADDR(addr, len)) {
-        debug_sanitize_post_noc_addr_and_hang(addr, 0, len, false, DebugSanitizeNocInvalidL1);
+        debug_sanitize_post_noc_addr_and_hang(noc_id, addr, 0, len, false, DebugSanitizeNocInvalidL1);
     }
 }
 
 void debug_sanitize_noc_and_worker_addr(
+    uint8_t noc_id,
     uint64_t noc_addr,
     uint32_t worker_addr,
     uint32_t len,
     debug_sanitize_noc_cast_t multicast,
     debug_sanitize_noc_dir_t dir) {
     // Check noc addr, get any extra alignment req for worker.
-    uint32_t alignment_mask = debug_sanitize_noc_addr(noc_addr, worker_addr, len, multicast, dir);
+    uint32_t alignment_mask = debug_sanitize_noc_addr(noc_id, noc_addr, worker_addr, len, multicast, dir);
 
     // Check worker addr
-    debug_sanitize_worker_addr(worker_addr, len);
+    debug_sanitize_worker_addr(noc_id, worker_addr, len);
 
     // Check alignment, but not for reg addresses.
     if (!DEBUG_VALID_REG_ADDR(worker_addr, len)) {
         if ((worker_addr & alignment_mask) != (noc_addr & alignment_mask)) {
             debug_sanitize_post_noc_addr_and_hang(
-                noc_addr, worker_addr, len, multicast, DebugSanitizeNocInvalidAlignment);
+                noc_id, noc_addr, worker_addr, len, multicast, DebugSanitizeNocInvalidAlignment);
         }
     }
 }
@@ -196,7 +203,7 @@ void debug_sanitize_noc_and_worker_addr(
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID) << 32) | \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO)), \
         NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO),                        \
-        NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));                      \
+        NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));                      \
     debug_insert_delay((uint8_t)TransactionRead);
 
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc_id)                               \
@@ -208,25 +215,25 @@ void debug_sanitize_noc_and_worker_addr(
         NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));                      \
     debug_insert_delay((uint8_t)TransactionWrite);
 #define DEBUG_SANITIZE_NOC_ADDR(a, l)                                                      \
-    debug_sanitize_noc_addr(a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ); \
+    debug_sanitize_noc_addr(noc_index, a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ); \
     LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_TRANSACTION(noc_a, worker_a, l, multicast, dir)  \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, multicast, dir); \
+    debug_sanitize_noc_and_worker_addr(noc_index, noc_a, worker_a, l, multicast, dir); \
     LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_a, worker_a, l)                                                  \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ); \
+    debug_sanitize_noc_and_worker_addr(noc_index, noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ); \
     LOG_LEN(l);                                                                                                  \
     debug_insert_delay((uint8_t)TransactionRead);
 #define DEBUG_SANITIZE_NOC_MULTI_READ_TRANSACTION(noc_a, worker_a, l)                                              \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_READ); \
+    debug_sanitize_noc_and_worker_addr(noc_index, noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_READ); \
     LOG_LEN(l);                                                                                                    \
     debug_insert_delay((uint8_t)TransactionRead);
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_a, worker_a, l)                                                  \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE); \
+    debug_sanitize_noc_and_worker_addr(noc_index, noc_a, worker_a, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE); \
     LOG_LEN(l);                                                                                                   \
     debug_insert_delay((uint8_t)TransactionWrite)
 #define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_a, worker_a, l)                                              \
-    debug_sanitize_noc_and_worker_addr(noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_WRITE); \
+    debug_sanitize_noc_and_worker_addr(noc_index, noc_a, worker_a, l, DEBUG_SANITIZE_NOC_MULTICAST, DEBUG_SANITIZE_NOC_WRITE); \
     LOG_LEN(l);                                                                                                     \
     debug_insert_delay((uint8_t)TransactionWrite);
 
@@ -236,7 +243,7 @@ void debug_sanitize_noc_and_worker_addr(
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID) << 32) | \
             noc_a_lower, \
         worker_a,                                                                                           \
-        NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
+        NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l)               \
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(                                                                    \
         ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
@@ -250,7 +257,7 @@ void debug_sanitize_noc_and_worker_addr(
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_MID) << 32) | \
             noc_a_lower, \
         worker_a,                                                                                              \
-        NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
+        NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
 #define DEBUG_INSERT_DELAY(transaction_type) debug_insert_delay(transaction_type)
 
 // Delay for debugging purposes
@@ -282,10 +289,10 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_a, worker_a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc_a, worker_a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) \
-    LOG_READ_LEN_FROM_STATE()
+    LOG_READ_LEN_FROM_STATE(noc_id)
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_WITH_ADDR_STATE(noc_id, noc_a_lower, worker_a, l) LOG_LEN(l)
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) \
-    LOG_WRITE_LEN_FROM_STATE()
+    LOG_WRITE_LEN_FROM_STATE(noc_id)
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc_id)
 #define DEBUG_INSERT_DELAY(transaction_type)
 
