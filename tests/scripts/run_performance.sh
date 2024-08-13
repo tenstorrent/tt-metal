@@ -11,7 +11,7 @@ run_perf_models_other() {
     local tt_arch=$1
     local test_marker=$2
 
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/ttnn_resnet/tests -m $test_marker
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/ttnn_resnet/tests/test_perf_ttnn_resnet.py -m $test_marker
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
 
