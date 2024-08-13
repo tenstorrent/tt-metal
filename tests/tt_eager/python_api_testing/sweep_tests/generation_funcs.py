@@ -2237,3 +2237,59 @@ def gen_bitwise_args(
         input_info.update({"value": random.randint(low, high) for _ in range(5)})
 
         yield input_info
+
+
+def gen_floor_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1,
+    high=10,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "value",
+        low,
+        high,
+        dtype,
+        do_sanitize_args=do_sanitize_args,
+        coregrid=coregrid,
+    ):
+        input_info.update({"value": random.uniform(low, high) + 0.5})
+
+        yield input_info
+
+
+def gen_div_no_nan_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1,
+    high=10,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "value",
+        low,
+        high,
+        dtype,
+        do_sanitize_args=do_sanitize_args,
+        coregrid=coregrid,
+    ):
+        input_info.update({"value": random.uniform(low, high)})
+
+        yield input_info

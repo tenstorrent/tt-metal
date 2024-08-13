@@ -99,12 +99,18 @@ def _golden_function_backward_with_dim(
 ):
     import torch
 
+    if input_tensor_a.requires_grad is False:
+        input_tensor_a.requires_grad = True
+    if input_tensor_b.requires_grad is False:
+        input_tensor_b.requires_grad = True
+
     input_tensor_a.retain_grad()
     input_tensor_b.retain_grad()
+
     if dimension == None:
-        pyt_y = torch.cat((input_tensor_a, input_tensor_b))
+        pyt_y = torch.concat((input_tensor_a, input_tensor_b))
     else:
-        pyt_y = torch.cat((input_tensor_a, input_tensor_b), dim=dimension)
+        pyt_y = torch.concat((input_tensor_a, input_tensor_b), dim=dimension)
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
     return golden_tensor
@@ -260,13 +266,6 @@ ttnn.attach_golden_function(
 )
 
 ttnn.attach_golden_function(
-    ttnn.eq_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.eq, grad, a, b, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
     ttnn.assign_bw,
     golden_function=lambda grad, a, b=None, *args, **kwargs: _golden_function_backward_overload(
         torch.clone, grad, a, b, *args, **kwargs
@@ -275,15 +274,8 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.concat_bw,
-    golden_function=lambda grad, a, b, dimension=None, *args, **kwargs: _golden_function_backward_with_dim(
-        torch.cat, grad, a, b, dimension, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
-    ttnn.le_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.le, grad, a, b, *args, **kwargs
+    golden_function=lambda grad, a, b, dim=None, *args, **kwargs: _golden_function_backward_with_dim(
+        torch.concat, grad, a, b, dim, *args, **kwargs
     ),
 )
 
@@ -298,34 +290,6 @@ ttnn.attach_golden_function(
     ttnn.bias_gelu_bw,
     golden_function=lambda grad, a, b, value="none", *args, **kwargs: _golden_function_backward_with_string(
         "bias_gelu_bw", grad, a, b, value, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
-    ttnn.gt_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.gt, grad, a, b, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
-    ttnn.lt_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.gt, grad, a, b, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
-    ttnn.ne_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.ne, grad, a, b, *args, **kwargs
-    ),
-)
-
-ttnn.attach_golden_function(
-    ttnn.ge_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.ge, grad, a, b, *args, **kwargs
     ),
 )
 

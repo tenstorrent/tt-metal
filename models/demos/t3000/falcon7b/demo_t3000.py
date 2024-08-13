@@ -65,8 +65,8 @@ def test_demo_multichip(
     if perf_mode:
         csv_perf_targets = {
             "prefill_t/s": {128: 3531, 1024: 70000, 2048: None}[max_seq_len],
-            "decode_t/s": 14 * batch_size * num_devices,
-            "decode_t/s/u": 14,
+            "decode_t/s": 26 * batch_size * num_devices,
+            "decode_t/s/u": 26,
         }  # performance targets that we aim for (t3000)
     else:
         csv_perf_targets = {}

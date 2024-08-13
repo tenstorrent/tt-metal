@@ -7,7 +7,6 @@
 
 #include "device/unary_backward_op.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/data_movement.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {

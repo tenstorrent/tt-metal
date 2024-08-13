@@ -43,8 +43,8 @@ void kernel_main() {
     uint32_t in1_mcast_num_dests                         = get_arg_val<uint32_t>(i++);
     uint32_t in1_mcast_num_cores                         = get_arg_val<uint32_t>(i++);
     uint32_t in1_mcast_grid_size                         = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_sender_semaphore_addr             = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_receiver_semaphore_addr           = get_arg_val<uint32_t>(i++);
+    uint32_t in1_mcast_sender_semaphore_addr             = get_semaphore(get_arg_val<uint32_t>(i++));
+    uint32_t in1_mcast_receiver_semaphore_addr           = get_semaphore(get_arg_val<uint32_t>(i++));
 
     uint32_t in1_mcast_sender_size_bytes                 = get_arg_val<uint32_t>(i++);
     uint32_t in1_mcast_sender_id                         = get_arg_val<uint32_t>(i++);

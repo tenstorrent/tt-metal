@@ -136,6 +136,7 @@ from ttnn.types import (
     DeviceGrid,
     UnaryWithParam,
     UnaryOpType,
+    BinaryOpType,
 )
 
 from ttnn.device import (
@@ -167,6 +168,7 @@ from ttnn.multi_device import (
     ConcatMeshToTensor,
     ListMeshToTensor,
     visualize_device_mesh,
+    ConcatMesh2dToTensor,
 )
 
 from ttnn.core import (

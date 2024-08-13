@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_lib_bindings_tensor.hpp"
+#include "ttnn/cpp/pybind11/json_class.hpp"
 
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/serialization.hpp"
@@ -14,9 +15,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/fast_reduce_nc/fast_reduce_nc_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/rotary_embedding/rotary_embedding_llama_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_lib_bindings.hpp"
@@ -59,16 +57,6 @@ void implement_buffer_protocol(PyType& py_buffer_t) {
 
 }  // namespace detail
 
-template <typename T>
-auto tt_pybind_class(py::module m, auto name, auto desc) {
-    return py::class_<T>(m, name, desc)
-        .def("to_json", [](const T& self) -> std::string { return tt::stl::json::to_json(self).dump(); })
-        .def(
-            "from_json",
-            [](const std::string& json_string) -> T { return tt::stl::json::from_json<T>(nlohmann::json::parse(json_string)); })
-        .def("__repr__", [](const T& self) { return fmt::format("{}", self); });
-}
-
 void TensorModule(py::module& m_tensor) {
     // ENUM SECTION
 
@@ -92,7 +80,7 @@ void TensorModule(py::module& m_tensor) {
         .value("L1_SMALL", BufferType::L1_SMALL);
 
 
-    auto py_core_coord = tt_pybind_class<CoreCoord>(m_tensor, "CoreCoord", R"doc(
+    auto py_core_coord = tt_serializable_class<CoreCoord>(m_tensor, "CoreCoord", R"doc(
         Class defining core coordinate
     )doc");
 
@@ -151,7 +139,7 @@ void TensorModule(py::module& m_tensor) {
 
     py::implicitly_convertible<std::vector<uint32_t>, Shape>();
 
-    auto pyMemoryConfig = tt_pybind_class<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
+    auto pyMemoryConfig = tt_serializable_class<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.
         There are eight DRAM memory banks on TT Accelerator device, indexed as 0, 1, 2, ..., 7.
     )doc");
@@ -177,9 +165,6 @@ void TensorModule(py::module& m_tensor) {
 
                     mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.SINGLE_BANK)
             )doc")
-        .def(
-            "__repr__",
-            [](const MemoryConfig& memory_config) -> std::string { return fmt::format("{}", memory_config); })
         .def(
             "__hash__",
             [](const MemoryConfig& memory_config) -> tt::stl::hash::hash_t {
@@ -220,20 +205,16 @@ void TensorModule(py::module& m_tensor) {
         py::class_<owned_buffer::Buffer<uint16_t>>(m_tensor, "owned_buffer_for_uint16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<owned_buffer::Buffer<uint16_t>, uint16_t>(py_owned_buffer_for_uint16_t);
 
-    auto pyCoreRange = tt_pybind_class<CoreRange>(m_tensor, "CoreRange", R"doc(
+    auto pyCoreRange = tt_serializable_class<CoreRange>(m_tensor, "CoreRange", R"doc(
         Class defining a range of cores)doc");
     pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }))
-        .def("__repr__", [](const CoreRange& core_range) -> std::string { return fmt::format("{}", core_range); })
         .def_readonly("start", &CoreRange::start_coord)
         .def_readonly("end", &CoreRange::end_coord)
         .def("grid_size", &CoreRange::grid_size);
 
-    auto pyCoreRangeSet = tt_pybind_class<CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(
+    auto pyCoreRangeSet = tt_serializable_class<CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(
         Class defining a set of CoreRanges required for sharding)doc");
     pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
-        .def(
-            "__repr__",
-            [](const CoreRangeSet& core_range_set) -> std::string { return fmt::format("{}", core_range_set); })
         .def(
             "bounding_box",
             &CoreRangeSet::bounding_box,
@@ -250,7 +231,7 @@ void TensorModule(py::module& m_tensor) {
             Returns a CoreRangeSet from number of cores
         )doc");
 
-    auto pyShardSpec = tt_pybind_class<ShardSpec>(m_tensor, "ShardSpec", R"doc(
+    auto pyShardSpec = tt_serializable_class<ShardSpec>(m_tensor, "ShardSpec", R"doc(
         Class defining the specs required for sharding.
     )doc");
 
@@ -265,7 +246,6 @@ void TensorModule(py::module& m_tensor) {
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self)
-        .def("__repr__", [](const ShardSpec& shard_spec) -> std::string { return fmt::format("{}", shard_spec); });
     ;
 
     auto py_owned_buffer_for_int32_t =
@@ -436,33 +416,7 @@ void TensorModule(py::module& m_tensor) {
         R"doc(
             Performs the second part of a distributed rms norm operation normalizing the input based on the gathered statistics input.
         )doc");
-    m_tensor.def(
-        "rotate_half",
-        &rotate_half,
-        py::arg("input").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        "Performs a rotate half operation used by RotaryEmbedding.
-    )doc");
-    m_tensor.def(
-        "rotary_embedding",
-        &rotary_embedding,
-        py::arg("input").noconvert(),
-        py::arg("cos").noconvert(),
-        py::arg("sin").noconvert(),
-        py::arg("token_idx") = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs rotary embedding with a given input, cos, and sin tensors. Sequence length is inferred as the second last dim of the input tensor.
-        If token_idx is passed, this assumes input is transposed to [seq_len, 1, B, head_dim], and seq_len is 1.
-    )doc");
-    m_tensor.def("rotary_embedding_llama", &rotary_embedding_llama,
-        py::arg("input").noconvert(), py::arg("cos").noconvert(), py::arg("sin").noconvert(), py::arg("trans_mat").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
-        "Performs prefill llama rotary embedding with a given input, cos, and sin, and transformation tensors. The input dimensions are as follows: [batch, num_heads, seq_len, head_dim].
-        The sequence length must be a power of 2. The transformation matrix should be the size of one tile. Only supported data type is bfloat16. The head dim must be at most 256 (8 tiles wide), and must be a multiple of 32.
-        The compute has a granularity of head_dim/tile_width, which means there can be a maximum of 8 tiles in the registers. If head_dim exceeds 128, then fp32_dest_acc_en must be set to false.
-    )doc");
+
     m_tensor.def("fill_cache", &fill_cache,
          py::arg("cache").noconvert(), py::arg("input").noconvert(), py::arg("batch_idx"), R"doc(
         "Fills the cache tensor in place with the values from input at the specified batch_idx.

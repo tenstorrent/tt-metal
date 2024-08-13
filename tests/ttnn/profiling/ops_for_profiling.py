@@ -11,7 +11,7 @@ def subalpha(x, y):
 
 
 def addalpha(x, y):
-    tt_lib.tensor.addalpha(x, y, 5)
+    ttnn.addalpha(x, y, 5)
 
 
 def isclose(x, y):
@@ -90,36 +90,6 @@ def bcast_h_shape_func_1(input_shape):
 def bcast_w_shape_func_1(input_shape):
     input_shape_1 = [input_shape[-4], input_shape[-3], input_shape[-2], 1]
     return input_shape, input_shape_1
-
-
-def complex_add(x, y):
-    tt_lib.tensor.complex_add(
-        x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
-    )
-
-
-def complex_sub(x, y):
-    tt_lib.tensor.complex_sub(
-        x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
-    )
-
-
-def complex_mul(x, y):
-    tt_lib.tensor.complex_mul(
-        x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
-    )
-
-
-def complex_div(x, y):
-    tt_lib.tensor.complex_div(
-        x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
-    )
-
-
-def polar_binary(x, y):
-    tt_lib.tensor.polar(
-        x, y, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
-    )
 
 
 def concat_0(x, y):
@@ -254,25 +224,7 @@ def div_no_nan_bw(x, y):
 
 
 def mseloss(x, y):
-    tt_lib.tensor.mseloss(
-        x,
-        y,
-        reduce_mode=tt_lib.tensor.LossReductionMode.SUM,
-        output_mem_config=tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-        ),
-    )
-
-
-def maeloss(x, y):
-    tt_lib.tensor.maeloss(
-        x,
-        y,
-        reduce_mode=tt_lib.tensor.LossReductionMode.SUM,
-        output_mem_config=tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-        ),
-    )
+    ttnn.mse_loss(x, y, reduction=ttnn.LossReductionMode.MEAN)
 
 
 def primary_moreh_softmax_backward_0(x, y):
@@ -435,10 +387,6 @@ def primaru_moreh_mean_3_shape_func(input_shape):
     return input_shape, [input_shape[0], input_shape[1], input_shape[2], 1]
 
 
-def angle_bw(x, y):
-    tt_lib.tensor.angle_bw(x, y, False)
-
-
 def celu_bw(x, y):
     ttnn.celu_bw(x, y, alpha=1)
 
@@ -521,7 +469,7 @@ all_binary_ops = [
     },
     {
         "op": addalpha,
-        "name": "tt_lib.tensor.addalpha",
+        "name": "ttnn.addalpha",
     },
     {
         "op": ttnn.ldexp,
@@ -633,24 +581,28 @@ all_binary_ops = [
         "shape_func": bcast_hw_shape_func,
     },
     {
-        "op": complex_add,
-        "name": "tt_lib.tensor.complex_add",
+        "op": ttnn.add,
+        "name": "ttnn.complex_add",
+        "is_complex": [True, True],
+        "need_out_mem_cfg": True,
     },
     {
-        "op": complex_sub,
-        "name": "tt_lib.tensor.complex_sub",
+        "op": ttnn.sub,
+        "name": "ttnn.complex_sub",
+        "is_complex": [True, True],
+        "need_out_mem_cfg": True,
     },
     {
-        "op": complex_mul,
-        "name": "tt_lib.tensor.complex_mul",
+        "op": ttnn.mul,
+        "name": "ttnn.complex_mul",
+        "is_complex": [True, True],
+        "need_out_mem_cfg": True,
     },
     {
-        "op": complex_div,
-        "name": "tt_lib.tensor.complex_div",
-    },
-    {
-        "op": polar_binary,
-        "name": "tt_lib.tensor.polar_binary",
+        "op": ttnn.div,
+        "name": "ttnn.complex_div",
+        "is_complex": [True, True],
+        "need_out_mem_cfg": True,
     },
     {
         "op": concat_0,
@@ -1026,11 +978,7 @@ all_binary_ops = [
     },
     {
         "op": mseloss,
-        "name": "tt_lib.tensor.mseloss",
-    },
-    {
-        "op": maeloss,
-        "name": "tt_lib.tensor.maeloss",
+        "name": "ttnn.mse_loss",
     },
     {
         "op": primary_moreh_softmax_backward_0,
@@ -1140,8 +1088,10 @@ all_binary_ops = [
         "name": "tt_lib.operations.primary.moreh_mean_backward",
     },
     {
-        "op": angle_bw,
-        "name": "tt_lib.tensor.angle_bw",
+        "op": ttnn.angle_bw,
+        "name": "ttnn.angle_bw",
+        "is_complex": [False, True],
+        "need_out_mem_cfg": True,
     },
     {
         "op": ttnn.fill_bw,
@@ -1233,10 +1183,6 @@ def elu(x):
 
 def heaviside(x):
     ttnn.heaviside(x, 0.5)
-
-
-def bias_gelu_unary(x):
-    tt_lib.tensor.bias_gelu_unary(x, 2)
 
 
 def logit(x):
@@ -1395,36 +1341,6 @@ def rdiv(x):
     ttnn.rdiv(x, 3)
 
 
-def real(x):
-    tt_lib.tensor.real(
-        x, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
-    )
-
-
-def imag(x):
-    tt_lib.tensor.imag(
-        x, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
-    )
-
-
-def complex_abs(x):
-    tt_lib.tensor.complex_abs(
-        x, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
-    )
-
-
-def conj(x):
-    tt_lib.tensor.conj(
-        x, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
-    )
-
-
-def complex_recip(x):
-    tt_lib.tensor.complex_recip(
-        x, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
-    )
-
-
 def sum_0(x):
     tt_lib.tensor.sum(x, 0)
 
@@ -1456,7 +1372,7 @@ def rsqrt_slow(x):
 def fill_rm(x):
     shape = x.get_legacy_shape()
 
-    tt_lib.tensor.fill_rm(
+    ttnn.fill_rm(
         N=shape[0],
         C=shape[1],
         H=shape[2],
@@ -1472,9 +1388,7 @@ def fill_rm(x):
 def fill_ones_rm(x):
     shape = x.get_legacy_shape()
 
-    tt_lib.tensor.fill_ones_rm(
-        N=shape[0], C=shape[1], H=shape[2], W=shape[3], hOnes=shape[2] - 32, wOnes=shape[3] - 32, any=x
-    )
+    ttnn.fill_ones_rm(N=shape[0], C=shape[1], H=shape[2], W=shape[3], hOnes=shape[2] - 32, wOnes=shape[3] - 32, any=x)
 
 
 def group_norm_no_weights(x):
@@ -1522,7 +1436,7 @@ def swiglu_2(x):
 
 
 def repeat(x):
-    tt_lib.tensor.repeat(x, (1, 1, 1, 4))
+    ttnn.repeat(x, ttnn.Shape((1, 1, 1, 4)))
 
 
 def repeat_interleave_0(x):
@@ -1545,28 +1459,24 @@ def pow_float(x):
     ttnn.pow(x, 3.3)
 
 
-def argmax_1(x):
-    ttnn.argmax(x, dim=-1)
+def argmax_dim_3(x):
+    ttnn.argmax(x, dim=3)
 
 
-def argmax_2(x):
-    ttnn.argmax(x, dim=-2)
+def argmax_dim_2(x):
+    ttnn.argmax(x, dim=2)
 
 
-def argmax_3(x):
-    ttnn.argmax(x, dim=-3)
+def argmax_dim_None(x):
+    ttnn.argmax(x, dim=None)
 
 
-def argmax_4(x):
-    ttnn.argmax(x, dim=-4)
-
-
-def argmax_all(x):
-    ttnn.argmax(x, dim=-1, all=True)
+def argmax_shape_func(input_shape):
+    return [1, 1, 128, 128]
 
 
 def argmin_1(x):
-    ttnn.argmin(x, dim=-1)
+    tt_lib.argmin(x, dim=-1)
 
 
 def argmin_2(x):
@@ -1862,10 +1772,6 @@ all_unary_ops = [
         "name": "ttnn.logical_not",
     },
     {
-        "op": bias_gelu_unary,
-        "name": "tt_lib.tensor.bias_gelu_unary",
-    },
-    {
         "op": ttnn.isfinite,
         "name": "ttnn.isfinite",
     },
@@ -1972,8 +1878,8 @@ all_unary_ops = [
         "layout": "ROW_MAJOR",
     },
     {
-        "op": tt_lib.tensor.untilize,
-        "name": "tt_lib.tensor.untilize",
+        "op": ttnn.untilize,
+        "name": "ttnn.untilize",
     },
     {
         "op": tilize_with_val_padding,
@@ -1982,7 +1888,7 @@ all_unary_ops = [
     },
     {
         "op": untilize_with_unpadding,
-        "name": "tt_lib.tensor.untilize_with_unpadding",
+        "name": "ttnn.untilize_with_unpadding",
     },
     {
         "op": ttnn.tilize_with_zero_padding,
@@ -2116,24 +2022,40 @@ all_unary_ops = [
         "name": "ttnn.rdiv",
     },
     {
-        "op": real,
-        "name": "tt_lib.tensor.real",
+        "op": ttnn.real,
+        "name": "ttnn.real",
+        "is_complex": [True],
+        "need_out_mem_cfg": True,
     },
     {
-        "op": imag,
-        "name": "tt_lib.tensor.imag",
+        "op": ttnn.imag,
+        "name": "ttnn.imag",
+        "is_complex": [True],
+        "need_out_mem_cfg": True,
     },
     {
-        "op": complex_abs,
-        "name": "tt_lib.tensor.complex_abs",
+        "op": ttnn.abs,
+        "name": "ttnn.complex_abs",
+        "is_complex": [True],
+        "need_out_mem_cfg": True,
     },
     {
-        "op": conj,
-        "name": "tt_lib.tensor.conj",
+        "op": ttnn.conj,
+        "name": "ttnn.conj",
+        "is_complex": [True],
+        "need_out_mem_cfg": True,
     },
     {
-        "op": complex_recip,
-        "name": "tt_lib.tensor.complex_recip",
+        "op": ttnn.reciprocal,
+        "name": "ttnn.complex_recip",
+        "is_complex": [True],
+        "need_out_mem_cfg": True,
+    },
+    {
+        "op": ttnn.polar,
+        "name": "ttnn.polar",
+        "is_complex": [True],
+        "need_out_mem_cfg": True,
     },
     {
         "op": sum_0,
@@ -2217,7 +2139,7 @@ all_unary_ops = [
         "name": "ttnn.normalize_hw",
     },
     {
-        "op": normalize_global,
+        "op": ttnn.normalize_global,
         "name": "ttnn.normalize_global",
     },
     {
@@ -2254,7 +2176,7 @@ all_unary_ops = [
     },
     {
         "op": repeat,
-        "name": "tt_lib.tensor.repeat",
+        "name": "ttnn.repeat",
     },
     {
         "op": repeat_interleave_0,
@@ -2283,23 +2205,24 @@ all_unary_ops = [
         "name": "ttnn.identity",
     },
     {
-        "op": argmax_1,
+        "op": argmax_dim_3,
         "name": "ttnn.argmax_dim_3",
+        "shape_func": argmax_shape_func,
+        "layout": "ROW_MAJOR",
         "num_repeats": 2,
     },
     {
-        "op": argmax_2,
+        "op": argmax_dim_2,
         "name": "ttnn.argmax_dim_2",
+        "shape_func": argmax_shape_func,
+        "layout": "ROW_MAJOR",
         "num_repeats": 2,
     },
     {
-        "op": argmax_3,
-        "name": "ttnn.argmax_dim_1",
-        "num_repeats": 2,
-    },
-    {
-        "op": argmax_all,
-        "name": "ttnn.argmax_all",
+        "op": argmax_dim_None,
+        "name": "ttnn.argmax_dim_None",
+        "shape_func": argmax_shape_func,
+        "layout": "ROW_MAJOR",
         "num_repeats": 2,
     },
     {
@@ -2467,11 +2390,11 @@ def rmsnorm(x, y, z):
 
 
 def addcmul(x, y, z):
-    tt_lib.tensor.addcmul(x, y, z, 2)
+    ttnn.addcmul(x, y, z, value=2)
 
 
 def addcdiv(x, y, z):
-    tt_lib.tensor.addcdiv(x, y, z, 2)
+    ttnn.addcdiv(x, y, z, value=2)
 
 
 def lamb_optimizer(x, y, z):
@@ -2614,11 +2537,11 @@ all_ternary_ops = [
     },
     {
         "op": addcmul,
-        "name": "tt_lib.tensor.addcmul",
+        "name": "ttnn.addcmul",
     },
     {
         "op": addcdiv,
-        "name": "tt_lib.tensor.addcdiv",
+        "name": "ttnn.addcdiv",
     },
     {
         "op": lamb_optimizer,

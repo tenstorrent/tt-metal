@@ -324,12 +324,12 @@ class TtMixtralAttention(LightweightModule):
             q_heads_14SD_pre_rot,
             k_heads_11SD_pre_rot,
             v_heads_11SD,
-        ) = ttnn.experimental.tensor.nlp_create_qkv_heads(
+        ) = ttnn.experimental.nlp_create_qkv_heads(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         xqkv_fused.deallocate(True)
@@ -338,12 +338,12 @@ class TtMixtralAttention(LightweightModule):
         # Rotary embeddings
         ###
 
-        q_heads_14SD = ttnn.experimental.tensor.rotary_embedding_llama(
+        q_heads_14SD = ttnn.experimental.rotary_embedding_llama(
             q_heads_14SD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
         )
         q_heads_14SD_pre_rot.deallocate(True)
 
-        k_heads_11SD = ttnn.experimental.tensor.rotary_embedding_llama(
+        k_heads_11SD = ttnn.experimental.rotary_embedding_llama(
             k_heads_11SD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
         )
         k_heads_11SD_pre_rot.deallocate(True)

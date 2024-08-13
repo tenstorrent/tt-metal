@@ -37,8 +37,8 @@ void ConfigureKernelGroup(
     }
 }
 
-std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
-    std::optional<uint32_t> address = std::nullopt;
+std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange &core_range) {
+    std::optional<uint32_t> semaphore_id = std::nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -65,12 +65,12 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
     }
 
     if (uninitialized_sem_id.has_value()) {
-        address = SEMAPHORE_BASE + (L1_ALIGNMENT * uninitialized_sem_id.value());
+        semaphore_id =  uninitialized_sem_id.value();
     } else {
         TT_THROW("Unable to initialize semaphores on core range " + core_range.str());
     }
 
-    return address;
+    return semaphore_id;
 }
 
 inline void SetRuntimeArgs(
@@ -190,6 +190,15 @@ std::map<chip_id_t, Device *> CreateDevices(
 }
 
 void CloseDevices(std::map<chip_id_t, Device *> devices) {
+    // Global Sync across all devices in the pool.
+    // We need to ensure that commands sent to each device have been completed
+    // before closing any device + modifying routing info.
+    // If this is not done, non-blocking CCLs followed by a close will hang, since
+    // the main thread will modify device state while the CCL is running on device.
+    for (const auto &[device_id, dev] : devices) {
+        dev->synchronize(); // Synchronize worker queue
+        detail::Synchronize(dev); // Synchronize device
+    }
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     std::map<chip_id_t, Device *> mmio_devices = {};
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
@@ -535,7 +544,7 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done)
 
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
-                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg);
+                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, device->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
@@ -671,9 +680,9 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
     }
 }
 
-void CompileProgram(Device *device, Program &program) {
+void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
     ZoneScoped;
-    program.compile(device);
+    program.compile(device, fd_bootloader_mode);
 }
 
 void AllocateBuffer(Buffer *buffer, bool bottom_up) {
@@ -809,23 +818,23 @@ uint32_t CreateSemaphore(
             } else {
                 crs = c;
             }
-            std::optional<uint32_t> address;
+            std::optional<uint32_t> semaphore_id;
             TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
             for (const auto &core_range : crs.ranges()) {
                 CoreCoord start_core = core_range.start_coord;
                 CoreCoord end_core = core_range.end_coord;
-                std::optional<uint32_t> addr_candidate = get_semaphore_address(program, core_range);
-                if (!address.has_value()) {
-                    address = addr_candidate;
+                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range);
+                if (!semaphore_id.has_value()) {
+                    semaphore_id = semaphore_id_candidate;
                 } else {
-                    address = std::max(address.value(), addr_candidate.value());
+                    semaphore_id = std::max(semaphore_id.value(), semaphore_id.value());
                 }
             }
-            TT_FATAL(address.has_value(), "Unable to initialize Semaphore!");
+            TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
 
-            program.add_semaphore(crs, address.value(), initial_value, core_type);
+            program.add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
 
-            return address.value();
+            return semaphore_id.value();
         },
         core_spec);
 }

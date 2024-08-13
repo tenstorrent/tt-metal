@@ -37,7 +37,7 @@ void kernel_main() {
     const uint32_t eth_l1_base_addr = get_arg_val<uint32_t>(0);
     // erisc l1 semaphore address
     const uint32_t eth_sender_l1_sem_addr = get_arg_val<uint32_t>(1);
-    const uint32_t writer_send_sem_addr = get_arg_val<uint32_t>(2);
+    const uint32_t writer_send_sem_addr = get_semaphore(get_arg_val<uint32_t>(2));
     const uint32_t eth_sender_noc_x = get_arg_val<uint32_t>(3);
     const uint32_t eth_sender_noc_y = get_arg_val<uint32_t>(4);
 

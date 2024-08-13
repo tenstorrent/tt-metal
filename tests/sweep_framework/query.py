@@ -77,8 +77,8 @@ def summary(ctx):
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
 
     if ctx.obj["module_name"] is None:
-        for file in sorted(sweeps_path.glob("*.py")):
-            module_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3]
+        for file in sorted(sweeps_path.glob("**/*.py")):
+            module_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
             results_index = RESULT_INDEX_PREFIX + module_name
             if not client.indices.exists(index=results_index):
                 continue
@@ -108,7 +108,9 @@ def summary(ctx):
             else:
                 row = []
                 for status in TestStatus:
-                    row.append(client.count(index=results_index, query={"match": {"status": str(status)}})["count"])
+                    row.append(
+                        client.count(index=results_index, query={"match": {"status.keyword": str(status)}})["count"]
+                    )
 
             table.rows.append(row, module_name)
     elif ctx.obj["suite_name"] is None:

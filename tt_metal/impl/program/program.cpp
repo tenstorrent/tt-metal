@@ -512,9 +512,9 @@ void Program::init_semaphores(const Device &device, const CoreCoord &logical_cor
     }
 }
 
-void Program::add_semaphore(const CoreRangeSet &crs, uint32_t address, uint32_t init_value, CoreType core_type) {
+void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     this->invalidate_compile();
-    semaphores_.emplace_back(Semaphore(crs, address, init_value, core_type));
+    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 
 void Program::add_config_buffer(std::shared_ptr<Buffer> config_buffer) { config_buffers_.emplace_back(config_buffer); }
@@ -679,8 +679,9 @@ void Program::populate_dispatch_data(Device *device) {
     }
 
     if (binaries_data.size() > 0) {
+        // We allocate program binaries top down to minimize fragmentation with other buffers in DRAM, which are typically allocated bottom up
         this->kernels_buffer = std::make_shared<Buffer>(
-            device, binaries_data.size() * sizeof(uint32_t), HostMemDeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM);
+            device, binaries_data.size() * sizeof(uint32_t), HostMemDeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM, TensorMemoryLayout::INTERLEAVED, std::nullopt, false);
 
         this->program_transfer_info.binary_data = binaries_data;
     }
@@ -859,7 +860,7 @@ void Program::finalize() {
     finalized_ = true;
 }
 
-void Program::compile(Device *device) {
+void Program::compile(Device *device, bool fd_bootloader_mode) {
     ZoneScoped;
     bool first_compile_on_device = compile_needed_.find(device->id()) == compile_needed_.end();
     if (not first_compile_on_device and (not compile_needed_.at(device->id()))) {
@@ -876,8 +877,43 @@ void Program::compile(Device *device) {
     std::vector<std::shared_future<void>> events;
     DprintServerSetProfilerState(profile_kernel);
 
+    auto validate_kernel_placement = [&device, &fd_bootloader_mode](std::shared_ptr<Kernel> kernel) {
+        // Placement rules:
+        //  Slow dispatch:
+        //      - kernels cannot be on storage only cores
+        //  Fast dispatch (tensix):
+        //      - kernels cannot be on storage only cores an
+        //      - tensix kernels cannot be on dispatch cores
+        //  Fast dispatch (ethernet):
+        //      - kernels cannot be on storage only cores
+        //      - eth kernels cannot be on idle eth cores
+        bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+
+        const std::vector<CoreCoord> &storage_cores = tt::get_logical_storage_cores(device->id(), device->num_hw_cqs());
+        bool on_storage_only_core =  std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
+            return kernel->is_on_logical_core(storage_core);
+        });
+        TT_FATAL(not on_storage_only_core, "Illegal kernel placement for {}. Kernels cannot be placed on storage only cores!", kernel->name());
+
+        // Kernels used to implement fast dispatch can be placed on dispatch cores
+        if (not slow_dispatch and not fd_bootloader_mode) {
+            const std::vector<CoreCoord> &dispatch_cores = tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs());
+            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+
+            bool on_dispatch_core = std::any_of(dispatch_cores.begin(), dispatch_cores.end(), [&kernel, &dispatch_core_type](const CoreCoord &dispatch_core) {
+                if (kernel->get_kernel_core_type() != dispatch_core_type) {
+                    return false;
+                }
+                return kernel->is_on_logical_core(dispatch_core);
+            });
+
+            TT_FATAL(not on_dispatch_core, "Illegal kernel placement for {}, Kernels cannot be placed on dispatch cores!", kernel->name());
+        }
+    };
+
     for (auto &[core_type, kernels] : kernels_) {
         for (auto &[id, kernel] : kernels) {
+            validate_kernel_placement(kernel);
             launch_build_step(
                 [kernel, device, this] {
                     JitBuildOptions build_options(device->build_env());

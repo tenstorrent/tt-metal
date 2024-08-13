@@ -378,10 +378,10 @@ std::vector<Tensor> _concat_bw(
     if (dim == 0) {
         start_index_2 = {input.get_legacy_shape()[0], 0, 0, 0};
     } else if (dim == 1) {
-        start_index_2 = {input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1], 0, 0};
+        start_index_2 = {0, input.get_legacy_shape()[1], 0, 0};
     } else if (dim == 2) {
         start_index_2 = {
-            input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1] - 1, input.get_legacy_shape()[2], 0};
+            0, 0, input.get_legacy_shape()[2], 0};
     } else if (dim == 3) {
         start_index_2 = {0, 0, 0, input.get_legacy_shape()[3]};
     }
@@ -637,22 +637,4 @@ std::vector<std::optional<Tensor>> ExecuteBackwardMul::operator()(
     return std::move(result);
 }
 
-std::vector<Tensor> ExecuteBackwardComparison::operator()(
-    const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(zero_grad);
-    return grad_tensor;
-}
-
-
-std::vector<Tensor> ExecuteBackwardComparison::operator()(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor zero_grad = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(zero_grad);
-    Tensor zero_input = ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(zero_input);
-    return grad_tensor;
-}
 }  // namespace ttnn::operations::binary_backward

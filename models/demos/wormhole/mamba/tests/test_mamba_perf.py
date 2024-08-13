@@ -1,145 +1,145 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
 import torch
 import pytest
-import time
-import json
-import ttnn
 from loguru import logger
-
-from models.demos.wormhole.mamba.demo.demo import (
-    get_tokenizer,
-    get_cpu_reference_model,
-    get_tt_metal_model,
-)
 
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from models.utility_functions import (
     profiler,
-    enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     skip_for_grayskull,
-    skip_for_wormhole_b0,
 )
 from tt_metal.tools.profiler.process_model_log import get_samples_per_s
-from models.demos.wormhole.mamba.reference.args import ModelMode
-from models.demos.wormhole.mamba.tt.preprocessing import split_sequence_length
+
+from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
+from models.demos.wormhole.mamba.tt import model_config
+from models.demos.wormhole.mamba.tt.model_config import ModelMode
+from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
 
 
-def display_tokens(tokens):
-    print("\n" * 1000)
-    for text in tokens:
-        eos = text.find("<|endoftext|>")
-        if eos != -1:
-            text = text[:eos] + "<|endoftext|>"
-        print(f"{text}\n")
-        print("-" * 150)  # Print a separator line for readability
-        print(f"\n")
+def is_nearby(actual: float, expected: float, lower_margin: float = 0.03, upper_margin: float = 0.03):
+    lower_threshold = (1 - lower_margin) * expected
+    upper_threshold = (1 + upper_margin) * expected
+    return lower_threshold <= actual <= upper_threshold
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
+NUM_LAYERS = 64
+MARGIN = 0.05
+
+
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize(
-    "batch, iterations, expected_compile_time, expected_inference_time",
-    ((32, 10, 12.5, 0.40),),  # Issue 7816 Compile time
+    "model_version, mode, batch_size, sequence_length, iterations, expected_compile_time, expected_inference_time",
+    (
+        ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 1, 8, 12.50, 0.110),
+        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 128, 8, 23.50, 0.520),
+    ),
 )
-def test_mamba_e2e_perf(
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_mamba_perf_e2e(
     device,
-    batch,
+    model_version,
+    mode,
+    batch_size,
+    sequence_length,
     iterations,
     expected_compile_time,
     expected_inference_time,
     use_program_cache,
     reset_seeds,
     get_tt_cache_path,
+    is_ci_env,
 ):
-    model_version = "state-spaces/mamba-2.8b-slimpj"
-    display_decoded_seq = False
-
-    tokenizer = get_tokenizer()
-
-    # Clear global profiler state before starting measurements
     profiler.clear()
 
-    # Load prompts
-    with open("models/demos/wormhole/mamba/demo/prompts.json", "r") as f:
-        prompts = json.load(f)
+    logger.info(
+        f"Testing end-to-end performance in {'PREFILL' if mode == ModelMode.PREFILL else 'DECODE'} mode with sequence length {sequence_length}"
+    )
 
-    profiler.start("pytorch_ref_model_setup")
-    reference_model = get_cpu_reference_model(model_version, batch)
-    profiler.end("pytorch_ref_model_setup")
-
-    profiler.start("tt_model_setup")
-    tt_model = get_tt_metal_model(model_version, device, cache_dir=get_tt_cache_path(model_version), batch_size=batch)
-    profiler.end("tt_model_setup")
-
-    sequences: torch.Tensor = tokenizer(prompts, return_tensors="pt", padding=True).input_ids
-
-    # Required due to non-deterministic hang on CI (#8606)
+    logger.warning(f"Disabling persistent kernel cache due to hang on CI (#8606)")
     disable_persistent_kernel_cache()
 
-    # prefill
-    prefill_iterations = sequences.shape[1] - 1
-    for idx in range(prefill_iterations):
-        if idx == 0:
-            profiler.start("ref_model_run_for_inference_0")
-        ref_logits = reference_model(sequences[:, idx].unsqueeze(1))
-        if idx == 0:
-            profiler.end("ref_model_run_for_inference_0")
+    profiler.start(f"initialize_ref_model")
+    reference_model = Mamba.from_pretrained(model_version, batch_size=batch_size)
+    reference_model.args.mode = mode
+    reference_model.eval()
+    profiler.end(f"initialize_ref_model")
 
-        if idx == 0:
-            profiler.start("model_run_for_inference_0")
-        tt_logits = tt_model(sequences[:, idx].unsqueeze(1))
-        if idx == 0:
-            profiler.end("model_run_for_inference_0")
+    if mode == ModelMode.DECODE:
+        assert sequence_length == 1, "Sequence length must be 1 in decode mode"
+        assert batch_size == 32, "Batch size must be 1 in decode mode"
+    else:
+        assert batch_size == 1, "Batch size must be 1 in prefill mode"
 
-    # Decode Starts
-    start = time.time()
-    token_counts = 0
-    total_iterations = iterations + prefill_iterations
-    inference_profile_iteration = total_iterations - 2  # Profile the second last iteration
+    profiler.start(f"initialize_model")
+    config = model_config.create_model_config(
+        batch_size, reference_model.args.d_model, mode=mode, seq_len=sequence_length
+    )
+    model = MambaTT(
+        reference_model, device, config, tt_cache_path=get_tt_cache_path(model_version), num_layers=NUM_LAYERS
+    )
+    profiler.end(f"initialize_model")
+    logger.info(f"Done initializing model in {profiler.get('initialize_model'):.2f} s")
 
-    for idx in range(prefill_iterations, total_iterations):
-        if idx == inference_profile_iteration:
-            profiler.start(f"model_run_for_inference_{idx}")
-        tt_logits = tt_model(sequences[:, idx].unsqueeze(1))
-        if idx == inference_profile_iteration:
-            profiler.end(f"model_run_for_inference_{idx}")
+    input = torch.randn((batch_size, sequence_length))
+    logger.info(f"Measuring performance with input of shape {list(input.shape)}")
 
-        probs = torch.nn.functional.softmax(tt_logits.squeeze(1), dim=-1)
-        next_token = torch.argmax(probs, dim=-1)
-        sequences = torch.cat([sequences, next_token.unsqueeze(-1)], dim=1)
+    logger.info(f"Compiling model with warmup run")
+    profiler.start(f"inference_and_compile_time")
+    model(input)
+    profiler.end(f"inference_and_compile_time")
 
-        token_counts += sequences.shape[0]
+    inference_and_compile_time = profiler.get("inference_and_compile_time")
+    logger.info(f"Model compiled with warmup run in {(inference_and_compile_time):.2f} s")
 
-        if display_decoded_seq:
-            decoded = tokenizer.batch_decode(sequences, skip_special_tokens=False)
-            display_tokens(decoded)
-            throughput = token_counts / (time.time() - start)
-            print(f"Current total throughput: {throughput:.2f} tok/s")
-            print(f"Current throughput per user: {(throughput/32):.2f} tok/s/u")
+    logger.info(f"Running inference for {iterations} iterations")
+    for idx in range(iterations):
+        profiler.start("inference_time")
+        profiler.start(f"inference_time_{idx}")
+        model(input)
+        profiler.end(f"inference_time_{idx}")
+        profiler.end("inference_time")
 
-    # profiler.print()
-    comment = ""
-    ref_model_run_for_inference = profiler.get("ref_model_run_for_inference_0")
-    first_iter_time = profiler.get("model_run_for_inference_0")
-    second_iter_time = profiler.get(f"model_run_for_inference_{inference_profile_iteration}")
+    mean_inference_time = profiler.get("inference_time")
+    inference_time = profiler.get(f"inference_time_{iterations - 1}")
+    compile_time = inference_and_compile_time - inference_time
+    logger.info(f"Inference time on last iterations was completed in {(inference_time * 1000.0):.2f} ms")
+    logger.info(f"Mean inference time was {(mean_inference_time * 1000.0):.2f} ms")
+    logger.info(f"Model compilation took {compile_time:.2f} s")
 
+    comment = (
+        f"mode-{'prefill' if mode == ModelMode.PREFILL else 'decode'}_layers-{NUM_LAYERS}_seqlen-{sequence_length}"
+    )
     prep_perf_report(
         model_name=f"{model_version}",
-        batch_size=batch,
-        inference_and_compile_time=first_iter_time,
-        inference_time=second_iter_time,
+        batch_size=batch_size,
+        inference_and_compile_time=inference_and_compile_time,
+        inference_time=inference_time,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
-        inference_time_cpu=ref_model_run_for_inference,
         comments=comment,
     )
 
+    lower_margin = MARGIN if is_ci_env else 1.0  # CI machines are generally slower
+    upper_margin = MARGIN
+    if not is_nearby(inference_time, expected_inference_time, lower_margin=lower_margin, upper_margin=upper_margin):
+        logger.warning(
+            "Inference time does not match (within some margin) the expected value (was {inference_time:2f} but expected {expected_inference_time:2f})"
+        )
+
+    if not is_nearby(compile_time, expected_compile_time, lower_margin=lower_margin, upper_margin=upper_margin):
+        logger.warning(
+            f"Compile time does not match (within some margin) the expected value (was {compile_time:2f} but expected {expected_compile_time:2f})"
+        )
+
 
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.timeout(600)
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, warmup, expected_device_fw_duration_ms",
@@ -155,15 +155,15 @@ def test_mamba_perf_device(batch, warmup, expected_device_fw_duration_ms, reset_
     command = f"pytest models/demos/wormhole/mamba/tests/test_mamba_model.py::test_device_perf[{inference_iterations}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
-    # convert expected perf (ms) to samples/s
-    expected_device_fw_duration_ns = expected_device_fw_duration_ms * 1e6  # convert ms to ns
+    # Convert expected perf (ms) to samples/s
+    expected_device_fw_duration_ns = expected_device_fw_duration_ms * 1e6  # ms to ns
     expected_total_device_fw_samples = get_samples_per_s(expected_device_fw_duration_ns * inference_iterations, batch)
 
     inference_time_key = "AVG DEVICE FW SAMPLES/S"
     expected_perf_cols = {inference_time_key: expected_total_device_fw_samples}
 
     post_processed_results = run_device_perf(command, subdir, 1, cols, batch)
-    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
     comment = ""
     prep_device_perf_report(
         model_name=f"mamba-2.8b_batch_{batch}",
@@ -172,57 +172,3 @@ def test_mamba_perf_device(batch, warmup, expected_device_fw_duration_ms, reset_
         expected_results=expected_results,
         comments=comment,
     )
-
-
-@skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "prefill_length",
-    (128,),
-)
-@pytest.mark.parametrize(
-    "prefill_chunk_size",
-    (
-        32,
-        64,
-        128,
-    ),
-)
-@pytest.mark.parametrize(
-    "num_layers",
-    (1,),
-)
-def test_mamba_prefill_perf_device(
-    device, use_program_cache, num_layers, prefill_length, prefill_chunk_size, get_tt_cache_path
-):
-    model_version = "state-spaces/mamba-2.8b"
-    batch_size = 32
-    model = get_tt_metal_model(
-        model_version,
-        device,
-        get_tt_cache_path(model_version),
-        batch_size=1,
-        mode=ModelMode.PREFILL,
-        seq_len=prefill_chunk_size,
-        num_layers=num_layers,
-    )
-
-    model.eval()
-    prefill_tokens = ttnn.from_torch(
-        torch.randint(1, 1000, (1, 1, batch_size, prefill_length)),
-        device=device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        dtype=ttnn.uint32,
-    )
-
-    prefill_start = time.time()
-    for chunk in split_sequence_length(prefill_tokens, batch=0, chunk_size=prefill_chunk_size):
-        chunk = ttnn.reshape(chunk, [1, chunk.shape[3]])  # Mamba expects (1, L) in prefill mode
-        with torch.no_grad():
-            model._forward(chunk)
-    prefill_end = time.time()
-
-    prefill_time_per_user = prefill_end - prefill_start
-    prefill_throughput_per_user = prefill_length / prefill_time_per_user
-    logger.info(f"Prefill throughput for user : {prefill_throughput_per_user:.2f} tok/s/u")

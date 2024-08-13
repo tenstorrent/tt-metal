@@ -263,5 +263,5 @@ def test_llama_demo(device, use_program_cache, input_prompts, instruct_weights, 
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
 
     return run_llama_demo(
-        user_input=input_prompts, batch_size=8, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
+        user_input=input_prompts, batch_size=1, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
     )

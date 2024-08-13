@@ -264,10 +264,6 @@ def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, 
     ttnn.deallocate(tt_model.wo_list[0])
     ttnn.deallocate(tt_model.layer_past_list[0][0])
     ttnn.deallocate(tt_model.layer_past_list[0][1])
-    ttnn.deallocate(tt_model.head_dims[0])
-    ttnn.deallocate(tt_model.expand_D_8D[0])
-    ttnn.deallocate(tt_model.reduce_8D_D[0])
-    ttnn.deallocate(tt_model.mask_Q_8D[0])
     ttnn.deallocate(attention_input)
 
 

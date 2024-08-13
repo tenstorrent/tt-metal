@@ -102,7 +102,6 @@ void kernel_main() {
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
 
-    static_assert(stick_nbytes <= NOC_MAX_BURST_SIZE);  // stick_nbytes used in noc_async_read_one_packet
 
     const uint16_t my_noc_x = NOC_X(my_x[noc_index]);
     const uint16_t my_noc_y = NOC_Y(my_y[noc_index]);

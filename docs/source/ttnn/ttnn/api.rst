@@ -190,12 +190,6 @@ Pointwise Unary
    ttnn/assign_bw
    ttnn/multigammaln_bw
    ttnn/add_bw
-   ttnn/eq_bw
-   ttnn/gt_bw
-   ttnn/lt_bw
-   ttnn/le_bw
-   ttnn/ge_bw
-   ttnn/ne_bw
    ttnn/lgamma_bw
    ttnn/fill_bw
    ttnn/hardsigmoid_bw
@@ -391,6 +385,12 @@ Data Movement
    ttnn/repeat_interleave
    ttnn/tilize
    ttnn/tilize_with_val_padding
+   ttnn/fill_rm
+   ttnn/fill_ones_rm
+   ttnn/untilize
+   ttnn/untilize_with_unpadding
+   ttnn/untilize_with_halo_v2
+   ttnn/indexed_fill
 
 Normalization
 =============

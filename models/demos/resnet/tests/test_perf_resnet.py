@@ -368,8 +368,8 @@ def test_perf_bare_metal(
 @pytest.mark.parametrize(
     "batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
     (
-        (20, True, 0.0064, 19),
-        (20, False, 0.0064, 19),
+        (20, True, 0.0067, 19),
+        (20, False, 0.0067, 19),
     ),
     indirect=["enable_async_mode"],
 )

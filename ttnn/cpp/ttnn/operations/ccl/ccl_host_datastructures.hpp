@@ -94,20 +94,20 @@ class EriscDatamoverBuilder {
     struct ChannelBufferSpec {
         ChannelBufferSpec(
             bool is_sender,
-            uint32_t worker_semaphore_address,
+            uint32_t worker_semaphore_id,
             uint32_t num_eth_messages_to_forward,
             uint32_t channel,
             std::vector<ccl::WorkerXY> const& worker_coords,
             uint32_t largest_message_size_bytes = 0) :
             worker_coords(worker_coords),
-            worker_semaphore_address(worker_semaphore_address),
+            worker_semaphore_id(worker_semaphore_id),
             num_eth_messages_to_forward(num_eth_messages_to_forward),
             channel(channel),
             largest_message_size_bytes(largest_message_size_bytes),
             is_sender(is_sender) {}
 
         std::vector<ccl::WorkerXY> const worker_coords;
-        uint32_t worker_semaphore_address;
+        uint32_t worker_semaphore_id;
         uint32_t num_eth_messages_to_forward;
         uint32_t channel;
         uint32_t largest_message_size_bytes;
@@ -126,7 +126,7 @@ class EriscDatamoverBuilder {
             args.push_back(this->eth_buffer_size_bytes);
         }
         args.push_back(this->local_semaphore_addresses.at(channel.channel));
-        args.push_back(channel.worker_semaphore_address);
+        args.push_back(channel.worker_semaphore_id);
         args.push_back(channel.worker_coords.size());
         for (auto const& worker_coord : channel.worker_coords) {
             args.push_back(worker_coord.to_uint32());
@@ -191,7 +191,7 @@ class EriscDatamoverBuilder {
 
     [[nodiscard]]
     ChannelBufferInterface add_sender_channel(
-        uint32_t worker_semaphore_address,
+        uint32_t worker_semaphore_id,
         uint32_t num_eth_messages_to_forward,
         std::vector<ccl::WorkerXY> const& worker_coords,
         uint32_t expected_message_size_bytes = 0) {
@@ -199,9 +199,9 @@ class EriscDatamoverBuilder {
         this->num_senders++;
         auto channel = active_channels.size();
         active_channels.emplace_back(
-            true, worker_semaphore_address, num_eth_messages_to_forward, channel, worker_coords, expected_message_size_bytes);
+            true, worker_semaphore_id, num_eth_messages_to_forward, channel, worker_coords, expected_message_size_bytes);
         log_trace(tt::LogOp, "Adding sender channel:");
-        log_trace(tt::LogOp, "\tworker_semaphore_address: {}", active_channels.back().worker_semaphore_address);
+        log_trace(tt::LogOp, "\tworker_semaphore_id: {}", active_channels.back().worker_semaphore_id);
         log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
         log_trace(tt::LogOp, "\tchannel: {}", active_channels.back().channel);
         log_trace(tt::LogOp, "\tis_sender: {}", active_channels.back().is_sender ? 1 : 0);
@@ -221,7 +221,7 @@ class EriscDatamoverBuilder {
 
     [[nodiscard]]
     ChannelBufferInterface add_receiver_channel(
-        uint32_t worker_semaphore_address,
+        uint32_t worker_semaphore_id,
         uint32_t num_eth_messages_to_forward,
         std::vector<ccl::WorkerXY> const& worker_coords,
         uint32_t expected_message_size_bytes = 0) {
@@ -229,9 +229,9 @@ class EriscDatamoverBuilder {
         this->num_receivers++;
         auto channel = active_channels.size();
         active_channels.emplace_back(
-            false, worker_semaphore_address, num_eth_messages_to_forward, channel, worker_coords, expected_message_size_bytes);
+            false, worker_semaphore_id, num_eth_messages_to_forward, channel, worker_coords, expected_message_size_bytes);
         log_trace(tt::LogOp, "Adding receiver channel:");
-        log_trace(tt::LogOp, "\tworker_semaphore_address: {}", active_channels.back().worker_semaphore_address);
+        log_trace(tt::LogOp, "\tworker_semaphore_id: {}", active_channels.back().worker_semaphore_id);
         log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
         log_trace(tt::LogOp, "\tchannel: {}", active_channels.back().channel);
         log_trace(tt::LogOp, "\tnum_workers: {}", worker_coords.size());
