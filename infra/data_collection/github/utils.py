@@ -171,13 +171,14 @@ def get_job_row_from_github_job(github_job):
 
     assert github_job["status"] == "completed", f"{github_job_id} is not completed"
 
-    logger.warning(
-        "Using labels to heuristically look for card type, but we should be using future arch- label instead"
-    )
-    if "grayskull" in labels:
+    labels_have_overlap = lambda labels_a, labels_b: bool(set(labels_a) & set(labels_b))
+
+    if labels_have_overlap(["grayskull", "arch-grayskull"], labels):
         card_type = "grayskull"
-    elif "wormhole_b0" in labels:
+    elif labels_have_overlap(["wormhole_b0", "arch-wormhole_b0"], labels):
         card_type = "wormhole_b0"
+    elif labels_have_overlap(["arch-blackhole"], labels):
+        card_type = "blackhole"
     else:
         card_type = None
 
@@ -321,7 +322,7 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
 
     assert "ARCH_NAME" in os.environ
     device_type = os.environ["ARCH_NAME"]
-    assert device_type in ("grayskull", "wormhole_b0")
+    assert device_type in ("grayskull", "wormhole_b0", "blackhole")
 
     logger.warning("Hardcoded null for device_memory_size")
     device_memory_size = ""
