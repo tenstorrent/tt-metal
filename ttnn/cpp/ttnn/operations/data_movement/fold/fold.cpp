@@ -106,7 +106,7 @@ Tensor fold(uint8_t queue_id,
             uint8_t pad_h,
             uint8_t pad_w) {
     if (use_transpose_as_fold) {
-        return operation::decorate_as_composite(__func__, fold_with_transpose_)(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w, queue_id).at(0);
+        return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w, queue_id).at(0);
     }
     bool is_sharded = input_tensor.is_sharded();
     Fold::operation_attributes_t op_attr = {.stride_h = stride_h, .stride_w = stride_w, .is_sharded = is_sharded};
