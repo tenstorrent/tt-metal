@@ -13,7 +13,7 @@ Tensor RotaryEmbeddingLlamaOperation::operator()(
     const Tensor &cos,
     const Tensor &sin,
     const Tensor& trans_mat,
-    const std::optional<MemoryConfig> memory_config,
+    const std::optional<MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor, cos, sin, trans_mat}))};
