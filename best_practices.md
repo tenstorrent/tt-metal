@@ -279,6 +279,10 @@ Prefer:
 enum class ThreadingOption { SingleCore, MultiCore };
 tensor = tt::tt_metal::tilize_with_val_padding(tensor, output_shape, 0, output_memory_config, dtype, ThreadingOption::MultiCore);
 ```
+Also consider giving enums power-of-2 values to pass them all as a single argument, e.g. 
+```cpp
+Options::FOO | Options::BAR
+```
 
 ### Motivation
 - **Readability:** Enhances readability by making the purpose of the argument explicit.
