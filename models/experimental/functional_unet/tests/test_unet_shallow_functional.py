@@ -61,8 +61,5 @@ def test_unet_pcc(device, perf_mode, batch, groups):
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.to(torch_input_tensor.dtype)
 
-        # Disable pcc checking due to hang
-        # if device.arch() == ttl.device.Arch.WORMHOLE_B0:
-        #    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
-        # else:
-        #    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.97)
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
