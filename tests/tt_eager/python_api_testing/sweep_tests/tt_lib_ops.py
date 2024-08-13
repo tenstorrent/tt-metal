@@ -862,43 +862,6 @@ def eltwise_round(
 
 
 @setup_host_and_device
-def eltwise_div_no_nan(
-    x,
-    y,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttnn.div_no_nan(t0, t1, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
-def eltwise_unary_div_no_nan(
-    x,
-    *args,
-    value,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.div_no_nan(t0, value, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def eltwise_unary_rdiv_trunc(
     x,
     *args,
@@ -2740,17 +2703,6 @@ def complex_real(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
 
 @setup_host_and_device
-def complex_recip(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    temp = torch.cat([x.real, x.imag], -1)
-    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
-
-    tt_result = ttl.tensor.complex_recip(t0, output_mem_config=output_mem_config)
-    result = ttl_complex_2_torch_complex(tt_result)
-
-    return result
-
-
-@setup_host_and_device
 def complex_div(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     tempx = torch.cat([x.real, x.imag], -1)
     t0 = setup_tt_tensor(tempx, device, layout[0], input_mem_config[0], dtype[0])
@@ -2776,37 +2728,6 @@ def complex_mul(x, y, *args, device, dtype, layout, input_mem_config, output_mem
     result = ttl_complex_2_torch_complex(tt_result)
 
     return result
-
-
-@setup_host_and_device
-def complex_conj(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    temp = torch.cat([x.real, x.imag], -1)
-    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
-
-    tt_result = ttl.tensor.conj(t0, output_mem_config=output_mem_config)
-    result = ttl_complex_2_torch_complex(tt_result)
-
-    return result
-
-
-@setup_host_and_device
-def complex_abs(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    temp = torch.cat([x.real, x.imag], -1)
-    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
-
-    tt_result = ttl.tensor.complex_abs(t0, output_mem_config=output_mem_config)
-    tt_result = tt2torch_tensor(tt_result)
-
-    return tt_result
-
-
-@setup_host_and_device
-def complex_polar(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    tt_result = ttl.tensor.polar(t0, t1, output_mem_config=output_mem_config)
-    return ttl_complex_2_torch_complex(tt_result)
 
 
 @setup_host_and_device
@@ -3048,23 +2969,6 @@ def sub_unary_bw(
     t2 = ttl.tensor.unary_sub_bw(t0, t1, output_mem_config=output_mem_config)[0]
 
     return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
-def fill_bw(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.fill_bw(t0, output_mem_config=output_mem_config)[0]
-
-    return tt2torch_tensor(t1)
 
 
 @setup_host_and_device

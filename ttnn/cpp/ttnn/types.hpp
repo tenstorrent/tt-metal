@@ -96,8 +96,8 @@ class Buffer : public tt::tt_metal::Buffer {
     public:
         Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type,
                 const TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-                std::optional< ShardSpecBuffer> shard_parameters = std::nullopt
-            ) : tt::tt_metal::Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, false) {
+                std::optional<ShardSpecBuffer> shard_parameters = std::nullopt, std::optional<bool> bottom_up = std::nullopt
+            ) : tt::tt_metal::Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, false) {
                 this->buffer_id = GLOBAL_BUFFER_ADDRESS_MAP.get_buf_id(); // Each buffer has a unique ID
                 this->allocate();
             }
@@ -109,7 +109,7 @@ class Buffer : public tt::tt_metal::Buffer {
         void allocate() {
             TT_ASSERT(this->device());
             this->device()->push_work([this] () mutable {
-                bool bottom_up = this->buffer_type() == BufferType::DRAM;
+                bool bottom_up = this->bottom_up_.value_or(this->is_dram());
                 tt::tt_metal::detail::AllocateBuffer(this, bottom_up);
                 // The address inserted here, will be used during asynchronous deallocate
                 GLOBAL_BUFFER_ADDRESS_MAP.insert(this->buffer_id, this->address());

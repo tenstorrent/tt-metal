@@ -338,12 +338,12 @@ class TtMixtralAttention(LightweightModule):
         # Rotary embeddings
         ###
 
-        q_heads_14SD = ttnn.experimental.tensor.rotary_embedding_llama(
+        q_heads_14SD = ttnn.experimental.rotary_embedding_llama(
             q_heads_14SD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
         )
         q_heads_14SD_pre_rot.deallocate(True)
 
-        k_heads_11SD = ttnn.experimental.tensor.rotary_embedding_llama(
+        k_heads_11SD = ttnn.experimental.rotary_embedding_llama(
             k_heads_11SD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
         )
         k_heads_11SD_pre_rot.deallocate(True)

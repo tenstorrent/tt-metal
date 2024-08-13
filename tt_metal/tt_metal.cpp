@@ -190,6 +190,15 @@ std::map<chip_id_t, Device *> CreateDevices(
 }
 
 void CloseDevices(std::map<chip_id_t, Device *> devices) {
+    // Global Sync across all devices in the pool.
+    // We need to ensure that commands sent to each device have been completed
+    // before closing any device + modifying routing info.
+    // If this is not done, non-blocking CCLs followed by a close will hang, since
+    // the main thread will modify device state while the CCL is running on device.
+    for (const auto &[device_id, dev] : devices) {
+        dev->synchronize(); // Synchronize worker queue
+        Synchronize(dev); // Synchronize device
+    }
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     std::map<chip_id_t, Device *> mmio_devices = {};
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
@@ -671,9 +680,9 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
     }
 }
 
-void CompileProgram(Device *device, Program &program) {
+void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
     ZoneScoped;
-    program.compile(device);
+    program.compile(device, fd_bootloader_mode);
 }
 
 void AllocateBuffer(Buffer *buffer, bool bottom_up) {
@@ -953,6 +962,18 @@ void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const 
 }
 
 void ReleaseTrace(Device *device, const uint32_t tid) { device->release_trace(tid); }
+
+void Synchronize(Device *device, const std::optional<uint8_t> cq_id) {
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+        if (cq_id.has_value()) {
+            Finish(device->command_queue(cq_id.value()));
+        } else {
+            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+                Finish(device->command_queue(cq_id));
+            }
+        }
+    }
+}
 
 }  // namespace tt_metal
 

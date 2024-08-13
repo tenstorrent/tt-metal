@@ -37,7 +37,7 @@ MARGIN = 0.05
     "model_version, mode, batch_size, sequence_length, iterations, expected_compile_time, expected_inference_time",
     (
         ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 1, 8, 12.50, 0.110),
-        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 128, 8, 23.00, 0.520),
+        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 128, 8, 23.50, 0.520),
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)

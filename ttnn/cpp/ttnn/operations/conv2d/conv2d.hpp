@@ -18,8 +18,8 @@
 #include "ttnn/operations/conv2d/device/optimized_conv_op.hpp"
 #include "ttnn/operations/conv2d/device/conv_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/halo_op.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/sliding_window/halo/halo.hpp"
 
 namespace ttnn {
 
@@ -103,7 +103,7 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t st
 uint32_t find_closest_common_largest_divisor(uint32_t num1, uint32_t num2, uint32_t start_divisor);
 
 template <typename T>
-ParallelConfig determine_parallel_config(
+sliding_window::ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
     uint32_t input_channels,
@@ -114,17 +114,17 @@ ParallelConfig determine_parallel_config(
     ShardOrientation block_shard_orientation,
     bool is_out_tiled=true);
 
-uint32_t get_num_cores_nhw_from_parallel_config(const ParallelConfig& pconfig);
+uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
-uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconfig);
+uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
-MemoryConfig create_sharded_memory_config_from_parallel_config(const Shape& tensor_shape, ParallelConfig& parallel_config, uint32_t tile_size);
+MemoryConfig create_sharded_memory_config_from_parallel_config(const Shape& tensor_shape, sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
 tt::tt_metal::OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw);
 
 std::pair<uint32_t, uint32_t> determine_largest_subblock_size(uint32_t block_height, uint32_t block_width, bool fp32_accum);
 
-tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(const ParallelConfig& parallel_config, const tt::tt_metal::OptimizedConvParallelizationConfig& conv_op_parallel_config, uint32_t padded_in_channels, uint32_t act_block_h_override, uint32_t window_w, bool fp32_accum, bool use_shallow_conv_variant);
+tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(const sliding_window::ParallelConfig& parallel_config, const tt::tt_metal::OptimizedConvParallelizationConfig& conv_op_parallel_config, uint32_t padded_in_channels, uint32_t act_block_h_override, uint32_t window_w, bool fp32_accum, bool use_shallow_conv_variant);
 
 template<typename T>
 std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
@@ -138,7 +138,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
     uint32_t out_channels);
 
 template<typename T>
-std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_required(
+std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool> shard_or_reshard_tensor_if_required(
     T * device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -151,7 +151,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
 void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor);
 
 template <typename T>
-std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const ParallelConfig& parallel_config, T * device, uint32_t groups, uint32_t act_block_h_ntiles, uint32_t input_width);
+std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const sliding_window::ParallelConfig& parallel_config, T * device, uint32_t groups, uint32_t act_block_h_ntiles, uint32_t input_width);
 
 template <typename T>
 std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d(

@@ -92,10 +92,6 @@ op_map = {
         "tt_op": tt_lib_ops.fill_ones_rm,
         "pytorch_op": pytorch_ops.fill_ones_rm,
     },
-    "fill-bw": {
-        "tt_op": tt_lib_ops.fill_bw,
-        "pytorch_op": pytorch_ops.fill_bw,
-    },
     "fill-zero-bw": {
         "tt_op": tt_lib_ops.fill_zero_bw,
         "pytorch_op": pytorch_ops.fill_zero_bw,
@@ -199,14 +195,6 @@ op_map = {
     "eltwise-unary_rdiv_trunc": {
         "tt_op": tt_lib_ops.eltwise_unary_rdiv_trunc,
         "pytorch_op": pytorch_ops.unary_rdiv_trunc,
-    },
-    "eltwise-div_no_nan": {
-        "tt_op": tt_lib_ops.eltwise_div_no_nan,
-        "pytorch_op": pytorch_ops.div_no_nan,
-    },
-    "eltwise-unary_div_no_nan": {
-        "tt_op": tt_lib_ops.eltwise_unary_div_no_nan,
-        "pytorch_op": pytorch_ops.unary_div_no_nan,
     },
     "eltwise-square": {
         "tt_op": tt_lib_ops.eltwise_square,
@@ -886,10 +874,6 @@ op_map = {
         "tt_op": tt_lib_ops.complex_real,
         "pytorch_op": pytorch_ops.complex_real,
     },
-    "complex-recip": {
-        "tt_op": tt_lib_ops.complex_recip,
-        "pytorch_op": pytorch_ops.complex_recip,
-    },
     "complex-div": {
         "tt_op": tt_lib_ops.complex_div,
         "pytorch_op": pytorch_ops.complex_div,
@@ -897,18 +881,6 @@ op_map = {
     "complex-mul": {
         "tt_op": tt_lib_ops.complex_mul,
         "pytorch_op": pytorch_ops.complex_mul,
-    },
-    "complex-conj": {
-        "tt_op": tt_lib_ops.complex_conj,
-        "pytorch_op": pytorch_ops.complex_conj,
-    },
-    "complex-abs": {
-        "tt_op": tt_lib_ops.complex_abs,
-        "pytorch_op": pytorch_ops.complex_abs,
-    },
-    "complex-polar": {
-        "tt_op": tt_lib_ops.complex_polar,
-        "pytorch_op": pytorch_ops.complex_polar,
     },
     "complex-imag": {
         "tt_op": tt_lib_ops.complex_imag,

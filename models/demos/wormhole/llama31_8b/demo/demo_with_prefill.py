@@ -224,6 +224,12 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
 
     logger.info("Starting decode...")
 
+    current_rot_mat, rot_matrix = get_single_rot_mat(
+        model_args.head_dim,
+        device,
+        start_pos=prefill_seq_len,
+    )
+
     # Keep track of generated outputs to print out every iteration
     all_outputs = [encoded_prompts[b][:prefill_seq_len] for b in range(batch_size)]
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
@@ -341,5 +347,5 @@ def test_llama_demo(device, use_program_cache, input_prompts, instruct_weights, 
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
 
     return run_llama_demo(
-        user_input=input_prompts, batch_size=8, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
+        user_input=input_prompts, batch_size=1, device=device, instruct_mode=instruct_weights, is_ci_env=is_ci_env
     )

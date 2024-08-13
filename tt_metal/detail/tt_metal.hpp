@@ -102,12 +102,13 @@ namespace tt::tt_metal{
          *
          *  Return value: void
          *
-         * | Argument       | Description                                                      | Type      | Valid Range                                        | Required |
-         * |----------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
-         * | device         | Which device the program is compiled for                         | Device *  | Must be initialized via tt_metal::InitializeDevice | Yes      |
-         * | program        | The program to compile                                           | Program & |                                                    | Yes      |
+         * | Argument                  | Description                                                      | Type      | Valid Range                                        | Required |
+         * |---------------------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
+         * | device                    | Which device the program is compiled for                         | Device *  | Must be initialized via tt_metal::InitializeDevice | Yes      |
+         * | program                   | The program to compile                                           | Program & |                                                    | Yes      |
+         * | fd_bootloader_mode        | Set when compiling program to initialize fast dispatch           | bool      |                                                    | No       |
          */
-        void CompileProgram(Device *device, Program &program);
+        void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode = false);
 
 
         /**
@@ -314,13 +315,6 @@ namespace tt::tt_metal{
             auto worker_core = device->worker_core_from_logical_core(logical_core);
             tt::Cluster::instance().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
             return true;
-        }
-
-        inline void Synchronize(Device *device)
-        {
-            if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-                Finish(device->command_queue());
-            }
         }
 
         inline void SetLazyCommandQueueMode(bool lazy)
