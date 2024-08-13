@@ -7,7 +7,6 @@ import pytest
 import torch
 
 import ttnn
-import tt_lib
 from models.utility_functions import is_grayskull
 
 from tests.ttnn.utils_for_testing import assert_with_pcc

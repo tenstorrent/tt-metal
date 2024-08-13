@@ -15,7 +15,6 @@ from models.utility_functions import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
-import tt_lib
 import math
 import os
 import torch.nn as nn
@@ -511,7 +510,7 @@ def test_resnet50_conv_wh(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
-    use_shallow_conv_variant = (input_channels == 16) and device.arch() != tt_lib.device.Arch.WORMHOLE_B0
+    use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
     run_conv(
         device,
         math_fidelity,
@@ -634,7 +633,7 @@ def test_resnet50_conv_wh_fp32(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
-    use_shallow_conv_variant = (input_channels == 16) and device.arch() != tt_lib.device.Arch.WORMHOLE_B0
+    use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
     run_conv(
         device,
         math_fidelity,
