@@ -29,6 +29,8 @@ class TtTransformer(nn.Module):
         self.n_layers = args.n_layers
         self.start_pos = start_pos
         self.device = device
+        self.dtype = dtype
+        self.model_config = args.get_model_config()
         assert self.vocab_size > 0
 
         self.layers = torch.nn.ModuleList(
@@ -84,6 +86,9 @@ class TtTransformer(nn.Module):
             x,
             self.output_weight,
             compute_kernel_config=self.args.get_compute_kernel_config(),
-            core_grid=ttnn.CoreGrid(y=8, x=8),
+            program_config=self.model_config["OUTPUT_MM_PROGCFG"],
+            memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
+            dtype=self.dtype,
         )
+
         return output
