@@ -29,11 +29,9 @@ FORCE_INLINE void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_
 
     uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_bytes);
     #pragma GCC unroll 3
-    for(uint32_t outer = 0; outer < window_height; outer++)
-    {
+    for(uint32_t outer = 0; outer < window_height; outer++) {
         uint32_t act_l1_read_addr_row_offset = act_l1_read_addr_plus_offset;
-        for (uint32_t inner = 0; inner < window_width; inner++)
-        {
+        for (uint32_t inner = 0; inner < window_width; inner++) {
             //Read the partial depth.
             noc_async_read_one_packet_with_state<true>(act_l1_read_addr_row_offset, l1_write_addr_act);
             //Increment by full depth to go to the next pixel
@@ -89,10 +87,11 @@ void kernel_main() {
     i+=num_cores_x;
     //Y lookup.
     tt_l1_ptr uint32_t *act_mcast_y_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
-    DPRINT<<"Act Params L1 :  "<<conv_act_size_w<<"  "<<conv_act_c_read_bytes<<"  "<<weight_size_h<<"  "<<weight_size_w<<"  "<<act_block_h_datums<<"  "<<act_block_num_tiles<<ENDL()<<
-    "L2  "<<act_w_num_outer<<"  "<<act_num_blocks_w<<"  "<<act_mcast_sender_semaphore_addr<<"  "<<act_mcast_receiver_semaphore_addr<<"  "<<act_mcast_dest_noc_start_x<<
-    "L3  "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<act_mcast_num_cores<<ENDL();
 
+
+    // DPRINT<<"Act Params L1 :  "<<conv_act_size_w<<"  "<<conv_act_c_read_bytes<<"  "<<weight_size_h<<"  "<<weight_size_w<<"  "<<act_block_h_datums<<"  "<<act_block_num_tiles<<ENDL()<<
+    // "L2  "<<act_w_num_outer<<"  "<<act_num_blocks_w<<"  "<<act_mcast_sender_semaphore_addr<<"  "<<act_mcast_receiver_semaphore_addr<<"  "<<act_mcast_dest_noc_start_x<<
+    // "L3  "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<act_mcast_num_cores<<ENDL();
 
     //Equivalent to Core Index.
     uint32_t act_mcast_sender_id = this_core_x+(num_cores_x*this_core_y) ;
@@ -119,6 +118,7 @@ void kernel_main() {
     // Set up remote VALID value
     volatile tt_l1_ptr uint32_t* act_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_semaphore_addr);
     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, VALID);
+
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
     volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_sender_semaphore_addr);

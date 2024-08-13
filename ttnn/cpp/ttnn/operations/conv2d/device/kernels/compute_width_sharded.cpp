@@ -166,8 +166,7 @@ void MAIN {
             for(uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 //Tilization is carried out multiple times for each core along the width dimension.
                 //At the beginning of each width block in the reader kernel do tilization.
-                if(in0_block_w_i%in0_nblocks_w_tilize==0)
-                {
+                if(in0_block_w_i % in0_nblocks_w_tilize == 0) {
                     #ifdef PRE_TILIZE
                     unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
 

@@ -58,8 +58,8 @@ void copy_sticks_async(
 
 
     while (length) {
-        uint16_t noc_x = (is_block_sharded && !is_col_major)||is_width_sharded ? my_noc_x : config_data[i + 0];
-        uint16_t noc_y = (is_block_sharded && is_col_major)||is_width_sharded ? my_noc_y : config_data[i + 1];
+        uint16_t noc_x =((is_block_sharded && !is_col_major) || is_width_sharded )? my_noc_x : config_data[i + 0];
+        uint16_t noc_y =((is_block_sharded && is_col_major) || is_width_sharded )? my_noc_y : config_data[i + 1];
         length = config_data[i + 2];
         i += 3;
 
