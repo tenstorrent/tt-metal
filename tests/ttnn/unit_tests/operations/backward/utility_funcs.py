@@ -111,6 +111,18 @@ def compare_pcc(tt_tensor, golden_tensor, pcc=0.99):
     return status
 
 
+def compare_equal(tt_tensor, golden_tensor):
+    status = True
+    for i in range(len(tt_tensor)):
+        tt_out_tensor = tt_tensor[i].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        pt_out_tensor = golden_tensor[i]
+        comp_pass, comp_out = comparison_funcs.comp_equal(pt_out_tensor, tt_out_tensor)
+        logger.debug(comp_pass)
+        logger.debug(comp_out)
+        status = status & comp_pass
+    return status
+
+
 def compare_all_close(tt_tensor, golden_tensor, atol=4, rtol=1e-1):
     status = True
     for i in range(len(tt_tensor)):

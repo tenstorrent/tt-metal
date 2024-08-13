@@ -385,4 +385,40 @@ def _golden_function_polyval(input_tensor_a, coeffs, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.binary.polyval, golden_function=_golden_function_polyval)
 
 
+def _golden_function_gt_(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return input_tensor_a.gt_(input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.gt_, golden_function=_golden_function_gt_)
+
+
+def _golden_function_le_(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return input_tensor_a.le_(input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.le_, golden_function=_golden_function_le_)
+
+
+def _golden_function_lt_(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return input_tensor_a.lt_(input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.lt_, golden_function=_golden_function_lt_)
+
+
+def _golden_function_ge_(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return input_tensor_a.ge_(input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.ge_, golden_function=_golden_function_ge_)
+
+
 __all__ = []
