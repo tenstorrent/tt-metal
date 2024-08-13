@@ -5,7 +5,7 @@
 import os
 import sys
 import torch
-import tt_lib
+import ttnn
 import pytest
 import numpy as np
 
@@ -82,12 +82,12 @@ def run_perf_yolov5s(
 
         profiler.start(cpu_key)
         logits = refence_module(test_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
         tt_output = tt_module(tt_inputs)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
 
@@ -95,7 +95,7 @@ def run_perf_yolov5s(
 
         profiler.start(second_key)
         tt_output = tt_module(tt_inputs)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
         del tt_output
 
@@ -166,7 +166,7 @@ def run_perf_yolov5s(
         )
         ap_list.append(ap)
 
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(third_key)
 
     mAP = np.mean(ap_list)
