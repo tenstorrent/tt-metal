@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 21 * * *"
-  push:
-    branches:
-      - "rkim/miw-291-t3000-nightly"
 
 jobs:
   build-artifact:
