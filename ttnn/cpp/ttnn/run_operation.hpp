@@ -41,11 +41,6 @@ auto generic_create_output_tensors(
     return output_tensors;
 }
 
-// TODO: delete all uses of decorate_as_composite
-constexpr auto decorate_as_composite(const char* name, auto function) {
-    return function;
-}
-
 #ifdef DEBUG
 namespace detail {
 
