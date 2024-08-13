@@ -9,6 +9,7 @@
 
 #include "tt_metal/common/core_coord.h"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/cpp/pybind11/json_class.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
@@ -17,25 +18,14 @@ namespace ttnn {
 namespace operations {
 namespace matmul {
 
-using namespace tt::operations::primary;
 using ttnn::operations::unary::UnaryWithParam;
 
-template <typename T>
-auto tt_pybind_class(py::module m, auto name, auto desc) {
-    return py::class_<T>(m, name, desc)
-        .def("to_json", [](const T& self) -> std::string { return tt::stl::json::to_json(self).dump(); })
-        .def(
-            "from_json",
-            [](const std::string& json_string) -> T { return tt::stl::json::from_json<T>(nlohmann::json::parse(json_string)); })
-        .def("__repr__", [](const T& self) { return fmt::format("{}", self); });
-}
-
 void py_module(py::module& module) {
-    auto matmul_program_config = tt_pybind_class<MatmulProgramConfig>(module, "MatmulProgramConfig", R"doc(
+    auto matmul_program_config = tt_serializable_class<MatmulProgramConfig>(module, "MatmulProgramConfig", R"doc(
         Class defining matmul program config
     )doc");
 
-    auto matmul_multi_core_reuse_program_config = tt_pybind_class<MatmulMultiCoreReuseProgramConfig>(module, "MatmulMultiCoreReuseProgramConfig", R"doc(
+    auto matmul_multi_core_reuse_program_config = tt_serializable_class<MatmulMultiCoreReuseProgramConfig>(module, "MatmulMultiCoreReuseProgramConfig", R"doc(
         Class defining matmul multi core reuse program config
     )doc");
 
@@ -56,7 +46,7 @@ void py_module(py::module& module) {
         .def_readwrite("per_core_M", &MatmulMultiCoreReuseProgramConfig::per_core_M)
         .def_readwrite("per_core_N", &MatmulMultiCoreReuseProgramConfig::per_core_N);
 
-    auto matmul_multi_core_reuse_multicast_program_config = tt_pybind_class<MatmulMultiCoreReuseMultiCastProgramConfig>(module, "MatmulMultiCoreReuseMultiCastProgramConfig", R"doc(
+    auto matmul_multi_core_reuse_multicast_program_config = tt_serializable_class<MatmulMultiCoreReuseMultiCastProgramConfig>(module, "MatmulMultiCoreReuseMultiCastProgramConfig", R"doc(
         Class defining matmul multi core reuse multi cast program config
     )doc");
 
@@ -93,7 +83,7 @@ void py_module(py::module& module) {
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation)
         .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCastProgramConfig::fuse_batch);
 
-    auto matmul_multi_core_reuse_multicast_1d_program_config = tt_pybind_class<MatmulMultiCoreReuseMultiCast1DProgramConfig>(module, "MatmulMultiCoreReuseMultiCast1DProgramConfig", R"doc(
+    auto matmul_multi_core_reuse_multicast_1d_program_config = tt_serializable_class<MatmulMultiCoreReuseMultiCast1DProgramConfig>(module, "MatmulMultiCoreReuseMultiCast1DProgramConfig", R"doc(
         Class defining matmul multi core reuse multi cast 1D program config
     )doc");
 
@@ -130,7 +120,7 @@ void py_module(py::module& module) {
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation)
         .def_readwrite("mcast_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::mcast_in0);
 
-    auto matmul_multi_core_reuse_multicast_dram_sharded_program_config = tt_pybind_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(module, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig", R"doc(
+    auto matmul_multi_core_reuse_multicast_dram_sharded_program_config = tt_serializable_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(module, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig", R"doc(
         Class defining matmul multi core reuse multi cast DRAM sharded program config
     )doc");
 
@@ -154,16 +144,17 @@ void py_module(py::module& module) {
            const bool transpose_b = false,
            const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
            const std::optional<const DataType> dtype = std::nullopt,
-           const std::optional<const ttnn::MatmulProgramConfig> program_config = std::nullopt,
+           const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
            const std::optional<const std::string>& activation = std::nullopt,
            const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
+           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+           const uint8_t& queue_id = 0) -> ttnn::Tensor {
             std::optional<CoreCoord> user_core_coord;
             if (core_grid.has_value()) {
                 user_core_coord = CoreCoord(core_grid->x, core_grid->y);
             }
-            bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(input_tensor_b.get_shape());
-            return ttnn::operations::matmul::matmul(
+            bool user_run_batched = detail::is_input_batched(input_tensor_b.get_shape());
+            return bound_matmul(
                 input_tensor_a,
                 input_tensor_b,
                 /*bias=*/std::nullopt,
@@ -178,7 +169,8 @@ void py_module(py::module& module) {
                     get_fused_activation(activation),
                     user_run_batched,
                     transpose_a,
-                    transpose_b});
+                    transpose_b},
+                queue_id);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -190,7 +182,8 @@ void py_module(py::module& module) {
         py::arg("program_config") = std::nullopt,
         py::arg("activation") = std::nullopt,
         py::arg("compute_kernel_config") = std::nullopt,
-        py::arg("core_grid") = std::nullopt);
+        py::arg("core_grid") = std::nullopt,
+        py::arg("queue_id") = 0);
 
     module.def(
         "linear",
@@ -201,24 +194,25 @@ void py_module(py::module& module) {
            const bool transpose_b = false,
            const ttnn::MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG,
            const std::optional<const DataType> dtype = std::nullopt,
-           const std::optional<const ttnn::MatmulProgramConfig> program_config = std::nullopt,
+           const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
            const std::optional<const std::string>& activation = std::nullopt,
            const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) -> ttnn::Tensor {
+           const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
+           const uint8_t& queue_id = 0) -> ttnn::Tensor {
             std::optional<CoreCoord> user_core_coord;
             if (core_grid.has_value()) {
                 user_core_coord = CoreCoord(core_grid->x, core_grid->y);
             }
-            bool b_is_batched = ttnn::operations::matmul::detail::is_input_batched(input_tensor_b.get_shape());
+            bool b_is_batched = detail::is_input_batched(input_tensor_b.get_shape());
             TT_FATAL(
                 !(b_is_batched && bias.has_value()),
                 "Batched input not supported when bias exists (linear operation).");
 
-            return ttnn::operations::matmul::matmul(
+            return bound_matmul(
                 input_tensor_a,
                 input_tensor_b,
                 bias,
-                tt::operations::primary::Matmul{
+                Matmul{
                     program_config,
                     /*bcast_batch=*/std::nullopt,
                     memory_config,
@@ -229,7 +223,8 @@ void py_module(py::module& module) {
                     get_fused_activation(activation),
                     /*user_run_batched=*/false,
                     transpose_a,
-                    transpose_b});
+                    transpose_b},
+                queue_id);
         },
         py::arg("input_tensor_a"),
         py::arg("input_tensor_b"),
@@ -242,7 +237,8 @@ void py_module(py::module& module) {
         py::arg("program_config") = std::nullopt,
         py::arg("activation") = std::nullopt,
         py::arg("compute_kernel_config") = std::nullopt,
-        py::arg("core_grid") = std::nullopt);
+        py::arg("core_grid") = std::nullopt,
+        py::arg("queue_id") = 0);
 }
 
 }  // namespace matmul

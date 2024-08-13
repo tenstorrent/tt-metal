@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_lib_bindings_tensor.hpp"
+#include "ttnn/cpp/pybind11/json_class.hpp"
 
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/serialization.hpp"
@@ -56,16 +57,6 @@ void implement_buffer_protocol(PyType& py_buffer_t) {
 
 }  // namespace detail
 
-template <typename T>
-auto tt_pybind_class(py::module m, auto name, auto desc) {
-    return py::class_<T>(m, name, desc)
-        .def("to_json", [](const T& self) -> std::string { return tt::stl::json::to_json(self).dump(); })
-        .def(
-            "from_json",
-            [](const std::string& json_string) -> T { return tt::stl::json::from_json<T>(nlohmann::json::parse(json_string)); })
-        .def("__repr__", [](const T& self) { return fmt::format("{}", self); });
-}
-
 void TensorModule(py::module& m_tensor) {
     // ENUM SECTION
 
@@ -89,7 +80,7 @@ void TensorModule(py::module& m_tensor) {
         .value("L1_SMALL", BufferType::L1_SMALL);
 
 
-    auto py_core_coord = tt_pybind_class<CoreCoord>(m_tensor, "CoreCoord", R"doc(
+    auto py_core_coord = tt_serializable_class<CoreCoord>(m_tensor, "CoreCoord", R"doc(
         Class defining core coordinate
     )doc");
 
@@ -148,7 +139,7 @@ void TensorModule(py::module& m_tensor) {
 
     py::implicitly_convertible<std::vector<uint32_t>, Shape>();
 
-    auto pyMemoryConfig = tt_pybind_class<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
+    auto pyMemoryConfig = tt_serializable_class<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.
         There are eight DRAM memory banks on TT Accelerator device, indexed as 0, 1, 2, ..., 7.
     )doc");
@@ -174,9 +165,6 @@ void TensorModule(py::module& m_tensor) {
 
                     mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.SINGLE_BANK)
             )doc")
-        .def(
-            "__repr__",
-            [](const MemoryConfig& memory_config) -> std::string { return fmt::format("{}", memory_config); })
         .def(
             "__hash__",
             [](const MemoryConfig& memory_config) -> tt::stl::hash::hash_t {
@@ -217,20 +205,16 @@ void TensorModule(py::module& m_tensor) {
         py::class_<owned_buffer::Buffer<uint16_t>>(m_tensor, "owned_buffer_for_uint16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<owned_buffer::Buffer<uint16_t>, uint16_t>(py_owned_buffer_for_uint16_t);
 
-    auto pyCoreRange = tt_pybind_class<CoreRange>(m_tensor, "CoreRange", R"doc(
+    auto pyCoreRange = tt_serializable_class<CoreRange>(m_tensor, "CoreRange", R"doc(
         Class defining a range of cores)doc");
     pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }))
-        .def("__repr__", [](const CoreRange& core_range) -> std::string { return fmt::format("{}", core_range); })
         .def_readonly("start", &CoreRange::start_coord)
         .def_readonly("end", &CoreRange::end_coord)
         .def("grid_size", &CoreRange::grid_size);
 
-    auto pyCoreRangeSet = tt_pybind_class<CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(
+    auto pyCoreRangeSet = tt_serializable_class<CoreRangeSet>(m_tensor, "CoreRangeSet", R"doc(
         Class defining a set of CoreRanges required for sharding)doc");
     pyCoreRangeSet.def(py::init<>([](const std::set<CoreRange>& core_ranges) { return CoreRangeSet(core_ranges); }))
-        .def(
-            "__repr__",
-            [](const CoreRangeSet& core_range_set) -> std::string { return fmt::format("{}", core_range_set); })
         .def(
             "bounding_box",
             &CoreRangeSet::bounding_box,
@@ -247,7 +231,7 @@ void TensorModule(py::module& m_tensor) {
             Returns a CoreRangeSet from number of cores
         )doc");
 
-    auto pyShardSpec = tt_pybind_class<ShardSpec>(m_tensor, "ShardSpec", R"doc(
+    auto pyShardSpec = tt_serializable_class<ShardSpec>(m_tensor, "ShardSpec", R"doc(
         Class defining the specs required for sharding.
     )doc");
 
@@ -262,7 +246,6 @@ void TensorModule(py::module& m_tensor) {
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self)
-        .def("__repr__", [](const ShardSpec& shard_spec) -> std::string { return fmt::format("{}", shard_spec); });
     ;
 
     auto py_owned_buffer_for_int32_t =

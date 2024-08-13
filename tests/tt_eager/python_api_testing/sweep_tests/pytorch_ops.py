@@ -2078,28 +2078,6 @@ def cos_bw(x, y, *args, **kwargs):
     return in_data.grad
 
 
-def concat_bw(x, y, z, *args, **kwargs):
-    grad_data = x
-    in_data = y
-    other_data = z
-
-    in_data.requires_grad = True
-    other_data.requires_grad = True
-
-    in_data.retain_grad()
-    other_data.retain_grad()
-
-    dim = -1
-    for i in range(0, len(x.size())):
-        if x.size(i) == y.size(i) + z.size(i):
-            dim = i
-
-    pyt_y = torch.concat([in_data, other_data], dim)
-    pyt_y.backward(gradient=grad_data)
-
-    return [in_data.grad, other_data.grad]
-
-
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
     x = x.to(torch.float32)

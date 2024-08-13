@@ -14,13 +14,6 @@
 
 namespace ttnn {
 
-using MatmulMultiCoreReuseProgramConfig = tt::operations::primary::MatmulMultiCoreReuseProgramConfig;
-using MatmulMultiCoreReuseMultiCastProgramConfig = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig;
-using MatmulMultiCoreReuseMultiCast1DProgramConfig =
-    tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig;
-// MatmulProgramConfig is the Union of the above types
-using MatmulProgramConfig = tt::operations::primary::MatmulProgramConfig;
-
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
@@ -35,12 +28,17 @@ bool is_input_batched(const ttnn::Shape& shape);
 
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation);
 
-ttnn::Tensor matmul(
+ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const struct tt::operations::primary::Matmul& parameters);
+    const struct Matmul& parameters,
+    const uint8_t& queue_id);
 
 }  // namespace matmul
 }  // namespace operations
 }  // namespace ttnn
+
+namespace ttnn {
+    using ttnn::operations::matmul::matmul;
+}
