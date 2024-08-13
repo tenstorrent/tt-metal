@@ -13,7 +13,7 @@ from models.utility_functions import (
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_embeddings import TtTimestepEmbedding
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding
 import pytest
 
 

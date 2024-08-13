@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 
@@ -74,43 +72,5 @@ void TensorModuleCompositeOPs(py::module& m_tensor) {
             +----------+---------------------------+-----------+------------------------------+----------+
         )doc");
 #endif
-
-    m_tensor.def(
-        "lamb_optimizer",
-        &lamb_optimizer,
-        py::arg("data").noconvert(),
-        py::arg("grad").noconvert(),
-        py::arg("exp_avg").noconvert(),
-        py::arg("exp_avg_sq").noconvert(),
-        py::arg("beta1"),
-        py::arg("beta2"),
-        py::arg("step_size"),
-        py::arg("eps"),
-        py::arg("weight_decay"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-            Returns tensor with the threshold activation on elements of the input tensors ``arg0`` at threshold ``threshold``,
-            and value ``value``.
-
-            Input tensor must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "data", "Tensor data is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "grad", "Tensor grad is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "exp_avg", "Tensor exp_avg is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "exp_avg_sq", "exp_avg_sq threshold is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "beta1", "Value to beta1 at", "float", "", "Yes"
-                "beta2", "Value to beta2 with", "float", "", "Yes"
-                "step_size", "Value to beta1 at", "float", "", "Yes"
-                "eps", "Value to beta2 with", "float", "", "Yes"
-                "weight_decay", "Value to beta1 at", "float", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-
 }
 }  // namespace tt::tt_metal::detail
