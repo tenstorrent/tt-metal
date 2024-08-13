@@ -261,3 +261,96 @@ Including `using namespace` in header files can lead to namespace pollution and 
 - **Code Clarity**: Improves code clarity by explicitly specifying the namespace.
 - **Maintainability**: Enhances maintainability by avoiding unintended interactions between different parts of the code.
 
+## 14. Avoid Bool Arguments in APIs
+
+### Practice
+Avoid using plain bool arguments in APIs, especially when the meaning isn't clear at the call site. Instead, use enum class to provide context.
+
+### Explanation
+Using a bool argument in a function call can make the code less readable and harder to maintain, as the purpose of the true or false value is often unclear. By using an enum class, you make the intention explicit, improving code clarity.
+
+### Example
+Avoid:
+```cpp
+tensor = tt::tt_metal::tilize_with_val_padding(tensor, output_shape, 0, output_memory_config, dtype, true);
+```
+Prefer:
+```cpp
+enum class ThreadingOption { SingleCore, MultiCore };
+tensor = tt::tt_metal::tilize_with_val_padding(tensor, output_shape, 0, output_memory_config, dtype, ThreadingOption::MultiCore);
+```
+Also consider giving enums power-of-2 values to pass them all as a single argument, e.g. 
+```cpp
+Options::FOO | Options::BAR
+```
+
+### Motivation
+- **Readability:** Enhances readability by making the purpose of the argument explicit.
+- **Maintainability:** Reduces the likelihood of misusing the API, making it easier to maintain and extend.
+- **User Experience:** Helps in winning over users by providing a clearer, more intuitive API.
+
+## 15. Initialize Primitive Types on Declaration
+### Practice
+Always initialize primitive types (e.g., size_t, int, float, bool, pointers) at the point of declaration.
+
+### Explanation
+Forgetting to initialize primitive types can lead to unpredictable behavior, as uninitialized variables may contain garbage values. This can cause hard-to-debug issues, especially in large codebases.
+
+### Example
+Avoid:
+```cpp
+struct PadDimension {
+    std::size_t front;
+    std::size_t back;
+
+    static constexpr auto attribute_names = std::make_tuple("front", "back");
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->front), std::cref(this->back)); }
+};
+```
+Prefer:
+```cpp
+struct PadDimension {
+    std::size_t front = 0;
+    std::size_t back = 0;
+
+    static constexpr auto attribute_names = std::make_tuple("front", "back");
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->front), std::cref(this->back)); }
+};
+```
+Motivation
+- **Bug Prevention:** Reduces the risk of bugs due to uninitialized variables.
+- **Code Safety:** Ensures that all variables have a known value, leading to safer and more predictable code.
+- **Ease of Review:** Simplifies code reviews by making initialization explicit.
+
+## 16. Use Early Exit for Contract Checks
+### Practice
+Use early exit strategies when performing contract checks or validations at the start of a function.
+
+### Explanation
+Placing contract checks at the start of a function and returning early if they fail simplifies the function logic, reducing nesting and improving readability.
+Keep in mind, compiler knows that early checks is the slow path and branch prediction works better this way.
+
+### Example
+Avoid:
+```cpp
+void doSomething(...) {
+    if (contractCheck) {
+        // Do a lot of things
+        // More complex logic
+    }
+}
+```
+Prefer:
+```cpp
+void doSomething(...) {
+    if (!contractCheck) 
+        return;
+
+    // Do a lot of things
+    // More complex logic
+}
+```
+### Motivation
+- **Code Clarity:** Improves code clarity by reducing unnecessary nesting.
+- **Maintainability:** Makes the code easier to maintain by focusing on the main logic once preconditions are validated.
+- **Efficiency:** Potentially improves performance by avoiding unnecessary processing when contract conditions aren't met.
