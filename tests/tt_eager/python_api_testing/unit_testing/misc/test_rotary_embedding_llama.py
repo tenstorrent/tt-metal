@@ -53,7 +53,7 @@ class TtLlamaRotary(torch.nn.Module):
             packer_l1_acc=True,
         )
 
-        rotary_output = ttnn.experimental.tensor.rotary_embedding_llama(
+        rotary_output = ttnn.experimental.rotary_embedding_llama(
             x, cos, sin, self.transformation_mat, compute_kernel_config=compute_kernel_config
         )
 

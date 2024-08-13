@@ -433,7 +433,8 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     uint32_t link,
     uint32_t ring_size,
     uint32_t worker_index,
-    ttnn::operations::binary::BinaryOpType binary_math_op) {
+    ttnn::operations::binary::BinaryOpType binary_math_op,
+    std::function<bool(uint32_t)> is_buffer_in_clockwise_direction_fn) {
 
     auto const& worker_defines = op_config.emit_worker_defines();
     TT_ASSERT(worker_defines.size() > 0);
@@ -448,7 +449,7 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     // This will be configurable by sharded/non-sharded but present the same arg builder
     KernelHandle worker_receiver_kernel_id, worker_sender_kernel_id;
 
-    bool is_in_clockwise_direction = true;  // TODO: bidirectional
+    bool is_in_clockwise_direction = is_buffer_in_clockwise_direction_fn(worker_index);
     uint32_t global_worker_index = link * num_edm_channels + worker_index;
     {
         CoreCoord const& receiver_edm = is_in_clockwise_direction ? topology_config.eth_receiver_cores.at(link)
@@ -730,7 +731,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         per_step_dim_size / tt::constants::TILE_WIDTH;  // TODO: find the divisibility based on layout
     TT_ASSERT(input_tensor_num_units_per_scatter_dim > 0);
     uint32_t max_num_workers = std::min<std::size_t>(8, input_tensor_num_units_per_scatter_dim);
-    bool enable_bidirectional = false;
+    bool enable_bidirectional = true;
     auto num_edm_channels = decide_number_of_edm_channels(op_config, max_num_workers, enable_bidirectional);
     log_trace(tt::LogOp, "num_edm_channels: {}", num_edm_channels);
     auto edm_termination_mode =ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
@@ -779,13 +780,15 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         cb_num_pages,
         cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes(),
         op_config.get_page_size());
+    std::size_t num_workers = worker_cores.size();
+    TT_ASSERT(num_workers == num_edm_channels * num_links);
     auto tensor_slicer = ttnn::ccl::RingReduceScatterWrappedTensorSlicer(
         local_chip_tensor,
         local_chip_output_tensor,
         scatter_split_dim,
         ring_index,
         ring_size,
-        num_edm_channels * num_links,
+        num_workers,
         max_worker_slice_in_bytes,
         cb_num_pages / 2);
 
@@ -800,6 +803,9 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         ring_size);
 
     // Configure the EDM builders
+    std::function<bool(uint32_t)> is_worker_in_clockwise_direction_fn = [enable_bidirectional, num_edm_channels](uint32_t x) {
+                return enable_bidirectional ? (x % num_edm_channels == 0) : true;
+            };
     EdmInterfaceAddresses edm_interface_addresses;
     for (std::size_t link = 0; link < num_links; link++) {
         add_worker_config_to_edm_builders(
@@ -816,9 +822,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
             worker_receiver_semaphore_id,
             link,
             ring_size,
-            [enable_bidirectional, num_edm_channels](uint32_t x) {
-                return enable_bidirectional ? (x % num_edm_channels == 0) : true;
-            },
+            is_worker_in_clockwise_direction_fn,
 
             edm_interface_addresses);
     }
@@ -861,7 +865,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                 link,
                 ring_size,
                 worker,
-                reduce_op);
+                reduce_op,
+                is_worker_in_clockwise_direction_fn);
             worker_receiver_kernels.push_back(receiver_kernel_id);
             worker_sender_kernels.push_back(sender_kernel_id);
 

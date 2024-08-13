@@ -157,6 +157,8 @@ tests/**/dtx/ @mywoodstock @sankarmanoj-tt
 tests/**/*test*conv*.py @mywoodstock @sankarmanoj-tt
 tests/python_api_testing/conv/ @mywoodstock @sankarmanoj-tt
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho
+tests/ttnn/integration_tests/stable_diffusion @esmalTT @uaydonat @mywoodstock
+tests/device_perf_tests/stable_diffusion/test_perf_stable_diffusion.py @esmalTT @uaydonat @mywoodstock
 scripts/profiler/ @mo-tenstorrent
 scripts/docker @ttmchiou @TT-billteng @tt-rkim
 

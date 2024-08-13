@@ -135,6 +135,7 @@ def run_falcon_demo_kv(
     expected_greedy_output_path=None,  # Path for expected outputs for greedy decoding
     save_generated_text_path=None,  # If provided, save generated text to this path (e.g. set to expected_greedy_output_path to update expected output)
     csv_perf_targets={},  # Optional perf targets for CSV output
+    is_ci_env=False,  # Whether is running in CI environment
 ):
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -430,7 +431,7 @@ def run_falcon_demo_kv(
         N_decode = 30
         N_warmup_decode = N_warmup_iter["inference_decode"]
     print_per_generated_token = (
-        expected_greedy_output_path is None and num_devices == 1
+        expected_greedy_output_path is None and num_devices == 1 and not is_ci_env
     )  # print per generated token if not verifying outputs and single device
     for output_token_index in (
         range(N_decode) if print_per_generated_token else tqdm(range(N_decode), desc="Generating tokens")

@@ -1367,6 +1367,76 @@ def test_shard_and_concat_2d_non_divisible(device_mesh):
     assert torch.allclose(read_back_tensor, full_tensor, atol=1e-6)
 
 
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 1), id="8x1_grid")], indirect=True)
+def test_line_all_gather_column_major(device_mesh):
+    """
+    The input tensor is size [1, 1, 32, 32*8] and it will get sharded onto an 8-row (8x1) device-mesh as follows:
+
+    [SHARD0]
+    [SHARD1]
+    [SHARD2]
+    ...
+    [SHARD7]
+
+    This exercises the sharding onto a column of devices (note the reversed `dims` argument) whereas the default
+    behaviour is to map onto the device-mesh in a row-major fashion. We will issue a line-all-gather along the vertical
+    axis (cluster_axis=0) and then gather on the width dimension of the tensor `dim=3`.
+
+    Each of the 8 devices will have a result output tensor of size [1, 1, 32, 32*8]
+    """
+    rows, cols, tile_size = 8, 1, 32
+    full_tensor = torch.rand((1, 1, tile_size, tile_size * rows), dtype=torch.bfloat16)
+
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=(-1, -2))
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    ttnn.visualize_device_mesh(device_mesh, tensor=ttnn_tensor)
+    ttnn_tensor = ttnn.line_all_gather(ttnn_tensor, dim=3, cluster_axis=0, device_mesh=device_mesh, num_links=1)
+    tt_outputs = ttnn.to_torch(ttnn_tensor, mesh_composer=ListMeshToTensor(device_mesh))
+    for output in tt_outputs[1:]:
+        assert output.shape == (1, 1, 32, 32 * 8)
+        assert torch.allclose(output, tt_outputs[0])
+
+
+@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("cluster_axis", (1,))
+@pytest.mark.parametrize("dim", (0,))
+@pytest.mark.parametrize("async_mode", (False, True))
+def test_device_line_all_gather_8x4_data(device_mesh, cluster_axis: int, dim: int, async_mode: bool):
+    """
+    Test the line-all-gather operation on a 8x4 mesh.
+    Data Pattern for initial sharding [TILE_SIZE*DEVICE_MESH_ROWS, TILE_SIZE*DEVICE_MESH_COLS]:
+    Input:
+        [1, 1, 1, 1]
+        [2, 2, 2, 2]
+        [3, 3, 3, 3]
+        [...]
+        [8, 8, 8, 8]
+    Data-pattern per-device before line-all-gather:
+    - Each device receives a shard of the tensor with shape: [1, 1, 32, 32]
+    Expected data-pattern per-device after line-all-gather:
+    - Every device along the column contains the whole column tensor stacked on `dim` dimension
+    - Every device will have the shape: [4, 1, 32, 32]
+    """
+    if async_mode:
+        for i in device_mesh.get_device_ids():
+            device = device_mesh.get_device(i)
+            device.enable_async(True)
+
+    (rows, cols), tile_size = device_mesh.shape, 32
+    full_tensor = torch.zeros((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
+    for i in range(rows):
+        full_tensor[0, 0, i * tile_size : (i + 1) * tile_size, :] = torch.full((tile_size, tile_size * cols), i + 1.0)
+    ttnn_tensor = ttnn.from_torch(
+        full_tensor, mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=(rows, cols), dims=(-2, -1))
+    )
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    ttnn_tensor = ttnn.line_all_gather(
+        ttnn_tensor, dim=dim, cluster_axis=cluster_axis, device_mesh=device_mesh, num_links=1
+    )
+
+
 @pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_visualize_device_mesh_with_tensor_row_major(device_mesh):
     rows, cols, tile_size = 4, 4, 32
