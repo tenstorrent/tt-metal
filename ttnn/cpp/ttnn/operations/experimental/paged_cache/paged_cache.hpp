@@ -34,17 +34,17 @@ struct PagedFillCacheOperation {
 
 }  // namespace operations::experimental::paged_cache
 
-namespace experimental::paged_cache {
+namespace experimental {
 
 constexpr auto paged_update_cache = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::paged_cache::paged_update_cache",
+    "ttnn::experimental::paged_update_cache",
     ttnn::operations::experimental::paged_cache::PagedUpdateCacheOperation>();
 
 constexpr auto paged_fill_cache = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experimental::paged_cache::paged_fill_cache",
+    "ttnn::experimental::paged_fill_cache",
     ttnn::operations::experimental::paged_cache::PagedFillCacheOperation>(
     );
 
-}  // namespace experimental::paged_cache
+}  // namespace experimental
 
 }  // namespace ttnn

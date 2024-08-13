@@ -17,7 +17,7 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_pybind.hpp"
 
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.hpp"
-
+#include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
@@ -32,6 +32,7 @@ void py_module(py::module& module) {
     transformer::py_bind_rotary_embedding(module);
     transformer::py_bind_rotary_embedding_llama(module);
     transformer::py_bind_rotate_half(module);
+    paged_cache::detail::bind_experimental_paged_cache_operations(module);
 }
 
 }  // namespace ttnn::operations::experimental

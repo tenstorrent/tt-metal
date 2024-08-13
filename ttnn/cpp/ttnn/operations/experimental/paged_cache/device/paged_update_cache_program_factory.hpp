@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
     uint32_t num_cores_x = bbox.end_coord.x + 1;
     uint32_t num_cores_y = bbox.end_coord.y + 1;
 
-    Buffer* in1_buffer_address = shard_spec.has_value() ? input_tensor.buffer() : nullptr;
+    tt::tt_metal::Buffer* in1_buffer_address = shard_spec.has_value() ? input_tensor.buffer() : nullptr;
 
     uint32_t num_cache_tiles = 2 * Wt; // double buffered
     uint32_t num_interm_tiles = 2 * Wt; // double buffered

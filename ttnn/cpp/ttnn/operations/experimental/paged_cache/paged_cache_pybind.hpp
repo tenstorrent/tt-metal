@@ -24,10 +24,10 @@ void bind_experimental_paged_cache_operations(py::module& module) {
          Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
         )doc";
 
-    using PagedUpdateCacheType = decltype(ttnn::experimental::paged_cache::paged_update_cache);
+    using PagedUpdateCacheType = decltype(ttnn::experimental::paged_update_cache);
     ttnn::bind_registered_operation(
         module,
-        ttnn::experimental::paged_cache::paged_update_cache,
+        ttnn::experimental::paged_update_cache,
         paged_update_cache_doc,
         ttnn::pybind_overload_t{
             [] (const PagedUpdateCacheType& self,
@@ -55,10 +55,10 @@ void bind_experimental_paged_cache_operations(py::module& module) {
         Paged fill cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, 1, seq_len, head_dim]. batch_idx specifies which index in the batch dimension to update with input_tensor.
         )doc";
 
-    using PagedFillCacheType = decltype(ttnn::experimental::paged_cache::paged_fill_cache);
+    using PagedFillCacheType = decltype(ttnn::experimental::paged_fill_cache);
     ttnn::bind_registered_operation(
         module,
-        ttnn::experimental::paged_cache::paged_fill_cache,
+        ttnn::experimental::paged_fill_cache,
         paged_fill_cache_doc,
         ttnn::pybind_overload_t{
             [] (const PagedFillCacheType& self,
