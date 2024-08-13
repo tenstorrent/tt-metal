@@ -18,6 +18,7 @@ import ttnn.library_tweaks
 library_tweaks.setup_ttnn_so()
 
 import ttnn._ttnn
+import ttnn.deprecated
 
 
 Config = ttnn._ttnn.core.Config
