@@ -2,19 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/fast_reduce_nc/fast_reduce_nc_op.hpp"
+#include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/run_operation.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
-namespace tt {
-using namespace constants;
-namespace tt_metal {
 
-namespace {
-inline
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const Shape& shape, uint32_t dim) {
+
+namespace ttnn::operations::experimental::reduction::detail {
+
+using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
+
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const tt::tt_metal::Shape& shape, uint32_t dim) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -33,9 +36,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
     return { Wt, Ht, inner_tile_size, reduce_tile_size};
 }
 
-}
-
-operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor &output, int64_t dim,const DeviceComputeKernelConfig &compute_kernel_config) {
+operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, const ttnn::Tensor &output, int64_t dim,const DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -46,9 +47,9 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
-    const auto single_tile_size = detail::TileSize(cb_data_format);
+    const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     const auto cb_1_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
-    const auto cb_1_tile_size = detail::TileSize(cb_1_data_format);
+    const auto cb_1_tile_size = tt_metal::detail::TileSize(cb_1_data_format);
 
     const auto &input_shape = input.get_legacy_shape();
     const auto &input_shape_without_padding = input_shape.without_padding();
@@ -63,17 +64,6 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
             break;
         }
     }
-
-    log_debug(LogOp, "reduce_tile_size {} inner_tile_size {} Ht {} Wt {}", reduce_tile_size, inner_tile_size, Ht, Wt);
-    log_debug(
-        LogOp, "dim {} num_reduce_input_tile {} num_output_tiles {}", dim, num_reduce_input_tile, num_output_tiles);
-    log_debug(
-        LogOp,
-        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
-        math_fidelity,
-        math_approx_mode,
-        fp32_dest_acc_en,
-        packer_l1_acc);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -127,8 +117,8 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
     std::vector<uint32_t> writer_compile_time_args =
              {static_cast<uint32_t>(output.memory_config().buffer_type == BufferType::DRAM),
               input_granularity} ;
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/fast_reduce_nc/reduce_nc_impl/kernels/reader_reduce_nc.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/fast_reduce_nc/reduce_nc_impl/kernels/writer_reduce_nc.cpp";
+    const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";
+    const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp";
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -150,7 +140,7 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/fast_reduce_nc/reduce_nc_impl/kernels/reduce_nc.cpp";
+    const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
     const auto compute_kernel_1_id = tt_metal::CreateKernel(
         program,
         compute_kernel_file,
@@ -212,7 +202,6 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
-        log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
         const auto *input_buffer = input_tensors.at(0).buffer();
         const auto *output_buffer = output_tensors.at(0).buffer();
         auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
@@ -229,5 +218,4 @@ operation::ProgramWithCallbacks reduce_nc_impl(const Tensor &input, const Tensor
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace tt-metal
-}  // namespace tt
+}  // namespace ttnn::operations::experimental::reduction::detail
