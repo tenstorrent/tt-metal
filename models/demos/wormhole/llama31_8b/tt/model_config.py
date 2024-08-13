@@ -180,8 +180,8 @@ class TtModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=1,  # seqlen / 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=7,  # 14336/32/56 cores = 8: N / TILE_WIDTH / Grid_Size
-                mcast_in0=False,
+                per_core_N=7,  # 14336/32/64cores = 7: N / TILE_WIDTH / Grid_Size
+                mcast_in0=True,
                 fused_activation=ttnn.UnaryOpType.SILU,
                 fuse_batch=False,
             )
@@ -192,8 +192,8 @@ class TtModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=1,  # seqlen / 32 # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=7,  # 14336/32/56 cores = 8: N / TILE_WIDTH / Grid_Size
-                mcast_in0=False,
+                per_core_N=7,  # 14336/32/64cores = 7: N / TILE_WIDTH / Grid_Size
+                mcast_in0=True,
                 fused_activation=None,
                 fuse_batch=False,
             )
@@ -205,7 +205,7 @@ class TtModelArgs:
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=2,  # 4096 / 32 / 64 cores = 2.86 -> 4 (32 cores) # N / TILE_WIDTH / Grid_Size
-                mcast_in0=False,
+                mcast_in0=True,
                 fused_activation=None,
                 fuse_batch=False,
             )
@@ -244,9 +244,9 @@ class TtModelArgs:
                 per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
                 out_subblock_h=1,
                 out_subblock_w=1,
-                fuse_batch=False,
+                fuse_batch=True,
                 fused_activation=None,
-                mcast_in0=False,
+                mcast_in0=True,
             )
 
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
