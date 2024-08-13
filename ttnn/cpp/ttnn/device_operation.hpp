@@ -190,6 +190,16 @@ struct CheckDeviceBufferIsAllocated {
 constexpr auto OPERATION_TYPE = "DeviceOperation";
 
 template <typename device_operation_t>
+auto get_type_name(const typename device_operation_t::operation_attributes_t& operation_attributes) {
+    if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
+        // TODO: remove this if statement once OldInfraDeviceOperation is removed
+        return device_operation_t::get_type_name(operation_attributes);
+    } else {
+        return tt::stl::get_type_name<device_operation_t>();
+    }
+}
+
+template <typename device_operation_t>
 static void append_operation_to_operation_history(
     const std::size_t ttnn_operation_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
@@ -206,7 +216,7 @@ static void append_operation_to_operation_history(
     operation_history::append(operation_history::OperationRecord{
         ttnn_operation_id,
         std::string(OPERATION_TYPE),
-        std::string{tt::stl::get_type_name<device_operation_t>()},
+        std::string{get_type_name<device_operation_t>(operation_attributes)},
         tt::stl::reflection::get_attributes(operation_attributes),
         input_tensor_records,
         program_cache_hit,
@@ -221,7 +231,9 @@ inline void log_operation(
     tt::stl::hash::hash_t program_hash,
     bool program_cache_hit) {
     tt::log_debug(
-        tt::LogOp, "Launching Operation: \"{}\" ({})", tt::stl::get_type_name<device_operation_t>(), OPERATION_TYPE);
+        tt::LogOp, "Launching Operation: \"{}\" ({})",
+        get_type_name<device_operation_t>(operation_attributes), OPERATION_TYPE);
+
     tt::log_debug(tt::LogOp, "Program Hash: {}", program_hash);
     tt::log_debug(tt::LogOp, "Program Cache Hit: {}", program_cache_hit);
 

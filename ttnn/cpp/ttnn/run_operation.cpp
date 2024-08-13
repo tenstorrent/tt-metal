@@ -198,6 +198,10 @@ struct OldInfraDeviceOperation {
         tensor_return_value_t& tensor_return_value) {
         return attributes.create_op_performance_model(tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
     }
+
+    static std::string get_type_name(const operation_attributes_t& attributes) {
+        return attributes.get_type_name();
+    }
 };
 
 
