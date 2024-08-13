@@ -4619,5 +4619,3 @@ def complex_add_bw(
             ttnn_tensor_to_torch(t3[1].real).to(torch.float32), ttnn_tensor_to_torch(t3[1].imag).to(torch.float32)
         ),
     ]
-
-
