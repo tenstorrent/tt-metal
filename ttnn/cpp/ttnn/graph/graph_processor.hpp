@@ -71,9 +71,8 @@ namespace ttnn::graph {
         std::mutex mutex;
         RunMode run_mode = RunMode::NORMAL;
         std::stack<int> current_op_id;
-        std::unordered_map<uint64_t, int> id_to_counter;
+        std::unordered_map<std::int64_t, int> id_to_counter;
         int last_finished_op_id = -1;
-        int tensors_used = 0;
         std::vector<Vertex> graph;
         std::unordered_map<std::type_index, ProcessFunc> begin_function_any_map;
         std::unordered_map<std::type_index, ProcessFunc> end_function_any_map;

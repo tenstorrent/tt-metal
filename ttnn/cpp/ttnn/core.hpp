@@ -70,4 +70,22 @@ using core::get_memory_config;
 using core::has_storage_type_of;
 using core::pad_to_multiple_of_tile_size;
 using core::set_printoptions;
+
+
+extern std::atomic<std::int64_t> TENSOR_ID;
+extern std::atomic<std::int64_t> PYTHON_OPERATION_ID;
+extern std::atomic<std::int64_t> DEVICE_OPERATION_ID;
+
+std::int64_t get_python_operation_id();
+void set_python_operation_id(std::int64_t operation_id);
+void increment_python_operation_id();
+
+std::int64_t get_tensor_id();
+void set_tensor_id(std::int64_t tensor_id);
+void increment_tensor_id();
+
+std::int64_t get_device_operation_id();
+void set_device_operation_id(std::int64_t device_operation_id);
+void increment_device_operation_id();
+
 }  // namespace ttnn

@@ -4,6 +4,7 @@
 
 import dataclasses
 import sqlite3
+import json
 
 from loguru import logger
 import networkx as nx
@@ -12,7 +13,6 @@ import ttnn
 
 SQLITE_DB_PATH = "db.sqlite"
 TENSORS_PATH = "tensors"
-OPERATION_HISTORY_JSON = "operation_history.json"
 GRAPHS_PATH = "graph"
 CONFIG_PATH = "config.json"
 
@@ -208,6 +208,10 @@ def get_or_create_sqlite_db(report_path):
     cursor.execute(
         """CREATE TABLE IF NOT EXISTS edges
                 (operation_id int, source_unique_id int, sink_unique_id int, source_output_index int, sink_input_index int, key int)"""
+    )
+    cursor.execute(
+        """CREATE TABLE IF NOT EXISTS captured_graph
+                (operation_id int, captured_graph text)"""
     )
     sqlite_connection.commit()
     return sqlite_connection
@@ -480,6 +484,19 @@ def store_tensor(report_path, tensor):
         raise ValueError(f"Unsupported tensor type {type(tensor)}")
 
 
+def insert_captured_graph(report_path, operation_id, captured_graph):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute(
+        f"""INSERT INTO captured_graph VALUES (
+            {operation_id},
+            '{json.dumps(captured_graph)}'
+        )"""
+    )
+    sqlite_connection.commit()
+
+
 def get_tensor_file_name_by_id(report_path, tensor_id):
     tensors_path = report_path / TENSORS_PATH
     tensors_path.mkdir(parents=True, exist_ok=True)
@@ -712,6 +729,19 @@ def query_tensor_by_id(report_path, tensor_id):
     return tensor
 
 
+def query_latest_tensor(report_path):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM tensors ORDER BY tensor_id DESC LIMIT 1")
+    tensor = None
+    for row in cursor.fetchall():
+        tensor = ttnn.database.Tensor(*row)
+        break
+
+    return tensor
+
+
 def query_input_tensors(report_path, operation_id):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
@@ -777,3 +807,15 @@ def query_consumer_operation_ids(report_path, tensor_id):
     for row in cursor.fetchall():
         operation_id, *_ = row
         yield operation_id
+
+
+def query_captured_graph(report_path, operation_id):
+    sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
+    cursor = sqlite_connection.cursor()
+
+    cursor.execute("SELECT * FROM captured_graph WHERE operation_id = ?", (operation_id,))
+    captured_graph = None
+    for row in cursor.fetchall():
+        _, captured_graph = row
+        break
+    return json.loads(captured_graph)

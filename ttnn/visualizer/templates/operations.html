@@ -41,7 +41,7 @@
                     <th>Operation Graph</th>
                     <th>Matches Golden Locally</th>
                     <th>Matches Golden Globally</th>
-                    <th>Underlying Operations</th>
+                    <th>C++ Operations/Functions</th>
                 </tr>
                 {% for operation in operations %}
                 <tr>
@@ -56,7 +56,7 @@
                         <td bgcolor="{{comparison_color(" global_tensor_comparison_records", operation.operation_id)}}"> <a
                             href=" /operation_tensor_report/{{ operation.operation_id}}">Open Tensor Report</a> <br> {{
                                 get_actual_pccs("global_tensor_comparison_records", operation.operation_id)}}</td>
-                    <td>{{ load_underlying_operations(operation.operation_id) | safe
+                    <td>{{ load_captured_graph(operation.operation_id) | safe
                         }}
                     </td>
                 </tr>

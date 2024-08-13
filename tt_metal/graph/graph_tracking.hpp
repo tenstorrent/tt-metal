@@ -66,6 +66,8 @@ namespace tt::tt_metal {
             return tracker;
         }
 
+        bool is_enabled() const;
+
         void push_processor(const std::shared_ptr<IGraphProcessor>& processor);
         void pop_processor();
 

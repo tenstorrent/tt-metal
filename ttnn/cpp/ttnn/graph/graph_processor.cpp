@@ -14,6 +14,7 @@
 #include <memory>
 #include <typeindex>
 #include <unordered_map>
+#include "ttnn/core.hpp"
 
 namespace {
 std::string demangle(const char* name) {
@@ -218,7 +219,6 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
             tt::log_info("input any type name ignored: {}", demangle(any.type().name()));
         }
     }
-
 }
 
 void GraphProcessor::track_function_end_impl() {
@@ -241,8 +241,8 @@ void GraphProcessor::track_function_end_impl() {
 void GraphProcessor::track_function_end() {
     const std::lock_guard<std::mutex> lock(mutex);
     this->track_function_end_impl();
+    TT_ASSERT(current_op_id.size() > 0);  // we should always have capture_start on top
     current_op_id.pop();
-    TT_ASSERT(current_op_id.size() > 0); // we should always have capture_start on top
 }
 
 void GraphProcessor::track_function_end(const std::any& output_tensors) {
@@ -257,42 +257,40 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     } else {
         tt::log_info("output any type name ignored: {}", demangle(output_tensors.type().name()));
     }
+    TT_ASSERT(current_op_id.size() > 0);  // we should always have capture_start on top
     current_op_id.pop();
 }
 
 int GraphProcessor::add_tensor(const Tensor& t) {
-    const uint64_t pointer_shift = (uint64_t)1 << 32; // to avoid reusing the same alloc_id
     auto& storage = t.get_storage();
     auto buffer = std::visit(
-    [&t](auto&& storage) -> tt::tt_metal::Buffer* {
-        using T = std::decay_t<decltype(storage)>;
-        if constexpr (std::is_same_v<T, DeviceStorage>) {
-            return t.buffer();
-        } else {
-            return nullptr;
-        }
-    },
-    storage);
-    auto alloc_id = buffer ? reinterpret_cast<std::uintptr_t>(buffer) + pointer_shift : reinterpret_cast<std::uintptr_t>(t.tensor_attributes.get());
-    tt::log_info("Tensor ID: {}, used: {}", alloc_id, tensors_used);
-    auto tensor_counter = id_to_counter.count(alloc_id) > 0 ? id_to_counter[alloc_id] : graph.size();
+        [&t](auto&& storage) -> tt::tt_metal::Buffer* {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, DeviceStorage>) {
+                return t.buffer();
+            } else {
+                return nullptr;
+            }
+        },
+        storage);
+    std::int64_t tensor_id;
+    if (not t.tensor_id.has_value()) {
+        tt::log_warning("Tensor doesn't have tensor_id, generating new one. Ideally this should not happen. Please set tensor_id for this tensor ahead of time.");
+        ttnn::increment_tensor_id();
+        tensor_id = ttnn::get_tensor_id();
+    } else {
+        tensor_id = t.tensor_id.value();
+    }
+    auto tensor_counter = id_to_counter.count(tensor_id) > 0 ? id_to_counter[tensor_id] : graph.size();
     auto shape = t.get_shape();
-    std::ostringstream oss;
-    oss << shape;
-    std::string shape_str = oss.str();
     std::unordered_map<std::string, std::string> params = {
-        {kShape, shape_str},
-        {kTensorId, std::to_string(tensors_used)}
+        {kShape, fmt::format("{}", shape)},
+        {kTensorId, fmt::format("{}", tensor_id)},
     };
-    if (id_to_counter.count(alloc_id) == 0) {
-        graph.push_back(Vertex{
-            .counter = tensor_counter,
-            .node_type = kNodeTensor,
-            .params = params,
-            .connections = {}
-        });
-        tensors_used++;
-        id_to_counter[alloc_id] = tensor_counter;
+
+    if (id_to_counter.count(tensor_id) == 0) {
+        graph.push_back(Vertex{.counter = tensor_counter, .node_type = kNodeTensor, .params = params, .connections = {}});
+        id_to_counter[tensor_id] = tensor_counter;
     }
 
     if (buffer) {

@@ -101,7 +101,7 @@ struct Tensor {
         }
     };
 
-    std::optional<std::size_t> tensor_id = std::nullopt;
+    std::optional<std::int64_t> tensor_id = std::nullopt;
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
@@ -195,11 +195,11 @@ struct Tensor {
 
     Tensor &operator=(const Tensor &other) {
         // Don't self-assign
+        this->tensor_id = other.tensor_id;
         if (this->tensor_attributes != other.tensor_attributes) {
             // Update ref count for curr tensor_attr and deallocate if needed
             perform_cleanup_for_async_mode();
             this->workers = other.workers;
-            this->tensor_id = other.tensor_id;
             this->tensor_attributes = other.tensor_attributes;
             this->deallocate_through_destructor = other.deallocate_through_destructor;
             if (this->workers.size()) {
@@ -215,11 +215,11 @@ struct Tensor {
 
     Tensor &operator=(Tensor &&other) {
         // Don't self assign
+        this->tensor_id = std::move(other.tensor_id);
         if (this->tensor_attributes != other.tensor_attributes) {
             // Update ref count for curr tensor_attr and deallocate if needed
             perform_cleanup_for_async_mode();
             this->workers = std::move(other.workers);
-            this->tensor_id = std::move(other.tensor_id);
             this->tensor_attributes = std::move(other.tensor_attributes);
             this->deallocate_through_destructor = std::move(other.deallocate_through_destructor);
         }
@@ -443,6 +443,8 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn
 
 // Maps a tensor to the set of devices in the device-mesh that the shards will be distributed across.
 std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, DeviceMesh& device_mesh);
+
+Tensor set_tensor_id(const Tensor &tensor);
 
 }  // namespace tt_metal
 

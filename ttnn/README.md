@@ -86,8 +86,6 @@ followed the instructions for [installing and building the software with the dev
         * `export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'`
             * `enable_fast_runtime_mode`: When turned on, op validation is always skipped
             * `enable_logging`: Turns on ttnn logging feature for ops, which makes every op blocking
-    * For the location of the operations use the following environment variable
-        * `export OPERATION_HISTORY_CSV=<filename>`
 * What is the format for git commit messages?
     * As mentioned in other documentation, the use of the '#' symbol to identify an issue request number is expected on each commit message.
         * For example your git commit message might be: "#4003: Your message here" for github issue 4003.
