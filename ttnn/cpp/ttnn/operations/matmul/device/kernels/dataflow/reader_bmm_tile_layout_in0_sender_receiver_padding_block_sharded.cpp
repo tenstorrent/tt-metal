@@ -16,8 +16,8 @@ void kernel_main() {
     // in0/in1 common args
     constexpr uint32_t num_blocks = get_compile_time_arg_val(4);
     // in0 mcast args
-    constexpr uint32_t in0_mcast_sender_semaphore_addr = get_compile_time_arg_val(5);
-    constexpr uint32_t in0_mcast_receiver_semaphore_addr = get_compile_time_arg_val(6);
+    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
+    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(6));
     constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(7);
     constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(8);
     constexpr uint32_t num_x = get_compile_time_arg_val(9);
@@ -168,12 +168,12 @@ void kernel_main() {
                         // Note: noc_async_write_multicast would hang if called with 0 cores.
                         if constexpr (in0_mcast_num_cores > 1) {
                             noc_async_write_multicast(
-                                    local_read_addr,
-                                    in0_multicast_data_addr,
-                                    in0_block_size_bytes,
-                                    in0_mcast_num_cores - 1,
-                                    false,
-                                    false);
+                                local_read_addr,
+                                in0_multicast_data_addr,
+                                in0_block_size_bytes,
+                                in0_mcast_num_cores - 1,
+                                false,
+                                false);
                         }
                     }
                     // Mcast from different CB to another CB
@@ -197,11 +197,11 @@ void kernel_main() {
                         in0_mcast_receiver_semaphore_addr_ptr[0] = in0_mcast_sender_semaphore_valid_addr_ptr[0];
                     } else {
                         noc_semaphore_set_multicast_loopback_src(
-                                in0_mcast_sender_semaphore_valid_addr,
-                                in0_mcast_receiver_semaphore_noc_addr,
-                                in0_mcast_num_cores,
-                                false,
-                                false);
+                            in0_mcast_sender_semaphore_valid_addr,
+                            in0_mcast_receiver_semaphore_noc_addr,
+                            in0_mcast_num_cores,
+                            false,
+                            false);
                     }
                 } else {
                     // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all cores

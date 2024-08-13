@@ -18,7 +18,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/multi_device.hpp"
+#include "tt_metal/impl/device/device_mesh.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {
@@ -26,7 +26,7 @@ namespace tt {
 namespace tt_metal {
 
 struct Tensor {
-    struct TensorAttributes : public enable_shared_from_this<TensorAttributes> {
+    struct TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
         Storage storage;
         ttnn::Shape shape;
         DataType dtype;
@@ -122,7 +122,10 @@ struct Tensor {
 
     // Constructor to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
     // handles in async mode.
-    Tensor(std::vector<Device *> workers, uint32_t num_buffers = 0) :
+    Tensor(
+        const std::vector<Device *>& workers,
+        uint32_t num_buffers = 0,
+        std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt) :
         tensor_id(std::nullopt),
         tensor_attributes(std::make_shared<TensorAttributes>()),
         workers(workers),
@@ -164,10 +167,14 @@ struct Tensor {
             } else {
                 this->tensor_attributes->storage = MultiDeviceHostStorage();
                 // Preallocate buffer and shape vector for MultiDeviceHostStorage
+                if (distributed_tensor_config.has_value()) {
+                    std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).strategy =
+                        distributed_tensor_config.value();
+                }
                 std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).buffers =
                     std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
                 std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).shapes =
-                    std::vector<Shape>(num_buffers, this->tensor_attributes->shape.value());
+                    std::vector<Shape>(num_buffers, this->tensor_attributes->shape.value);
             }
             this->tensor_attributes->num_shards_to_be_populated = num_buffers;
         }
@@ -291,7 +298,7 @@ struct Tensor {
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
     inline const Storage &storage() const { return this->tensor_attributes->storage; };
-    inline const Shape &legacy_shape() const { return this->tensor_attributes->shape.value(); };
+    inline const Shape &legacy_shape() const { return this->tensor_attributes->shape.value; };
     inline const ttnn::Shape &shape() const { return this->tensor_attributes->shape; };
     inline const DataType &dtype() const { return this->tensor_attributes->dtype; };
     inline const Layout &layout() const { return this->tensor_attributes->layout; };
@@ -397,7 +404,7 @@ static Tensor create_device_tensor(
     Layout layout,
     Device *device,
     const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return create_device_tensor(shape.value(), dtype, layout, device, memory_config);
+    return create_device_tensor(shape.value, dtype, layout, device, memory_config);
 }
 
 // template<typename Buffer>
@@ -433,6 +440,9 @@ Tensor allocate_tensor_on_device(
     DeviceMesh *device_mesh,
     const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
 void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id = 0);
+
+// Maps a tensor to the set of devices in the device-mesh that the shards will be distributed across.
+std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, DeviceMesh& device_mesh);
 
 }  // namespace tt_metal
 

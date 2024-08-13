@@ -12,6 +12,7 @@
 #include "reports.hpp"
 #include "activation.hpp"
 #include "export_enum.hpp"
+#include "json_class.hpp"
 
 #include "ttnn/deprecated/tt_lib/csrc/tt_lib_bindings.hpp"
 #include "operations/__init__.hpp"

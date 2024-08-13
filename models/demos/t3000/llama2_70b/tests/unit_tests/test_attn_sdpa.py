@@ -68,7 +68,7 @@ class TtLlamaSDPA(torch.nn.Module):
         attn = ttnn.multiply(attn, scale)
 
         ## Need to figure out how to broadcast in t dim
-        # attn_mask = tt_lib.tensor.repeat(attn_mask, [1, attn.shape()[1], 1, 1])  # this causes memory error as the broadcast result is too big
+        # attn_mask = ttnn.repeat(attn_mask, [1, attn.shape()[1], 1, 1])  # this causes memory error as the broadcast result is too big
         # attn_mask = tt2torch_tensor(attn_mask)
         # attn_mask = attn_mask.repeat(1, attn.shape()[1], 1, 1)
         # attn_mask = torch2tt_tensor(attn_mask, self.device)
@@ -83,7 +83,7 @@ class TtLlamaSDPA(torch.nn.Module):
         # values = [batch, num_kv_heads, cache_len + seqlen, dhead]
         # attn_mask = [seq_len, n_heads, batch,cache_len + seqlen]
 
-        keys = tt_lib.tensor.transpose(keys, -1, -2)  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
+        keys = ttnn.transpose(keys, -1, -2)  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
         attn = tt_lib.operations.primary.transformers.group_attn_matmul(
             xq,
             keys,

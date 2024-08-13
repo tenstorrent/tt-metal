@@ -9,6 +9,7 @@
 #include <random>
 
 #include "basic_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
@@ -97,6 +98,9 @@ TEST_F(BasicFixture, VerifyNocNodeIDs) {
 }
 TEST_F(BasicFixture, VerifyNocIdentityTranslationTable) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
+    if (arch == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP();
+    }
 #ifndef NOC_X_ID_TRANSLATE_TABLE_0
     // If the translation tables are not defined, we should skip :)
     GTEST_SKIP();
@@ -126,4 +130,58 @@ TEST_F(BasicFixture, VerifyNocIdentityTranslationTable) {
         }
     }
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+}
+
+// Tests that kernel can write to and read from a stream register address
+// This is meant to exercise noc_inline_dw_write API
+TEST_F(DeviceFixture, DirectedStreamRegWriteRead) {
+    CoreCoord start_core{0, 0};
+    const uint32_t stream_id = 0;
+    const uint32_t stream_reg = 4;
+
+    for (tt_metal::Device *device : this->devices_) {
+        std::set<CoreCoord> storage_only_cores = device->storage_only_cores();
+
+        tt_metal::Program program = tt_metal::CreateProgram();
+        CoreCoord logical_grid_size = device->compute_with_storage_grid_size();
+        CoreCoord end_core{logical_grid_size.x - 1, logical_grid_size.y - 1};
+        CoreRange all_cores(start_core, end_core);
+        tt_metal::KernelHandle kernel_id = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/streams/stream_reg_read_write.cpp",
+            all_cores,
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0}
+        );
+
+        uint32_t value_to_write = 0x1234;
+        for (uint32_t x = 0; x < logical_grid_size.x; x++) {
+            for (uint32_t y = 0; y < logical_grid_size.y; y++) {
+                CoreCoord logical_core(x, y);
+                uint32_t logical_target_x = (x + 1) % logical_grid_size.x;
+                uint32_t logical_target_y = (y + 1) % logical_grid_size.y;
+                CoreCoord logical_target_core(logical_target_x, logical_target_y);
+                CoreCoord worker_target_core = device->worker_core_from_logical_core(logical_target_core);
+
+                tt_metal::SetRuntimeArgs(
+                    program, kernel_id, logical_core,
+                    {worker_target_core.x, worker_target_core.y, stream_id, stream_reg, value_to_write, L1_UNRESERVED_BASE}
+                );
+
+                value_to_write++;
+            }
+        }
+
+        tt_metal::detail::LaunchProgram(device, program);
+
+        uint32_t expected_value_to_read = 0x1234;
+        for (uint32_t x = 0; x < logical_grid_size.x; x++) {
+            for (uint32_t y = 0; y < logical_grid_size.y; y++) {
+                CoreCoord logical_core(x, y);
+                std::vector<uint32_t> readback = {0xDEADBEEF};
+                tt_metal::detail::ReadFromDeviceL1(device, logical_core, L1_UNRESERVED_BASE, sizeof(uint32_t), readback);
+                EXPECT_EQ(readback[0], expected_value_to_read);
+                expected_value_to_read++;
+            }
+        }
+    }
 }

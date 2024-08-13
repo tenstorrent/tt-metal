@@ -6,6 +6,7 @@ import os
 import pytest
 import torch
 import tt_lib
+import ttnn
 import time
 import statistics
 from loguru import logger
@@ -91,6 +92,8 @@ def measure_host_overhead_binary(
     num_call_to_stack,
     num_repeats,
     shape_func=None,
+    is_complex=[False, False],
+    need_out_mem_cfg=False,
     is_warmup=False,
 ):
     input_shape_0 = input_shape
@@ -105,8 +108,17 @@ def measure_host_overhead_binary(
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
     y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype)
 
+    if is_complex[0]:
+        x = ttnn.complex_tensor(x, x)
+
+    if is_complex[1]:
+        y = ttnn.complex_tensor(y, y)
+
     def op_func():
-        op["op"](x, y)
+        if need_out_mem_cfg:
+            op["op"](x, y, memory_config=in_mem_config)
+        else:
+            op["op"](x, y)
 
     result_overhead = []
     result_op = []
@@ -130,13 +142,28 @@ def measure_host_overhead_unary(
     num_call_to_stack,
     num_repeats,
     shape_func=None,
+    is_complex=[False],
+    need_out_mem_cfg=False,
     is_warmup=False,
 ):
-    x = torch.Tensor(size=input_shape).uniform_(-100, 100).bfloat16()
+    input_shape_0 = input_shape
+
+    if shape_func is not None:
+        input_shape_0 = shape_func(input_shape)
+
+    print(f"input_shape_0 {input_shape_0} **************************")
+
+    x = torch.Tensor(size=input_shape_0).uniform_(-100, 100).bfloat16()
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
 
+    if is_complex[0]:
+        x = ttnn.complex_tensor(x, x)
+
     def op_func():
-        op["op"](x)
+        if need_out_mem_cfg:
+            op["op"](x, memory_config=in_mem_config)
+        else:
+            op["op"](x)
 
     result_overhead = []
     result_op = []
@@ -160,6 +187,8 @@ def measure_host_overhead_ternary(
     num_call_to_stack,
     num_repeats,
     shape_func=None,
+    is_complex=[False, False, False],
+    need_out_mem_cfg=False,
     is_warmup=False,
 ):
     input_shape_0 = input_shape
@@ -177,8 +206,20 @@ def measure_host_overhead_ternary(
     y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype)
     z = torch2tt_tensor(z, device, dlayout, in_mem_config, dtype)
 
+    if is_complex[0]:
+        x = ttnn.complex_tensor(x, x)
+
+    if is_complex[1]:
+        y = ttnn.complex_tensor(y, y)
+
+    if is_complex[2]:
+        z = ttnn.complex_tensor(z, z)
+
     def op_func():
-        op["op"](x, y, z)
+        if need_out_mem_cfg:
+            op["op"](x, y, z, memory_config=in_mem_config)
+        else:
+            op["op"](x, y, z)
 
     result_overhead = []
     result_op = []
@@ -205,6 +246,8 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
 
         num_repeats = op["num_repeats"] if "num_repeats" in op else NUM_REPEATS
         shape_func = None if "shape_func" not in op else op["shape_func"]
+        is_complex = [False, False, False] if "is_complex" not in op else op["is_complex"]
+        need_out_mem_cfg = False if "need_out_mem_cfg" not in op else op["need_out_mem_cfg"]
 
         # Warmup
         measuring_func(
@@ -218,6 +261,8 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
             num_call_to_stack=1,
             num_repeats=1,
             shape_func=shape_func,
+            is_complex=is_complex,
+            need_out_mem_cfg=need_out_mem_cfg,
             is_warmup=True,
         )
 
@@ -233,6 +278,8 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
                 num_call_to_stack,
                 num_repeats,
                 shape_func=shape_func,
+                need_out_mem_cfg=need_out_mem_cfg,
+                is_complex=is_complex,
             )
 
             op_count += len(overhead_ms) * num_call_to_stack * 2

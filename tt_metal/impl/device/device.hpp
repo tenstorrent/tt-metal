@@ -15,9 +15,11 @@
 #include "tt_metal/impl/trace/trace_buffer.hpp"
 #include "tt_metal/jit_build/build.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "llrt/hal.hpp"
 #include "dev_msgs.h"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "program_cache.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -251,7 +253,6 @@ class Device {
     friend class SystemMemoryManager;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
-    static constexpr uint32_t max_num_hw_cqs = 2;
     chip_id_t id_;
     uint32_t build_key_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
@@ -308,9 +309,31 @@ class Device {
     }
    uint32_t trace_buffers_size = 0;
    void update_dispatch_cores_for_multi_cq_eth_dispatch();
+
+    template <typename T = DeviceAddr>
+    T get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type);
+
    private:
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 };
+
+template <typename T>
+T Device::get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) {
+
+    HalProgrammableCoreType dispatch_core_type = HalProgrammableCoreType::TENSIX;;
+
+    if (tt::llrt::is_ethernet_core(phys_core, this->id_)) {
+        // Eth pcores have a different address, but only active ones.
+        CoreCoord logical_core = this->logical_core_from_ethernet_core(phys_core);
+        if (this->is_active_ethernet_core(logical_core)) {
+            dispatch_core_type = HalProgrammableCoreType::ACTIVE_ETH;
+        } else {
+            dispatch_core_type = HalProgrammableCoreType::IDLE_ETH;
+        }
+    }
+
+    return hal.get_dev_addr<T>(dispatch_core_type, addr_type);
+}
 
 }  // namespace tt_metal
 

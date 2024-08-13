@@ -32,10 +32,12 @@ namespace detail{
     void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
 }
 
+typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
+
 struct KernelGroup {
     CoreType core_type;
     CoreRangeSet core_ranges;
-    std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids;
+    kernel_id_array_t kernel_ids;
     uint32_t rta_sizes[DISPATCH_CLASS_MAX];
     uint32_t total_rta_size;
     launch_msg_t launch_msg;
@@ -44,12 +46,19 @@ struct KernelGroup {
     KernelGroup(
         const Program &program,
         CoreType core_type,
-        std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_ids,
+        kernel_id_array_t kernel_ids,
         bool erisc_is_idle,
         int last_cb_index,
         const CoreRangeSet &new_ranges);
 
     CoreType get_core_type() const;
+};
+
+// Contains the program's worker memory map
+struct ProgramConfig {
+    uint32_t rta_offset;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
 };
 
 // TODO: why is this in program.hpp
@@ -126,7 +135,7 @@ class Program {
     // Is worker_crs_ used anywhere?
     const CoreRangeSet& get_worker_core_range_set() const { return worker_crs_; };
 
-    void compile(Device * device);
+    void compile(Device * device, bool fd_bootloader_mode = false);
 
     void invalidate_compile();
 
@@ -134,9 +143,12 @@ class Program {
 
     void allocate_circular_buffers();
 
-    void finalize_rt_args();
-    bool is_finalized() const { return loaded_onto_device; }
-    void set_finalized() { loaded_onto_device = true; }
+    bool is_finalized() const { return this->finalized_; }
+    void finalize();
+    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
+
+    void capture_multi_device_dependencies() { capture_multi_device_dependencies_ = true; }
+    bool has_multi_device_dependencies() { return capture_multi_device_dependencies_; }
 
    private:
     void populate_dispatch_data(Device *device);
@@ -145,11 +157,10 @@ class Program {
     std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
 
     // The buffer that holds the kernel/binaries/etc for this program
-    std::vector<std::shared_ptr<Buffer>> kg_buffers;
-    std::unique_ptr<Buffer> buffer;
+    std::shared_ptr<Buffer> kernels_buffer = nullptr;
     ProgramTransferInfo program_transfer_info;
 
-    bool loaded_onto_device;
+    bool finalized_;
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
 
@@ -197,13 +208,13 @@ class Program {
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::unordered_map<CoreType, std::vector<KernelGroup>> kernel_groups_;
     std::unordered_map<CoreType, std::vector<uint8_t>> core_to_kernel_group_index_table_;
+    uint32_t tensix_go_signal_count_;
 
     std::vector<std::shared_ptr<Buffer>> config_buffers_;
 
-    static constexpr uint32_t num_dispatchable_core_types = 2;
-    std::array<std::array<uint32_t, DISPATCH_CLASS_MAX>, num_dispatchable_core_types> crta_offsets;
-    std::array<std::array<uint32_t, DISPATCH_CLASS_MAX>, num_dispatchable_core_types> crta_sizes;
-
+    std::vector<ProgramConfig> program_configs_;
+    std::vector<uint32_t> program_config_sizes_;
+    bool capture_multi_device_dependencies_ = false;
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
@@ -213,12 +224,11 @@ class Program {
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
     KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const CoreType &core_type);
-    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
-    void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value, CoreType core_type=CoreType::WORKER);
+    void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type=CoreType::WORKER);
 
     friend void detail::AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
     void add_config_buffer(std::shared_ptr<Buffer> config_buffer);
@@ -229,6 +239,11 @@ class Program {
     void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(const CoreType &core_type);
+
+    ProgramConfig& get_program_config(CoreType core_type);
+    uint32_t& get_program_config_size(CoreType core_type);
+
+    uint32_t finalize_rt_args(CoreType core_type, uint32_t base_offset);
 
     friend class HWCommandQueue;
     friend class EnqueueProgramCommand;

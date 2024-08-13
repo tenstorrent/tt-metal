@@ -152,8 +152,8 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     Pytest fixture to set up a device mesh for tests.
 
     If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
-    If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (4, 8) creates
-    a devish mesh grid of 4 rows and 8 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+    If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+    a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
 
     Args:
         request: Pytest request object.
@@ -177,8 +177,10 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     if isinstance(param, tuple):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
-        device_grid = ttnn.DeviceGrid(*grid_dims)
         num_devices_requested = grid_dims[0] * grid_dims[1]
+        if num_devices_requested > len(device_ids):
+            pytest.skip("Requested more devices than available. Test not applicable for machine")
+        device_grid = ttnn.DeviceGrid(*grid_dims)
         assert num_devices_requested <= len(device_ids), "Requested more devices than available."
     else:
         num_devices_requested = min(param, len(device_ids))
@@ -271,36 +273,47 @@ def reset_default_device():
     ttl.device.SetDefaultDevice(device)
 
 
-@pytest.fixture(scope="function")
-def use_program_cache(request):
-    import tt_lib as ttl
-
+def get_devices(request):
     if "device" in request.fixturenames:
-        dev = request.getfixturevalue("device")
-        dev.enable_program_cache()
+        devices = [request.getfixturevalue("device")]
     elif "all_devices" in request.fixturenames:
         devices = request.getfixturevalue("all_devices")
-        for dev in devices:
-            dev.enable_program_cache()
     elif "pcie_devices" in request.fixturenames:
         devices = request.getfixturevalue("pcie_devices")
-        for dev in devices:
-            dev.enable_program_cache()
     elif "device_mesh" in request.fixturenames:
-        mesh = request.getfixturevalue("device_mesh")
-        for device_id in mesh.get_device_ids():
-            mesh.get_device(device_id).enable_program_cache()
+        devices = request.getfixturevalue("device_mesh").get_devices()
     elif "t3k_device_mesh" in request.fixturenames:
-        mesh = request.getfixturevalue("t3k_device_mesh")
-        for device_id in mesh.get_device_ids():
-            mesh.get_device(device_id).enable_program_cache()
+        devices = request.getfixturevalue("t3k_device_mesh").get_devices()
     elif "pcie_device_mesh" in request.fixturenames:
-        mesh = request.getfixturevalue("pcie_device_mesh")
-        for device_id in mesh.get_device_ids():
-            mesh.get_device(device_id).enable_program_cache()
+        devices = request.getfixturevalue("pcie_device_mesh").get_devices()
     else:
+        devices = []
+    return devices
+
+
+@pytest.fixture(scope="function")
+def use_program_cache(request):
+    devices = get_devices(request)
+    if not devices:
         logger.warning("No device fixture found to apply program cache to: PROGRAM CACHE DISABLED")
+    for dev in devices:
+        dev.enable_program_cache()
     yield
+    for dev in devices:
+        dev.disable_and_clear_program_cache()
+
+
+@pytest.fixture(scope="function")
+def enable_async_mode(request):
+    devices = get_devices(request)
+    if not devices:
+        logger.warning("No device fixture found to apply async mode to: ASYNC MODE DISABLED")
+
+    for dev in devices:
+        dev.enable_async(request.param)
+    yield request.param
+    for dev in devices:
+        dev.enable_async(False)
 
 
 @pytest.fixture(scope="function")

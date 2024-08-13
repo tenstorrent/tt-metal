@@ -3,9 +3,9 @@ FROM ubuntu:20.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ENV DOXYGEN_VERSION=1.9.6
-
+ARG UBUNTU_VERSION=20.04
 # Install build and runtime deps
-COPY /scripts/docker/requirements.txt /opt/tt_metal_infra/scripts/docker/requirements.txt
+COPY /scripts/docker/requirements-${UBUNTU_VERSION}.txt /opt/tt_metal_infra/scripts/docker/requirements.txt
 RUN apt-get -y update \
     && xargs -a /opt/tt_metal_infra/scripts/docker/requirements.txt apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
@@ -34,6 +34,8 @@ ENV PYTHON_ENV_DIR=${TT_METAL_INFRA_DIR}/tt-metal/python_env
 
 # Copy requirements from tt-metal folders with requirements.txt docs
 COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
+# Copy requirements from tt-metal folders for sweeps (requirements-sweeps.txt)
+COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
 COPY /tt_metal/python_env/* ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu \
     && python3 -m pip install setuptools wheel

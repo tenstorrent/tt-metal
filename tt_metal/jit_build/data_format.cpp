@@ -344,7 +344,7 @@ const DataFormat get_single_pack_src_format(
         }
     } else {
         //Inputs and outputs are different exponent widths, gs/wha0 only support this mode for fp16
-        if(arch != tt::ARCH::WORMHOLE_B0) {
+        if(arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
             TT_FATAL((output_format == DataFormat::Float16_b) || (output_format == DataFormat::Float16),
                 "Exponent width conversion is only supported for float16 formats for grayskull/wormhole_a0");
         }

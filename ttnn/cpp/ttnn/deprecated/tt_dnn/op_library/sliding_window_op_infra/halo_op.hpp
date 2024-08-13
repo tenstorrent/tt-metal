@@ -8,9 +8,8 @@
 #include <tuple>
 
 // #include "ttnn/tensor/tensor.hpp"
-// #include "ttnn/run_operation.hpp"
+#include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/untilize/untilize_op.hpp"
 
 
 namespace ttnn::operations {
@@ -26,6 +25,7 @@ struct Halo {
     uint32_t reshard_num_cores_nhw_;
     uint32_t max_out_nsticks_per_core_;
     MemoryConfig output_memory_config_;
+    bool is_out_tiled_;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -34,7 +34,7 @@ struct Halo {
     // const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 
     static constexpr auto attribute_names =
-        std::make_tuple("config_", "parallel_config_", "pad_val_", "remote_read_", "transpose_mcast_", "reshard_num_cores_nhw_", "max_out_nsticks_per_core_", "output_memory_config_");
+        std::make_tuple("config_", "parallel_config_", "pad_val_", "remote_read_", "transpose_mcast_", "reshard_num_cores_nhw_", "max_out_nsticks_per_core_", "output_memory_config_", "is_out_tiled_");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(config_),
@@ -44,7 +44,8 @@ struct Halo {
             std::cref(transpose_mcast_),
             std::cref(reshard_num_cores_nhw_),
             std::cref(max_out_nsticks_per_core_),
-            std::cref(output_memory_config_)
+            std::cref(output_memory_config_),
+            std::cref(is_out_tiled_)
         );
     }
 };
@@ -56,7 +57,8 @@ Tensor halo_op(const Tensor& input_tensor,
                 bool remote_read = false,
                 bool transpose_mcast = true,
                 uint32_t reshard_num_cores_nhw = 0,
-                MemoryConfig output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+                MemoryConfig output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+                bool is_out_tiled = true);
 
 } // namespace halo
 

@@ -291,7 +291,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-    } catch (exception e) {
+    } catch (std::exception e) {
         test_fixture.TearDown();
         return -1;
     }

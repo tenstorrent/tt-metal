@@ -16,6 +16,7 @@
 
 #include "debug/status.h"
 #include "debug/dprint.h"
+#include "debug/stack_usage.h"
 // clang-format on
 
 uint32_t halt_stack_ptr_save;
@@ -31,7 +32,6 @@ uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
-uint32_t atomic_ret_val __attribute__((section("l1_data"))) __attribute__((used));
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
@@ -75,6 +75,7 @@ inline __attribute__((always_inline)) void signal_ncrisc_completion() {
 }
 
 int main(int argc, char *argv[]) {
+    DIRTY_STACK_MEMORY();
     DEBUG_STATUS("I");
 
     disable_lowcache();
@@ -104,6 +105,7 @@ int main(int argc, char *argv[]) {
 
         DEBUG_STATUS("R");
         kernel_init();
+        RECORD_STACK_USAGE();
         DEBUG_STATUS("D");
 
         signal_ncrisc_completion();

@@ -73,10 +73,10 @@ def run_test_FalconCausalLM_end_to_end(
     use_global_cos_sin_cache = True
 
     if 1:
-        model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
+        model_input = torch.randint(0, seq_len * batch, (batch, seq_len))
     else:
         # batch identical sequences for debugging
-        model_input = torch.stack([torch.arange(seq_len)] * batch).reshape(batch, seq_len)
+        model_input = torch.stack([torch.randint(0, seq_len)] * batch).reshape(batch, seq_len)
 
     # Generate dummy kv_cache --------------------------------------------------------------
     if llm_mode == "prefill":
@@ -228,7 +228,7 @@ def run_test_FalconCausalLM_end_to_end(
                     use_cache=use_cache,
                 )
                 if tt_out.get_layout() != ttnn.experimental.tensor.Layout.ROW_MAJOR:
-                    tt_out = ttnn.experimental.tensor.untilize(tt_out, use_multicore=False)
+                    tt_out = ttnn.untilize(tt_out, use_multicore=False)
                 tt_outs.append(tt_out)
 
             tt_outs = [
@@ -445,6 +445,10 @@ def run_test_FalconCausalLM_end_to_end(
         ),
     ),
 )
+@pytest.mark.parametrize(
+    "async_mode",
+    (True,),
+)
 def test_FalconCausalLM_end_to_end_with_program_cache(
     num_devices,
     model_version,
@@ -460,6 +464,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     get_tt_cache_path,
     t3k_device_mesh,
     use_program_cache,
+    async_mode,
 ):
     model_config_str = f"{data_type}-{memcfg}"
     if llm_mode == "prefill" and memcfg != "DRAM" or num_devices != 8:
@@ -520,6 +525,9 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
     devices = t3k_device_mesh.get_devices()
+    # Set async mode
+    for device in devices:
+        device.enable_async(async_mode)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")

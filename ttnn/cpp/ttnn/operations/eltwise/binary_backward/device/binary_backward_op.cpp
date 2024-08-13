@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,27 +7,31 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op.hpp"
 #include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/backward/backward_ops.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/embedding/embedding.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/composite/composite_ops.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
-
+#include "ttnn/cpp/ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
+#include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
+#include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "ttnn/operations/eltwise/ternary/where_op.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/creation.hpp"
 
+#include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
+
 namespace ttnn::operations::binary_backward {
 
 std::vector<ttnn::Tensor> _atan2_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    auto output_memory_config = output_mem_config.value_or(input.memory_config()); //TODO: Remove after ternary forward ops migration is completed
     float t_nan = std::nanf("");
     using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
@@ -35,13 +39,13 @@ std::vector<ttnn::Tensor> _atan2_bw(
     UnaryWithParam {UnaryOpType::SQUARE},
     UnaryWithParam {UnaryOpType::RECIP}};
     Tensor recip_mul =
-        ttnn::multiply(grad, ttnn::unary_chain(hypot(input, other), ops_chain, output_memory_config), std::nullopt, output_memory_config);
-    Tensor grad_a = ttnn::multiply(other, recip_mul, std::nullopt, output_memory_config);
-    Tensor cond = ttnn::logical_and(ttnn::eqz(input, output_memory_config), ttnn::eqz(other, output_memory_config));
-    grad_a = where(cond, t_nan, grad_a, output_memory_config);
+        ttnn::multiply(grad, ttnn::unary_chain(ttnn::hypot(input, other, output_mem_config), ops_chain, output_mem_config), std::nullopt, output_mem_config);
+    Tensor grad_a = ttnn::multiply(other, recip_mul, std::nullopt, output_mem_config);
+    Tensor cond = ttnn::logical_and(ttnn::eqz(input, output_mem_config), ttnn::eqz(other, output_mem_config));
+    grad_a = ttnn::where(cond, t_nan, grad_a, output_mem_config);
     grad_tensor.emplace_back(grad_a);
-    Tensor grad_b = ttnn::multiply(ttnn::neg(input), recip_mul, std::nullopt, output_memory_config);
-    grad_b = where(cond, t_nan, grad_b, output_memory_config);
+    Tensor grad_b = ttnn::multiply(ttnn::neg(input), recip_mul, std::nullopt, output_mem_config);
+    grad_b = ttnn::where(cond, t_nan, grad_b, output_mem_config);
     recip_mul.deallocate();
     cond.deallocate();
     grad_tensor.emplace_back(grad_b);
@@ -112,7 +116,7 @@ std::vector<ttnn::Tensor> _subalpha_bw(
 }
 
 std::vector<ttnn::Tensor> _sub_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     return _subalpha_bw(grad, input, other, 1.0, output_mem_config);
 }
 
@@ -128,32 +132,66 @@ std::vector<std::optional<Tensor>> _add_bw(
     return _addalpha_bw(queue_id, grad, input, other, 1.0f, output_mem_config, are_required_outputs, input_grad, other_grad);
 }
 
-std::vector<ttnn::Tensor> _add_bw_inter(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    auto result =  _add_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
-    std::vector<ttnn::Tensor> output_tensors;
-    output_tensors.reserve(result.size());
-
-    for (const auto& opt_tensor : result) {
-        if (opt_tensor) {
-            output_tensors.emplace_back(*opt_tensor);
-        } else {
-            output_tensors.emplace_back();
-        }
-    }
-    return output_tensors;
+std::vector<Tensor> ExecuteBackwardAdd::operator()(
+    const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> _add_bw_overload(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    uint8_t default_queue_id = 0;
-    return _addalpha_bw(default_queue_id, grad, input, other, 1.0f, output_mem_config, are_required_outputs, input_grad, other_grad);
+std::vector<Tensor> ExecuteBackwardAdd::operator()(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    auto output_memory_config = output_mem_config.value_or(input.memory_config());
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    Tensor grad_b = ttnn::multiply(grad, 1.0f, std::nullopt,output_memory_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+std::vector<ComplexTensor> ExecuteBackwardAdd::operator()(
+    const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    ComplexTensor grad_a = grad;
+    grad_tensor.emplace_back(grad_a);
+    const Tensor& grad_r = grad.real();
+    const Tensor& grad_i = grad.imag();
+    ComplexTensor grad_b = ComplexTensor({ttnn::multiply(grad_r, alpha, std::nullopt, output_mem_config), ttnn::multiply(grad_i, alpha, std::nullopt, output_mem_config)});
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+std::vector<Tensor> ExecuteBackwardSub::operator()(
+    const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    return grad_tensor;
+}
+
+std::vector<Tensor> ExecuteBackwardSub::operator()(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
+    Tensor grad_b = ttnn::multiply(ttnn::neg(grad, output_mem_config), 1.0f, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+std::vector<ComplexTensor> ExecuteBackwardSub::operator()(
+    const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    ComplexTensor grad_a = grad;
+    grad_tensor.emplace_back(grad);
+    const Tensor& grad_r = grad.real();
+    const Tensor& grad_i = grad.imag();
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam{UnaryOpType::NEG},
+    UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha} };
+    ComplexTensor grad_b = ComplexTensor({ttnn::unary_chain( grad_r, ops_chain, output_mem_config), ttnn::unary_chain( grad_i, ops_chain, output_mem_config)});
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
 }
 
 std::vector<ttnn::Tensor> _xlogy_bw(
@@ -193,7 +231,7 @@ std::vector<ttnn::Tensor> _hypot_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
-    Tensor result_recip = ttnn::reciprocal(hypot(input, other), output_memory_config);
+    Tensor result_recip = ttnn::reciprocal(ttnn::hypot(input, other, output_memory_config), output_memory_config);
     Tensor grad_a =
         ttnn::multiply(grad, ttnn::multiply(input, result_recip, std::nullopt, output_memory_config), std::nullopt, output_memory_config);
     grad_tensor.emplace_back(grad_a);
@@ -213,7 +251,7 @@ std::vector<ttnn::Tensor> _ldexp_bw(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
-    Tensor tpow_o = ttnn::multiply(grad, rpow(other, 2.0, output_memory_config), std::nullopt, output_memory_config);
+    Tensor tpow_o = ttnn::multiply(grad, ttnn::rpow(other, 2.0, output_memory_config), std::nullopt, output_memory_config);
     grad_tensor.emplace_back(tpow_o);
     Tensor result = ttnn::multiply(input, ttnn::multiply(tpow_o, M_LN2, std::nullopt, output_memory_config), std::nullopt, output_memory_config);
     grad_tensor.emplace_back(result);
@@ -248,21 +286,22 @@ other: grad / (1 + pow(2, self - other))
 */
 
 std::vector<ttnn::Tensor> _logaddexp2_bw(
-    const Tensor& grad, const Tensor& input_a, const Tensor& other, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input_a, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor oppow =
-        ttnn::add(rpow(ttnn::subtract(other, input_a, std::nullopt, output_mem_config), 2, output_mem_config), 1, std::nullopt, output_mem_config);
-    Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(oppow, output_mem_config), std::nullopt, output_mem_config);
+        ttnn::add(ttnn::rpow(ttnn::subtract(other, input_a, std::nullopt, output_memory_config), 2, output_memory_config), 1, std::nullopt, output_memory_config);
+    Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(oppow, output_memory_config), std::nullopt, output_memory_config);
     grad_tensor.emplace_back(grad_a);
-    oppow = ttnn::add(rpow(ttnn::subtract(input_a, other, std::nullopt, output_mem_config), 2, output_mem_config), 1, std::nullopt, output_mem_config);
-    Tensor grad_b = ttnn::multiply(grad, ttnn::reciprocal(oppow, output_mem_config), std::nullopt, output_mem_config);
+    oppow = ttnn::add(ttnn::rpow(ttnn::subtract(input_a, other, std::nullopt, output_memory_config), 2, output_memory_config), 1, std::nullopt, output_memory_config);
+    Tensor grad_b = ttnn::multiply(grad, ttnn::reciprocal(oppow, output_memory_config), std::nullopt, output_memory_config);
     grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
 
 
 std::vector<ttnn::Tensor> _squared_difference_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor difference = ttnn::subtract(input, other);
     Tensor grad_a = ttnn::multiply(ttnn::multiply(grad, difference, std::nullopt, output_mem_config), 2, std::nullopt, output_mem_config);
@@ -284,26 +323,18 @@ std::vector<std::optional<Tensor>> _eq_bw(
     std::vector<std::optional<Tensor>> result;
 
     if (are_required_outputs.at(0)) {
-        if(input_grad.has_value()){
-            tt::tt_metal::zeros_like(cq_id, input, output_mem_config, input_grad);
-        } else {
-            input_grad = tt::tt_metal::zeros_like(cq_id, input, output_mem_config);
-        }
+        input_grad = ttnn::full_like(input, 0.0f);
         result.emplace_back(input_grad);
     } else {
         result.emplace_back(std::nullopt);
     }
     if (are_required_outputs.at(1)) {
-        if(other_grad.has_value()){
-            tt::tt_metal::zeros_like(cq_id, input, output_mem_config, other_grad);
-        } else {
-            other_grad = tt::tt_metal::zeros_like(cq_id, input, output_mem_config);
-        }
+        other_grad = ttnn::full_like(grad, 0.0f);
         result.emplace_back(other_grad);
     } else {
         result.emplace_back(std::nullopt);
     }
-    return std::move(result);
+    return result;
 }
 
 std::vector<ttnn::Tensor> _eq_bw_inter(
@@ -322,20 +353,8 @@ std::vector<ttnn::Tensor> _eq_bw_inter(
     return output_tensors;
 }
 
-std::vector<std::optional<Tensor>> _eq_bw_overload(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    uint8_t default_queue_id = 0;
-    return _eq_bw(default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
-
 std::vector<Tensor> _assign_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
     grad_tensor.emplace_back(grad);
@@ -359,10 +378,10 @@ std::vector<Tensor> _concat_bw(
     if (dim == 0) {
         start_index_2 = {input.get_legacy_shape()[0], 0, 0, 0};
     } else if (dim == 1) {
-        start_index_2 = {input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1], 0, 0};
+        start_index_2 = {0, input.get_legacy_shape()[1], 0, 0};
     } else if (dim == 2) {
         start_index_2 = {
-            input.get_legacy_shape()[0] - 1, input.get_legacy_shape()[1] - 1, input.get_legacy_shape()[2], 0};
+            0, 0, input.get_legacy_shape()[2], 0};
     } else if (dim == 3) {
         start_index_2 = {0, 0, 0, input.get_legacy_shape()[3]};
     }
@@ -377,7 +396,7 @@ std::vector<Tensor> _concat_bw(
     return grad_tensor;
 }
 
-std::vector<Tensor> _binary_comp_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+std::vector<Tensor> _binary_comp_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor zero_grad = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(zero_grad);
@@ -392,37 +411,33 @@ std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Ten
     return grad_tensor;
 }
 
-std::vector<Tensor> _bias_gelu_bw(
-    const Tensor& grad,
-    const Tensor& input_a,
-    const Tensor& input_b,
-    string approximate,
-    const MemoryConfig& output_mem_config) {
+std::vector<Tensor> ExecuteBackwardBiasGelu::operator()(
+    const Tensor& grad, const Tensor& input_a, const Tensor& input_b, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect approximation type (expected 'none', 'tanh')");
     std::vector<Tensor> grad_tensor;
     Tensor input = ttnn::add(input_a, input_b);
-    grad_tensor = ttnn::operations::unary_backward::_gelu_bw(grad, input, approximate = approximate, output_mem_config);
+    grad_tensor = ttnn::gelu_bw(grad, input, approximate = approximate, output_mem_config);
     grad_tensor.emplace_back(grad_tensor[0]);
     return grad_tensor;
 }
 
-
-std::vector<Tensor> _gt_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return _binary_comp_bw(grad, input, other, output_mem_config);
+std::vector<Tensor> ExecuteBackwardBiasGelu::operator()(
+    const Tensor& grad, const Tensor& input_tensor, float bias, string approximate, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    TT_FATAL((approximate == "none" || approximate == "tanh") && "Incorrect rounding mode (expected 'none' or 'tanh')");
+    Tensor input = ttnn::add(input_tensor, bias);
+    grad_tensor = ttnn::gelu_bw(grad, input, approximate = approximate);
+    return grad_tensor;
 }
 
-std::vector<Tensor> _ne_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+
+std::vector<Tensor> _gt_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     return _binary_comp_bw(grad, input, other, output_mem_config);
 }
 
 std::vector<Tensor> _ge_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     return _binary_comp_bw(grad, input, other, output_mem_config);
 }
-
-std::vector<Tensor> _le_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    return _binary_comp_bw(grad, input, other, output_mem_config);
-}
-
 std::vector<Tensor> _lt_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     return _binary_comp_bw(grad, input, other, output_mem_config);
 }
@@ -430,7 +445,7 @@ std::vector<Tensor> _lt_bw(const Tensor& grad, const Tensor& input, const Tensor
 // template parameter min_or_max = TRUE for MAX, FALSE for MIN
 template <bool min_or_max>
 std::vector<Tensor> _min_or_max_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor zeros_t = ttnn::operations::creation::zeros_like(input, input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
     std::vector<Tensor> grad_tensor;
     Tensor t_scale_grad = ttnn::multiply(grad, 0.5, std::nullopt, output_mem_config);
@@ -461,21 +476,52 @@ std::vector<Tensor> _min_or_max_bw(
     return grad_tensor;
 }
 
+template std::vector<Tensor> _min_or_max_bw<true>(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 
-std::vector<Tensor> _div_bw(
+template std::vector<Tensor> _min_or_max_bw<false>(
+    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
+
+
+std::vector<Tensor> ExecuteBackwardDiv::operator()(
+    const Tensor& grad, const Tensor& input, float scalar, std::string round_mode, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor") && "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
+    float inv_scalar = 1.0f / scalar;
+    if (round_mode == "None") {
+        Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity());
+        if (scalar == 0.0) {
+            float t_nan = std::nanf("");
+            grad_tensor.emplace_back(where(
+                ttnn::eqz(grad, output_mem_config),
+                t_nan,
+                ttnn::multiply(ttnn::sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
+                output_mem_config));
+        } else {
+            grad_tensor.emplace_back(ttnn::multiply(grad, inv_scalar, std::nullopt, output_mem_config));
+        }
+    } else {
+        Tensor result = ttnn::operations::creation::zeros_like(grad, grad.get_dtype(), grad.get_layout(), std::nullopt, output_mem_config);
+        grad_tensor.emplace_back(result);
+    }
+    return grad_tensor;
+}
+
+
+std::vector<Tensor> ExecuteBackwardDiv::operator()(
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
-    string round_mode,
-    const MemoryConfig& output_mem_config) {
+    std::string round_mode,
+    const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     if (round_mode == "None") {
         Tensor grad_a = ttnn::multiply(grad, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config);
         Tensor t_inf = ttnn::operations::creation::full_like(input, std::numeric_limits<float>::infinity(), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
         Tensor t_nan = ttnn::operations::creation::full_like(input, std::nanf(""), input.get_dtype(), input.get_layout(), std::nullopt, output_mem_config);
-        grad_tensor.emplace_back(where(
+        grad_tensor.emplace_back(ttnn::where(
             ttnn::eqz(other, output_mem_config),
-            where(
+            ttnn::where(
                 ttnn::eqz(grad, output_mem_config),
                 t_nan,
                 ttnn::multiply(t_inf, ttnn::sign(grad, output_mem_config), std::nullopt, output_mem_config),
@@ -487,12 +533,12 @@ std::vector<Tensor> _div_bw(
             (ttnn::multiply(input, ttnn::reciprocal(ttnn::square(other, output_mem_config), output_mem_config), std::nullopt, output_mem_config)),
             std::nullopt,
             output_mem_config);
-        grad_tensor.emplace_back(where(
+        grad_tensor.emplace_back(ttnn::where(
             ttnn::eqz(other, output_mem_config),
-            where(
+            ttnn::where(
                 ttnn::eqz(grad, output_mem_config),
                 t_nan,
-                where(
+                ttnn::where(
                     ttnn::eqz(input, output_mem_config),
                     t_nan,
                     ttnn::multiply(ttnn::multiply(ttnn::neg(t_inf, output_mem_config),
@@ -516,29 +562,58 @@ std::vector<Tensor> _div_bw(
     return grad_tensor;
 }
 
-// lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
-std::vector<Tensor> _lerp_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& end, float weight, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    float sub_scalar = 1.0f - weight;
-    Tensor result_1 = ttnn::multiply(grad, sub_scalar, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result_1);
-    Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result_2);
+std::vector<ComplexTensor> ExecuteBackwardDiv::operator()(
+const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    Tensor condition_nan = ttnn::logical_and(ttnn::eqz(other.real(),output_mem_config), ttnn::eqz(other.imag(),output_mem_config), std::nullopt, output_mem_config);
+    ComplexTensor grad_a = ttnn::operations::complex_binary::_div(grad, ttnn::conj(other,output_mem_config), output_mem_config);
+    Tensor grad_a_r = where(condition_nan, ttnn::operations::creation::full_like(grad.real(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::real(grad_a,output_mem_config),  output_mem_config);
+    Tensor grad_a_i = where(condition_nan, ttnn::operations::creation::full_like(grad.imag(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::imag(grad_a,output_mem_config),  output_mem_config);
+    grad_a = ComplexTensor({grad_a_r, grad_a_i});
+    grad_a_r.deallocate();
+    grad_a_i.deallocate();
+    grad_tensor.emplace_back(grad_a);
+    ComplexTensor neg_grad = ComplexTensor({ttnn::neg(grad.real(),output_mem_config), ttnn::neg(grad.imag(),output_mem_config)});
+    ComplexTensor grad_b = ttnn::operations::complex_binary::_mul(neg_grad, ttnn::conj(ttnn::operations::complex_binary::_div(ttnn::operations::complex_binary::_div(input, other, output_mem_config), other, output_mem_config ),output_mem_config), output_mem_config);
+    neg_grad.deallocate();
+    Tensor grad_b_r = where(condition_nan, ttnn::operations::creation::full_like(grad.real(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::real(grad_b,output_mem_config),  output_mem_config);
+    Tensor grad_b_i = where(condition_nan, ttnn::operations::creation::full_like(grad.imag(), std::nanf(""), std::nullopt, std::nullopt, std::nullopt, output_mem_config), ttnn::imag(grad_b,output_mem_config),  output_mem_config);
+    grad_b = ComplexTensor({grad_b_r, grad_b_i});
+    grad_b_r.deallocate();
+    grad_b_i.deallocate();
+    condition_nan.deallocate();
+    grad_tensor.emplace_back(grad_b);
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> _mul_bw(
+std::vector<Tensor> ExecuteBackwardMul::operator()(
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = ttnn::multiply(grad, scalar, std::nullopt, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+
+std::vector<ComplexTensor> ExecuteBackwardMul::operator()(
+    const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor;
+    ComplexTensor grad_a = ttnn::operations::complex_binary::_mul(grad, ttnn::conj(other,output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_a);
+    ComplexTensor grad_b = ttnn::operations::complex_binary::_mul(grad, ttnn::conj(input,output_mem_config), output_mem_config);
+    grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+std::vector<std::optional<Tensor>> ExecuteBackwardMul::operator()(
     uint8_t queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
-    const MemoryConfig& output_mem_config,
+    const std::optional<MemoryConfig>& output_mem_config,
     const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result;
-
     if (are_required_outputs.at(0)) {
         if(input_grad.has_value()){
             ttnn::multiply(queue_id, grad, other, std::nullopt, operation::DEFAULT_OUTPUT_MEMORY_CONFIG, input_grad);
@@ -559,117 +634,7 @@ std::vector<std::optional<Tensor>> _mul_bw(
     } else {
         result.emplace_back(std::nullopt);
     }
-
     return std::move(result);
-}
-
-std::vector<ttnn::Tensor> _mul_bw_inter(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-
-    auto result = _mul_bw(0, grad, input, other, output_mem_config, {true, true}, std::nullopt, std::nullopt);
-
-    std::vector<ttnn::Tensor> output_tensors;
-    output_tensors.reserve(result.size());
-
-    for (const auto& opt_tensor : result) {
-        if (opt_tensor) {
-            output_tensors.emplace_back(*opt_tensor);
-        } else {
-            output_tensors.emplace_back();
-        }
-    }
-    return output_tensors;
-}
-
-std::vector<std::optional<Tensor>> _mul_bw_overload(
-    const Tensor& grad,
-    const Tensor& input,
-    const Tensor& other,
-    const MemoryConfig& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-        uint8_t default_queue_id = 0;
-    return _mul_bw(default_queue_id, grad, input, other, output_mem_config, are_required_outputs, input_grad, other_grad);
-}
-
-
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&)> BinaryBackwardFunction::get_function_type1(BinaryBackwardOpType OpType){
-    switch (OpType) {
-        case BinaryBackwardOpType::EMBEDDING_BW:
-            return _embedding_bw;
-        case BinaryBackwardOpType::SUB_BW:
-            return _sub_bw;
-        case BinaryBackwardOpType::LOGADDEXP2_BW:
-            return _logaddexp2_bw;
-        case BinaryBackwardOpType::SQUARED_DIFFERENCE_BW:
-            return _squared_difference_bw;
-        case BinaryBackwardOpType::ADD_BW:
-            return _add_bw_inter;
-        case BinaryBackwardOpType::EQ_BW:
-            return _eq_bw_inter;
-        case BinaryBackwardOpType::ASSIGN_BW:
-            return _assign_bw;
-        case BinaryBackwardOpType::LE_BW:
-            return _le_bw;
-        case BinaryBackwardOpType::GT_BW:
-            return _gt_bw;
-        case BinaryBackwardOpType::LT_BW:
-            return _lt_bw;
-        case BinaryBackwardOpType::NE_BW:
-            return _ne_bw;
-        case BinaryBackwardOpType::GE_BW:
-            return _ge_bw;
-        case BinaryBackwardOpType::MIN_BW:
-            return _min_or_max_bw<false>;
-        case BinaryBackwardOpType::MAX_BW:
-            return _min_or_max_bw<true>;
-        case BinaryBackwardOpType::MUL_BW:
-            return _mul_bw_inter;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
-std::function<std::vector<ttnn::Tensor>(const Tensor&, const Tensor&, const Tensor&, std::string, const MemoryConfig&)> BinaryBackwardFunction::get_function_type1_w_string(BinaryBackwardOpType OpType){
-    switch (OpType) {
-        case BinaryBackwardOpType::BIAS_GELU_BW:
-            return _bias_gelu_bw;
-        case BinaryBackwardOpType::DIV_BW:
-            return _div_bw;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
-std::function<std::vector<std::optional<ttnn::Tensor>>(uint8_t , const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> BinaryBackwardFunction::get_function_type3(BinaryBackwardOpType OpType){
-    switch (OpType) {
-        case BinaryBackwardOpType::ADD_BW:
-            return _add_bw;
-        case BinaryBackwardOpType::EQ_BW:
-            return _eq_bw;
-        case BinaryBackwardOpType::MUL_BW:
-            return _mul_bw;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
-}
-
-std::function<std::vector<std::optional<ttnn::Tensor>>(const Tensor&, const Tensor&, const Tensor&, const MemoryConfig&, const std::vector<bool>&, std::optional<Tensor>, std::optional<Tensor>)> BinaryBackwardFunction::get_function_type3_wo_qid(BinaryBackwardOpType OpType){
-    switch (OpType) {
-        case BinaryBackwardOpType::ADD_BW:
-            return _add_bw_overload;
-        case BinaryBackwardOpType::EQ_BW:
-            return _eq_bw_overload;
-        case BinaryBackwardOpType::MUL_BW:
-            return _mul_bw_overload;
-        default:
-            TT_ASSERT(false && "Undefined op type");
-            return 0;
-    }
 }
 
 }  // namespace ttnn::operations::binary_backward

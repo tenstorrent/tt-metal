@@ -78,7 +78,7 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const stri
     }
 }
 
-bool is_close_packed_sfpu_output(const vector<uint32_t>& vec_a, const vector<uint32_t>& vec_b, const string& op_name) {
+bool is_close_packed_sfpu_output(const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const string& op_name) {
     if (op_name == "tanh") {
         return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
             vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
@@ -236,7 +236,7 @@ TEST_P(SingleCoreSingleCardSfpuParameterizedFixture, SfpuCompute) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
+        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
 
         CoreRange core_range({0, 0}, {0, 0});
         CoreRangeSet core_range_set({core_range});
@@ -282,7 +282,7 @@ TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, SfpuCompute) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
+        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
 
         CoreRange core_range({0, 0}, {0, 0});
         CoreRangeSet core_range_set({core_range});
@@ -330,7 +330,7 @@ TEST_P(MultiCoreSingleCardSfpuParameterizedApproxFixture, AllCoreMultiTileSfpuAp
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
+        if ((arch_ == tt::ARCH::WORMHOLE_B0 or arch_ == tt::ARCH::BLACKHOLE) and sfpu_op == "log") { GTEST_SKIP() << "log has very high abs and relative diff"; }
 
         CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});

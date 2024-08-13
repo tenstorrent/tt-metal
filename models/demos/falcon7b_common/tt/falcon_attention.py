@@ -98,12 +98,12 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         output = []
         for i in range(len(layer)):
             output.append(
-                ttnn.experimental.tensor.rotary_embedding(
+                ttnn.experimental.rotary_embedding(
                     layer[i],
                     self.tt_cos_cached[i],
                     self.tt_sin_cached[i],
                     token_idx,
-                    output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
                 )
             )
         return output
@@ -276,11 +276,11 @@ class TtFalconAttentionPrefill(nn.Module):
         key_layer_transposed = []
         for i in range(self.num_devices):
             key_layer_transposed.append(
-                ttnn.experimental.tensor.transpose(
+                ttnn.transpose(
                     key_layer[i],
                     -2,
                     -1,
-                    output_mem_config=(
+                    memory_config=(
                         self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
                         if llm_mode == "prefill" or self.model_config["l1_sharded"] == False
                         else ttnn.experimental.tensor.MemoryConfig(
@@ -439,11 +439,11 @@ class TtFalconAttentionPrefill(nn.Module):
         key_layer_transposed = []
         for i in range(self.num_devices):
             key_layer_transposed.append(
-                ttnn.experimental.tensor.transpose(
+                ttnn.transpose(
                     key_layer[i],
                     -2,
                     -1,
-                    output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
                 )
             )
             key_layer[i].deallocate()
@@ -733,7 +733,7 @@ class TtFalconAttentionDecode(nn.Module):
                 )
 
             for i in range(self.num_devices):
-                query_layer[i] = ttnn.experimental.tensor.transpose(
+                query_layer[i] = ttnn.transpose(
                     query_layer[i],
                     -2,
                     -3,
@@ -762,11 +762,11 @@ class TtFalconAttentionDecode(nn.Module):
         key_layer_transposed = []
         for i in range(self.num_devices):
             key_layer_transposed.append(
-                ttnn.experimental.tensor.transpose(
+                ttnn.transpose(
                     key_layer[i],
                     -2,
                     -1,
-                    output_mem_config=(
+                    memory_config=(
                         self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
                         if self.model_config["l1_sharded"] == False
                         else ttnn.experimental.tensor.MemoryConfig(
@@ -927,7 +927,7 @@ class TtFalconAttentionDecode(nn.Module):
 
             # Get batch in dim 2
             for i in range(self.num_devices):
-                attn_output[i] = ttnn.experimental.tensor.transpose(
+                attn_output[i] = ttnn.transpose(
                     attn_output[i],
                     -2,
                     -3,

@@ -36,8 +36,8 @@ class TtConvNet(torch.nn.Module):
         )
         self.linear2_bias = torch2tt_tensor(state_dict[f"fc2.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
-        self.linear1_weights = tt_lib.tensor.transpose(self.linear1_weights, -2, -1)
-        self.linear2_weights = tt_lib.tensor.transpose(self.linear2_weights, -2, -1)
+        self.linear1_weights = ttnn.transpose(self.linear1_weights, -2, -1)
+        self.linear2_weights = ttnn.transpose(self.linear2_weights, -2, -1)
 
         self.max_pool2d = fallback_ops.MaxPool2d(2)
 

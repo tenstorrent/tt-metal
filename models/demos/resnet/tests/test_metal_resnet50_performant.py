@@ -33,8 +33,17 @@ from models.utility_functions import skip_for_wormhole_b0
     [tt_lib.tensor.MathFidelity.LoFi],
     ids=["LoFi"],
 )
+@pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_inference(
-    device, use_program_cache, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
+    device,
+    use_program_cache,
+    batch_size,
+    weights_dtype,
+    activations_dtype,
+    math_fidelity,
+    imagenet_sample_input,
+    enable_async_mode,
+    model_location_generator,
 ):
     run_resnet50_inference(
         device,
@@ -44,6 +53,7 @@ def test_run_resnet50_inference(
         math_fidelity,
         imagenet_sample_input,
         run_model,
+        model_location_generator,
     )
 
 
@@ -65,7 +75,7 @@ def test_run_resnet50_inference(
     [tt_lib.tensor.MathFidelity.LoFi],
     ids=["LoFi"],
 )
-@pytest.mark.parametrize("enable_async", [True, False])
+@pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_trace_inference(
     device,
     use_program_cache,
@@ -74,10 +84,9 @@ def test_run_resnet50_trace_inference(
     activations_dtype,
     math_fidelity,
     imagenet_sample_input,
-    enable_async,
+    enable_async_mode,
+    model_location_generator,
 ):
-    device.enable_async(enable_async)
-
     run_resnet50_inference(
         device,
         batch_size,
@@ -86,9 +95,8 @@ def test_run_resnet50_trace_inference(
         math_fidelity,
         imagenet_sample_input,
         run_trace_model,
+        model_location_generator,
     )
-
-    device.enable_async(False)
 
 
 @skip_for_wormhole_b0("This test is not supported on WHB0, please use the TTNN version.")
@@ -109,8 +117,17 @@ def test_run_resnet50_trace_inference(
     [tt_lib.tensor.MathFidelity.LoFi],
     ids=["LoFi"],
 )
+@pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_2cqs_inference(
-    device, use_program_cache, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
+    device,
+    use_program_cache,
+    batch_size,
+    weights_dtype,
+    activations_dtype,
+    math_fidelity,
+    imagenet_sample_input,
+    enable_async_mode,
+    model_location_generator,
 ):
     run_resnet50_inference(
         device,
@@ -120,6 +137,7 @@ def test_run_resnet50_2cqs_inference(
         math_fidelity,
         imagenet_sample_input,
         run_2cq_model,
+        model_location_generator,
     )
 
 
@@ -143,7 +161,7 @@ def test_run_resnet50_2cqs_inference(
     [tt_lib.tensor.MathFidelity.LoFi],
     ids=["LoFi"],
 )
-@pytest.mark.parametrize("enable_async", [True, False])
+@pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_trace_2cqs_inference(
     device,
     use_program_cache,
@@ -152,10 +170,9 @@ def test_run_resnet50_trace_2cqs_inference(
     activations_dtype,
     math_fidelity,
     imagenet_sample_input,
-    enable_async,
+    enable_async_mode,
+    model_location_generator,
 ):
-    device.enable_async(enable_async)
-
     run_resnet50_inference(
         device,
         batch_size,
@@ -164,6 +181,5 @@ def test_run_resnet50_trace_2cqs_inference(
         math_fidelity,
         imagenet_sample_input,
         run_trace_2cq_model,
+        model_location_generator,
     )
-
-    device.enable_async(False)

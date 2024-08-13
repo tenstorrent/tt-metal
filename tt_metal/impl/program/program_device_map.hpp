@@ -2,42 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unordered_map>
 #include <cstdint>
+#include <unordered_map>
+#include <variant>
+#include <vector>
 
-// TODO: AL delete?
-//
-struct transfer_info {
-    std::uint32_t size_in_bytes;
-    std::uint32_t dst;
-    std::uint32_t dst_noc_encoding;
-    std::uint32_t num_receivers;
-    bool last_transfer_in_group;
-    bool linked;
-};
+#include "tt_metal/common/core_coord.h"
+
+namespace tt::tt_metal {
 
 using transfer_info_cores = std::variant<CoreCoord, CoreRange>;
 
-struct transfer_info_2 {
+struct transfer_info {
     std::uint32_t dst_base_addr;
-    vector<pair<transfer_info_cores, uint32_t>> dst_noc_info;  // noc_encoding, num_mcast_dests
+    std::vector<std::pair<transfer_info_cores, std::uint32_t>> dst_noc_info;  // noc_encoding, num_mcast_dests
     bool linked;
-    vector<std::uint32_t> data;
-};
-struct kernel_bins_transfer_info {
-    vector<std::uint32_t> dst_base_addrs;           // BRISC, NCRISC, TRISC etc..
-    vector<std::uint32_t> page_offsets;             // offsets into paged buffer in DRAM
-    vector<std::uint32_t> lengths;                  // WriteLinear lengths
-    vector<pair<transfer_info_cores, uint32_t>> dst_noc_info;  // noc_encoding, num_mcast_dests
-    bool linked;
-    vector<std::uint32_t> data;                     // all binaries' data for kernel group
+    std::vector<std::uint32_t> data;
 };
 
-enum class PageTransferType { MULTICAST, UNICAST };
+struct kernel_bins_transfer_info {
+    std::vector<std::uint32_t> dst_base_addrs;  // BRISC, NCRISC, TRISC etc..
+    std::vector<std::uint32_t> page_offsets;    // offsets into paged buffer in DRAM
+    std::vector<std::uint32_t> lengths;         // WriteLinear lengths
+    std::vector<tt::RISCV> riscvs;              // RISC that each span is targeted for, for binaries
+};
 
 struct ProgramTransferInfo {
     std::uint32_t num_active_cores;
-    std::unordered_map<uint32_t, vector<transfer_info_2>> multicast_semaphores;    // WritePacked, sorted by dst
-    std::unordered_map<uint32_t, vector<transfer_info_2>> unicast_semaphores;      // WritePacked, sorted by dst
-    vector<kernel_bins_transfer_info> kernel_bins;                                 // RelayPaged, WriteLinear
+    std::unordered_map<std::uint32_t, std::vector<transfer_info>> multicast_semaphores;  // WritePacked, sorted by dst
+    std::unordered_map<std::uint32_t, std::vector<transfer_info>> unicast_semaphores;    // WritePacked, sorted by dst
+    std::vector<std::tuple<transfer_info_cores, std::uint32_t, kernel_bins_transfer_info>>
+        kernel_bins;                         // noc_encoding, num_mcast_dests, transfer_info
+    std::vector<std::uint32_t> binary_data;  // Holds binary data for all program kernels
 };
+
+}  // namespace tt::tt_metal

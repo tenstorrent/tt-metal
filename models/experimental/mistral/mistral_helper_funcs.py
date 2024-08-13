@@ -66,7 +66,7 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
                 x, x.shape_without_padding(), device, target_layout, output_mem_config
             )
         else:
-            return tt_lib.tensor.untilize(x, output_mem_config, use_multicore=True)
+            return ttnn.untilize(x, memory_config=output_mem_config, use_multicore=True)
     else:
         assert False
 
@@ -113,7 +113,7 @@ def get_freqs_cis(freqs_cis: torch.Tensor, query_shape, key_shape, device=None, 
     BCH = tt_lib.tensor.BcastOpDim.HW
     BCMUL = tt_lib.tensor.BcastOpMath.MUL
 
-    t_one_xq = tt_lib.tensor.ones(query_shape, output_mem_config=mem_config)
+    t_one_xq = ttnn.ones(query_shape, memory_config=mem_config)
     t_one_xq = ttnn.permute(t_one_xq, (3, 1, 2, 0), memory_config=mem_config)
 
     freqs_real = ttnn.permute(freqs_cis.real, (3, 1, 2, 0), memory_config=mem_config)
@@ -130,7 +130,7 @@ def get_freqs_cis(freqs_cis: torch.Tensor, query_shape, key_shape, device=None, 
     bcast_freq_re_xq.deallocate()
     bcast_freq_im_xq.deallocate()
 
-    t_one_xk = tt_lib.tensor.ones(key_shape, output_mem_config=mem_config)
+    t_one_xk = ttnn.ones(key_shape, memory_config=mem_config)
     t_one_xk = ttnn.permute(t_one_xk, (3, 1, 2, 0), memory_config=mem_config)
 
     bcast_freq_re_xk = tt_lib.tensor.bcast(t_one_xk, freqs_real, BCMUL, BCH, output_mem_config=mem_config)

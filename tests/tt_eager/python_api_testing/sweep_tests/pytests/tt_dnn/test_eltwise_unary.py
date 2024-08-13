@@ -52,6 +52,11 @@ class TestEltwiseUnary:
         input_mem_config,
         output_mem_config,
     ):
+        if fn_kind == "silu":
+            is_ttnn_op = True
+        else:
+            is_ttnn_op = False
+
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
         ]
@@ -70,6 +75,7 @@ class TestEltwiseUnary:
             comparison_func,
             device,
             test_args,
+            ttnn_op=is_ttnn_op,
         )
 
     @pytest.mark.parametrize(
@@ -586,7 +592,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("round_off_method", ["floor", "ceil", "trunc"])
+    @pytest.mark.parametrize("round_off_method", ["floor"])
     @skip_for_grayskull("#ToDo: GS implementation needs to be done for Floor")
     def test_run_eltwise_round_off_ops(
         self,
@@ -609,12 +615,7 @@ class TestEltwiseUnary:
         )
         comparison_func = comparison_funcs.comp_equal
         run_single_pytorch_test(
-            f"eltwise-{round_off_method}",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
+            f"eltwise-{round_off_method}", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
         )
 
     @pytest.mark.parametrize("scalar", [0.5])

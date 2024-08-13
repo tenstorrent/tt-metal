@@ -64,7 +64,7 @@ uint32_t get_rm_start_offset(const Tensor &tensor, const Shape &slice_start) {
 
 
 
-void Slice::validate_with_output_tensors(
+void SliceDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
     const auto &input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
@@ -97,7 +97,7 @@ void Slice::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::Shape> Slice::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::Shape> SliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     std::vector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
@@ -108,46 +108,20 @@ std::vector<tt::tt_metal::Shape> Slice::compute_output_shapes(const std::vector<
     return {output_tensor_shape};
 }
 
-std::vector<Tensor> Slice::create_output_tensors(
+std::vector<Tensor> SliceDeviceOperation::create_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
     const auto &input_tensor_a = input_tensors.at(0);
     return operation::generic_create_output_tensors(
         *this, input_tensors, input_tensor_a.get_dtype(), input_tensor_a.get_layout(), this->output_mem_config);
 }
 
-operation::ProgramWithCallbacks Slice::create_program(
+operation::ProgramWithCallbacks SliceDeviceOperation::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto &input_tensor_a = input_tensors.at(0);
     auto &output_tensor = output_tensors.at(0);
 
-    return slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end);
+    return detail::slice_multi_core(input_tensor_a, output_tensor, this->slice_start, this->slice_end);
 }
 
-const operation::Hash Slice::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    auto input_tensor = input_tensors.at(0);
-    TT_ASSERT(std::holds_alternative<DeviceStorage>(input_tensor.storage()), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(input_tensor.get_storage()),__FILE__, __LINE__));
-    auto input_mem_config = std::get<DeviceStorage>(input_tensor.storage()).memory_config();
-    auto output_mem_config = this->output_mem_config;
-    auto dtype = input_tensor.dtype();
-    auto num_dims = input_tensor.shape().rank();
-
-    std::string rm_width = "TILE";
-    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        rm_width = fmt::format("{}", input_tensor.legacy_shape()[3]);
-    }
-
-    auto str = operation::hash_operation<Slice>(
-        num_dims,
-        input_tensor.layout(),
-        input_mem_config.memory_layout,
-        input_mem_config.buffer_type,
-        output_mem_config.memory_layout,
-        output_mem_config.buffer_type,
-        dtype,
-        rm_width
-
-    );
-    return str;
-}
 
 }  // namespace ttnn::operations::reduction

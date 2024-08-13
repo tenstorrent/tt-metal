@@ -28,6 +28,12 @@ run_test() {
     echo
 };
 
+run_test_with_watcher() {
+    echo $1
+    TT_METAL_WATCHER=1 $1
+    echo
+};
+
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 0 -i 5"  # TrueSmoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 5"  # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 5"  # Random Test
@@ -37,6 +43,7 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 5 -i 5"  # Paged DRAM Write + Read Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 6 -i 5"  # Host Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 7 -i 5"  # Packed Read Test
+run_test_with_watcher "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 7 -i 10 -x -mpps" # Packed Read Test w/ max num subcmds
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 1000 -rb"  # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 1000 -rb"  # Random Test
 
@@ -85,7 +92,6 @@ run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 7 -i 5 -x -spre -sdis -packetized_en" # Packed Read Test+exec
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 1 -i 1000 -x -rb -spre -sdis -packetized_en"  # Smoke Test
 run_test "./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 2 -i 1000 -x -rb -spre -sdis -packetized_en"  # Random Test
-
 
 # Testcase: Paged Write Cmd to DRAM. 256 pages, 256b size.
 ./build/test/tt_metal/perf_microbenchmark/dispatch/test_prefetcher -t 4 -i 1 -dpgs 256 -dpgr 256

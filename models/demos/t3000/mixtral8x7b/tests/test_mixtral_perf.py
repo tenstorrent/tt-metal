@@ -5,20 +5,9 @@ import os
 import torch
 import pytest
 
-# Set Mixtral flags for CI, if CI environment is setup
-if os.getenv("CI") == "true":
-    os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-
 import ttnn
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 import tt_lib
-
-if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
-    from tracy import signpost
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     preprocess_inputs_prefill,
@@ -44,6 +33,7 @@ class Emb(torch.nn.Module):
 
 
 @pytest.mark.model_perf_t3000
+@pytest.mark.timeout(400)
 @pytest.mark.parametrize(
     "generation_start_pos, expected_compile_time, expected_inference_time",
     (
@@ -60,7 +50,14 @@ def test_mixtral_model_perf(
     expected_inference_time,
     use_program_cache,
     reset_seeds,
+    is_ci_env,
 ):
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
+
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
+        from tracy import signpost
+
     dtype = ttnn.bfloat8_b
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
@@ -88,7 +85,6 @@ def test_mixtral_model_perf(
     generation_length = 1
 
     profiler.start("Mixtral_model_setup")
-
     # Load TTNN model
     tt_model = TtTransformer(
         device_mesh=t3k_device_mesh,
@@ -96,30 +92,30 @@ def test_mixtral_model_perf(
         args=model_args,
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
+        rotary_on_host=True,
     )
-
     profiler.end("TtMixtral_model_setup")
 
     # Call the function
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("Model warmup")
-    profiler.start(f"end_to_end_inference_with_compile")
+    profiler.start(f"e2e_decode_compile")
     run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
-    profiler.end(f"end_to_end_inference_with_compile")
+    profiler.end(f"e2e_decode_compile")
     profiler.print(units="ms")
-    compile_and_iter_time = profiler.get("model_run_for_inference_0")
+    compile_and_iter_time = profiler.get("e2e_decode_compile")
 
     for device_id in t3k_device_mesh.get_device_ids():
         tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
     profiler.clear()
-    profiler.start(f"end_to_end_inference")
+    profiler.start(f"e2e_decode_inference")
     run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
-    profiler.end(f"end_to_end_inference")
+    profiler.end(f"e2e_decode_inference")
     profiler.print(units="ms")
-    iter_time = profiler.get("model_run_for_inference_0")
+    iter_time = profiler.get("e2e_decode_inference")
 
     comment = f"kv_cache_len={generation_start_pos}_num_layers={model_args.n_layers}"
 
@@ -135,12 +131,13 @@ def test_mixtral_model_perf(
 
 
 @pytest.mark.model_perf_t3000
+@pytest.mark.timeout(400)
 @pytest.mark.parametrize(
     "prefill_seqlen, expected_compile_time, expected_inference_time",
     (
-        (128, 80, 4.5),
-        (1024, 80, 15),
-        (1024 * 2, 80, 33),
+        (128, 80, 0.23),
+        (1024, 80, 0.61),
+        (1024 * 2, 80, 1.13),
         # (1024*4, 80, 60),
         # (1024*8, 150, 80),
         # (1024*16, 150, 100),
@@ -163,7 +160,14 @@ def test_mixtral_model_with_prefill_perf(
     expected_inference_time,
     use_program_cache,
     reset_seeds,
+    is_ci_env,
 ):
+    for device in t3k_device_mesh.get_device_ids():
+        t3k_device_mesh.get_device(device).enable_async(True)
+
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
+        from tracy import signpost
+
     dtype = ttnn.bfloat8_b
     batch_size = 32
 
@@ -213,7 +217,6 @@ def test_mixtral_model_with_prefill_perf(
     pt_prefill_input = [embd(input_tokens_prefill_pt[b, :]).view(1, prefill_seq_len, -1) for b in range(batch_size)]
 
     profiler.start("Mixtral_model_setup")
-
     # Load TTNN model
     tt_model = TtTransformer(
         device_mesh=t3k_device_mesh,
@@ -223,67 +226,72 @@ def test_mixtral_model_with_prefill_perf(
         dtype=dtype,
         start_pos=prefill_seq_len,
     )
-
     profiler.end("TtMixtral_model_setup")
 
     # Prefill (run warmup for single user before running perf for all users)
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("prefill warmup")
     profiler.clear()
     profiler.start(f"e2e_prefill_warmup")
     run_inference_prefill(tt_model, model_args, prefill_seq_len, t3k_device_mesh, pt_prefill_input, 1)
     profiler.end(f"e2e_prefill_warmup")
     profiler.print(units="ms")
-    prefill_warmup_time = profiler.get("prepare_inputs_and_prefill_1_users")
+    prefill_warmup_time = profiler.get("e2e_prefill_warmup")
 
     # Profiler dump, ready for real run
     for device_id in t3k_device_mesh.get_device_ids():
         tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("prefill perf run")
     profiler.clear()
-    profiler.start(f"e2e_prefill_{batch_size}_users")
-    run_inference_prefill(tt_model, model_args, prefill_seq_len, t3k_device_mesh, pt_prefill_input, batch_size)
-    profiler.end(f"e2e_prefill_{batch_size}_users")
+    profiler.start(f"e2e_prefill_1_user")
+    # Prefill a single user, as this will be the real-world usage
+    prefill_out = run_inference_prefill(tt_model, model_args, prefill_seq_len, t3k_device_mesh, pt_prefill_input, 1)
+    profiler.end(f"e2e_prefill_1_user")
     profiler.print(units="ms")
-    prefill_time = profiler.get("prepare_inputs_and_prefill_32_users")
+    prefill_time = profiler.get("e2e_prefill_1_user")
+
+    # profile dump
+    for device_id in t3k_device_mesh.get_device_ids():
+        tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
     # Decode (Run 1 warmup iteration before running 1 perf iteration)
     generation_start_pos = prefill_seq_len
     generation_length = 1
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("decode warmup")
     profiler.clear()
     profiler.start(f"e2e_decode_warmup")
     run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
     profiler.end(f"e2e_decode_warmup")
     profiler.print(units="ms")
-    decode_warmup_time = profiler.get("model_run_for_inference_0")
+    decode_warmup_time = profiler.get("e2e_decode_warmup")
 
     # Profiler dump, ready for real run
     for device_id in t3k_device_mesh.get_device_ids():
         tt_lib.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
-    if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
+    if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("decode perf run")
     profiler.clear()
-    profiler.start(f"e2e_decode_{batch_size}_users")
+    profiler.start(f"e2e_decode_inference_{batch_size}_users")
     run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, generation_length)
-    profiler.end(f"e2e_decode_{batch_size}_users")
-
-    profiler.end("e2e_decode_1_iteration")
+    profiler.end(f"e2e_decode_inference_{batch_size}_users")
     profiler.print(units="ms")
-    decode_time = profiler.get("model_run_for_inference_0")
+    decode_time = profiler.get("e2e_decode_inference_32_users")
 
-    comment = f"seqlen_len={prefill_seqlen}_num_layers={model_args.n_layers}"
+    comment = f"time_to_1st_token_seqlen={prefill_seqlen}_num_layers={model_args.n_layers}"
+
+    # Time to first token is measured as 1 user prefill time + 1 decode iteration, since we currently do not generate first token during prefill
+    prefill_time_to_first = prefill_time + decode_time
 
     prep_perf_report(
         model_name=f"Mixtral8x7B_prefill_{comment}",
         batch_size=model_args.max_batch_size,
         inference_and_compile_time=prefill_warmup_time + decode_warmup_time,
-        inference_time=prefill_time + decode_time,
+        inference_time=prefill_time_to_first,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments=comment,
@@ -309,14 +317,16 @@ def run_inference_prefill(tt_model, model_args, prefill_seq_len, device_mesh, pt
     )
     profiler.end("prefill_prepare_rot_matrices")
 
-    profiler.start(f"prepare_inputs_and_prefill_{batch_size}_users")
     # Prefill all users, one by one
     for batch_id in range(batch_size):
+        profiler.start(f"e2e_prefill_prepare_inputs_{batch_id}")
         prefill_input, attn_mask, _ = prepare_inputs_ttnn_prefill(
             pt_prefill_input[batch_id],
             device_mesh,
         )
-        # profiler.start(f"e2e_prefill_user_{batch_id}")
+        profiler.end(f"e2e_prefill_prepare_inputs_{batch_id}")
+
+        profiler.start(f"e2e_prefill_inference_{batch_id}")
         tt_out = tt_model(
             prefill_input,
             0,  # Start position
@@ -327,61 +337,65 @@ def run_inference_prefill(tt_model, model_args, prefill_seq_len, device_mesh, pt
             user_id=batch_id,
             mode="prefill",
         )
-        # profiler.end(f"e2e_prefill_user_{batch_id}")
+        profiler.end(f"e2e_prefill_inference_{batch_id}")
 
-    profiler.end(f"prepare_inputs_and_prefill_{batch_size}_users")
+        # Device sync to get proper e2e timing
+        profiler.start(f"e2e_prefill_inference_sync_{batch_id}")
+        devices = device_mesh.get_devices()
+        for device in devices:
+            ttnn.device.synchronize_device(device)
+        profiler.end(f"e2e_prefill_inference_sync_{batch_id}")
 
 
 def run_inference_decode(tt_model, embd, encoded_prompts, generation_start_pos, generation_length):
     seqlen = 1  # Generating one token per user at a time
     batch = tt_model.args.max_batch_size
 
-    profiler.start(f"torch_embed_initial")
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
-    profiler.end(f"torch_embed_initial")
-
     for i in range(generation_length):
+        profiler.start(f"Decode_token_embedding_{i}")
         pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
-        start_pos = generation_start_pos + i
-        current_pos = start_pos % tt_model.args.sliding_window
+        profiler.end(f"Decode_token_embedding_{i}")
 
-        profiler.start(f"prepare_inputs_for_inference_{i}")
-        decode_input, attn_mask = prepare_inputs_ttnn(
+        start_pos = generation_start_pos + i
+        current_pos = start_pos
+
+        profiler.start(f"Decode_prepare_inputs_{i}")
+        decode_input = prepare_inputs_ttnn(
             pt_decode_input,
             tt_model.args.dim,
             start_pos,
             tt_model.args,
             tt_model.device_mesh,
         )
-        profiler.end(f"prepare_inputs_for_inference_{i}")
+        profiler.end(f"Decode_prepare_inputs_{i}")
 
         # Run TT model
-        profiler.start(f"model_run_for_inference_{i}")
+        profiler.start(f"inference_decode_{i}")
         profiler.start(f"python_dispatch_for_inference_{i}")
-        tt_out = tt_model(decode_input, start_pos, current_pos, attn_mask)
+        tt_out = tt_model(decode_input, start_pos, current_pos)
         profiler.end(f"python_dispatch_for_inference_{i}")
 
         # Convert ttnn tensor to torch tensor
-        profiler.start(f"result_wait_for_inference_{i}")
+        profiler.start(f"python_wait_for_inference_out_{i}")
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(tt_model.device_mesh, dim=0))[0]
             .squeeze(1)
-            .view(batch, seqlen, -1)
+            .view(32, seqlen, -1)
             .detach()
             .float()
-        )
+        )[:batch, ...]
 
-        profiler.end(f"model_run_for_inference_{i}")
-        profiler.end(f"result_wait_for_inference_{i}")
+        profiler.end(f"inference_decode_{i}")
+        profiler.end(f"python_wait_for_inference_out_{i}")
 
-        profiler.start(f"torch_argmax_and_embed_{i}")
+        profiler.start(f"torch_argmax_{i}")
         # Greedy decode the generated token and pass it back in, this is just a perf test
         tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
         # tt_decode_input = embd(tt_token_batch).view(batch, seqlen, -1)
-        profiler.end(f"torch_argmax_and_embed_{i}")
+        profiler.end(f"torch_argmax_{i}")
 
         profiler.start(f"deallocate_tt_tensors_{i}")
-
         tt_out.deallocate(force=True)
         profiler.end(f"deallocate_tt_tensors_{i}")

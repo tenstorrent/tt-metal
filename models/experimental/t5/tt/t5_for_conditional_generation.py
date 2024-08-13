@@ -105,7 +105,7 @@ class TtT5ForConditionalGeneration(nn.Module):
 
         self.lm_head_weights = torch2tt_tensor(state_dict[f"lm_head.weight"], device)
 
-        self.lm_head_weights = tt_lib.tensor.transpose(self.lm_head_weights, -2, -1)
+        self.lm_head_weights = ttnn.transpose(self.lm_head_weights, -2, -1)
 
         # Model parallel
         self.model_parallel = False

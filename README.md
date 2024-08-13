@@ -2,7 +2,7 @@
 
 <h1>
 
-[Buy hardware](https://tenstorrent.com/cards/) | [Install](./INSTALLING.md) | [Discord](https://discord.gg/tvhGzHQwaj)
+[Buy hardware](https://tenstorrent.com/cards/) | [Install](./INSTALLING.md) | [Discord](https://discord.gg/tvhGzHQwaj) | [Join Us](https://boards.greenhouse.io/tenstorrent/jobs/4155609007)
 
 </h1>
 
@@ -12,7 +12,7 @@
 
 <h3>
 
-[API Reference](https://tenstorrent.github.io/tt-metal/latest/ttnn) | [Model Demos](./models/demos/)
+[API Reference](https://tenstorrent.github.io/ttnn/latest/index.html) | [Model Demos](./models/demos/)
 
 </h3>
 
@@ -44,14 +44,15 @@
 >
 > Furthermore, all performance numbers here are run or based off an N300 Wormhole card.
 
-| Model                                                                                  | Gen. Token [3]     |  Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target         |
-|----------------------------------------------------------------------------------------|--------------------|----------------------|------------------------------|-----------------------------|----------------|
-| [Falcon7B](./models/demos/wormhole/falcon7b)                                           | 129th              | 32                   | 13.3 t/s/u - 425 t/s         | 15.4 t/s/u - 493 t/s        | 26             |
-| [Mistral-7B](./models/demos/wormhole/mistral7b)                                        | 129th              | 32                   | 9.9 t/s/u - 317 t/s          | 11.0 t/s/u - 352 t/s        | 25             |
-| [Mamba-2.8B](./models/demos/wormhole/mamba)                                            | any                | 32                   | 11.6 t/s/u - 370 t/s         | 16.5 t/s/u - 528 t/s        | 41             |
-| [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s) [4]                          |                    | 8                    | 270                          | 340                         | 400            |
-| [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512 (sec/img) [5] |                    | 1                    | 6                            | 5                           | 3              |
-| [ResNet-50](./models/demos/ttnn_resnet) (fps)                                          |                    | 16                   | 4,300                        | 5,550                       | 7,000          |
+| Model                                                                                  | Last Verified Release                                                     | Gen. Token [3]     |  Batch               | End-to-end throughput [1]      | Device throughput [2]        | Target         |
+|----------------------------------------------------------------------------------------|---------------------------------------------------------------------------|--------------------|----------------------|--------------------------------|------------------------------|----------------|
+| [Falcon7B](./models/demos/wormhole/falcon7b)                                           | [v0.51.0-rc13](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc13) | 129th              | 32                   | 13.7 t/s/u - 438 t/s           | 19.5 t/s/u - 624 t/s         | 26             |
+| [Mistral-7B](./models/demos/wormhole/mistral7b)                                        | [v0.51.0-rc13](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc13) | 129th              | 32                   | 9.9 t/s/u - 317 t/s            | 11.0 t/s/u - 352 t/s         | 25             |
+| [Mamba-2.8B](./models/demos/wormhole/mamba)                                            | [v0.51.0-rc13](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc13) | any                | 32                   | 11.6 t/s/u - 371 t/s           | 16.5 t/s/u - 528 t/s         | 41             |
+| [LLaMA-3.1-8B](./models/demos/wormhole/llama31_8b)                                     | [v0.51.0-rc13](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc13) | 129th              | 8                    | 8.3 t/s/u - 66.0 t/s           | 9.7 t/s/u - 77.9 t/s         | 23             |
+| [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s) [4]                          |                                                                           |                    | 8                    | 270                            | 340                          | 400            |
+| [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512 (sec/img) [5] |                                                                           |                    | 1                    | 6                              | 5                            | 3              |
+| [ResNet-50](./models/demos/ttnn_resnet) (fps)                                          |                                                                           |                    | 16                   | 4,300                          | 5,550                        | 7,000          |
 
 [1] - Observed from the host. Includes dispatch overhead and kernel execution time. For LLMs, token-to-token decode throughput is reported.
 
@@ -65,15 +66,18 @@
 
 ##  TT-QuietBox & TT-LoudBox (2x4 mesh of WHs) Models
 
-| Model                                                     |   Technique        | Gen. Token [3]      |  Batch                | End-to-end throughput [1]    | Device throughput [2]        | Target          |
-|-----------------------------------------------------------|--------------------|---------------------|-----------------------|------------------------------|------------------------------|-----------------|
-| [Falcon7B](./models/demos/t3000/falcon7b)          | Data Parallel      | 129th               |  256                  |  7.4 t/s/u - 1901 t/s        |  15.5 t/s/u - 3968 t/s       |   26 t/s/u      |
-| [LLaMA-2-70B](./models/demos/t3000/llama2_70b)     | Tensor Parallel    | 129th               |  32                   | 10.4 t/s/u - 333 t/s         |  16.6 t/s/u - 532 t/s        |   20 t/s/u      |
-| [LLaMA-3-70B](./models/demos/t3000/llama3_70b)     | Tensor Parallel    | 129th               |  32                   | 10.4 t/s/u - 333 t/s         |  15.8 t/s/u - 506 t/s        |   20 t/s/u      |
-| [LLaMA-3.1-70B](./models/demos/t3000/llama3_70b)     | Tensor Parallel    | 129th               |  32                   | 10.4 t/s/u - 333 t/s         |  15.8 t/s/u - 506 t/s        |   20 t/s/u      |
-| [Falcon40B](./models/demos/t3000/falcon40b)        | Tensor Parallel    | 129th               |  32                   | work-in-progress             |  10.0 t/s/u - 320 t/s        |   36 t/s/u      |
-| [Mixtral7Bx8](./models/demos/t3000/mixtral8x7b)    | Tensor Parallel    | 129th               |  32                   | 15.1 t/s/u - 483 t/s         |  27.1 t/s/u - 868 t/s        |   33 t/s/u      |
-| ResNet50                                                  | Data Parallel      | coming soon         |                       |                              |                              |                 |
+| Model                                              | Last Verified Release                                                     |   Technique        | Gen. Token [3]      |  Batch                | End-to-end throughput [1]    | Device throughput [2]        | Target          |
+|----------------------------------------------------|---------------------------------------------------------------------------|--------------------|---------------------|-----------------------|------------------------------|------------------------------|-----------------|
+| [Falcon7B](./models/demos/t3000/falcon7b)          | [v0.51.0-rc13](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc13) | Data Parallel      | 129th               |  256                  | 7.6 t/s/u - 1950 t/s         |  19.5 t/s/u - 4990 t/s       |   26 t/s/u      |
+| [LLaMA-2-70B](./models/demos/t3000/llama2_70b)     | [v0.51.0-rc13](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc13) | Tensor Parallel    | 129th               |  32                   | 10.4 t/s/u - 333 t/s         |  16.6 t/s/u - 531 t/s        |   20 t/s/u      |
+| [LLaMA-3.1-70B](./models/demos/t3000/llama3_70b)   | [v0.51.0-rc13](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc13) | Tensor Parallel    | 129th               |  32                   | 10.4 t/s/u - 333 t/s         |  15.8 t/s/u - 506 t/s        |   20 t/s/u      |
+| [Falcon40B](./models/demos/t3000/falcon40b)        | [v0.51.0-rc13](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc13) | Tensor Parallel    | 129th               |  32                   | 5.3 t/s/u - 168 t/s          |  12.2 t/s/u - 390 t/s        |   36 t/s/u      |
+| [Mixtral7Bx8](./models/demos/t3000/mixtral8x7b)    | [v0.51.0-rc13](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc13) | Tensor Parallel    | 129th               |  32                   | 13.3 t/s/u - 426 t/s         |  21.4 t/s/u - 685 t/s        |   33 t/s/u      |
+| [ResNet-50](./models/demos/ttnn_resnet)            |                                                                           | Data Parallel      |                     |  128                  | 31,700                       |  44,400                      |   56,000        |
+
+## Model Updates
+For the latest model updates and features, please see [MODEL_UPDATES.md](models/MODEL_UPDATES.md)
+
 
 ## Using TT-NN ops and tensors
 
@@ -105,11 +109,11 @@ print(output)
 
 <h3>
 
-[Programming Guide](./METALIUM_GUIDE.md) | [API Reference](https://tenstorrent.github.io/tt-metal/latest/tt-metalium)
+[Programming Guide](./METALIUM_GUIDE.md) | [API Reference](https://tenstorrent.github.io/tt-metalium/latest/tt_metal/apis/index.html)
 
 </h3>
 </div>
 
 ## Getting started
 
-Get started with [simple kernels](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
+Get started with [simple kernels](https://tenstorrent.github.io/tt-metalium/latest/tt_metal/examples/index.html).

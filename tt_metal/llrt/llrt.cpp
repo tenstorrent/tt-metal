@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "llrt.hpp"
+#include "hal.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 
@@ -85,16 +86,16 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
             range_max = MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE;
             break;
         case 2:
-            range_min = MEM_TRISC0_BASE;
-            range_max = MEM_TRISC0_BASE + MEM_TRISC0_SIZE;
+            range_min = MEM_TRISC0_FIRMWARE_BASE;
+            range_max = MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE;
             break;
         case 3:
-            range_min = MEM_TRISC1_BASE;
-            range_max = MEM_TRISC1_BASE + MEM_TRISC1_SIZE;
+            range_min = MEM_TRISC1_FIRMWARE_BASE;
+            range_max = MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC1_FIRMWARE_SIZE;
             break;
         case 4:
-            range_min = MEM_TRISC2_BASE;
-            range_max = MEM_TRISC2_BASE + MEM_TRISC2_SIZE;
+            range_min = MEM_TRISC2_FIRMWARE_BASE;
+            range_max = MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE;
             break;
         case 5:
             range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
@@ -147,37 +148,12 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ph
     return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
 }
 
-void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, bool send_go) {
-
-    bool is_eth_core = is_ethernet_core(core, chip);
-    bool is_active_eth_core = false;
-    bool is_inactive_eth_core = false;
-
-    // Determine whether an ethernet core is active or idle. Their host handshake interfaces are different.
-    if (is_eth_core) {
-        auto active_eth_cores =  tt::Cluster::instance().get_active_ethernet_cores(chip);
-        auto inactive_eth_cores =  tt::Cluster::instance().get_inactive_ethernet_cores(chip);
-        is_active_eth_core = active_eth_cores.find(logical_core_from_ethernet_core(chip, core)) != active_eth_cores.end();
-        is_inactive_eth_core = inactive_eth_cores.find(logical_core_from_ethernet_core(chip, core)) != inactive_eth_cores.end();
-        //we should not be operating on any reserved cores here.
-        assert(is_active_eth_core or is_inactive_eth_core);
-    }
+void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, uint64_t base_addr, bool send_go) {
 
     msg->kernel_config.mode = DISPATCH_MODE_HOST;
-    uint32_t launch_addr;
-    uint32_t go_addr;
-    if (is_active_eth_core) {
-        launch_addr = GET_ETH_MAILBOX_ADDRESS_HOST(launch.kernel_config);
-        go_addr = GET_ETH_MAILBOX_ADDRESS_HOST(launch.go);
-    } else {
-        if (is_inactive_eth_core) {
-            launch_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(launch.kernel_config);
-            go_addr = GET_IERISC_MAILBOX_ADDRESS_HOST(launch.go);
-        } else {
-            launch_addr = GET_MAILBOX_ADDRESS_HOST(launch.kernel_config);
-            go_addr = GET_MAILBOX_ADDRESS_HOST(launch.go);
-        }
-    }
+
+    uint64_t launch_addr = base_addr + offsetof(launch_msg_t, kernel_config);
+    uint64_t go_addr = base_addr + offsetof(launch_msg_t, go);
 
     tt::Cluster::instance().write_core((void *)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
     tt_driver_atomics::sfence();
@@ -234,18 +210,18 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
     return read_mem;
 }
 
-void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
+
+uint32_t generate_risc_startup_addr(bool is_eth_core) {
     // Options for handling brisc fw not starting at mem[0]:
     // 1) Program the register for the start address out of reset
     // 2) Encode a jump in crt0 for mem[0]
     // 3) Write the jump to mem[0] here
     // This does #3.  #1 may be best, #2 gets messy (elf files
     // drop any section before .init, crt0 needs ifdefs, etc)
-    vector<uint32_t> jump_to_fw;
     constexpr uint32_t jal_opcode = 0x6f;
     constexpr uint32_t jal_max_offset = 0x0007ffff;
     uint32_t opcode = jal_opcode;
-    uint32_t firmware_base = is_ethernet_core(core, chip_id) ? MEM_IERISC_FIRMWARE_BASE : MEM_BRISC_FIRMWARE_BASE;
+    uint32_t firmware_base = is_eth_core ? MEM_IERISC_FIRMWARE_BASE : MEM_BRISC_FIRMWARE_BASE;
     assert(firmware_base < jal_max_offset);
     // See riscv spec for offset encoding below
     uint32_t jal_offset_bit_20 = 0;
@@ -257,7 +233,13 @@ void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
         jal_offset_bits_10_to_1 |
         jal_offset_bit_11 |
         jal_offset_bits_19_to_12;
-    jump_to_fw.push_back(jal_offset | opcode);
+
+    return jal_offset | opcode;
+}
+
+void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
+    vector<uint32_t> jump_to_fw;
+    jump_to_fw.push_back(generate_risc_startup_addr(is_ethernet_core(core, chip_id)));
     write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
 }
 
@@ -321,8 +303,9 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
         assert(is_active_eth_core or is_inactive_eth_core);
     }
 
-    uint64_t run_mailbox_addr = is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(launch.go.run) :
-        is_inactive_eth_core ? GET_IERISC_MAILBOX_ADDRESS_HOST(launch.go.run) : GET_MAILBOX_ADDRESS_HOST(launch.go.run);
+    tt_metal::HalProgrammableCoreType dispatch_core_type =  is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH :
+        is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH : tt_metal::HalProgrammableCoreType::TENSIX;
+    uint64_t run_mailbox_addr = reinterpret_cast<uint64_t>(&tt_metal::hal.get_dev_addr<launch_msg_t *>(dispatch_core_type, tt_metal::HalMemAddrType::LAUNCH)->go.run);
 
     auto get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
         constexpr int RUN_MAILBOX_BOGUS = 3;

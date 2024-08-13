@@ -11,152 +11,6 @@
 
 namespace ttnn::operations::binary {
 
-namespace utils {
-
-using ttnn::operations::unary::UnaryWithParam;
-using ttnn::operations::unary::UnaryOpType;
-
-std::map<string, string> get_defines(
-    BinaryOpType op_type,
-    const std::optional<DataType> input_dtype,
-    const std::optional<DataType> output_dtype,
-    const std::optional<std::vector<UnaryWithParam>> fused_activations) {
-    std::map<string, string> defines;
-    string op_name = "sub_tiles";
-    string op_binary_type = "EltwiseBinaryType::ELWSUB";
-    string idst = "i";
-
-    using ttnn::operations::unary::utils::get_defines;
-
-    switch (op_type) {
-        case BinaryOpType::ADD:
-            op_name = "add_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWADD";
-            break;
-        case BinaryOpType::SUB:
-            op_name = "sub_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWSUB";
-            break;
-        case BinaryOpType::MUL:
-            op_name = "mul_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWMUL";
-            break;
-        case BinaryOpType::GT:
-            defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::LT:
-            defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::GTE:
-            defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::LTE:
-            defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::EQ:
-            defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::NE:
-            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::SQUARED_DIFFERENCE:
-            defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::LOGICAL_AND:
-            op_name = "mul_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWMUL";
-            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::BIAS_GELU:
-            op_name = "add_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(get_defines(UnaryOpType::GELU, std::vector<float>{0}, "0", idst));
-            break;
-        case BinaryOpType::LOGADDEXP:
-            // PRE_IN0_0 ===> Applies prescaling for first input
-            // PRE_IN1_0 ====> Applies prescaling for second input
-            defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN0_0"));
-            defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN1_0"));
-            op_name = "add_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(get_defines(UnaryOpType::LOG, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::DIV_FAST:
-            // Divide by a non-zero tensor
-            defines.merge(get_defines(UnaryOpType::RECIP, std::nullopt, "PRE_IN1_0"));
-            op_name = "mul_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWMUL";
-            break;
-        case BinaryOpType::LOGICAL_OR:
-            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
-            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));
-            op_name = "add_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::LDEXP:
-            defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
-            op_name = "mul_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWMUL";
-            break;
-        case BinaryOpType::LOGADDEXP2:
-            defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN0_0"));
-            defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
-            op_name = "add_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst));
-            break;
-        default: TT_ASSERT(false && "Undefined op type");
-    }
-
-    if(input_dtype.has_value() && output_dtype.has_value() &&
-        ((input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT16) ||
-        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::INT32) ||
-        (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT16) ||
-        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT16) ||
-        (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::BFLOAT16) ||
-        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::FLOAT32) ||
-        (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::UINT16) ||
-        (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::FLOAT32) ||
-        (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::INT32) ||
-        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::FLOAT32) ||
-        (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::UINT16) ||
-        (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT8_B) ||
-        (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::INT32) ||
-        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT8_B) ||
-        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT32) ||
-        (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT16) ||
-        (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::UINT32) ||
-        (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::FLOAT32) ||
-        (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::UINT32) ||
-        (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT8_B) ||
-        (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::UINT32))){
-        TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
-
-        auto in_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(input_dtype.value()));
-        auto out_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(output_dtype.value()));
-        defines.insert(
-            {"SFPU_OP_CHAIN_0",
-             fmt::format("typecast_tile_init(); typecast_tile<{0}u, {1}u>(i);", in_dataformat, out_dataformat)});
-        defines.insert({"SFPU_OP_TYPECAST_INCLUDE", "1"});
-    }
-
-    defines["ELTWISE_OP"] = op_name.c_str();
-    defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
-    if (fused_activations.has_value()) {
-        if (op_type == BinaryOpType::ADD and fused_activations.value().size() == 1 and
-            fused_activations.value().at(0).op_type == UnaryOpType::RELU) {
-            defines["PACK_RELU"] = "1";
-        } else {
-            defines.merge(ttnn::operations::unary::utils::get_block_defines(fused_activations.value(), "0", idst));
-        }
-    }
-
-    return defines;
-}
-
-}  // namespace utils
-
 BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     ZoneScopedN("BinaryDeviceOperation::select_program_factory");
@@ -317,7 +171,7 @@ BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_outpu
             i + input_shape_b.rank() < input_shape_b.rank() ? input_shape_b.with_tile_padding()[i] : 1;
         output_shape_with_tile_padding[i + rank] = std::max(dim_a_with_tile_padding, dim_b_with_tile_padding);
     }
-    return ttnn::Shape::from_vector(output_shape, output_shape_with_tile_padding);
+    return ttnn::Shape(output_shape, output_shape_with_tile_padding);
 }
 
 BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(
@@ -434,5 +288,35 @@ operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model
 #endif
     return result;
 }
+
+
+
+std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t> BinaryDeviceOperation::operator()(
+    const Tensor &input_tensor_a_arg,
+    const Tensor &input_tensor_b_arg,
+    BinaryOpType binary_op_type,
+    bool in_place,
+    const std::optional<const DataType> &output_dtype,
+    const std::optional<MemoryConfig> &memory_config,
+    std::optional<Tensor> optional_output_tensor,
+    std::optional<unary::FusedActivations> activations,
+    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    if (output_dtype.has_value() && optional_output_tensor.has_value()) {
+        TT_FATAL(
+            output_dtype.value() == optional_output_tensor.value().get_dtype(),
+            "If both output dtype and output tensor provided dtype should match");
+    }
+
+    return {
+        operation_attributes_t{
+            binary_op_type,
+            in_place,
+            activations,
+            input_tensor_a_activation,
+            memory_config.value_or(input_tensor_a_arg.memory_config()),
+            output_dtype.value_or(input_tensor_a_arg.get_dtype()),
+            std::nullopt},
+        tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor}};
+    }
 
 }  // namespace ttnn::operations::binary

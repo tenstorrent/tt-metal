@@ -16,7 +16,7 @@ from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_wit
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("exponent", [0.5, 2.0])
+@pytest.mark.parametrize("exponent", [0.5, 2.0, 4])
 def test_unary_pow_ttnn(input_shapes, exponent, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)

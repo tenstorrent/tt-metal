@@ -9,6 +9,7 @@ import sys
 import torch
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import print_diff_argmax
 import pytest
 from loguru import logger
@@ -37,7 +38,7 @@ def run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, ou
 
     tt_cpu = input.repeat(torch.Size(repeats))
 
-    tt = ttl.tensor.repeat(tt_input, ttl.tensor.Shape(repeats), output_mem_config)
+    tt = ttnn.repeat(tt_input, ttnn.Shape(repeats), memory_config=output_mem_config)
 
     tt_dev = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
@@ -155,5 +156,5 @@ def test_repeat_with_program_cache(
     function_level_defaults,
 ):
     run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)
-    tmp = ttl.tensor.empty([1, 256, 32, 32], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    tmp = ttnn.empty([1, 256, 32, 32], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
     run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)

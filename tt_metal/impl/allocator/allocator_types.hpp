@@ -63,8 +63,6 @@ enum class MemoryAllocator {
 // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
 constexpr static uint32_t ALLOCATOR_ALIGNMENT = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
-// L1 write barrier
-// Host writes (4B value) to and reads from this address across all L1s to ensure previous writes have been committed
 constexpr static std::uint32_t STORAGE_ONLY_RESERVED_SIZE = ((MEM_MAILBOX_END + ALLOCATOR_ALIGNMENT - 1) / ALLOCATOR_ALIGNMENT) * ALLOCATOR_ALIGNMENT;
 // Storage only cores only need to reserve mailbox space to hold barriers
 constexpr static std::uint32_t STORAGE_ONLY_UNRESERVED_BASE = STORAGE_ONLY_RESERVED_SIZE;

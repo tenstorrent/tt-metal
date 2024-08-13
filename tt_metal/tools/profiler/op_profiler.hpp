@@ -83,7 +83,7 @@ class thread_safe_call_stack {
 
    private:
     std::mutex stack_mutex;
-    stack<TracyCZoneCtx> call_stack;
+    std::stack<TracyCZoneCtx> call_stack;
 };
 
 inline thread_safe_cached_ops_map cached_ops{};
@@ -122,7 +122,7 @@ static bool stop_tracy_zone(const string& name = "", uint32_t color = 0) {
     return callStackWasEmpty;
 }
 
-static void tracy_message(const string& source, uint32_t color = 0xf0f8ff) {
+static void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) {
     TracyMessageC(source.c_str(), source.size(), color);
 }
 
@@ -130,8 +130,8 @@ static void tracy_frame() { FrameMark; }
 
 #if defined(TRACY_ENABLE)
 static inline json get_kernels_json(const Program& program) {
-    vector<json> computeKernels;
-    vector<json> datamovementKernels;
+    std::vector<json> computeKernels;
+    std::vector<json> datamovementKernels;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id).get();
         if (kernel->processor() == RISCV::COMPUTE) {
@@ -157,7 +157,7 @@ static inline json get_kernels_json(const Program& program) {
 
 static inline json get_tensor_json(const Tensor& tensor) {
     json ret;
-    string tensorStorageStr;
+    std::string tensorStorageStr;
     if (tensor.storage_type() == StorageType::DEVICE) {
         ret["storage_type"]["device_id"] = tensor.device()->id();
         ret["storage_type"]["memory_config"]["buffer_type"] = magic_enum::enum_name(tensor.memory_config().buffer_type);
@@ -178,7 +178,7 @@ static inline json get_tensor_json(const Tensor& tensor) {
     return ret;
 }
 
-static inline vector<json> get_tensors_json(const vector<Tensor>& tensors) {
+static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tensors) {
     ZoneScoped;
     vector<json> ret;
     for (auto& tensor : tensors) {
@@ -187,7 +187,7 @@ static inline vector<json> get_tensors_json(const vector<Tensor>& tensors) {
     return ret;
 }
 
-static inline vector<json> get_tensors_json(const vector<std::optional<const Tensor>>& tensors) {
+static inline std::vector<json> get_tensors_json(const std::vector<std::optional<const Tensor>>& tensors) {
     ZoneScoped;
     vector<json> ret;
     for (auto& tensor : tensors) {
@@ -198,7 +198,7 @@ static inline vector<json> get_tensors_json(const vector<std::optional<const Ten
     return ret;
 }
 
-static inline vector<json> get_tensors_json(const vector<std::optional<Tensor>>& tensors) {
+static inline std::vector<json> get_tensors_json(const std::vector<std::optional<Tensor>>& tensors) {
     ZoneScoped;
     vector<json> ret;
     for (auto& tensor : tensors) {
@@ -256,28 +256,32 @@ inline json get_base_json(
     return j;
 }
 
-template <typename operation_t>
+template <typename device_operation_t>
 inline json get_base_json(
     uint32_t operation_id,
-    const typename operation_t::operation_attributes_t& operation_attributes,
-    const typename operation_t::tensor_args_t& tensor_args,
-    typename operation_t::tensor_return_value_t& tensor_return_value) {
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    typename device_operation_t::tensor_return_value_t& tensor_return_value) {
     ZoneScoped;
     json j;
     j["global_call_count"] = operation_id;
 
     auto as_string = [](std::string_view v) -> std::string { return {v.data(), v.size()}; };
-    std::string opName = as_string(tt::stl::get_type_name<operation_t>());
+    std::string opName = as_string(tt::stl::get_type_name<device_operation_t>());
+    if constexpr ( requires { device_operation_t::get_type_name(operation_attributes); }) {
+        // TODO: remove this if-statement when OldInfraDeviceOperation is removed
+        opName = device_operation_t::get_type_name(operation_attributes);
+    }
+
     std::replace(opName.begin(), opName.end(), ',', ';');
     j["op_code"] = opName;
 
     json attributesObj;
-    reflect::for_each(
-        [&attributesObj, &operation_attributes](auto I) {
-            attributesObj[std::string{reflect::member_name<I>(operation_attributes)}] =
-                fmt::format("{}", reflect::get<I>(operation_attributes));
-        },
-        operation_attributes);
+    for (auto&& [name, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
+        std::string nameStr = "";
+        nameStr = fmt::format("{}", name);
+        attributesObj[nameStr] = fmt::format("{}", value);
+    }
     j["attributes"] = attributesObj;
 
     std::vector<json> input_tensors;
@@ -301,72 +305,9 @@ inline std::string op_meta_data_serialized_json(
     return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`", j["op_code"], ser);
 }
 
-template <typename OutputTensors, template <typename> typename HostOperationType>
+template <typename device_operation_t>
 inline std::string op_meta_data_serialized_json(
-    uint32_t opID,
-    const HostOperationType<OutputTensors>& op,
-    const std::vector<Tensor>& input_tensors,
-    OutputTensors& output_tensors) {
-    auto j = get_base_json(opID, op, input_tensors, output_tensors);
-    j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_cpu);
-    std::string ser = j.dump(4);
-    return fmt::format("`TT_DNN_HOST_OP:{} ->\n{}`", j["op_code"], ser);
-}
-
-template <typename OutputTensors, template <typename> typename DeviceOperationType>
-inline std::string op_meta_data_serialized_json(
-    uint32_t opID,
-    tt::tt_metal::operation::Hash opHash,
-    bool isProgramCached,
-    uint32_t device_id,
-    const DeviceOperationType<OutputTensors>& op,
-    const std::variant<std::shared_ptr<Program>, std::reference_wrapper<Program>>& program,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
-    OutputTensors& output_tensors) {
-    const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
-    if (!useCachedOps || !isProgramCached || (cached_ops.find(device_id) == cached_ops.end()) ||
-        (cached_ops.at(device_id).find(opHash) == cached_ops.at(device_id).end())) {
-        auto j = get_base_json(opID, op, input_tensors, output_tensors);
-        j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
-        j["device_id"] = device_id;
-        j["op_hash"] = opHash;
-        if (std::holds_alternative<std::reference_wrapper<Program>>(program)) {
-            j["kernel_info"] = get_kernels_json(std::get<std::reference_wrapper<Program>>(program));
-        } else if (std::holds_alternative<std::shared_ptr<Program>>(program)) {
-            auto prg = std::get<std::shared_ptr<Program>>(program);
-            if (prg != nullptr) {
-                j["kernel_info"] = get_kernels_json(*prg);
-            }
-        }
-
-        j["optional_input_tensors"] = get_tensors_json(optional_input_tensors);
-
-        auto perfModel = op.create_op_performance_model(input_tensors, optional_input_tensors, output_tensors);
-        j["performance_model"]["compute_ns"] = perfModel.get_compute_ns();
-        j["performance_model"]["ideal_ns"] = perfModel.get_ideal_ns();
-        j["performance_model"]["bandwidth_ns"] = perfModel.get_bandwidth_ns();
-        j["performance_model"]["input_bws"] = perfModel.get_input_bws();
-        j["performance_model"]["output_bws"] = perfModel.get_output_bws();
-
-        std::string short_str = fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"], opHash, device_id);
-        if (cached_ops.find(device_id) == cached_ops.end()) {
-            cached_ops.emplace(
-                device_id, (std::unordered_map<tt::tt_metal::operation::Hash, std::string>){{opHash, short_str}});
-        } else {
-            cached_ops.at(device_id).emplace(opHash, short_str);
-        }
-
-        std::string ser = j.dump(4);
-        return fmt::format("{}{} ->\n{}`", short_str, opID, ser);
-    } else {
-        return fmt::format("{}{}`", cached_ops.at(device_id).at(opHash), opID);
-    }
-}
-
-template <typename operation_t>
-inline std::string op_meta_data_serialized_json(
-    const operation_t& operation,
+    const device_operation_t& operation,
     uint32_t operation_id,
     auto device_id,
     const auto& program,
@@ -377,7 +318,7 @@ inline std::string op_meta_data_serialized_json(
     const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
     if (!useCachedOps || (cached_ops.find(device_id) == cached_ops.end()) ||
         (cached_ops.at(device_id).find(program_hash) == cached_ops.at(device_id).end())) {
-        auto j = get_base_json<operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
+        auto j = get_base_json<device_operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
         j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
         j["device_id"] = device_id;
         j["op_hash"] = program_hash;
@@ -386,8 +327,8 @@ inline std::string op_meta_data_serialized_json(
         j["optional_input_tensors"] = std::vector<json>{};
 
         auto perfModel = [&]() {
-            if constexpr (requires { operation_t::create_op_performance_model; }) {
-                return operation_t::create_op_performance_model(operation_attributes, tensor_args, tensor_return_value);
+            if constexpr (requires { device_operation_t::create_op_performance_model; }) {
+                return device_operation_t::create_op_performance_model(operation_attributes, tensor_args, tensor_return_value);
             } else {
                 return operation::OpPerformanceModel{};
             }
@@ -414,22 +355,6 @@ inline std::string op_meta_data_serialized_json(
 }
 
 #define TracyOpTTNNDevice(                                                                                           \
-    op_id, op_hash, is_cached, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors) \
-    std::string op_message = op_profiler::op_meta_data_serialized_json(                                              \
-        op_id,                                                                                                       \
-        op_hash,                                                                                                     \
-        is_cached,                                                                                                   \
-        device_id,                                                                                                   \
-        operation,                                                                                                   \
-        program,                                                                                                     \
-        input_tensors,                                                                                               \
-        optional_input_tensors,                                                                                      \
-        output_tensors);                                                                                             \
-    std::string op_text = fmt::format("id:{}", op_id);                                                               \
-    ZoneText(op_text.c_str(), op_text.size());                                                                       \
-    TracyMessage(op_message.c_str(), op_message.size());
-
-#define TracyOpTNNNDeviceV2(                                                                                           \
     operation, operation_id, device_id, program, program_hash, operation_attributes, tensor_args, tensor_return_value) \
     std::string op_message = op_profiler::op_meta_data_serialized_json(                                                \
         operation,                                                                                                     \
@@ -460,8 +385,6 @@ inline std::string op_meta_data_serialized_json(
 #else
 
 #define TracyOpTTNNDevice( \
-    op_id, op_hash, is_cached, device_id, operation, program, input_tensors, optional_input_tensors, output_tensors)
-#define TracyOpTNNNDeviceV2( \
     operation, operation_id, device_id, program, program_hash, operation_attributes, tensor_args, tensor_return_value)
 #define TracyOpTTNNHost(op_id, operation, input_tensors, output_tensors)
 #define TracyOpTTNNExternal(op_id, op, input_tensors)

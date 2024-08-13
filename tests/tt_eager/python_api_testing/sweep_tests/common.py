@@ -116,14 +116,26 @@ def align_to_interval(x, start_val, interval):
 
 
 def shapes_and_datagen(
-    shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_buffer_types, sanitize_args=True
+    shape_dict,
+    datagen_dict,
+    test_args_gen,
+    test_tt_dtypes,
+    test_tt_layouts,
+    test_buffer_types,
+    sanitize_args=True,
+    coregrid=[],
 ):
     num_shapes = shape_dict["num-shapes"]
 
     # Helper
     def _gen_args(input_shapes):
         args = test_args_gen(
-            input_shapes, test_tt_dtypes, test_tt_layouts, test_buffer_types, do_sanitize_args=sanitize_args
+            input_shapes,
+            test_tt_dtypes,
+            test_tt_layouts,
+            test_buffer_types,
+            do_sanitize_args=sanitize_args,
+            coregrid=coregrid,
         )
         args = list(args)
 
@@ -672,6 +684,32 @@ def shapes_and_datagen(
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
                 start_shape, end_shape, interval, _gen_tt_nn_bcast_shapes
+            ):
+                yield shapes, datagen_funcs, test_args
+
+        elif method == "concat_bw":
+
+            def _gen_concat_bw_shapes(shape):
+                shape1 = []
+                shape2 = []
+                grad_shape = []
+
+                num_dims = len(shape)
+
+                dim = random.randint(0, num_dims - 1)
+
+                for i in range(num_dims):
+                    shape1.append(shape[i])
+                    shape2.append(shape[i])
+                    if i == dim:
+                        grad_shape.append(shape1[i] + shape2[i])
+                    else:
+                        grad_shape.append(shape[i])
+
+                return [grad_shape, shape1, shape2]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
+                start_shape, end_shape, interval, _gen_concat_bw_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 

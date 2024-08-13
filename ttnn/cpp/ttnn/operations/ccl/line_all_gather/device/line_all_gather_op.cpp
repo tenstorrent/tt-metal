@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/ccl/line_all_gather/device/line_all_gather_op.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
+#include "tt_metal/impl/device/device_mesh_view.hpp"
 #include "tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -70,18 +71,7 @@ std::vector<Tensor> LineAllGather::create_output_tensors(const std::vector<Tenso
 }
 
 operation::ProgramWithCallbacks LineAllGather::create_program(const std::vector<Tensor> & input_tensors, std::vector<Tensor> &output_tensors) const {
-    AllGatherMode line_all_gather_mode = choose_all_gather_mode(input_tensors.at(0), output_tensors.at(0), dim);
-    switch (line_all_gather_mode) {
-        case AllGatherMode::RING_INTERLEAVED:
-        case AllGatherMode::SINGLE_TILE_HIGH_WIDTH_SHARDED:
-            return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
-        break;
-        case AllGatherMode::FULL_WORKER_GRID_SHARDED:
-            TT_THROW("Unsupported AllGatherMode");
-        break;
-        default:
-            TT_THROW("Unsupported AllGatherMode");
-    };
+    return all_gather_multi_core_with_workers(input_tensors[0], output_tensors[0], this->dim, this->num_links, this->ring_size, this->ring_index, this->receiver_device_id, this->sender_device_id, this->topology);
 }
 
 namespace operations {
@@ -104,14 +94,20 @@ Tensor line_all_gather(
             uint32_t num_devices = devices.size();
 
             uint32_t device_index = 0; // Initialize device index
-            uint32_t receiver_device_id = 0; // Initialize receiver device ID
-            uint32_t sender_device_id = 0; // Initialize sender device ID
+            std::optional<uint32_t> receiver_device_id = std::nullopt; // Initialize receiver device ID
+            std::optional<uint32_t> sender_device_id = std::nullopt; // Initialize sender device ID
 
             for (uint32_t i = 0; i < num_devices; ++i) {
                 if (devices[i] == input_tensor.device()) {
                     device_index = i;
-                    receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
-                    sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
+                    bool is_last_chip_in_clockwise_direction = i == (num_devices - 1);
+                    bool is_last_chip_in_counter_clockwise_direction = i == 0;
+                    receiver_device_id = is_last_chip_in_clockwise_direction ?
+                        std::nullopt :
+                        std::optional<chip_id_t>(devices.at(i+1)->id());
+                    sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+                        std::nullopt :
+                        std::optional<chip_id_t>(devices.at(i-1)->id());
                     break;
                 }
             }
@@ -124,6 +120,62 @@ Tensor line_all_gather(
         {input_tensor},
         output_tensors);
     return output_tensors.at(0);
+}
+
+Tensor line_all_gather(
+    const Tensor& input_tensor,
+    const uint32_t dim,
+    const uint32_t cluster_axis,
+    const DeviceMesh& device_mesh,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config) {
+
+    const auto view = DeviceMeshView(device_mesh);
+    const auto device_views = (cluster_axis == 0) ? view.get_column_views() : view.get_row_views();
+
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+
+    operation::launch_op(
+        [&dim, &num_links, &memory_config, &device_views](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+
+            const auto& input_tensor = input_tensors[0];
+            const DeviceMeshView::DeviceView* selected_view = nullptr;
+
+            uint32_t device_index = 0;
+            for (const auto& view : device_views) {
+                auto it = std::find(view.begin(), view.end(), input_tensor.device());
+                if (it != view.end()) {
+                    selected_view = &view;
+                    device_index = std::distance(view.begin(), it);
+                    break;
+                }
+            }
+
+            TT_ASSERT(selected_view != nullptr, "Device not found in any view");
+
+            uint32_t num_devices = selected_view->size();
+
+            bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);
+            bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
+            std::optional<chip_id_t> receiver_device_id = is_last_chip_in_clockwise_direction ?
+                std::nullopt :
+                std::optional<chip_id_t>((*selected_view)[(device_index + 1) % num_devices]->id());
+            std::optional<chip_id_t> sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+                std::nullopt :
+                std::optional<chip_id_t>((*selected_view)[(device_index + num_devices - 1) % num_devices]->id());
+
+            return operation::run(
+                ttnn::LineAllGather{
+                    dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
+                {input_tensor});
+        },
+        {input_tensor},
+        output_tensors);
+    return output_tensors.at(0);
+
 }
 
 } // namespace ccl

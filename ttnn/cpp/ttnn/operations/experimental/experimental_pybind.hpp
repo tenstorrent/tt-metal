@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "pybind11/pybind_fwd.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -19,5 +20,6 @@ void py_module(py::module& module) {
     // Paged update cache ops
     paged_cache::detail::bind_experimental_paged_cache_operations(module);
 }
+void py_module(pybind11::module& module);
 
 }  // namespace ttnn::operations::experimental

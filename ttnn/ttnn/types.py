@@ -46,6 +46,7 @@ CoreGrid = ttnn._ttnn.types.CoreGrid
 
 DeviceComputeKernelConfig = ttnn._ttnn.deprecated.tensor.DeviceComputeKernelConfig
 WormholeComputeKernelConfig = ttnn._ttnn.deprecated.tensor.WormholeComputeKernelConfig
+BlackholeComputeKernelConfig = WormholeComputeKernelConfig
 GrayskullComputeKernelConfig = ttnn._ttnn.deprecated.tensor.GrayskullComputeKernelConfig
 
 
@@ -83,3 +84,4 @@ CoreCoord = ttnn._ttnn.deprecated.tensor.CoreCoord
 
 UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
 UnaryOpType = ttnn._ttnn.activation.UnaryOpType
+BinaryOpType = ttnn._ttnn.operations.binary.BinaryOpType

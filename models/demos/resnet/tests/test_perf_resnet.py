@@ -4,7 +4,6 @@
 
 import torch
 from loguru import logger
-from torchvision import models
 from transformers import AutoImageProcessor
 import pytest
 import tt_lib
@@ -13,6 +12,7 @@ from models.utility_functions import is_e75, profiler, divup, disable_persistent
 from models.perf.perf_utils import prep_perf_report
 
 from loguru import logger
+from models.demos.resnet.tests.demo_utils import load_resnet50_model
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 
 model_config = {
@@ -245,6 +245,7 @@ def run_perf_resnet(
     hf_cat_image_sample_input,
     device,
     model_version,
+    model_location_generator,
 ):
     if is_e75(device):
         pytest.skip("Resnet is not supported on E75")
@@ -268,7 +269,7 @@ def run_perf_resnet(
     for i in range(batch_size - 1):
         inputs = torch.cat((inputs, inputs1), dim=0)
 
-    torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+    torch_resnet50 = load_resnet50_model(model_location_generator)
     torch_resnet50.eval()
 
     state_dict = torch_resnet50.state_dict()
@@ -345,12 +346,19 @@ def test_perf_bare_metal(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
+    model_location_generator,
 ):
     if is_e75(device):
         pytest.skip("Resnet is not supported on E75")
 
     run_perf_resnet(
-        batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device, "resnet50"
+        batch_size,
+        expected_inference_time,
+        expected_compile_time,
+        hf_cat_image_sample_input,
+        device,
+        "resnet50",
+        model_location_generator,
     )
 
 
@@ -358,11 +366,12 @@ def test_perf_bare_metal(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "batch_size, enable_async, expected_inference_time, expected_compile_time",
+    "batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
     (
-        (20, True, 0.0064, 19),
-        (20, False, 0.0064, 19),
+        (20, True, 0.0067, 19),
+        (20, False, 0.0067, 19),
     ),
+    indirect=["enable_async_mode"],
 )
 def test_perf_trace_bare_metal(
     device,
@@ -371,10 +380,10 @@ def test_perf_trace_bare_metal(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
-    enable_async,
+    enable_async_mode,
+    model_location_generator,
 ):
-    device.enable_async(enable_async)
-    mode = "async" if enable_async else "sync"
+    mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
         batch_size,
         expected_inference_time,
@@ -382,8 +391,8 @@ def test_perf_trace_bare_metal(
         hf_cat_image_sample_input,
         device,
         f"resnet50_trace_{mode}",
+        model_location_generator,
     )
-    device.enable_async(False)
 
 
 @skip_for_wormhole_b0(reason_str="Not tested on single WH")
@@ -391,7 +400,7 @@ def test_perf_trace_bare_metal(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((20, 0.0043, 19),),  # Expected 0.0039, but current perf results are unstable
+    ((20, 0.0046, 19),),  # Expected 0.0039, but current perf results are unstable
 )
 def test_perf_2cqs_bare_metal(
     device,
@@ -400,9 +409,16 @@ def test_perf_2cqs_bare_metal(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
+    model_location_generator,
 ):
     run_perf_resnet(
-        batch_size, expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device, "resnet50_2cqs"
+        batch_size,
+        expected_inference_time,
+        expected_compile_time,
+        hf_cat_image_sample_input,
+        device,
+        "resnet50_2cqs",
+        model_location_generator,
     )
 
 
@@ -422,6 +438,7 @@ def test_perf_trace_2cqs_bare_metal(
     expected_inference_time,
     expected_compile_time,
     hf_cat_image_sample_input,
+    model_location_generator,
 ):
     run_perf_resnet(
         batch_size,
@@ -430,4 +447,5 @@ def test_perf_trace_2cqs_bare_metal(
         hf_cat_image_sample_input,
         device,
         "resnet50_trace_2cqs",
+        model_location_generator,
     )

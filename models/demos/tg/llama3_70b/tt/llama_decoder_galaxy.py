@@ -10,6 +10,11 @@ from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 from models.demos.tg.llama3_70b.tt.llama_attention_galaxy import TtLlamaAttention_galaxy
 from models.demos.tg.llama3_70b.tt.llama_mlp_galaxy import TtLlamaMLP_galaxy
+from models.demos.t3000.llama2_70b.tt.llama_common import (
+    ShardTensor2dMesh,
+    ConcatMesh2DToTensor,
+)
+from models.demos.tg.llama3_70b.tt.llama_common import tt_all_gather
 
 
 class TtLlamaDecoder_galaxy:
@@ -75,7 +80,6 @@ class TtLlamaDecoder_galaxy:
         )
 
         self.get_decoder_config()
-        self.get_mlp_slice_mat()
         self.load_weights()
 
     def get_decoder_config(self):
@@ -116,8 +120,14 @@ class TtLlamaDecoder_galaxy:
                 False,
             ),
         )
-
-        self.ACT_MEMCFG = ttnn.create_sharded_memory_config(
+        self.ATTN_ACT_MEMCFG = ttnn.create_sharded_memory_config(
+            shape=(32, 2048 // 32),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.MLP_ACT_MEMCFG = ttnn.create_sharded_memory_config(
             shape=(32, 2048 // 8),
             core_grid=ttnn.CoreGrid(y=1, x=8),
             strategy=ttnn.ShardStrategy.WIDTH,
@@ -140,8 +150,11 @@ class TtLlamaDecoder_galaxy:
         attn_norm_str = f"{self.layer_name}.attention_norm.weight"
         ffn_norm_str = f"{self.layer_name}.ffn_norm.weight"
 
-        attn_norm_cache_str = f"{self.layer_name}.attention_norm_galaxy.weight"
-        ffn_norm_cache_str = f"{self.layer_name}.ffn_norm_galaxy.weight"
+        # attn_norm_cache_str = f"{self.layer_name}.attention_norm_galaxy.weight"
+        # ffn_norm_cache_str = f"{self.layer_name}.ffn_norm_galaxy.weight"
+
+        attn_norm_sharded_str = f"{self.layer_name}.attention_norm_sharded_galaxy.weight"
+        ffn_norm_sharded_str = f"{self.layer_name}.ffn_norm_sharded_galaxy.weight"
 
         pt_attn_norm = None
         pt_ffn_norm = None
@@ -149,40 +162,44 @@ class TtLlamaDecoder_galaxy:
             pt_attn_norm = self.state_dict[attn_norm_str].reshape([1, 1, -1, 32])
             pt_ffn_norm = self.state_dict[ffn_norm_str].reshape([1, 1, -1, 32])
 
-        self.attn_norm = ttnn.as_tensor(
+        # self.attn_norm = ttnn.as_tensor(
+        #     pt_attn_norm,
+        #     dtype=ttnn.bfloat16,
+        #     layout=ttnn.ROW_MAJOR_LAYOUT,
+        #     device=self.device_mesh,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+        #     cache_file_name=self.cache_path / attn_norm_cache_str,
+        # )
+
+        self.attn_norm_sharded = ttnn.as_tensor(
             pt_attn_norm,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device_mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-            cache_file_name=self.cache_path / attn_norm_cache_str,
+            mesh_mapper=ShardTensor2dMesh(self.device_mesh, (2, None), self.cluster_shape),
+            cache_file_name=self.cache_path / attn_norm_sharded_str,
         )
 
-        self.ffn_norm = ttnn.as_tensor(
+        # self.ffn_norm = ttnn.as_tensor(
+        #     pt_ffn_norm,
+        #     dtype=ttnn.bfloat16,
+        #     layout=ttnn.ROW_MAJOR_LAYOUT,
+        #     device=self.device_mesh,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+        #     cache_file_name=self.cache_path / ffn_norm_cache_str,
+        # )
+
+        self.ffn_norm_sharded = ttnn.as_tensor(
             pt_ffn_norm,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device_mesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
-            cache_file_name=self.cache_path / ffn_norm_cache_str,
-        )
-
-    def get_mlp_slice_mat(self):
-        combined_weight_matrix = torch.zeros(1, 32, 8192, 2048)
-
-        for i in range(32):
-            start_idx = (i % 4) * 2048
-            weight_matrix = torch.eye(2048)
-            combined_weight_matrix[0, i, start_idx : start_idx + 2048, :] = weight_matrix
-
-        self.mlp_slice_mat = ttnn.from_torch(
-            combined_weight_matrix,
-            dtype=ttnn.bfloat4_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=1),
+            mesh_mapper=ShardTensor2dMesh(self.device_mesh, (2, None), self.cluster_shape),
+            cache_file_name=self.cache_path / ffn_norm_sharded_str,
         )
 
     def __call__(
@@ -198,6 +215,34 @@ class TtLlamaDecoder_galaxy:
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
+    def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
+        # Run distributed rmsnorm part 1
+        tt_stats = ttnn.experimental.operations.primary.rmsnorm_pre_allgather(
+            inp, compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG, output_dtype=ttnn.bfloat16
+        )
+
+        tt_stats = ttnn.reshape(
+            tt_stats, ttnn.Shape((1, 1, 32, 32), (1, 1, 32, 32))
+        )  # TODO: Figure out why we need this
+
+        tt_stats = tt_all_gather(
+            tt_stats,
+            device_mesh=self.device_mesh,
+            dim=3,
+            cluster_axis=1,
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Run distributed rmsnorm part 2
+        tt_out = ttnn.experimental.operations.primary.rmsnorm_post_allgather(
+            inp, tt_stats, epsilon, gamma, compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG
+        )
+
+        tt_stats.deallocate(True)
+
+        return tt_out
+
     def decode_forward(
         self,
         xs: List[ttnn.Tensor],
@@ -205,19 +250,18 @@ class TtLlamaDecoder_galaxy:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
     ) -> List[ttnn.Tensor]:
-        # Not in-place RMSNorm
-        attn_norm_out = ttnn.rms_norm(
-            xs,
+        xs_interleaved = ttnn.to_memory_config(xs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        attn_norm_out = self.tt_distributed_rmsnorm(
+            xs_interleaved,
             epsilon=self.norm_eps,
-            weight=self.attn_norm,
-            program_config=self.LN_PROGCFG,
-            memory_config=self.LN_OUTPUT_MEMCFG,
-            compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG,
+            gamma=self.attn_norm_sharded,
         )
 
+        attn_norm_out = ttnn.to_memory_config(attn_norm_out, memory_config=self.ATTN_ACT_MEMCFG)
         attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, attn_masks)
+        attn_outs = ttnn.to_memory_config(attn_outs, memory_config=self.MLP_ACT_MEMCFG)
 
-        # Add attn output to residiual
         output = xs
         output = ttnn.add(
             output,
@@ -226,26 +270,14 @@ class TtLlamaDecoder_galaxy:
         )
         attn_outs.deallocate(True)
 
-        # Not in-place RMSNorm
-        ffn_norm_out = ttnn.rms_norm(
-            output,
+        output_interleaved = ttnn.to_memory_config(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ffn_norm_out = self.tt_distributed_rmsnorm(
+            output_interleaved,
             epsilon=self.norm_eps,
-            weight=self.ffn_norm,
-            program_config=self.LN_PROGCFG,
-            memory_config=self.LN_OUTPUT_MEMCFG,
-            compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG,
+            gamma=self.ffn_norm_sharded,
         )
 
-        # TODO: Slice the ffn_norm_out tensor get [1, 1, 32, 2048] per chip
-        ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ffn_norm_out = ttnn.matmul(
-            ffn_norm_out,
-            self.mlp_slice_mat,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=self.ACT_MEMCFG)
-
+        ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=self.MLP_ACT_MEMCFG)
         ffn_out = self.mlp(ffn_norm_out)
 
         ### residual add

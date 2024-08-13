@@ -713,7 +713,7 @@ def export_operation(python_fully_qualified_name, operation, is_method):
     global REGISTERED_OPERATIONS
 
     if operation in REGISTERED_OPERATIONS:
-        raise RuntimeError(f'Operarion with name "{python_fully_qualified_name}" is already registered')
+        raise RuntimeError(f'Operation with name "{python_fully_qualified_name}" is already registered')
 
     REGISTERED_OPERATIONS.add(operation)
 

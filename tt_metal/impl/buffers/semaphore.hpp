@@ -17,16 +17,11 @@ namespace tt_metal {
 // Semaphores are statically allocated withing range [SEMAPHORE_BASE, SEMAPHORE_BASE + SEMAPHORE_SIZE]
 class Semaphore {
    public:
-    Semaphore(
-        const CoreRangeSet &core_range_set,
-        uint32_t address,
-        uint32_t initial_value) : core_range_set_(core_range_set), address_(address), initial_value_(initial_value), core_type_(CoreType::WORKER) {}
+    Semaphore(const CoreRangeSet &core_range_set, uint32_t id, uint32_t initial_value) :
+        core_range_set_(core_range_set), id_(id), initial_value_(initial_value), core_type_(CoreType::WORKER) {}
 
-    Semaphore(
-        const CoreRangeSet &core_range_set,
-        uint32_t address,
-        uint32_t initial_value,
-        CoreType core_type) : core_range_set_(core_range_set), address_(address), initial_value_(initial_value), core_type_(core_type) {}
+    Semaphore(const CoreRangeSet &core_range_set, uint32_t id, uint32_t initial_value, CoreType core_type) :
+        core_range_set_(core_range_set), id_(id), initial_value_(initial_value), core_type_(core_type) {}
 
     Semaphore(const Semaphore &other);
 
@@ -38,9 +33,10 @@ class Semaphore {
 
     constexpr uint32_t size() const { return SEMAPHORE_SIZE / NUM_SEMAPHORES; }
 
-    uint32_t id() const { return (address_ - SEMAPHORE_BASE) / L1_ALIGNMENT; }
+    uint32_t id() const { return id_; }
 
-    uint32_t address() const { return address_; }
+    // TODO: will be removed, calculated in program compile instead
+    uint32_t address() const;
 
     CoreRangeSet core_range_set() const { return core_range_set_; }
 
@@ -52,7 +48,7 @@ class Semaphore {
 
    private:
     CoreRangeSet core_range_set_;             // Ranges of cores where this semaphore is initialized
-    uint32_t address_;
+    uint32_t id_;
     uint32_t initial_value_;              // Initial value of semaphore
     CoreType core_type_;                       // Type of core. ETH, WORKER.
 };

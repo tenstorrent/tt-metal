@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_pcc, divup, is_grayskull
 
 
@@ -91,7 +92,7 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
 
     cost = ttl.tensor.Tensor(cos_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
     sint = ttl.tensor.Tensor(sin_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    xtt = ttl.tensor.rotary_embedding(xt, cost, sint, output_mem_config=out_mem_config)
+    xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, memory_config=out_mem_config)
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -165,7 +166,7 @@ def test_rotary_embedding_decode(
 
     cost = ttl.tensor.Tensor(cos_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
     sint = ttl.tensor.Tensor(sin_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    xtt = ttl.tensor.rotary_embedding(xt, cost, sint, token_idx, out_mem_config)
+    xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx, memory_config=out_mem_config)
     if out_sharded:
         xtt = ttl.tensor.sharded_to_interleaved(xtt)
 
@@ -240,7 +241,7 @@ def test_rotary_embedding_prefill_fp32(
 
     cost = ttl.tensor.Tensor(cos_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
     sint = ttl.tensor.Tensor(sin_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    xtt = ttl.tensor.rotary_embedding(xt, cost, sint, output_mem_config=out_mem_config)
+    xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, memory_config=out_mem_config)
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -312,7 +313,7 @@ def test_rotary_embedding_decode_fp32(
 
     cost = ttl.tensor.Tensor(cos_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
     sint = ttl.tensor.Tensor(sin_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    xtt = ttl.tensor.rotary_embedding(xt, cost, sint, token_idx, out_mem_config)
+    xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx, memory_config=out_mem_config)
     if out_sharded:
         xtt = ttl.tensor.sharded_to_interleaved(xtt)
 

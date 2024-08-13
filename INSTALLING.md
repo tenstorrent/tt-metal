@@ -120,9 +120,15 @@ We use CMake for our build flows.
 source python_env/bin/activate
 ```
 
-Note about Python environments: You do not have to use `create_venv.sh`. If you
-are less familiar with Python and its various environment tools, just use
-`create_venv.sh` as shown above and the pre-built environment.
+> [!NOTE]
+>
+> Note about Python environments: You do not have to use `create_venv.sh`. If you
+> are less familiar with Python and its various environment tools, just use
+> `create_venv.sh` as shown above and the pre-built environment.
+>
+> If you do choose to manage your own environment, please note that you must
+> use Pip 20.1.1 or lower to install this project. This is the highest version
+> of Pip that supports editable installs in the way that we use it.
 
 ### Option 2: From wheel
 
@@ -147,7 +153,7 @@ pip install -r tt_metal/python_env/requirements-dev.txt
 
 5. Start coding
 
-You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://tenstorrent.github.io/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
+You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/ttnn/latest/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://tenstorrent.github.io/tt-metalium/latest//tt_metal/examples/index.html).
 
 ---
 

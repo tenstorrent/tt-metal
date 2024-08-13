@@ -282,7 +282,7 @@ class TtLlamaAttention_optimized:
         key_layer = tt_lib.tensor.nlp_kv_cache_load_slice(keys, 0, padded_layer_past_len)
 
         # PRE-SOFTMAX MM
-        key_layer_transposed = tt_lib.tensor.transpose(
+        key_layer_transposed = ttnn.transpose(
             key_layer,
             -2,
             -1,
@@ -414,12 +414,12 @@ class TtLlamaAttention_optimized:
             query_layer,  # [bsz, n_local_heads, seq_len, head_dim]
             key_layer,  # [bsz, n_local_kv_heads, seq_len, head_dim]
             value_layer,  # [bsz, n_local_kv_heads, seq_len, head_dim]
-        ) = tt_lib.tensor.nlp_create_qkv_heads(
+        ) = ttnn.experimental.nlp_create_qkv_heads(
             fused_query_key_value,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            output_mem_config=self.model_config["DRAM_MEMCFG"],
+            memory_config=self.model_config["DRAM_MEMCFG"],
         )
 
         fused_query_key_value.deallocate(True)
@@ -427,14 +427,14 @@ class TtLlamaAttention_optimized:
         # ROTARY EMBEDDINGS
         # Q Rotary Embeddings
         # query_layer: ttnn.Shape([1, 8, seq_len, 128]) -> [bsz, n_local_heads, seq_len, head_dim]
-        query_layer_ret = ttnn.experimental.tensor.rotary_embedding_llama(
+        query_layer_ret = ttnn.experimental.rotary_embedding_llama(
             query_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
         query_layer.deallocate(True)
 
         # K Rotary Embeddings
         # key_layer: ttnn.Shape([1, 1, seq_len, 128]) -> [bsz, n_local_kv_heads, seq_len, head_dim]
-        key_layer_ret = ttnn.experimental.tensor.rotary_embedding_llama(
+        key_layer_ret = ttnn.experimental.rotary_embedding_llama(
             key_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
         key_layer.deallocate(True)

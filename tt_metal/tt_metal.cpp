@@ -37,8 +37,8 @@ void ConfigureKernelGroup(
     }
 }
 
-std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
-    std::optional<uint32_t> address = nullopt;
+std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange &core_range) {
+    std::optional<uint32_t> semaphore_id = std::nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -56,7 +56,7 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
         }
     }
 
-    std::optional<uint32_t> uninitialized_sem_id = nullopt;
+    std::optional<uint32_t> uninitialized_sem_id = std::nullopt;
     for (int sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
         if (semaphore_histogram.at(sem_id) == 0) {
             uninitialized_sem_id = sem_id;
@@ -65,12 +65,12 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
     }
 
     if (uninitialized_sem_id.has_value()) {
-        address = SEMAPHORE_BASE + (L1_ALIGNMENT * uninitialized_sem_id.value());
+        semaphore_id =  uninitialized_sem_id.value();
     } else {
         TT_THROW("Unable to initialize semaphores on core range " + core_range.str());
     }
 
-    return address;
+    return semaphore_id;
 }
 
 inline void SetRuntimeArgs(
@@ -190,6 +190,15 @@ std::map<chip_id_t, Device *> CreateDevices(
 }
 
 void CloseDevices(std::map<chip_id_t, Device *> devices) {
+    // Global Sync across all devices in the pool.
+    // We need to ensure that commands sent to each device have been completed
+    // before closing any device + modifying routing info.
+    // If this is not done, non-blocking CCLs followed by a close will hang, since
+    // the main thread will modify device state while the CCL is running on device.
+    for (const auto &[device_id, dev] : devices) {
+        dev->synchronize(); // Synchronize worker queue
+        detail::Synchronize(dev); // Synchronize device
+    }
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     std::map<chip_id_t, Device *> mmio_devices = {};
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
@@ -513,9 +522,9 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done)
         detail::DispatchStateCheck(false);
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
-            program.finalize_rt_args();
-            program.set_finalized();
+            program.finalize();
         }
+
         detail::WriteRuntimeArgsToDevice(device, program);
         detail::ConfigureDeviceWithProgram(device, program);
 
@@ -535,7 +544,7 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done)
 
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
-                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg);
+                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, device->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
@@ -622,6 +631,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
 
     for (CoreType core_type : core_types) {
         for (auto& kg : program.get_kernel_groups(core_type)) {
+            uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base;
             for (const CoreRange &core_range : kg.core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -630,24 +640,11 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
                         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
                             auto& optional_id = kg.kernel_ids[dispatch_class];
                             if (optional_id) {
-                                const auto kernel = detail::GetKernel(program, optional_id.value());
+                                const auto &kernel = detail::GetKernel(program, optional_id.value());
                                 const auto &rt_args = kernel->runtime_args(logical_core);
 
-                                uint32_t kernel_config_base;
-                                // TODO: get this from the dispatch ring buffer
-                                if (core_type == CoreType::WORKER) {
-                                    kernel_config_base = L1_KERNEL_CONFIG_BASE;
-                                } else {
-                                    TT_ASSERT(core_type == CoreType::ETH);
-                                    if (kernel->is_idle_eth()) {
-                                        kernel_config_base = IDLE_ERISC_L1_KERNEL_CONFIG_BASE;
-                                    } else {
-                                        kernel_config_base = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
-                                    }
-                                }
-
                                 if (rt_args.size() > 0) {
-                                    auto args_base_addr = kernel_config_base + kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset;
+                                    auto rt_args_addr = kernel_config_base + kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset;
                                     log_trace(
                                               tt::LogMetal,
                                               "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",
@@ -655,9 +652,9 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
                                               rt_args.size(),
                                               logical_core.str(),
                                               physical_core.str(),
-                                              args_base_addr,
+                                              rt_args_addr,
                                               rt_args);
-                                    tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, args_base_addr);
+                                    tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, rt_args_addr);
                                 }
 
                                 const auto &common_rt_args = kernel->common_runtime_args();
@@ -683,9 +680,9 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
     }
 }
 
-void CompileProgram(Device *device, Program &program) {
+void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
     ZoneScoped;
-    program.compile(device);
+    program.compile(device, fd_bootloader_mode);
 }
 
 void AllocateBuffer(Buffer *buffer, bool bottom_up) {
@@ -712,19 +709,11 @@ void EnableAllocs(Device *device) { tt::tt_metal::allocator::enable_allocs(*(dev
 }  // namespace detail
 
 size_t GetNumAvailableDevices() {
-#ifdef TT_METAL_VERSIM_DISABLED
     return tt::Cluster::instance().number_of_user_devices();
-#else
-    return 1;
-#endif
 }
 
 size_t GetNumPCIeDevices() {
-#ifdef TT_METAL_VERSIM_DISABLED
     return tt::Cluster::instance().number_of_pci_devices();
-#else
-    return 1;
-#endif
 }
 
 chip_id_t GetPCIeDeviceID(chip_id_t device_id){
@@ -746,6 +735,7 @@ Device *CreateDevice(
 
 Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs) {
     ZoneScoped;
+    tt::tt_metal::dispatch_core_manager::initialize();
     Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
@@ -828,23 +818,23 @@ uint32_t CreateSemaphore(
             } else {
                 crs = c;
             }
-            std::optional<uint32_t> address;
+            std::optional<uint32_t> semaphore_id;
             TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
             for (const auto &core_range : crs.ranges()) {
                 CoreCoord start_core = core_range.start_coord;
                 CoreCoord end_core = core_range.end_coord;
-                std::optional<uint32_t> addr_candidate = get_semaphore_address(program, core_range);
-                if (!address.has_value()) {
-                    address = addr_candidate;
+                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range);
+                if (!semaphore_id.has_value()) {
+                    semaphore_id = semaphore_id_candidate;
                 } else {
-                    address = std::max(address.value(), addr_candidate.value());
+                    semaphore_id = std::max(semaphore_id.value(), semaphore_id.value());
                 }
             }
-            TT_FATAL(address.has_value(), "Unable to initialize Semaphore!");
+            TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
 
-            program.add_semaphore(crs, address.value(), initial_value, core_type);
+            program.add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
 
-            return address.value();
+            return semaphore_id.value();
         },
         core_spec);
 }

@@ -11,6 +11,7 @@ import pytest
 import torch
 import tt_lib as ttl
 import random
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
@@ -20,7 +21,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_r
 
 def tt_transpose_nh(x, device, dtype, layout, input_mem_config, output_mem_config):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.transpose(t0, 0, 2, output_mem_config=output_mem_config)
+    t1 = ttnn.transpose(t0, 0, 2, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

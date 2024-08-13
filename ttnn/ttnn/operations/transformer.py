@@ -52,6 +52,11 @@ ttnn.attach_golden_function(
     golden_function=_golden_function,
 )
 
+ttnn.attach_golden_function(
+    ttnn.experimental.transformer.split_query_key_value_and_split_heads,
+    golden_function=_golden_function,
+)
+
 
 def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask, **_):
     import torch
@@ -116,7 +121,7 @@ def _golden_function(x, cos_cached, sin_cached, token_idx, **_):
     return pt_out
 
 
-ttnn.attach_golden_function(ttnn.transformer.rotary_embedding, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.experimental.rotary_embedding, golden_function=_golden_function)
 
 
 __all__ = []

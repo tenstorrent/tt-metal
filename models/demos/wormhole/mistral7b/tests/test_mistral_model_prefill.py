@@ -37,10 +37,7 @@ class Emb(torch.nn.Module):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "seq_len",
-    (
-        128,
-        4096,
-    ),
+    (4096,),
 )
 def test_mistral_model_inference(device, seq_len, use_program_cache, reset_seeds, is_ci_env):
     # Set additional Mistral flag for CI

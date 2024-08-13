@@ -94,12 +94,12 @@ operation::ProgramWithCallbacks concatenate_heads_multi_core(const Tensor &a, Te
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/device/kernels/reader_tm_tile_layout_concat_heads.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/device/kernels/dataflow/reader_tm_tile_layout_concat_heads.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/device/kernels/writer_tm_tile_layout_concat_heads.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/device/kernels/dataflow/writer_tm_tile_layout_concat_heads.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

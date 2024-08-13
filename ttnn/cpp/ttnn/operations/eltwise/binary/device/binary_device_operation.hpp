@@ -8,6 +8,7 @@
 #include <optional>
 #include <variant>
 
+#include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -21,47 +22,18 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::binary {
-
-constexpr uint8_t DefaultQueueId = 0;
-enum class BinaryOpType {
-    ADD,
-    SUB,
-    MUL,
-    GT,
-    LT,
-    LTE,
-    GTE,
-    EQ,
-    NE,
-    SQUARED_DIFFERENCE,
-    BIAS_GELU,
-    LOGADDEXP,
-    LOGICAL_AND,
-    LOGICAL_OR,
-    LDEXP,
-    LOGADDEXP2,
-    DIV_FAST
-};
-
-using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
-
-namespace utils {
-
-std::map<string, string> get_defines(
-    BinaryOpType op_type,
-    const std::optional<DataType> in_dtype = std::nullopt,
-    const std::optional<DataType> out_dtype = std::nullopt,
-    const std::optional<FusedActivations> fused_activations = std::nullopt);
-
-}  // namespace utils
 
 struct BinaryDeviceOperation {
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
         bool in_place;
-        const std::optional<FusedActivations> activations;
+        const std::optional<unary::FusedActivations> activations;
+        const std::optional<unary::UnaryWithParam> input_tensor_a_activation;
         const MemoryConfig memory_config;
         const DataType dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
@@ -193,6 +165,20 @@ struct BinaryDeviceOperation {
         const operation_attributes_t& attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> operator()(
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        BinaryOpType binary_op_type,
+        bool in_place,
+        const std::optional<const DataType>& output_dtype,
+        const std::optional<MemoryConfig>& memory_config,
+        std::optional<Tensor> optional_output_tensor,
+        std::optional<unary::FusedActivations> activations,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation);
 };
 
 }  // namespace ttnn::operations::binary
+
+
+TTNN_REGISTER_OPERATION(ttnn::prim, binary, ttnn::operations::binary::BinaryDeviceOperation);

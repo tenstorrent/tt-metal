@@ -95,9 +95,14 @@ def ResnetLinear(
 
     if transpose:
         assert weight.get_legacy_shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
-        weight_T = tt_lib.tensor.transpose(weight, -2, -1)
+        weight_T = ttnn.transpose(weight, -2, -1)
     else:
-        assert weight.get_legacy_shape() == [1, 1, in_features, out_features], "weight does not have the expected shape"
+        assert weight.get_legacy_shape() == [
+            1,
+            1,
+            in_features,
+            out_features,
+        ], "weight does not have the expected shape"
         weight_T = weight
     if device is not None:
         weight_T = weight_T.to(device)
@@ -166,7 +171,7 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
                 x, x.shape_without_padding(), device, target_layout, output_mem_config
             )
         else:
-            return tt_lib.tensor.untilize(x, output_mem_config, use_multicore=True)
+            return ttnn.untilize(x, memory_config=output_mem_config, use_multicore=True)
     else:
         assert False
 
@@ -180,7 +185,13 @@ def unpad_from_zero(x, desired_shape):
         if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
             x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         x = x.unpad(
-            (0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1)
+            (0, 0, 0, 0),
+            (
+                desired_shape[0] - 1,
+                desired_shape[1] - 1,
+                desired_shape[2] - 1,
+                desired_shape[3] - 1,
+            ),
         )
         x = x.to_torch().to(torch.float)
     return x
@@ -942,7 +953,18 @@ hardcoded_conv_blocking_and_parallelization_config = {
     },
     20: {
         (250880, 64): [16 * 4, 1280, 64, 128, 64, 2560, (12, 9), 2560, 64, 98],
-        (62720, 64): [64 * 3, 320, 64, 64, 64, 640, (12, 9), 640, 64, 98],  # try actblock h = 320, subblock h = 64
+        (62720, 64): [
+            64 * 3,
+            320,
+            64,
+            64,
+            64,
+            640,
+            (12, 9),
+            640,
+            64,
+            98,
+        ],  # try actblock h = 320, subblock h = 64
         (15680, 128): [128 * 3, 160, 128, 32, 128, 160, (12, 9), 160, 128, 98],
         (3936, 256): [256, 352, 32, 32, 32, 352, (12, 8), 352, 32, 12],
         (992, 512): [512, 96, 64, 96, 64, 96, (11, 8), 96, 64, 11],
@@ -1139,7 +1161,10 @@ class Bottleneck:
         conv2_output_padded_face_size = _nearest_32(
             self.conv2_output_shape[0] * self.conv2_output_shape[1] * self.conv2_output_shape[2]
         )
-        assert (conv2_output_padded_face_size, width) in hardcoded_conv_blocking_and_parallelization_config[batch_size]
+        assert (
+            conv2_output_padded_face_size,
+            width,
+        ) in hardcoded_conv_blocking_and_parallelization_config[batch_size]
         [
             act_block_w,
             act_block_h,
@@ -1261,9 +1286,11 @@ class Bottleneck:
             self.conv3_output_shape[0] * self.conv3_output_shape[1] * self.conv3_output_shape[2]
         )
         matmul_config = None
-        assert (conv3_as_mm_padded_act_height, width, planes * self.expansion) in hardcoded_matmul_config_conv[
-            batch_size
-        ]
+        assert (
+            conv3_as_mm_padded_act_height,
+            width,
+            planes * self.expansion,
+        ) in hardcoded_matmul_config_conv[batch_size]
         # logger.info("Setting matmul config for 1x1 conv (third conv in module)")
         matmul_config = hardcoded_matmul_config_conv[batch_size][
             (conv3_as_mm_padded_act_height, width, planes * self.expansion)
@@ -1632,7 +1659,12 @@ class ResNet(nn.Module):
             )
         self.conv1_output_shape = compute_conv_output_shape(
             self.conv1_params,
-            [batch_size, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes],
+            [
+                batch_size,
+                self.conv_input_face_shape_hw[0],
+                self.conv_input_face_shape_hw[1],
+                self.inplanes,
+            ],
         )
         self.relu = ttnn.relu
 
@@ -1768,7 +1800,10 @@ class ResNet(nn.Module):
         ).to(tt_lib.tensor.Layout.TILE)
         fc_bias = pad_weight(state_dict[f"{self.base_address_with_dot}fc.bias"])
         fc_bias = tt_lib.tensor.Tensor(
-            fc_bias.reshape(-1).tolist(), fc_bias.shape, model_config["WEIGHTS_DTYPE"], tt_lib.tensor.Layout.ROW_MAJOR
+            fc_bias.reshape(-1).tolist(),
+            fc_bias.shape,
+            model_config["WEIGHTS_DTYPE"],
+            tt_lib.tensor.Layout.ROW_MAJOR,
         ).to(tt_lib.tensor.Layout.TILE)
         self.fc = ResnetLinear(
             512 * block.expansion,
@@ -1923,7 +1958,13 @@ class ResNet(nn.Module):
                     (downsample_output_padded_face_size, self.inplanes, downsample_output_channels)
                 ]
                 assert stride == 2
-                downsample_op_params = [batch_size, layer_input_shape[1], layer_input_shape[2], stride, stride]
+                downsample_op_params = [
+                    batch_size,
+                    layer_input_shape[1],
+                    layer_input_shape[2],
+                    stride,
+                    stride,
+                ]
                 # logger.info("Calling ds op and matmul op, input shape - ", layer_input_shape)
 
                 self.downsample_conv_on_tt = resnet50_1x1_conv_s2_as_downsample_and_matmul(
@@ -2082,7 +2123,10 @@ class ResNet(nn.Module):
         NHW_even = _nearest_y(NHW // stride_h, self.first_conv_num_cores_nhw * 32)
 
         shard_spec = tt_lib.tensor.ShardSpec(
-            self.fold_grid, [NHW // self.n_fold_cores, x.shape[3]], tt_lib.tensor.ShardOrientation.ROW_MAJOR, False
+            self.fold_grid,
+            [NHW // self.n_fold_cores, x.shape[3]],
+            tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+            False,
         )
         x = torch2tt_tensor(
             x,
@@ -2124,7 +2168,10 @@ class ResNet(nn.Module):
         if not self.sharded:
             original_A_cl_host_shape = x.get_legacy_shape()
             x = x.reshape(
-                x.get_legacy_shape()[0], x.get_legacy_shape()[1], 1, x.get_legacy_shape()[2] * x.get_legacy_shape()[3]
+                x.get_legacy_shape()[0],
+                x.get_legacy_shape()[1],
+                1,
+                x.get_legacy_shape()[2] * x.get_legacy_shape()[3],
             )
 
             x = x.to(self.device, self.memory_config)  # to l1
@@ -2147,7 +2194,9 @@ class ResNet(nn.Module):
                 False,
             )
             mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                tt_lib.tensor.BufferType.L1,
+                shard_spec,
             )
             if write_event is not None:
                 tt_lib.device.WaitForEvent(self.device, 0, write_event)
@@ -2280,7 +2329,10 @@ class ResNet(nn.Module):
                             )
                         }
                     ),
-                    [x.volume() // x_shape[-1], x_shape[-1] // (self.end_grid_size[0] * self.end_grid_size[1])],
+                    [
+                        x.volume() // x_shape[-1],
+                        x_shape[-1] // (self.end_grid_size[0] * self.end_grid_size[1]),
+                    ],
                     tt_lib.tensor.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
@@ -2292,10 +2344,15 @@ class ResNet(nn.Module):
 
         unpadded_shape = x.shape_without_padding()
 
-        x = tt_lib.tensor.untilize_with_unpadding(
+        x = ttnn.untilize_with_unpadding(
             x,
-            (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
-            self.width_sharded_memory_config,
+            output_tensor_end=(
+                unpadded_shape[0] - 1,
+                unpadded_shape[1] - 1,
+                unpadded_shape[2] - 1,
+                unpadded_shape[3] - 1,
+            ),
+            memory_config=self.width_sharded_memory_config,
         )
 
         x_shape = x.get_legacy_shape()
@@ -2347,11 +2404,13 @@ class ResNet(nn.Module):
             x_shape[3] - 1,
         ]
         if self.sharded:
-            x = tt_lib.tensor.untilize_with_unpadding(
-                x, unpadded_shape_end, output_mem_config=self.width_sharded_memory_config
+            x = ttnn.untilize_with_unpadding(
+                x,
+                output_tensor_end=unpadded_shape_end,
+                memory_config=self.width_sharded_memory_config,
             )
         else:
-            x = tt_lib.tensor.untilize(x, self.memory_config, use_multicore=True)
+            x = ttnn.untilize(x, memory_config=self.memory_config, use_multicore=True)
             x = ttnn.slice(x, (0, 0, 0, 0), unpadded_shape_end, memory_config=self.memory_config)
 
         x_shape = x.get_legacy_shape()
@@ -2390,10 +2449,10 @@ class ResNet(nn.Module):
 
         x = self.fc(x)
         x_shape = x.shape_without_padding()
-        x = tt_lib.tensor.untilize_with_unpadding(
+        x = ttnn.untilize_with_unpadding(
             x,
-            (x_shape[0] - 1, x_shape[1] - 1, x_shape[2] - 1, 1000 - 1),
-            self.memory_config if final_out_mem_config is None else final_out_mem_config,
+            output_tensor_end=(x_shape[0] - 1, x_shape[1] - 1, x_shape[2] - 1, 1000 - 1),
+            memory_config=self.memory_config if final_out_mem_config is None else final_out_mem_config,
         )
         x_shape = x.get_legacy_shape()
         x = x.reshape(

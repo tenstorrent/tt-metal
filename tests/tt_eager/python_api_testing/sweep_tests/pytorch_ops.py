@@ -502,9 +502,8 @@ def polygamma(x, *args, k, **kwargs):
     return torch.special.polygamma(n=k, input=x)
 
 
-def logical_xori(x, *args, **kwargs):
-    value = kwargs.pop("immediate")
-    result = torch.logical_xor(x, torch.tensor(value, dtype=torch.int32))
+def logical_xor_(x, y, *args, **kwargs):
+    result = x.logical_xor_(y)
     return result
 
 
@@ -744,9 +743,8 @@ def multigammaln(x, *args, **kwargs):
     return torch.special.multigammaln(x, 4)
 
 
-def logical_andi(x, *args, **kwargs):
-    value = kwargs.pop("immediate")
-    result = torch.logical_and(x, torch.tensor(value, dtype=torch.int32))
+def logical_and_(x, y, *args, **kwargs):
+    result = x.logical_and_(y)
     return result
 
 
@@ -960,9 +958,8 @@ def logical_and(x, y, *args, **kwargs):
     return result
 
 
-def logical_noti(x, *args, **kwargs):
-    immediate = kwargs.pop("immediate")
-    result = torch.logical_not(torch.full_like(x, immediate)).to(torch.int32)
+def logical_not_(x, *args, **kwargs):
+    result = x.logical_not_()
     return result
 
 
@@ -1162,9 +1159,8 @@ def logical_or(x, y, *args, **kwargs):
     return torch.logical_or(x, y)
 
 
-def logical_ori(x, *args, **kwargs):
-    value = kwargs.pop("immediate")
-    result = torch.logical_or(x, torch.tensor(value, dtype=torch.int32))
+def logical_or_(x, y, *args, **kwargs):
+    result = x.logical_or_(y)
     return result
 
 
@@ -1926,6 +1922,162 @@ def clamp_bw(x, y, scalar, *args, **kwargs):
     return in_data.grad
 
 
+def fmod_bw(x, y, value, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+
+    pyt_y = torch.fmod(in_data, value)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def frac_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+
+    pyt_y = torch.frac(in_data)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def gelu_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+
+    fast_and_approx = kwargs.pop("fast_and_approx")
+    approximate = "tanh" if fast_and_approx else "none"
+
+    pyt_y = torch.nn.functional.gelu(in_data, approximate=approximate)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def hardshrink_bw(x, y, _lambda, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+
+    pyt_y = torch.nn.functional.hardshrink(in_data, _lambda)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def hardtanh_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+
+    if "low" in kwargs and "high" in kwargs:
+        low = kwargs.pop("low")
+        high = kwargs.pop("high")
+        pyt_y = torch.nn.functional.hardtanh(in_data, min_val=low, max_val=high)
+
+        in_data.retain_grad()
+        pyt_y.backward(gradient=grad_data)
+
+    else:
+        pyt_y = torch.nn.functional.hardtanh(in_data)
+
+        in_data.retain_grad()
+        pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def hypot_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = torch.hypot(in_data, other_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
+def i0_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+    in_data.retain_grad()
+
+    pyt_y = torch.i0(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def ceil_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.ceil(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def celu_bw(x, y, alpha, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.celu(in_data, alpha)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def cosh_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.cosh(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def cos_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.cos(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
     x = x.to(torch.float32)
@@ -2066,3 +2218,145 @@ def interleaved_to_sharded_partial(x, num_slices, *args, **kwargs):
 def interleaved_to_sharded_partial_coregrid(x, num_slices, x_core, ycore, *args, **kwargs):
     res = torch.ones(x.shape).bfloat16().float()
     return res
+
+
+def log10_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log10(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def log2_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log2(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def log1p_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log1p(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def log_sigmoid_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.nn.functional.logsigmoid(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def logaddexp_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = torch.logaddexp(in_data, other_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
+def logaddexp2_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = torch.logaddexp2(in_data, other_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
+def erf_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.erf(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def erfc_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.erfc(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def erfinv_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.erfinv(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def expm1_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.expm1(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def floor_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.floor(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad

@@ -7,6 +7,7 @@
 #include "device/tilize_with_val_padding_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/common/constants.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
@@ -19,20 +20,7 @@ struct ExecuteTilizeWithValPadding {
         float pad_value,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false) {
-        return operation::run(
-                   TilizeWithValPadding{
-                       output_tensor_shape,
-                       pad_value,
-                       memory_config.value_or(input_tensor.memory_config()),
-                       output_dtype.value_or(input_tensor.get_dtype()),
-                       use_multicore},
-                   {input_tensor},
-                   {},
-                   {},
-                   queue_id)
-            .at(0);
-    }
+        bool use_multicore = false);
 
     static ttnn::Tensor operator()(
         const ttnn::Tensor &input_tensor,
@@ -40,39 +28,23 @@ struct ExecuteTilizeWithValPadding {
         float pad_value,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false) {
-        constexpr uint8_t DefaultQueueId = 0;
-        return operator()(
-            DefaultQueueId, input_tensor, output_tensor_shape, pad_value, memory_config, output_dtype, use_multicore);
-    }
+        bool use_multicore = false);
 };
 
 struct ExecuteTilizeWithZeroPadding {
-    static constexpr uint8_t DefaultQueueId = 0;
 
     static ttnn::Tensor operator()(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false) {
-        auto shape = input_tensor.get_legacy_shape();
-
-        shape[2] = tt::round_up(shape[2], TILE_HEIGHT);
-        shape[3] = tt::round_up(shape[3], TILE_WIDTH);
-
-        return ExecuteTilizeWithValPadding::operator()(
-            queue_id, input_tensor, shape, 0, memory_config, output_dtype, use_multicore);
-    }
+        bool use_multicore = false);
 
     static ttnn::Tensor operator()(
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false) {
-        constexpr uint8_t DefaultQueueId = 0;
-        return operator()(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
-    }
+        bool use_multicore = false);
 };
 
 }  // namespace operations::data_movement

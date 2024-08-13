@@ -7,7 +7,7 @@ import sys
 from loguru import logger
 import random
 import numpy as np
-
+import ttnn
 
 import tt_lib as ttl
 
@@ -37,7 +37,7 @@ import os
     ),
     ids=["out_DRAM", "out_L1"],
 )
-@pytest.mark.parametrize("dim", (2,))  # 0, 1 ),
+@pytest.mark.parametrize("dim", (2, 3))  # 0, 1 ),
 @pytest.mark.parametrize(
     "refshape",
     (
@@ -123,7 +123,7 @@ def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dty
             ttl.tensor.Layout.ROW_MAJOR,
         ).to(device)
 
-    dev_buffers = ttl.tensor.split_dim_two_chunks_tiled(a_t, dim, out_mem_config)
+    dev_buffers = ttnn.split(a_t, 2, dim, memory_config=out_mem_config)
 
     # Check memory of inputs and outputs
     logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")

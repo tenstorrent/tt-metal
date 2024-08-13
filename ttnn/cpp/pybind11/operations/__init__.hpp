@@ -16,7 +16,10 @@
 #include "pybind11/operations/kv_cache.hpp"
 
 #include "ttnn/operations/pool/avgpool/avg_pool_pybind.hpp"
+#include "ttnn/operations/pool/downsample/downsample_pybind.hpp"
 #include "ttnn/operations/pool/maxpool/maxpool_pybind.hpp"
+#include "ttnn/operations/pool/maxpool/max_pool2d_pybind.hpp"
+#include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
@@ -32,9 +35,10 @@
 #include "ttnn/operations/embedding/embedding_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
-#include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
-#include "ttnn/operations/eltwise/complex_binary_backward/complex_binary_backward_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
+#include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
+#include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
+#include "ttnn/operations/loss/loss_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -48,9 +52,6 @@ void py_module(py::module& module) {
 
     auto m_unary = module.def_submodule("unary", "unary operations");
     unary::py_module(m_unary);
-
-    auto m_complex_unary_backward = module.def_submodule("complex_unary_backward", "complex_unary_backward operations");
-    complex_unary_backward::py_module(m_complex_unary_backward);
 
     auto m_binary = module.def_submodule("binary", "binary operations");
     binary::py_module(m_binary);
@@ -69,8 +70,14 @@ void py_module(py::module& module) {
     ccl::py_bind_line_all_gather(m_ccl);
     ccl::py_bind_reduce_scatter(m_ccl);
 
+    auto m_complex = module.def_submodule("complex", "complex tensor creation");
+    complex::py_module(m_complex);
+
     auto m_complex_unary = module.def_submodule("complex_unary", "complex_unary operations");
     complex_unary::py_module(m_complex_unary);
+
+    auto m_complex_unary_backward = module.def_submodule("complex_unary_backward", "complex_unary_backward operations");
+    complex_unary_backward::py_module(m_complex_unary_backward);
 
     auto m_ternary = module.def_submodule("ternary", "ternary operations");
     ternary::py_module(m_ternary);
@@ -84,6 +91,9 @@ void py_module(py::module& module) {
     auto m_embedding = module.def_submodule("embedding", "embedding operations");
     embedding::py_module(m_embedding);
 
+    auto m_loss = module.def_submodule("loss", "loss operations");
+    loss::py_bind_loss_functions(m_loss);
+
     auto m_matmul = module.def_submodule("matmul", "matmul operations");
     matmul::py_module(m_matmul);
 
@@ -94,8 +104,10 @@ void py_module(py::module& module) {
     conv2d::py_module(m_conv2d);
 
     auto m_pool = module.def_submodule("pool", "pooling  operations");
-    maxpool::py_module(m_pool);
+    pool::py_module(m_pool);
     avgpool::py_module(m_pool);
+    upsample::py_module(m_pool);
+    downsample::py_bind_downsample(m_pool);
 
     auto m_normalization = module.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);

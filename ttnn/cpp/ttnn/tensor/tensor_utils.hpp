@@ -107,7 +107,8 @@ bool is_multi_device_tensor(const Tensor& tensor);
 std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_device_tensor);
 
 // Given a list of per-device shards, return a multi-device tensor
-Tensor create_multi_device_tensor(const std::vector<Tensor>& tensors);
+Tensor create_multi_device_tensor(
+    const std::vector<Tensor>& tensors, StorageType storage_type, const DistributedTensorConfig& strategy);
 
 // Given a multi-device tensor, and a function that transforms a tensor, apply the function to all per-device
 // tensors.

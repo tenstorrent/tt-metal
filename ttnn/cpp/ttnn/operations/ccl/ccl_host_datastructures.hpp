@@ -62,47 +62,18 @@ struct EriscDatamoverConfig {
 struct CCLOpConfig {
    public:
     CCLOpConfig(
-        const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology) :
-        input_tensors(&input_tensors),
-        output_tensors(&output_tensors),
-        input_sharded(input_tensors.at(0).is_sharded()),
-        output_sharded(output_tensors.at(0).is_sharded()),
-        page_size(input_tensors.at(0).buffer()->page_size()),
-        input_shard_size_bytes(
-            input_tensors.at(0).is_sharded() ? static_cast<std::optional<uint32_t>>(
-                                                   (input_tensors.at(0).buffer()->page_size() *
-                                                    input_tensors.at(0).buffer()->shard_spec().tensor2d_shape[0] *
-                                                    input_tensors.at(0).buffer()->shard_spec().tensor2d_shape[1]) /
-                                                   input_tensors.at(0).shard_spec()->num_cores())
-                                             : std::nullopt),
-        output_shard_size_bytes(
-            output_tensors.at(0).is_sharded() ? static_cast<std::optional<uint32_t>>(
-                                                    (output_tensors.at(0).buffer()->page_size() *
-                                                     output_tensors.at(0).buffer()->shard_spec().tensor2d_shape[0] *
-                                                     output_tensors.at(0).buffer()->shard_spec().tensor2d_shape[1]) /
-                                                    input_tensors.at(0).shard_spec()->num_cores())
-                                              : std::nullopt),
-        shard_grid_size(output_tensors.at(0).is_sharded() ? input_tensors.at(0).shard_spec()->num_cores() : 0),
-        topology(topology) {
-        TT_ASSERT(!this->is_input_sharded() || input_shard_size_bytes.has_value());
-        TT_ASSERT(!this->is_output_sharded() || output_shard_size_bytes.has_value());
-    }
+        std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology);
 
-    uint32_t get_input_shard_size_bytes() const {
-        TT_ASSERT(input_shard_size_bytes.has_value());
-        return input_shard_size_bytes.value();
-    }
-    uint32_t get_output_shard_size_bytes() const {
-        TT_ASSERT(output_shard_size_bytes.has_value());
-        return output_shard_size_bytes.value();
-    }
-    uint32_t get_page_size() const { return this->page_size; }
-    Topology get_topology() const { return this->topology; }
-    bool is_input_sharded() const { return this->input_sharded; }
-    bool is_output_sharded() const { return this->output_sharded; }
-    bool get_shard_grid_size() const { return this->shard_grid_size; }
-    Tensor const& get_input_tensor(std::size_t i) const { return input_tensors->at(i); }
-    Tensor const& get_output_tensor(std::size_t i) const { return output_tensors->at(i); }
+    uint32_t get_input_shard_size_bytes() const;
+    uint32_t get_output_shard_size_bytes() const;
+    uint32_t get_page_size() const;
+    Topology get_topology() const;
+    bool is_input_sharded() const;
+    bool is_output_sharded() const;
+    bool get_shard_grid_size() const;
+    Tensor const& get_input_tensor(std::size_t i) const;
+    Tensor const& get_output_tensor(std::size_t i) const;
+    std::map<string, string> emit_worker_defines() const;
 
    private:
     std::optional<uint32_t> input_shard_size_bytes;
@@ -112,6 +83,7 @@ struct CCLOpConfig {
     Topology topology;
     bool input_sharded;
     bool output_sharded;
+    bool is_row_major;
 
     std::vector<Tensor> const* input_tensors;
     std::vector<Tensor> const* output_tensors;
@@ -122,20 +94,20 @@ class EriscDatamoverBuilder {
     struct ChannelBufferSpec {
         ChannelBufferSpec(
             bool is_sender,
-            uint32_t worker_semaphore_address,
+            uint32_t worker_semaphore_id,
             uint32_t num_eth_messages_to_forward,
             uint32_t channel,
             std::vector<ccl::WorkerXY> const& worker_coords,
             uint32_t largest_message_size_bytes = 0) :
             worker_coords(worker_coords),
-            worker_semaphore_address(worker_semaphore_address),
+            worker_semaphore_id(worker_semaphore_id),
             num_eth_messages_to_forward(num_eth_messages_to_forward),
             channel(channel),
             largest_message_size_bytes(largest_message_size_bytes),
             is_sender(is_sender) {}
 
         std::vector<ccl::WorkerXY> const worker_coords;
-        uint32_t worker_semaphore_address;
+        uint32_t worker_semaphore_id;
         uint32_t num_eth_messages_to_forward;
         uint32_t channel;
         uint32_t largest_message_size_bytes;
@@ -154,7 +126,7 @@ class EriscDatamoverBuilder {
             args.push_back(this->eth_buffer_size_bytes);
         }
         args.push_back(this->local_semaphore_addresses.at(channel.channel));
-        args.push_back(channel.worker_semaphore_address);
+        args.push_back(channel.worker_semaphore_id);
         args.push_back(channel.worker_coords.size());
         for (auto const& worker_coord : channel.worker_coords) {
             args.push_back(worker_coord.to_uint32());
@@ -219,7 +191,7 @@ class EriscDatamoverBuilder {
 
     [[nodiscard]]
     ChannelBufferInterface add_sender_channel(
-        uint32_t worker_semaphore_address,
+        uint32_t worker_semaphore_id,
         uint32_t num_eth_messages_to_forward,
         std::vector<ccl::WorkerXY> const& worker_coords,
         uint32_t expected_message_size_bytes = 0) {
@@ -227,9 +199,9 @@ class EriscDatamoverBuilder {
         this->num_senders++;
         auto channel = active_channels.size();
         active_channels.emplace_back(
-            true, worker_semaphore_address, num_eth_messages_to_forward, channel, worker_coords, expected_message_size_bytes);
+            true, worker_semaphore_id, num_eth_messages_to_forward, channel, worker_coords, expected_message_size_bytes);
         log_trace(tt::LogOp, "Adding sender channel:");
-        log_trace(tt::LogOp, "\tworker_semaphore_address: {}", active_channels.back().worker_semaphore_address);
+        log_trace(tt::LogOp, "\tworker_semaphore_id: {}", active_channels.back().worker_semaphore_id);
         log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
         log_trace(tt::LogOp, "\tchannel: {}", active_channels.back().channel);
         log_trace(tt::LogOp, "\tis_sender: {}", active_channels.back().is_sender ? 1 : 0);
@@ -249,7 +221,7 @@ class EriscDatamoverBuilder {
 
     [[nodiscard]]
     ChannelBufferInterface add_receiver_channel(
-        uint32_t worker_semaphore_address,
+        uint32_t worker_semaphore_id,
         uint32_t num_eth_messages_to_forward,
         std::vector<ccl::WorkerXY> const& worker_coords,
         uint32_t expected_message_size_bytes = 0) {
@@ -257,9 +229,9 @@ class EriscDatamoverBuilder {
         this->num_receivers++;
         auto channel = active_channels.size();
         active_channels.emplace_back(
-            false, worker_semaphore_address, num_eth_messages_to_forward, channel, worker_coords, expected_message_size_bytes);
+            false, worker_semaphore_id, num_eth_messages_to_forward, channel, worker_coords, expected_message_size_bytes);
         log_trace(tt::LogOp, "Adding receiver channel:");
-        log_trace(tt::LogOp, "\tworker_semaphore_address: {}", active_channels.back().worker_semaphore_address);
+        log_trace(tt::LogOp, "\tworker_semaphore_id: {}", active_channels.back().worker_semaphore_id);
         log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
         log_trace(tt::LogOp, "\tchannel: {}", active_channels.back().channel);
         log_trace(tt::LogOp, "\tnum_workers: {}", worker_coords.size());

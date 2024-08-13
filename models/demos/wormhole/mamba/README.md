@@ -12,12 +12,6 @@ To get the best performance during decode we can use the 8x8 core grid. To enabl
 export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
-To run the model for a single user you can use the command line input:
-
-```
-pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/mamba/demo/demo.py
-```
-
 To run the demo using pre-written prompts for a batch of 32 users run:
 
 ```
@@ -30,7 +24,7 @@ To run the demo using custom input prompts, you can provide a different path to 
 pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/wormhole/mamba/demo/demo.py
 ```
 
-Any sequence length is supported. We currently only support JSON file with strictly 32 user prompts with same token length. Check the `models/demos/wormhole/mamba/demo/prompts.json` file for reference.
+Any sequence length is supported. We currently only support JSON file with strictly 1 user prompt or 32 user prompts with same token length. Check the `models/demos/wormhole/mamba/demo/prompts.json` file for reference.
 
 The prefill graph is not currently integrated into the demo. Therefore we currently process the prompt a single token at a time using the decode graph.
 
@@ -68,7 +62,7 @@ pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py
 Note : input embedding layer and TopK are on CPU
 
 ```
-pytest -svv models/demos/wormhole/mamba/tests/test_full_model.py::test_inference
+pytest -svv models/demos/wormhole/mamba/tests/test_mamba_model.py::test_inference
 ```
 
 ## Performance Tests

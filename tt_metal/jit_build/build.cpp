@@ -14,8 +14,6 @@
 #include <thread>
 
 #include "common/executor.hpp"
-#include "dev_mem_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "tools/profiler/common.hpp"
@@ -377,7 +375,7 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
             }
             this->lflags_ = env_.lflags_ + "-Os ";
-            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/idle-erisc.ld ";
+            this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/ierisc.ld ";
             break;
     }
     this->process_defines_at_compile = true;
@@ -459,13 +457,13 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
 void JitBuildState::link(const string& log_file, const string& out_dir) const {
     string lflags = this->lflags_;
     if (tt::llrt::OptionsG.get_build_map_enabled()) {
-        lflags += " -Wl,-Map=" + out_dir + "linker.map";
+        lflags += "-Wl,-Map=" + out_dir + "linker.map ";
     }
 
     string cmd;
     cmd = "cd " + out_dir + " && ";
     cmd += env_.gpp_;
-    cmd += this->lflags_;
+    cmd += lflags;
     cmd += this->link_objs_;
 
     if (!this->is_fw_) {

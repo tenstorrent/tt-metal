@@ -209,7 +209,7 @@ def tt_tensors_to_torch_tensors(tt_tensors_device):
                 )
         # Untilize using singlecore since multicore version runs out of l1 memory (TODO: change when multicore untilize is fixed)
         for i in range(len(tt_tensors_device)):
-            tt_tensors_device[i] = tt_lib.tensor.untilize(tt_tensors_device[i], use_multicore=False)
+            tt_tensors_device[i] = ttnn.untilize(tt_tensors_device[i], use_multicore=False)
 
     # Issue non-blocking reads across all devices. This allows for reads across devices to overlap
     tensors_on_host = [tt_tensor_device.cpu(False) for tt_tensor_device in tt_tensors_device]
@@ -950,15 +950,15 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
             run_conv_on_device_batch_one(torch_to_tt_tensor_rm(xx[batch_idx, :, :, :], device))
             for batch_idx in range(N)
         ]
-        conv_concat = tt_lib.tensor.concat(partial_convs, 0)
+        conv_concat = ttnn.concat(partial_convs, 0)
         return conv_concat
 
     def run_conv_on_device_batch_one(x):
         [N, C, H, W] = x.get_legacy_shape()
         if channel_transpose:
             # n c h w -> n h w c
-            x = tt_lib.tensor.transpose(x, 1, -2)
-            x = tt_lib.tensor.transpose(x, -2, -1)  # wh
+            x = ttnn.transpose(x, 1, -2)
+            x = ttnn.transpose(x, -2, -1)  # wh
 
         logger.info("Running Conv with following parameters on device -")
         logger.info(
@@ -990,15 +990,15 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
 
         logger.info("Going to run conv on tt device")
         if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-            x = tt_lib.tensor.untilize(x)
+            x = ttnn.untilize(x)
         else:
             x_padded_shape = list(x.get_legacy_shape())
             x_padded_shape[-1] = roundup(x.get_legacy_shape()[-1], 16)
             x = ttnn.pad(x, x_padded_shape, [0, 0, 0, 0], 0)
         x = conv_on_device(x)
         if channel_transpose:
-            x = tt_lib.tensor.transpose(x, -2, -1)
-            x = tt_lib.tensor.transpose(x, 1, -2)
+            x = ttnn.transpose(x, -2, -1)
+            x = ttnn.transpose(x, 1, -2)
 
         logger.info("conv on tt device done")
         return x
@@ -1015,6 +1015,11 @@ def is_e75(device):
 def is_x2_harvested(device):
     grid = device.compute_with_storage_grid_size()
     return device.arch() == Arch.WORMHOLE_B0 and (grid.x, grid.y) == (8, 7)
+
+
+def is_blackhole():
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return "blackhole" in ARCH_NAME
 
 
 def is_wormhole_b0():

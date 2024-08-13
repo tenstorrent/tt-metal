@@ -6,13 +6,13 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/data_transfer/data_transfer_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/layout_conversion/layout_conversion_op.hpp"
+#include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -24,7 +24,7 @@ namespace tt_metal {
 
 Tensor AutoFormat::move_tensor_to_device(const Tensor& input, Device* device, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
-        return data_transfer_to_device(input, device, mem_config);
+        return ttnn::data_transfer_to_device(input, device, mem_config);
     } else {
         return input;
     }
@@ -32,7 +32,7 @@ Tensor AutoFormat::move_tensor_to_device(const Tensor& input, Device* device, co
 
 Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
-        return data_transfer_to_device(input, AutoFormat::GetDefaultDevice(), mem_config);
+        return ttnn::data_transfer_to_device(input, AutoFormat::GetDefaultDevice(), mem_config);
     } else if (input.memory_config() != mem_config) {
         return clone(input, mem_config);
     } else {
@@ -89,7 +89,7 @@ Tensor AutoFormat::format_input_tensor(
             if (target_layout == Layout::TILE && formatted_input.get_layout() == Layout::ROW_MAJOR) {
                 return ttnn::tilize(formatted_input, mem_config);
             } else if (target_layout == Layout::ROW_MAJOR && formatted_input.get_layout() == Layout::TILE) {
-                return untilize(formatted_input, mem_config);
+                return ttnn::untilize(formatted_input, mem_config);
             }
         } else if (!convert_layout && pad_input) {
             if (formatted_input.get_layout() == Layout::ROW_MAJOR || formatted_input.get_layout() == Layout::TILE) {
@@ -99,25 +99,25 @@ Tensor AutoFormat::format_input_tensor(
             if (formatted_input.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
                 return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value, mem_config);
             } else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
-                formatted_input = untilize(formatted_input, mem_config);
+                formatted_input = ttnn::untilize(formatted_input, mem_config);
                 return ttnn::pad(0, (const ttnn::Tensor) formatted_input, padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), pad_value, false, mem_config);
             }
         }
         // Fall back to host conversions
-        formatted_input = data_transfer_to_host(formatted_input);
+        formatted_input = ttnn::data_transfer_to_host(formatted_input);
     }
 
     // Host side conversions
     if (pad_input) {
         if (formatted_input.get_layout() != Layout::ROW_MAJOR) {
-            formatted_input = layout_conversion_on_host(formatted_input, Layout::ROW_MAJOR);
+            formatted_input = formatted_input.to(Layout::ROW_MAJOR);
             convert_layout = formatted_input.get_layout() != target_layout;
         }
         formatted_input = ttnn::pad((const ttnn::Tensor)formatted_input, padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), pad_value);
     }
 
     if (convert_layout) {
-        formatted_input = layout_conversion_on_host(formatted_input, target_layout);
+        formatted_input = formatted_input.to(target_layout);
     }
 
     return AutoFormat::move_tensor_to_device(formatted_input, device, mem_config);
@@ -153,7 +153,7 @@ Tensor AutoFormat::format_output_tensor(
                 }
                 return formatted_output;
             } else if (target_layout == Layout::ROW_MAJOR && formatted_output.get_layout() == Layout::TILE) {
-                formatted_output = untilize(formatted_output, mem_config);
+                formatted_output = ttnn::untilize(formatted_output, mem_config);
                 return formatted_output;
             }
 
@@ -170,18 +170,18 @@ Tensor AutoFormat::format_output_tensor(
                 return formatted_output;
                 // Output is tile but shape cannot be tile. We leave in RM
             } else if (formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_rm_shape(shape)) {
-                formatted_output = untilize_with_unpadding(
+                formatted_output = ttnn::untilize_with_unpadding(
                     formatted_output,
-                    {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1},
+                    std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
                     mem_config);
                 return formatted_output;
             }
         } else if (unpad_output && convert_layout) {
             if (formatted_output.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR &&
                 AutoFormat::legal_rm_shape(shape)) {
-                formatted_output = untilize_with_unpadding(
+                formatted_output = ttnn::untilize_with_unpadding(
                     formatted_output,
-                    {shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1},
+                    std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
                     mem_config);
                 return formatted_output;
             } else if (
@@ -198,14 +198,14 @@ Tensor AutoFormat::format_output_tensor(
             }
         }
         // Fall back to host conversions
-        formatted_output = data_transfer_to_host(formatted_output);
+        formatted_output = ttnn::data_transfer_to_host(formatted_output);
     }
 
     // Host side conversions
     if (unpad_output) {
         // Requires RM for unpad
         if (formatted_output.get_layout() != Layout::ROW_MAJOR) {
-            formatted_output = layout_conversion_on_host(formatted_output, Layout::ROW_MAJOR);
+            formatted_output = formatted_output.to(Layout::ROW_MAJOR);
             convert_layout = formatted_output.get_layout() != target_layout;
         }
         formatted_output =
@@ -216,10 +216,10 @@ Tensor AutoFormat::format_output_tensor(
         // Default to RM layout if we can't match the formatted_input layout
         if (target_layout == Layout::TILE && !AutoFormat::legal_tile_shape(formatted_output.get_legacy_shape())) {
             if (formatted_output.get_layout() != Layout::ROW_MAJOR) {
-                formatted_output = layout_conversion_on_host(formatted_output, Layout::ROW_MAJOR);
+                formatted_output = formatted_output.to(Layout::ROW_MAJOR);
             }
         } else {
-            formatted_output = layout_conversion_on_host(formatted_output, target_layout);
+            formatted_output = formatted_output.to(target_layout);
         }
     }
 

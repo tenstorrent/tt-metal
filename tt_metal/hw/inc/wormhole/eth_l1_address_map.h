@@ -13,8 +13,13 @@ namespace eth_l1_mem {
 
 struct address_map {
 
-  static constexpr std::int32_t MAX_SIZE = 256 * 1024;
-  static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1 * 256 * 1024;
+  // UMD doesn't distinguish between active/idle eth cores
+  // UMD needs space for l1_barrier
+  // active/idle eth cores have very different mem maps
+  // Reserve some space at the end of l1 for l1_barrier
+  static constexpr std::int32_t ERISC_BARRIER_SIZE = 32;
+  static constexpr std::int32_t MAX_SIZE = 256 * 1024 - ERISC_BARRIER_SIZE;
+  static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1 * 256 * 1024 - ERISC_BARRIER_SIZE;
 
   // Sizes
   static constexpr std::int32_t FIRMWARE_SIZE = 32 * 1024;
@@ -23,7 +28,6 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_SIZE_ETH = 4 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE_NOC = 16 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE = 24 * 1024;
-  static constexpr std::int32_t TOOLS_MAX_L1_SIZE = 3 * 1024;
   static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4;
 
   // Base addresses
@@ -40,12 +44,11 @@ struct address_map {
   //    -  53 * 1024 eth app reserved buffer space
   //    - 106 * 1024 L1 unreserved buffer space
   static constexpr std::int32_t MAX_NUM_CONCURRENT_TRANSACTIONS = 8;
-  static constexpr std::int32_t ERISC_BARRIER_SIZE = 32;
   static constexpr std::int32_t ERISC_APP_ROUTING_INFO_SIZE = 48;
   static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 160 + 16 * MAX_NUM_CONCURRENT_TRANSACTIONS;
 
-  static constexpr std::int32_t ERISC_BARRIER_BASE = TILE_HEADER_BUFFER_BASE;
-  static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = ERISC_BARRIER_BASE + ERISC_BARRIER_SIZE;
+  static constexpr std::int32_t ERISC_BARRIER_BASE = MAX_SIZE;
+  static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = TILE_HEADER_BUFFER_BASE;
   static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
   static constexpr std::uint32_t SEMAPHORE_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
 
@@ -56,16 +59,11 @@ struct address_map {
   // erisc early exit functionality re-uses mailboxes_t::ncrisc_halt_msg_t::stack_save memory
   static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = ERISC_MEM_MAILBOX_BASE + 4;
 
-  static constexpr std::int32_t ERISC_RING_BUFFER_ADDR = ERISC_MEM_MAILBOX_BASE + 256 + 16;
-  static constexpr std::int32_t PRINT_BUFFER_ER = ERISC_RING_BUFFER_ADDR + RING_BUFFER_SIZE;
-  static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = PRINT_BUFFER_ER + 256;
+  static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = ERISC_MEM_MAILBOX_BASE + 288 + 256 + 16;
   static constexpr std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_ER + PROFILER_L1_BUFFER_SIZE;
 
   static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
 
-  static_assert(ERISC_L1_KERNEL_CONFIG_BASE - ERISC_RING_BUFFER_ADDR <= TOOLS_MAX_L1_SIZE);
-  static_assert((ERISC_RING_BUFFER_ADDR % 32) == 0);
-  static_assert((PRINT_BUFFER_ER % 32) == 0);
   static_assert((PROFILER_L1_BUFFER_ER % 32) == 0);
   static_assert((PROFILER_L1_BUFFER_CONTROL % 32) == 0);
 

@@ -102,6 +102,7 @@ class MaxPool2d:
         parallel_config_override: Dict = None,
         deallocate_activation: bool = False,
         channels: int = None,
+        mesh_mapper: ttnn.TensorToMesh = None,
     ):
         if isinstance(kernel_size, int):
             window_h = kernel_size
@@ -149,6 +150,7 @@ class MaxPool2d:
             deallocate_activation=deallocate_activation,
             act_dtype=dtype,
             channels=channels,
+            mesh_mapper=mesh_mapper,
         )
 
     @ttnn.register_python_operation(name="ttnn.MaxPool2d.__call__", is_method=True)
@@ -180,6 +182,7 @@ class TTPyMaxPool(TTPyOp):
         act_dtype=None,
         channels=None,
         pool_op=None,
+        mesh_mapper=None,
     ):
         self.pool_op = pool_op
         if parallel_config_override is None:
@@ -233,6 +236,7 @@ class TTPyMaxPool(TTPyOp):
         sliding_window_op_params_hash = get_hash_from_sliding_window_op_params(self.sliding_window_op_params)
 
         self.device = device
+        self.mesh_mapper = mesh_mapper
 
         self.input_sharded_memory_config = calculate_memory_config(
             self.sliding_window_op_params,
@@ -272,6 +276,7 @@ class TTPyMaxPool(TTPyOp):
             reader_patterns_cache["halo"],
             pad_val=self.pad_val,
             is_out_tiled=snap_to_tile,
+            mesh_mapper=self.mesh_mapper,
         )
 
         self.deallocate_activation = deallocate_activation
@@ -325,9 +330,10 @@ class TTPyMaxPool(TTPyOp):
             reader_indices_torch_tensor = torch.tensor(
                 [[sliding_window_op_sharded_input_top_left_indices]], dtype=indices_torch_dtype
             )
-            reader_indices_tt_tensor = ttnn.Tensor(
+            reader_indices_tt_tensor = ttnn.from_torch(
                 reader_indices_torch_tensor,
                 indices_tt_dtype,
+                mesh_mapper=self.mesh_mapper,
             )
             shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
             shard_halo = False

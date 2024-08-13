@@ -62,10 +62,10 @@ class Job(BaseModel):
     job_matrix_config: Optional[dict] = Field(
         None, description="This attribute is included for future feature enhancement."
     )
-    host_name: str = Field(description="Unique host name.")
-    card_type: str = Field(description="Card type and version.")
-    os: str = Field(description="Operating system of the host.")
-    location: str = Field(description="Where the host is located.")
+    host_name: Optional[str] = Field(description="Unique host name.")
+    card_type: Optional[str] = Field(description="Card type and version.")
+    os: Optional[str] = Field(description="Operating system of the host.")
+    location: Optional[str] = Field(description="Where the host is located.")
     tests: List[Test] = []
 
 
