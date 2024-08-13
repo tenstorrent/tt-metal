@@ -21,7 +21,6 @@ TT_FATAL(input_shape.rank() == 3, fmt::format("Invalid input tensor: expected 3 
 
 ## Explain the Issue
 Provide a brief explanation of why the error occurred or why the condition is important. This helps users understand the context of the error.
-
 Instead of:
 ```cpp
 TT_FATAL(!input_tensor_kv.has_value(), "KV tensor cannot be passed in when sharded.");
