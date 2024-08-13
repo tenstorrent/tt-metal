@@ -5,9 +5,9 @@
 #include "max_pool2d.hpp"
 
 #include "ttnn/operations/conv2d/conv2d.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/math.hpp"
-
+#include "ttnn/common/constants.hpp"
 
 namespace ttnn {
 namespace operations::pool {
@@ -15,7 +15,7 @@ namespace operations::pool {
 template<typename T>
 Tensor MaxPoolNewOp::operator()(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, T* device) {
 
-    tt::tt_metal::SlidingWindowConfig sliding_window_config = tt::tt_metal::SlidingWindowConfig(
+    sliding_window::SlidingWindowConfig sliding_window_config = sliding_window::SlidingWindowConfig(
                                                                     batch_size,
                                                                     input_h, input_w,
                                                                     kernel_size.at(0), kernel_size.at(1),
@@ -29,7 +29,7 @@ Tensor MaxPoolNewOp::operator()(uint8_t queue_id, const Tensor& input_tensor, ui
     bool is_out_tiled = false;
     bool is_in_tiled = input_tensor.dtype() == DataType::BFLOAT8_B; // input tiled for bfp8_b
 
-    ParallelConfig parallel_config;
+    sliding_window::ParallelConfig parallel_config;
     MemoryConfig memory_config = input_tensor_sharded.memory_config();
     uint32_t num_cores_nhw = 0;
 
@@ -70,7 +70,7 @@ Tensor MaxPoolNewOp::operator()(uint8_t queue_id, const Tensor& input_tensor, ui
     log_debug(tt::LogOp, "output_nhw: {}, output_nhw_padded: {}, output_shard_height_padded: {}, output_shard_width_padded: {}", output_nhw, output_nhw_padded, output_shard_height_padded, output_shard_width_padded);
     memory_config.shard_spec = ShardSpec{shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR, false};
 
-    sliding_window_config = tt::tt_metal::SlidingWindowConfig(
+    sliding_window_config = sliding_window::SlidingWindowConfig(
                                             batch_size,
                                             input_h,
                                             input_w,
@@ -87,7 +87,16 @@ Tensor MaxPoolNewOp::operator()(uint8_t queue_id, const Tensor& input_tensor, ui
                                             false);
     // call the halo uop
     uint32_t neg_inf_pad_val = 0xf7ff;
-    auto haloed_tensor = ttnn::operations::halo::halo_op(input_tensor_sharded, sliding_window_config, neg_inf_pad_val, false, parallel_config.shard_orientation == ShardOrientation::COL_MAJOR, 0, input_tensor_sharded.memory_config(), is_out_tiled);
+    auto haloed_tensor = ttnn::halo(
+        queue_id,
+        input_tensor_sharded,
+        sliding_window_config,
+        neg_inf_pad_val,
+        false,
+        parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+        0,
+        input_tensor_sharded.memory_config(),
+        is_out_tiled);
 
     MaxPoolNew::operation_attributes_t op_attr{
         .sliding_window_config_ = sliding_window_config,

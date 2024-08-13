@@ -49,7 +49,7 @@ def run(
 
     torch_input_tensor = torch_random(input_shape, low, high, dtype=torch.float32)
 
-    golden_function = ttnn.get_golden_function(ttnn.transformer.rotary_embedding)
+    golden_function = ttnn.get_golden_function(ttnn.experimental.rotary_embedding)
     torch_output_tensor = golden_function(torch_input_tensor, torch_cos_cached, torch_sin_cached, token_index)
 
     input_tensor = ttnn.from_torch(
@@ -62,7 +62,7 @@ def run(
         torch_sin_cached, dtype=input_dtype, device=device, memory_config=input_memory_config, layout=layout
     )
 
-    output_tensor = ttnn.transformer.rotary_embedding(
+    output_tensor = ttnn.experimental.rotary_embedding(
         input_tensor, cos_cached, sin_cached, token_index, memory_config=output_memory_config
     )
     output_tensor = ttnn.to_torch(output_tensor)

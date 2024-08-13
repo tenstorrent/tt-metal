@@ -1609,8 +1609,8 @@ def complex_abs(x, *args, **kwargs):
     return torch.abs(x)
 
 
-def complex_polar(x, y, *args, **kwargs):
-    return torch.polar(x.to(torch.float32), y.to(torch.float32))
+def complex_polar(x, *args, **kwargs):
+    return torch.polar(x.real.to(torch.float32), x.imag.to(torch.float32))
 
 
 def complex_imag(x, *args, **kwargs):

@@ -121,7 +121,7 @@ def _golden_function(x, cos_cached, sin_cached, token_idx, **_):
     return pt_out
 
 
-ttnn.attach_golden_function(ttnn.transformer.rotary_embedding, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.experimental.rotary_embedding, golden_function=_golden_function)
 
 
 __all__ = []

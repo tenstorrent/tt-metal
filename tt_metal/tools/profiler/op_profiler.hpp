@@ -256,18 +256,23 @@ inline json get_base_json(
     return j;
 }
 
-template <typename operation_t>
+template <typename device_operation_t>
 inline json get_base_json(
     uint32_t operation_id,
-    const typename operation_t::operation_attributes_t& operation_attributes,
-    const typename operation_t::tensor_args_t& tensor_args,
-    typename operation_t::tensor_return_value_t& tensor_return_value) {
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    typename device_operation_t::tensor_return_value_t& tensor_return_value) {
     ZoneScoped;
     json j;
     j["global_call_count"] = operation_id;
 
     auto as_string = [](std::string_view v) -> std::string { return {v.data(), v.size()}; };
-    std::string opName = as_string(tt::stl::get_type_name<operation_t>());
+    std::string opName = as_string(tt::stl::get_type_name<device_operation_t>());
+    if constexpr ( requires { device_operation_t::get_type_name(operation_attributes); }) {
+        // TODO: remove this if-statement when OldInfraDeviceOperation is removed
+        opName = device_operation_t::get_type_name(operation_attributes);
+    }
+
     std::replace(opName.begin(), opName.end(), ',', ';');
     j["op_code"] = opName;
 
@@ -300,9 +305,9 @@ inline std::string op_meta_data_serialized_json(
     return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`", j["op_code"], ser);
 }
 
-template <typename operation_t>
+template <typename device_operation_t>
 inline std::string op_meta_data_serialized_json(
-    const operation_t& operation,
+    const device_operation_t& operation,
     uint32_t operation_id,
     auto device_id,
     const auto& program,
@@ -313,7 +318,7 @@ inline std::string op_meta_data_serialized_json(
     const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
     if (!useCachedOps || (cached_ops.find(device_id) == cached_ops.end()) ||
         (cached_ops.at(device_id).find(program_hash) == cached_ops.at(device_id).end())) {
-        auto j = get_base_json<operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
+        auto j = get_base_json<device_operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
         j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
         j["device_id"] = device_id;
         j["op_hash"] = program_hash;
@@ -322,8 +327,8 @@ inline std::string op_meta_data_serialized_json(
         j["optional_input_tensors"] = std::vector<json>{};
 
         auto perfModel = [&]() {
-            if constexpr (requires { operation_t::create_op_performance_model; }) {
-                return operation_t::create_op_performance_model(operation_attributes, tensor_args, tensor_return_value);
+            if constexpr (requires { device_operation_t::create_op_performance_model; }) {
+                return device_operation_t::create_op_performance_model(operation_attributes, tensor_args, tensor_return_value);
             } else {
                 return operation::OpPerformanceModel{};
             }
