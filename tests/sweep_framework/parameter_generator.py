@@ -150,14 +150,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--elastic",
         required=False,
-        default=ELASTIC_DEFAULT_URL,
-        help="Elastic Connection String for vector database.",
+        default="corp",
+        help="Elastic Connection String for vector database. Available presets are ['corp', 'cloud']",
     )
 
     args = parser.parse_args(sys.argv[1:])
 
     global ELASTIC_CONNECTION_STRING
-    ELASTIC_CONNECTION_STRING = args.elastic
+    ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
 
     if args.clean and not args.module_name:
         print("SWEEPS: The clean flag must be set in conjunction with a module name.")
