@@ -802,7 +802,3 @@ using Operation = std::variant<
 }  // namespace operation
 }  // namespace tt_metal
 }  // namespace tt
-
-namespace ttnn {
-inline std::int64_t OPERATION_ID = -1;
-}
