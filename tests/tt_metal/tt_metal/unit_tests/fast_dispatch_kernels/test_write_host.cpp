@@ -184,13 +184,20 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
     vector<uint32_t> args = {1};
     tt::tt_metal::SetRuntimeArgs(program, sp1, spoof_prefetch_core, args);
 
+    constexpr NOC my_noc_index = NOC::NOC_0;
+    constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
+
     configure_kernel_variant<true, true>(program,
         "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
         dispatch_compile_args,
         dispatch_core,
         phys_dispatch_core,
         phys_spoof_prefetch_core,
-        {0, 0});
+        {0, 0},
+        device,
+        my_noc_index,
+        my_noc_index,
+        my_noc_index);
 
     // Need a separate thread for SD
     if (read_ptr_update.has_value()) {

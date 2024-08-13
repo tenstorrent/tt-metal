@@ -1642,6 +1642,9 @@ void configure_for_single_chip(Device *device,
         dispatch_constants::PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
     };
 
+    constexpr NOC my_noc_index = NOC::NOC_0;
+    constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
+
     if (split_prefetcher_g) {
 
         log_info(LogTest, "split prefetcher test, packetized_path_en={}", packetized_path_en_g);
@@ -1664,7 +1667,11 @@ void configure_for_single_chip(Device *device,
             prefetch_d_core,
             phys_prefetch_d_core,
             phys_prefetch_d_upstream_core,
-            phys_dispatch_core);
+            phys_dispatch_core,
+            device,
+            my_noc_index,
+            my_noc_index,
+            my_noc_index);
 
         // prefetch_h
         prefetch_compile_args[0] = prefetch_d_buffer_base;
@@ -1684,7 +1691,11 @@ void configure_for_single_chip(Device *device,
             prefetch_core,
             phys_prefetch_core_g,
             {0xffffffff, 0xffffffff}, // upstream core unused
-            phys_prefetch_h_downstream_core);
+            phys_prefetch_h_downstream_core,
+            device,
+            my_noc_index,
+            my_noc_index,
+            my_noc_index);
 
         if (packetized_path_en_g) {
 
@@ -1846,7 +1857,11 @@ void configure_for_single_chip(Device *device,
             prefetch_core,
             phys_prefetch_core_g,
             {0xffffffff, 0xffffffff}, // upstream core unused
-            phys_dispatch_core);
+            phys_dispatch_core,
+            device,
+            my_noc_index,
+            my_noc_index,
+            my_noc_index);
     }
 
     std::vector<uint32_t> dispatch_compile_args = {
@@ -1891,7 +1906,11 @@ void configure_for_single_chip(Device *device,
             dispatch_core,
             phys_dispatch_core,
             phys_upstream_from_dispatch_core,
-            phys_dispatch_d_downstream_core);
+            phys_dispatch_d_downstream_core,
+            device,
+            my_noc_index,
+            dispatch_upstream_noc_index,
+            my_noc_index);
 
         // dispatch_h
         dispatch_compile_args[3] = dispatch_h_cb_sem;
@@ -1907,7 +1926,11 @@ void configure_for_single_chip(Device *device,
             dispatch_h_core,
             phys_dispatch_h_core,
             phys_dispatch_h_upstream_core,
-            {0xffffffff,0xffffffff});
+            {0xffffffff,0xffffffff},
+            device,
+            my_noc_index,
+            dispatch_upstream_noc_index,
+            my_noc_index);
 
         if (packetized_path_en_g) {
 
@@ -2064,7 +2087,11 @@ void configure_for_single_chip(Device *device,
             dispatch_core,
             phys_dispatch_core,
             phys_upstream_from_dispatch_core,
-            {0xffffffff,0xffffffff});
+            {0xffffffff,0xffffffff},
+            device,
+            my_noc_index,
+            dispatch_upstream_noc_index,
+            my_noc_index);
     }
 }
 
@@ -2229,6 +2256,9 @@ void configure_for_multi_chip(Device *device,
         dispatch_constants::PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
     };
 
+    constexpr NOC my_noc_index = NOC::NOC_0;
+    constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
+
     if (split_prefetcher_g) {
 
         log_info(LogTest, "split prefetcher test, packetized_path_en={}", packetized_path_en_g);
@@ -2251,7 +2281,11 @@ void configure_for_multi_chip(Device *device,
             prefetch_d_core,
             phys_prefetch_d_core,
             phys_prefetch_d_upstream_core,
-            phys_dispatch_core);
+            phys_dispatch_core,
+            device,
+            my_noc_index,
+            my_noc_index,
+            my_noc_index);
 
         // prefetch_h
         prefetch_compile_args[0] = prefetch_d_buffer_base;
@@ -2271,7 +2305,11 @@ void configure_for_multi_chip(Device *device,
             prefetch_core,
             phys_prefetch_core_g,
             {0xffffffff, 0xffffffff}, // upstream core unused
-            phys_prefetch_h_downstream_core);
+            phys_prefetch_h_downstream_core,
+            device,
+            my_noc_index,
+            my_noc_index,
+            my_noc_index);
 
         if (packetized_path_en_g) {
 
@@ -2518,7 +2556,11 @@ void configure_for_multi_chip(Device *device,
             prefetch_core,
             phys_prefetch_core_g,
             {0xffffffff, 0xffffffff}, // upstream core unused
-            phys_dispatch_core);
+            phys_dispatch_core,
+            device,
+            my_noc_index,
+            my_noc_index,
+            my_noc_index);
     }
 
     std::vector<uint32_t> dispatch_compile_args = {
@@ -2563,7 +2605,11 @@ void configure_for_multi_chip(Device *device,
             dispatch_core,
             phys_dispatch_core,
             phys_upstream_from_dispatch_core,
-            phys_dispatch_d_downstream_core);
+            phys_dispatch_d_downstream_core,
+            device,
+            my_noc_index,
+            dispatch_upstream_noc_index,
+            my_noc_index);
 
         // dispatch_h
         dispatch_compile_args[3] = dispatch_h_cb_sem;
@@ -2578,7 +2624,11 @@ void configure_for_multi_chip(Device *device,
             dispatch_h_core,
             phys_dispatch_h_core,
             phys_dispatch_h_upstream_core,
-            {0xffffffff,0xffffffff});
+            {0xffffffff,0xffffffff},
+            device,
+            my_noc_index,
+            dispatch_upstream_noc_index,
+            my_noc_index);
 
         if (packetized_path_en_g) {
 
@@ -2743,7 +2793,11 @@ void configure_for_multi_chip(Device *device,
             dispatch_core,
             phys_dispatch_core,
             phys_upstream_from_dispatch_core,
-            {0xffffffff,0xffffffff});
+            {0xffffffff,0xffffffff},
+            device,
+            my_noc_index,
+            dispatch_upstream_noc_index,
+            my_noc_index);
     }
 }
 
