@@ -200,10 +200,10 @@ void cb_acquire_pages(uint32_t n) {
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
 }
 
-template<uint32_t noc_xy, uint32_t sem_id>
+template<uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE
 void cb_release_pages(uint32_t n) {
-    noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore(sem_id)), n);
+    noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore(sem_id)), n, noc_idx);
 }
 
 template<uint32_t noc_xy,
@@ -221,6 +221,7 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
     static uint32_t sem = 0;
 
     if (counter == sem) {
+        DEBUG_STATUS("UAPW");
         uint32_t heartbeat = 0;
         while ((sem = *sem_addr) == counter) {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
@@ -238,7 +239,8 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
     return usable;
 }
 
-template<uint32_t noc_xy,
+template<uint8_t noc_idx,
+         uint32_t noc_xy,
          uint32_t sem_id,
          uint32_t cb_blocks,
          uint32_t cb_pages_per_block>
@@ -250,7 +252,7 @@ void cb_block_release_pages(uint32_t block_noc_writes_to_clear[],
 
     uint32_t noc_progress = NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT);
     if (wrap_ge(noc_progress, block_noc_writes_to_clear[wr_block_idx])) {
-        noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block);
+        noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block, noc_idx);
         wr_block_idx++;
         wr_block_idx &= (cb_blocks - 1);
 
@@ -258,7 +260,7 @@ void cb_block_release_pages(uint32_t block_noc_writes_to_clear[],
         // then we can fall behind by a block and never catch up
         // checking twice ensures we "gain" on the front if possible
         if (wrap_ge(noc_progress, block_noc_writes_to_clear[wr_block_idx])) {
-            noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block);
+            noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block, noc_idx);
             wr_block_idx++;
             wr_block_idx &= (cb_blocks - 1);
         }

@@ -508,13 +508,20 @@ int main(int argc, char **argv) {
         args.push_back(prefetcher_iterations_g);
         tt_metal::SetRuntimeArgs(program, sp1, spoof_prefetch_core, args);
 
+        constexpr NOC my_noc_index = NOC::NOC_0;
+        constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
+
         configure_kernel_variant<true, true>(program,
             "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
             dispatch_compile_args,
             dispatch_core,
             phys_dispatch_core,
             phys_spoof_prefetch_core,
-            {0, 0});
+            {0, 0},
+            device,
+            my_noc_index,
+            dispatch_upstream_noc_index,
+            my_noc_index);
 
         switch (test_type_g) {
         case 0:
