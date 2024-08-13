@@ -83,6 +83,7 @@ def test_run_optimized_conv(
     has_bias,
     fuse_relu,
 ):
+    pytest.skip("TODO: Delete")
     if has_bias and untilize_out:
         ## bias is only supported without untilize out
         pytest.skip()

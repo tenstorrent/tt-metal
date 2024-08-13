@@ -104,7 +104,7 @@ uint32_t find_closest_common_largest_divisor(uint32_t num1, uint32_t num2, uint3
 
 template <typename T>
 ParallelConfig determine_parallel_config(
-    const Conv2dConfig& conv_config,
+    const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
     uint32_t input_channels,
     uint32_t output_height,

@@ -15,7 +15,7 @@ from tests.ttnn.unit_tests.operations.test_conv2d import run_conv
 # from test_conv import run_conv
 
 
-@skip_for_wormhole_b0()
+# @skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, bias, use_1d_systolic_array, config_override",
