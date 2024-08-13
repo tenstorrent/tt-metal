@@ -164,12 +164,12 @@ void DeviceMesh::close_devices() {
     managed_devices.clear();
 }
 
-const DeviceMeshView* DeviceMesh::get_view() const {
-    return this->view.get();
+std::shared_ptr<const DeviceMeshView> DeviceMesh::get_view() const {
+    return this->view;
 }
 
-DeviceMeshView* DeviceMesh::get_view() {
-    return this->view.get();
+std::shared_ptr<DeviceMeshView> DeviceMesh::get_view() {
+    return this->view;
 }
 
 bool validate_worker_modes(const std::vector<Device*>& workers) {

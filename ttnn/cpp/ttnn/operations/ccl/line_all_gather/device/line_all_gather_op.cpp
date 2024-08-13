@@ -130,47 +130,42 @@ Tensor line_all_gather(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config) {
 
-    const auto view = DeviceMeshView(device_mesh);
-    const auto device_views = (cluster_axis == 0) ? view.get_column_views() : view.get_row_views();
+    const auto mesh_view = device_mesh.get_view();
+    std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
     operation::launch_op(
-        [&dim, &num_links, &memory_config, &device_views](
+        [dim, num_links, memory_config, mesh_view, cluster_axis, num_devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
-            const auto& input_tensor = input_tensors[0];
-            const DeviceMeshView::DeviceView* selected_view = nullptr;
+            const auto& input_device_tensor = input_tensors.at(0);
 
-            uint32_t device_index = 0;
-            for (const auto& view : device_views) {
-                auto it = std::find(view.begin(), view.end(), input_tensor.device());
-                if (it != view.end()) {
-                    selected_view = &view;
-                    device_index = std::distance(view.begin(), it);
-                    break;
+            const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
+            const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
+            const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
+
+            auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+                auto new_coord = coordinate;
+                if (cluster_axis == 0) {
+                    new_coord.row = line_index % num_devices;
+                } else {
+                    new_coord.col = line_index % num_devices;
                 }
-            }
-
-            TT_ASSERT(selected_view != nullptr, "Device not found in any view");
-
-            uint32_t num_devices = selected_view->size();
+                return mesh_view->find_device_id(new_coord);
+            };
 
             bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);
             bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
-            std::optional<chip_id_t> receiver_device_id = is_last_chip_in_clockwise_direction ?
-                std::nullopt :
-                std::optional<chip_id_t>((*selected_view)[(device_index + 1) % num_devices]->id());
-            std::optional<chip_id_t> sender_device_id = is_last_chip_in_counter_clockwise_direction ?
-                std::nullopt :
-                std::optional<chip_id_t>((*selected_view)[(device_index + num_devices - 1) % num_devices]->id());
+            auto receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
+            auto sender_device_id = is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(device_index + num_devices - 1);
 
             return operation::run(
                 ttnn::LineAllGather{
-                    dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
-                {input_tensor});
+                    dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), ttnn::all_gather_op::Topology::Linear},
+                {input_device_tensor});
         },
         {input_tensor},
         output_tensors);

@@ -23,7 +23,7 @@ public:
     DeviceGrid device_grid;
     std::map<chip_id_t, Device *> managed_devices;
     std::vector<std::pair<int, Device *>> mesh_devices;
-    std::unique_ptr<DeviceMeshView> view;
+    std::shared_ptr<DeviceMeshView> view;
 
     DeviceMesh(const DeviceGrid &device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues);
     ~DeviceMesh();
@@ -54,8 +54,8 @@ public:
     tt::ARCH arch() const;
 
     void close_devices();
-    const DeviceMeshView* get_view() const;
-    DeviceMeshView* get_view();
+    std::shared_ptr<const DeviceMeshView> get_view() const;
+    std::shared_ptr<DeviceMeshView> get_view();
 
    private:
     bool is_galaxy_;
