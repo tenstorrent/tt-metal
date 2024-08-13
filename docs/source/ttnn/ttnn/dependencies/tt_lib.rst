@@ -257,12 +257,6 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.reshape
 
-.. autofunction:: tt_lib.tensor.clone
-
-.. autofunction:: tt_lib.tensor.typecast
-
-.. autofunction:: tt_lib.tensor.copy
-
 
 
 Broadcast and Reduce

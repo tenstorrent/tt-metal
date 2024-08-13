@@ -1556,7 +1556,7 @@ def primary_moreh_norm_3(x):
 
 
 def clone(x):
-    ttnn.clone(x, ttnn.get_memory_config(x), x.dtype)
+    ttnn.clone(x, ttnn.get_memory_config(x), dtype=x.dtype)
 
 
 from tt_lib.fused_ops.softmax import softmax as fused_softmax
