@@ -11,18 +11,23 @@ namespace ttnn::operations::transformer {
 
 struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
     void validate(const std::vector<Tensor>& input_tensors) const {
+
         const auto& input_tensor = input_tensors.at(0);
         const auto head_size = input_tensor.get_shape()[-1];
         const auto padded_head_size = input_tensor.get_legacy_shape()[-1];
+
         TT_FATAL(
             head_size % ttnn::types::TILE_SIZE == 0,
             fmt::format(
-                "Head size must be a multiple of {} but was found to be {}! Update matmul that uses the output of this "
-                "operation to have the "
-                "padding in the weights!",
+                "Head size must be a multiple of {} but was found to be {}. Update the matmul that uses the output of this "
+                "operation to include padding in the weights.",
                 ttnn::types::TILE_SIZE,
                 head_size));
-        TT_FATAL(padded_head_size - head_size == 0, "Head size cannot have tile padding!");
+
+        TT_FATAL(
+            padded_head_size - head_size == 0,
+            fmt::format("Head size ({}) cannot have tile padding. Ensure that the head size is not padded.", head_size));
+
 
         NlpConcatHeads::validate(input_tensors);
     }
