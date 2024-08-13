@@ -328,6 +328,7 @@ Use early exit strategies when performing contract checks or validations at the 
 
 ### Explanation
 Placing contract checks at the start of a function and returning early if they fail simplifies the function logic, reducing nesting and improving readability.
+Keep in mind, compiler knows that early checks is the slow path and branch prediction works better this way.
 
 ### Example
 Avoid:
