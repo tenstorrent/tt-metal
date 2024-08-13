@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,6 +28,16 @@ int main(int argc, char **argv) {
     std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
     std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
     std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+
+    auto src0_dram_noc_coord = src0_dram_buffer->noc_coordinates();
+    auto src1_dram_noc_coord = src1_dram_buffer->noc_coordinates();
+    auto dst_dram_noc_coord = dst_dram_buffer->noc_coordinates();
+    uint32_t src0_dram_noc_x = src0_dram_noc_coord.x;
+    uint32_t src0_dram_noc_y = src0_dram_noc_coord.y;
+    uint32_t src1_dram_noc_x = src1_dram_noc_coord.x;
+    uint32_t src1_dram_noc_y = src1_dram_noc_coord.y;
+    uint32_t dst_dram_noc_x = dst_dram_noc_coord.x;
+    uint32_t dst_dram_noc_y = dst_dram_noc_coord.y;
 
     /* Use L1 circular buffers to set input and output buffers that the compute engine will use */
     constexpr uint32_t src0_cb_index = CB::c_in0;
@@ -83,9 +93,9 @@ int main(int argc, char **argv) {
     EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
 
     /* Configure program and runtime kernel arguments, then execute */
-    SetRuntimeArgs( program, binary_reader_kernel_id, core, { src0_dram_buffer->address(), src1_dram_buffer->address()});
+    SetRuntimeArgs(program, binary_reader_kernel_id, core, { src0_dram_buffer->address(), src1_dram_buffer->address(), src0_dram_noc_x, src0_dram_noc_y, src1_dram_noc_x, src1_dram_noc_y});
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address()});
+    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_dram_noc_x, dst_dram_noc_y});
 
     EnqueueProgram(cq, program, false);
     Finish(cq);
