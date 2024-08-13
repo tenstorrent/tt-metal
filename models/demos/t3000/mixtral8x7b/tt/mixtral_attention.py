@@ -241,7 +241,7 @@ class TtMixtralAttention(LightweightModule):
         k_heads_1B1D.deallocate(True)
         v_heads_1B1D.deallocate(True)
 
-        attn_output_1B4D = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
+        attn_output_1B4D = ttnn.transformer.scaled_dot_product_attention_decode(
             q_heads_1B4D,
             keys_1BPD,
             values_1BPD,
@@ -249,7 +249,7 @@ class TtMixtralAttention(LightweightModule):
             scale=self.scale,
             program_config=self.model_config["SDPA_DECODE_PROGCFG"],
             compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
-            output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
         )
 
         attn_output_11BH = ttnn.experimental.nlp_concat_heads_decode(
@@ -360,7 +360,7 @@ class TtMixtralAttention(LightweightModule):
         self.layer_past = [keys_11SD, values_11SD]
 
         # SDPA
-        attn_output_14SD = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+        attn_output_14SD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_14SD,
             k_heads_11SD,
             v_heads_11SD,

@@ -350,7 +350,7 @@ class TtFalconAttention:
             ),
             user_id,
         )
-        attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
             query_layer,
             key_layer,
             value_layer,

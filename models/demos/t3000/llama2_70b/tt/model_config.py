@@ -491,9 +491,7 @@ def get_model_config(
         ),
     )
     if llm_mode == "decode":
-        model_config[
-            "SDPA_DECODE_PROGRAM_CONFIG"
-        ] = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+        model_config["SDPA_DECODE_PROGRAM_CONFIG"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=[8, 4],  # Can be increased, but could result in di/dt?
             q_chunk_size=0,  # unused
             k_chunk_size=0,  # unused
@@ -511,7 +509,7 @@ def get_model_config(
         q_chunk_size = 128
         k_chunk_size = 64 if seq_len == 128 else 256
 
-        model_config["SDPA_PROGCFG"] = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+        model_config["SDPA_PROGCFG"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=[8, 7],
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,

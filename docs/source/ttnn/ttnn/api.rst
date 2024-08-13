@@ -417,6 +417,9 @@ Transformer
    ttnn/transformer/attention_softmax
    ttnn/transformer/attention_softmax_
    ttnn/transformer/rotary_embedding
+   ttnn/transformer/sdpa
+   ttnn/transformer/sdpa_decode
+   ttnn/transformer/sdpa_decode_gqa
 
 Embedding
 =========

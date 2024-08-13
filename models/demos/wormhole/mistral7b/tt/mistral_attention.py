@@ -608,7 +608,7 @@ class TtMistralAttention(nn.Module):
         q_heads_84SD = ttnn.reshape(
             q_heads_1QSD, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
         )
-        attn_output_84SD = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+        attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_84SD,
             k_heads_K1SD,
             v_heads_V1SD,

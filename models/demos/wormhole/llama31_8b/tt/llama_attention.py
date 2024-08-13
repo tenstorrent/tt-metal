@@ -298,17 +298,15 @@ class TtLlamaAttention(nn.Module):
             ttnn.deallocate(k_heads)
             ttnn.deallocate(v_heads)
 
-            attn_output_1G4D = (
-                ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode_gqa(
-                    q_heads,
-                    keys,
-                    values,
-                    [current_pos for _ in range(self.max_batch_size * self.n_kv_heads)],
-                    scale=self.scale,
-                    program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                    compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
-                    output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
+                q_heads,
+                keys,
+                values,
+                [current_pos for _ in range(self.max_batch_size * self.n_kv_heads)],
+                scale=self.scale,
+                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
             attn_output_11BH = ttnn.to_memory_config(
@@ -429,7 +427,7 @@ class TtLlamaAttention(nn.Module):
         q_heads_84SD = ttnn.reshape(
             q_heads_1QSD, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
         )
-        attn_output_84SD = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+        attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_84SD,
             k_heads_K1SD,
             v_heads_V1SD,

@@ -903,7 +903,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     q_chunk_size = min(seq_len, 256)
     k_chunk_size = min(seq_len, 256)
 
-    model_config["SDPA_PROGCFG"] = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+    model_config["SDPA_PROGCFG"] = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=[8, 7],
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,

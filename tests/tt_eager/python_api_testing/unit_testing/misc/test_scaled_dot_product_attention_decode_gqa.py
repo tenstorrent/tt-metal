@@ -116,7 +116,7 @@ def run_test_sdpa_decode_single_iter(
     scale = d**-0.5
 
     k_chunk_size = get_chunk_size(max_start_idx + 1)
-    program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+    program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=padded_num_heads,
         k_chunk_size=k_chunk_size,
@@ -144,7 +144,7 @@ def run_test_sdpa_decode_single_iter(
         memory_config=dram_memcfg,
     )
 
-    tt_back = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode_gqa(
+    tt_back = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
         tt_Q,
         tt_K,
         tt_V,
@@ -152,7 +152,7 @@ def run_test_sdpa_decode_single_iter(
         scale=scale,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
-        output_mem_config=dram_memcfg,
+        memory_config=dram_memcfg,
     )
 
     tt_back = ttnn.to_torch(tt_back)
