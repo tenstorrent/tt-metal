@@ -925,4 +925,8 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_unary_div_no_nan,
         "pytorch_op": pytorch_ops.unary_div_no_nan,
     },
+    "complex-conj": {
+        "tt_op": ttnn_ops.complex_conj,
+        "pytorch_op": pytorch_ops.complex_conj,
+    },
 }
