@@ -368,10 +368,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_erfinv,
         "pytorch_op": pytorch_ops.erfinv,
     },
-    "lamb-optimizer": {
-        "tt_op": tt_lib_ops.lamb_optimizer,
-        "pytorch_op": pytorch_ops.lamb_optimizer,
-    },
     "eltwise-log": {
         "tt_op": tt_lib_ops.eltwise_log,
         "pytorch_op": pytorch_ops.log,
