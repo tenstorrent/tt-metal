@@ -676,7 +676,8 @@ void process_write_packed_large() {
         uint32_t length = sub_cmd_ptr->length;
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
         uint32_t pad_size = align(length, alignment) - length;
-        uint32_t unlink = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
+        // TODO: Enable linking across subcmds after writes to prefetcher is switched to other NOC
+        uint32_t unlink = true; // sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
 
         // Only re-init state after we have unlinked the last transaction
         // Otherwise we assume NOC coord hasn't changed
@@ -1094,7 +1095,8 @@ void kernel_main() {
     cb_release_pages<upstream_noc_xy, upstream_dispatch_cb_sem_id>(npages);
 
     // Confirm expected number of pages, spinning here is a leak
-    cb_wait_all_pages<my_dispatch_cb_sem_id>(0);
+    // TODO: We need to pass in our static counter here
+    // cb_wait_all_pages<my_dispatch_cb_sem_id>(0);
 
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": out" << ENDL();
 }
