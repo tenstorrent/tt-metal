@@ -2,16 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
+#include "rotate_half_device_operation.hpp"
 
-#include "tt_metal/common/constants.hpp"
+#include "single_core/rotate_half_program_factory.hpp"
+
+#include "ttnn/run_operation.hpp"
+
+namespace ttnn::operations::experimental::transformer {
 
 using namespace tt::constants;
-
-namespace tt {
-
-namespace tt_metal {
-
 
 void RotateHalf::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -23,7 +22,7 @@ void RotateHalf::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "RotateHalf does not currently support sharding");
 }
 
-std::vector<Shape> RotateHalf::compute_output_shapes(
+std::vector<tt::tt_metal::Shape> RotateHalf::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {input_tensor.get_legacy_shape()};
@@ -39,7 +38,7 @@ operation::ProgramWithCallbacks RotateHalf::create_program(const std::vector<Ten
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    return rotate_half_single_core(input_tensor, output_tensor);
+    return detail::rotate_half_single_core(input_tensor, output_tensor);
 }
 
 
@@ -47,6 +46,4 @@ RotateHalfOpParallelizationStrategy RotateHalf::get_parallelization_strategy(con
     return RotateHalfOpParallelizationStrategy::SINGLE_CORE;
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+} // namespace ttnn::operations::experimental::transformer
