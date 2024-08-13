@@ -387,8 +387,7 @@ namespace tt::tt_metal::sliding_window {
             auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
             log_debug(tt::LogOp, "config_shape: ({}, {})", config_shape[0], config_shape[1]);
             return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
-        }
-        else if(p_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED){
+        } else if(p_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t repeat_factor = p_config.grid.num_cores();
             std::vector<uint16_t> repeat_config;
             for (uint32_t i = 0; i < repeat_factor; ++ i) {
@@ -397,7 +396,7 @@ namespace tt::tt_metal::sliding_window {
             auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
             config_shape = {config_shape[0] * repeat_factor, config_shape[1]};
             return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
-        }else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+        } else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
             TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
             // NOTE: it is assumed that the range start is always (0, 0)
             uint32_t ncores_y = p_config.grid.ranges().begin()->end_coord.y + 1;
@@ -435,3 +434,26 @@ namespace tt::tt_metal::sliding_window {
     }
 
 } // namespace sliding_window
+auto fmt::formatter<tt::tt_metal::ParallelConfig>::format(tt::tt_metal::ParallelConfig t, format_context& ctx) const
+    -> format_context::iterator {
+        std::string shard_scheme_str = "";
+        if(t.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
+            shard_scheme_str = "HEIGHT_SHARDED";
+        } else if(t.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+            shard_scheme_str = "BLOCK_SHARDED";
+        } else if(t.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+            shard_scheme_str = "WIDTH_SHARDED";
+        } else {
+            shard_scheme_str = "NOT_SHARDED";
+        }
+        std::string shard_orientation_str = "";
+        if(t.shard_orientation == ShardOrientation::COL_MAJOR){
+            shard_orientation_str="COL_MAJOR";
+        } else if(t.shard_orientation == ShardOrientation::ROW_MAJOR){
+            shard_orientation_str="ROW_MAJOR";
+        } else {
+            shard_orientation_str="INVALID";
+        }
+        std::string str = fmt::format("ParallelConfig(grid={}, shard_scheme={}, shard_orientation={})", t.grid.str(), shard_scheme_str, shard_orientation_str);
+        return fmt::format_to(ctx.out(), "{}", str);
+}

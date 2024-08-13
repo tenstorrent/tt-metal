@@ -1693,8 +1693,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
     bool enable_split_reader,
     bool enable_subblock_padding) {
     tt_metal::Program program = tt_metal::CreateProgram();
-    if(a.memory_config().memory_layout==TensorMemoryLayout::WIDTH_SHARDED)
-    {
+    if(a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         return multi_core_optimized_conv_width_sharded_v2_impl(
         program,
         a,
@@ -1825,8 +1824,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
 
     // add config tensor to program
     tt::tt_metal::detail::AddConfigBuffer(program, conv_reader_indices_tensor.device_buffer());
-    if(parallel_config.shard_scheme==TensorMemoryLayout::WIDTH_SHARDED)
-    {
+    if(parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
         return multi_core_optimized_conv_width_sharded_v2_impl(
         program,
         a,

@@ -160,28 +160,6 @@ template <> struct fmt::formatter<tt::tt_metal::SlidingWindowConfig>: formatter<
 };
 
 template <> struct fmt::formatter<tt::tt_metal::ParallelConfig>: formatter<string_view> {
-    auto format(const tt::tt_metal::ParallelConfig& t, fmt::format_context& ctx) {
-        std::string shard_scheme_str = "";
-        if(t.shard_scheme==TensorMemoryLayout::HEIGHT_SHARDED) {
-            shard_scheme_str = "HEIGHT_SHARDED";
-        } else if(t.shard_scheme==TensorMemoryLayout::BLOCK_SHARDED) {
-            shard_scheme_str = "BLOCK_SHARDED";
-        } else if(t.shard_scheme==TensorMemoryLayout::WIDTH_SHARDED) {
-            shard_scheme_str = "WIDTH_SHARDED";
-        }         if(t.shard_scheme==TensorMemoryLayout::HEIGHT_SHARDED) {
-            shard_scheme_str = "NOT_SHARDED";
-        }
-        std::string shard_orientation_str = "";
-        if(t.shard_orientation==ShardOrientation::COL_MAJOR){
-            shard_orientation_str="COL_MAJOR";
-        } else if(t.shard_orientation==ShardOrientation::ROW_MAJOR){
-            shard_orientation_str="ROW_MAJOR";
-        } else
-        {
-            shard_orientation_str="INVALID S.O.";
-        }
-
-        std::string str = fmt::format("ParallelConfig(grid={}, shard_scheme={}, shard_orientation={})", t.grid.str(), shard_scheme_str, shard_orientation_str);
-        return fmt::format_to(ctx.out(), "{}", str);
-    }
+  auto format(tt::tt_metal::ParallelConfig t, format_context& ctx) const
+    -> format_context::iterator;
 };
