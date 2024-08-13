@@ -3,8 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from tt_lib.fallback_ops import fallback_ops
-import tt_lib
+from ttnn.fallback_ops import fallback_ops
 import ttnn
 from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv
 
