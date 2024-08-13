@@ -72,8 +72,8 @@ RUN python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env
 RUN python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
 
 # Set python 3.11 and gcc-12 to be default
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 10
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 11
+# RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 10
+# RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 11
 
 RUN update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 11
 RUN update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
