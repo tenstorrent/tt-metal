@@ -4,7 +4,6 @@
 
 import torch
 
-import tt_lib as ttl
 import pytest
 import ttnn
 from loguru import logger
@@ -21,12 +20,12 @@ from tests.ttnn.unit_tests.operations.complex.utility_funcs import (
 @pytest.mark.parametrize(
     "memcfg",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
     ids=["out_DRAM", "out_L1"],
 )
-@pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.FLOAT32,)))
+@pytest.mark.parametrize("dtype", ((ttnn.float32,)))
 @pytest.mark.parametrize("bs", ((1, 1),))
 @pytest.mark.parametrize("hw", ((32, 32),))
 def test_create_complex_tensor(bs, hw, memcfg, dtype, device, function_level_defaults):
@@ -35,8 +34,8 @@ def test_create_complex_tensor(bs, hw, memcfg, dtype, device, function_level_def
     in_data = random_complex_tensor(input_shape, (-90, 90), (-70, 70))
 
     input_tensor = ttnn.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttnn.Tensor(in_data.real, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
+        ttnn.Tensor(in_data.imag, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
     )
 
     tt_dev = input_tensor

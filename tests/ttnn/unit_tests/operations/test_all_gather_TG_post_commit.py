@@ -5,7 +5,6 @@
 import torch
 import pytest
 from loguru import logger
-import tt_lib as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
@@ -153,7 +152,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 
     if debug:
         for i, t in enumerate(ttnn.get_device_tensors(ttnn_tensor_out)):
-            t = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+            t = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
             print(f"OUTPUT TENSOR {i}")
             print_tile_corners_of_tensor(t)
 
@@ -169,7 +168,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         print_tile_corners_of_tensor(tt_output_tensor)
 
     ## This full_tensor will only be 1/num_devices_per_line of the tt_output_tensor. We should just be able to concatenate it along the
-    if input_dtype == ttl.tensor.DataType.BFLOAT16:
+    if input_dtype == ttnn.bfloat16:
         eq, output = comp_equal(tt_output_tensor, full_mesh_output_golden)
         if not eq and debug:
             report_mismatches(full_mesh_output_golden, tt_output_tensor)
@@ -185,25 +184,25 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        (4, 3, [1, 1, 32, 1280], 0, ttl.tensor.Layout.TILE),
-        (4, 3, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
-        (4, 3, [1, 1, 32, 2304], 1, ttl.tensor.Layout.TILE),
-        (4, 3, [1, 1, 32, 4096], 1, ttl.tensor.Layout.TILE),
-        (4, 3, [1, 1, 32, 6656], 1, ttl.tensor.Layout.TILE),
+        (4, 3, [1, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 1, 32, 2304], 1, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 1, 32, 4096], 1, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 1, 32, 6656], 1, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
@@ -246,24 +245,24 @@ def test_line_all_gather_on_TG_rows_post_commit(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        # (8, 4, [1, 1, 32, 1280], 1, ttl.tensor.Layout.TILE), # Rightmost column of tiles per input not copied to final output
-        (8, 4, [1, 1, 32, 2048], 1, ttl.tensor.Layout.TILE),  # passes
-        (8, 4, [1, 1, 32, 2304], 1, ttl.tensor.Layout.TILE),  # passes
-        (8, 4, [1, 1, 32, 4096], 1, ttl.tensor.Layout.TILE),  # passes
+        # (8, 4, [1, 1, 32, 1280], 1, ttnn.TILE_LAYOUT), # Rightmost column of tiles per input not copied to final output
+        (8, 4, [1, 1, 32, 2048], 1, ttnn.TILE_LAYOUT),  # passes
+        (8, 4, [1, 1, 32, 2304], 1, ttnn.TILE_LAYOUT),  # passes
+        (8, 4, [1, 1, 32, 4096], 1, ttnn.TILE_LAYOUT),  # passes
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("enable_async", [False])

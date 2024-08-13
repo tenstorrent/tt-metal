@@ -4,7 +4,7 @@
 
 import torch
 
-import tt_lib as ttl
+import ttnn
 
 
 def random_complex_tensor(shape, real_range=(-100, 100), imag_range=(-100, 100)):
@@ -15,7 +15,7 @@ def random_complex_tensor(shape, real_range=(-100, 100), imag_range=(-100, 100))
 
 
 def convert_complex_to_torch_tensor(tt_dev):
-    tt_dev_r = tt_dev.real.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    tt_dev_i = tt_dev.imag.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_dev_r = tt_dev.real.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_dev_i = tt_dev.imag.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
     tt_to_torch = torch.complex(tt_dev_r, tt_dev_i)
     return tt_to_torch

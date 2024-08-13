@@ -173,7 +173,7 @@ def test_run_max_pool(
         device=device,
     )
 
-    # interleaved_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    # interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
     # output = ttnn.to_memory_config(output, interleaved_mem_config)
     output_host = output.cpu()
     output_pytorch_padded = ttnn.to_torch(output_host)

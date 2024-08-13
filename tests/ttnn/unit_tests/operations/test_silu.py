@@ -10,8 +10,6 @@ import torch
 
 # import torch.nn as nn
 
-# import tt_lib
-import tt_lib as ttl
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
@@ -48,7 +46,7 @@ def run_elt_silu_relu(
     input_tensor = ttnn.from_torch(
         tt_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT, dtype=dtype
     )
-    interleaved_mem_config = ttnn.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
     input_tensor = ttnn.to_memory_config(input_tensor, interleaved_mem_config)
     # input_shape = [1, 1, _nearest_y(batch_size * input_height * input_width, 32), input_channels]
     input_2d_height = input_tensor.get_legacy_shape()[2]

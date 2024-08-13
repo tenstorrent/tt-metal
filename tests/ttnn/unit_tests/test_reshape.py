@@ -7,7 +7,6 @@ import pytest
 import torch
 
 import ttnn
-import tt_lib as ttl
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 

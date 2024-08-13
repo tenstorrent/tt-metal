@@ -205,7 +205,7 @@ def test_fold(act_shape, stride_h, stride_w, device):
         torch_input,
         device,
         ttnn.ROW_MAJOR_LAYOUT,
-        tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        tt_memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     tt_out = ttnn.fold(tt_input, stride_h, stride_w)
