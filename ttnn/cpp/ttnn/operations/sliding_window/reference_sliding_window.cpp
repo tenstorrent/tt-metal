@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/reference_sliding_window.hpp"
+#include "ttnn/operations/sliding_window/reference_sliding_window.hpp"
 
 #include <cstdint>
 #include <numeric>
@@ -12,16 +12,16 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 
-namespace tt::tt_metal::sliding_window {
+namespace ttnn::operations::sliding_window {
 
 owned_buffer::Buffer<bfloat16> ref_conv_op(
     const Tensor &input_padded_tensor,
-    Shape input_nchw_shape,
+    const Shape &input_nchw_shape,
     uint32_t stride_h,
     uint32_t stride_w,
     const std::vector<float> &filter_vector,
-    Shape &filter_pyt_tensor_shape,
-    Shape &out_golden_pyt_tensor_shape) {
+    const Shape &filter_pyt_tensor_shape,
+    const Shape &out_golden_pyt_tensor_shape) {
     uint32_t input_n, input_h, input_w;
     uint32_t filter_h, filter_w;
     uint32_t output_n, output_h, output_w;
@@ -29,9 +29,9 @@ owned_buffer::Buffer<bfloat16> ref_conv_op(
     auto input_padded_tensor_buf = owned_buffer::get_as<bfloat16>(input_padded_tensor);
 
     std::tie(output_n, output_h, output_w) =
-        std::tie(out_golden_pyt_tensor_shape[0], out_golden_pyt_tensor_shape[1], out_golden_pyt_tensor_shape[2]);
-    std::tie(filter_h, filter_w) = std::tie(filter_pyt_tensor_shape[0], filter_pyt_tensor_shape[1]);
-    std::tie(input_n, input_h, input_w) = std::tie(input_nchw_shape[0], input_nchw_shape[1], input_nchw_shape[2]);
+        std::forward_as_tuple(out_golden_pyt_tensor_shape[0], out_golden_pyt_tensor_shape[1], out_golden_pyt_tensor_shape[2]);
+    std::tie(filter_h, filter_w) = std::forward_as_tuple(filter_pyt_tensor_shape[0], filter_pyt_tensor_shape[1]);
+    std::tie(input_n, input_h, input_w) = std::forward_as_tuple(input_nchw_shape[0], input_nchw_shape[1], input_nchw_shape[2]);
     auto out_golden_pyt_tensor = owned_buffer::create<bfloat16>(output_n * output_h * output_w);
 
     std::vector<float> input_window;

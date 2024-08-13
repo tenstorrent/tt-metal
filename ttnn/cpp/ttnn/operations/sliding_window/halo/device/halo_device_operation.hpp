@@ -9,13 +9,13 @@
 
 // #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 
-namespace ttnn::operations {
+namespace ttnn::operations::sliding_window {
 namespace halo {
 
-struct Halo {
+struct HaloDeviceOperation {
     thread_local static std::unordered_map<std::size_t, std::uint32_t> sliding_window_max_out_nsticks_per_core;
     SlidingWindowConfig config_;
     ParallelConfig parallel_config_;
