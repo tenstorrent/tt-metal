@@ -245,12 +245,13 @@ void py_module(py::module& module) {
 
     py::class_<OptimizedConvParallelizationConfig>(module, "OptimizedConvParallelizationConfig")
         .def(
-            py::init<CoreCoord, uint32_t, uint32_t, uint32_t>(),
+            py::init<CoreCoord, uint32_t, uint32_t, uint32_t, uint32_t>(),
             py::kw_only(),
             py::arg("grid_size"),
-            py::arg("num_cores_nhw"),
-            py::arg("per_core_out_matrix_height_ntiles").noconvert(),
-            py::arg("per_core_out_matrix_width_ntiles").noconvert())
+            py::arg("num_cores_nhw") = 1,
+            py::arg("num_cores_c") = 1,
+            py::arg("per_core_out_matrix_height_ntiles").noconvert() = 1,
+            py::arg("per_core_out_matrix_width_ntiles").noconvert() = 1)
         .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
         .def_property_readonly(
             "num_cores_nhw", [](OptimizedConvParallelizationConfig const& c) { return c.num_cores_nhw; })

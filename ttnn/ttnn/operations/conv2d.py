@@ -531,9 +531,8 @@ def conv2d(
         if config_shard_grid is not None:
             if config_shard_grid != input_shard_grid:
                 needs_reshard = True
-        input_height_sharded = input_shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        if conv_config.height_sharding is not None:
-            if input_height_sharded != conv_config.height_sharding:
+        if conv_config.shard_layout is not None:
+            if input_shard_scheme != conv_config.shard_layout:
                 needs_reshard = True
     else:
         needs_reshard = True
@@ -560,7 +559,9 @@ def conv2d(
             )
 
             shard_orientation = (
-                ttnn.ShardOrientation.ROW_MAJOR if conv_config.height_sharding else ttnn.ShardOrientation.COL_MAJOR
+                ttnn.ShardOrientation.ROW_MAJOR
+                if conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                else ttnn.ShardOrientation.COL_MAJOR
             )
             parallel_config = ParallelConfig(
                 grid_size.y, grid_size.x, num_cores_nhw, conv_config.shard_layout, shard_orientation

@@ -110,7 +110,7 @@ void kernel_main() {
             weight_block_start_tile_id += weight_next_block_other_core_stride_h;
         }
         weight_start_tile_id +=weight_next_block_this_core_stride_h;
-        if(to_load_bias){
+        if(to_load_bias) {
             #ifdef FUSE_BIAS
             uint32_t bias_l1_addr = get_write_ptr(bias_cb_id);
             for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i)

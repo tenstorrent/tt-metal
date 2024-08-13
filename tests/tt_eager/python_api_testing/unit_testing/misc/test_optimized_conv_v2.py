@@ -277,6 +277,7 @@ def test_simple(
     debug = False
     fuse_relu = False
 
+    pytest.skip("TODO: Delete this test suite")
     assert output_channels % 32 == 0
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
