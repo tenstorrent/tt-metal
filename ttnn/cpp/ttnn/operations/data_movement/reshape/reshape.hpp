@@ -11,7 +11,7 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct ReshapeOperation {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         int N,
@@ -20,7 +20,7 @@ struct ReshapeOperation {
         int W,
         const std::optional<MemoryConfig>& memory_config_arg);
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         int N,
         int C,
@@ -28,7 +28,7 @@ struct ReshapeOperation {
         int W,
         const std::optional<MemoryConfig>& memory_config);
 
-    static ttnn::Tensor operator()(const ttnn::Tensor& input_tensor, int N, int C, int H, int W);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, int N, int C, int H, int W);
 };
 
 

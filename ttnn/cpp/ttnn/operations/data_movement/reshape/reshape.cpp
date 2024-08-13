@@ -48,7 +48,7 @@ namespace detail {
 }
 
 
-ttnn::Tensor ReshapeOperation::operator()(
+ttnn::Tensor ReshapeOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     int N,
@@ -87,18 +87,18 @@ ttnn::Tensor ReshapeOperation::operator()(
 
 }
 
-ttnn::Tensor ReshapeOperation::operator()(
+ttnn::Tensor ReshapeOperation::invoke(
     const ttnn::Tensor& input_tensor,
     int N,
     int C,
     int H,
     int W,
     const std::optional<MemoryConfig>& memory_config) {
-    return operator()(DefaultQueueId, input_tensor, N, C, H, W, memory_config);
+    return invoke(DefaultQueueId, input_tensor, N, C, H, W, memory_config);
 }
 
-ttnn::Tensor ReshapeOperation::operator()(const ttnn::Tensor& input_tensor, int N, int C, int H, int W) {
-    return operator()(DefaultQueueId, input_tensor, N, C, H, W,std::nullopt);
+ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, int N, int C, int H, int W) {
+    return invoke(DefaultQueueId, input_tensor, N, C, H, W,std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace
