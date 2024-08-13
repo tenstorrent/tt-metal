@@ -924,7 +924,7 @@ op_map = {
     "eltwise-unary_div_no_nan": {
         "tt_op": ttnn_ops.eltwise_unary_div_no_nan,
         "pytorch_op": pytorch_ops.unary_div_no_nan,
-    }
+    },
     "complex-polar-bw": {
         "tt_op": ttnn_ops.complex_polar_bw,
         "pytorch_op": pytorch_ops.complex_polar_bw,
