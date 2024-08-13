@@ -575,9 +575,9 @@ def get_model_config(
             fused_activation=None,
         )
         model_config["PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=32,  # K = 32768 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+            in0_block_w=4,  # K = 32768 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             per_core_M=1,
-            per_core_N=1,
+            per_core_N=8,
             fused_activation=None,
         )
     else:
@@ -616,7 +616,7 @@ def get_model_config(
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
             per_core_M=max_mm_seq_tiles // cores_y,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-            per_core_N=4,  # N / TILE_WIDTH / Grid_Size
+            per_core_N=32,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=False,

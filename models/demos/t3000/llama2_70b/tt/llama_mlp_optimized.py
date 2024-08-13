@@ -48,7 +48,7 @@ class TtLlamaMLP_optimized:
         w2_str = f"{self.layer_name}.feed_forward.w2.weight"
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
-        w2_dram_shard_str = f"{self.layer_name}.feed_forward.w2_dram_shard.weight"
+        w2_dram_shard_str = f"{self.layer_name}.feed_forward.w2_dram_shard_reduce.weight"
         w3_dram_shard_str = f"{self.layer_name}.feed_forward.w3_dram_shard.weight"
 
         w1_dtype = ttnn.bfloat4_b
@@ -91,7 +91,7 @@ class TtLlamaMLP_optimized:
             cache_file_name=self.cache_path / w1_str,
         )
 
-        w2_shard_shape = (32768, 96)  # Padded cols 1024/12
+        w2_shard_shape = (4096, 8448 // 12)  # expand dim is 32k / 8 chips padded
         w2_shard_spec = ttnn.ShardSpec(weight_grid, w2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
         w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
         self.w2 = ttnn.as_tensor(
@@ -100,7 +100,7 @@ class TtLlamaMLP_optimized:
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=w2_memory_config,
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
             cache_file_name=self.cache_path / w2_dram_shard_str,
         )
 
@@ -155,12 +155,6 @@ class TtLlamaMLP_optimized:
         w1_out.deallocate(True)
         w3_out.deallocate(True)
 
-        hidden_states = ttnn.all_gather(
-            hidden_states,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-        )
-
         hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
@@ -170,9 +164,19 @@ class TtLlamaMLP_optimized:
         )
 
         # Prefill Reshape fix (reverse)
-        hidden_states = ttnn.reshape(hidden_states, (1, 1, seq_len, self.hidden_size // self.num_devices))
+        hidden_states = ttnn.reshape(hidden_states, (1, 1, seq_len, self.hidden_size))
 
-        return hidden_states
+        hidden_states_reduced = ttnn.reduce_scatter(
+            hidden_states,
+            scatter_dim=3,
+            math_op=ttnn.experimental.tensor.ReduceOpMath.SUM,
+            num_links=1,
+            memory_config=self.model_config["DRAM_MEMCFG"],
+        )
+
+        hidden_states.deallocate(True)
+
+        return hidden_states_reduced
 
     def decode_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         hidden_states = []
@@ -203,14 +207,6 @@ class TtLlamaMLP_optimized:
         w1_out.deallocate(True)
         w3_out.deallocate(True)
 
-        hidden_states = ttnn.all_gather(
-            hidden_states,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            # memory_config=self.model_config["L1_MEMCFG"],
-            memory_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"],
-        )
-
         hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
@@ -218,4 +214,13 @@ class TtLlamaMLP_optimized:
             memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
-        return hidden_states
+
+        hidden_states_reduced = ttnn.reduce_scatter(
+            hidden_states,
+            scatter_dim=3,
+            math_op=ttnn.experimental.tensor.ReduceOpMath.SUM,
+            num_links=1,
+            memory_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
+        )
+        hidden_states.deallocate(True)
+        return hidden_states_reduced
