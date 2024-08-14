@@ -71,6 +71,7 @@ run_t3000_tteager_tests() {
   echo "LOG_METAL: Running run_t3000_tteager_tests"
 
   pytest -n auto tests/ttnn/unit_tests/operations/test_all_gather.py -k post_commit ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/test_all_gather_matmul.py -k post_commit ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/test_reduce_scatter_post_commit.py ; fail+=$?
 
   # distributed layernorm

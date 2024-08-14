@@ -20,21 +20,24 @@
 #include <sstream>
 #include <type_traits>
 
+#include "ttnn/operations/experimental/ccl/ccl_op_fusion.hpp"
+
+
 using namespace tt::constants;
 
 namespace ttnn {
 
 using namespace ccl;
 
-static std::tuple<CoreRangeSet,CoreRangeSet> select_worker_cores(AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t link, uint32_t full_send_direction) {
+static std::tuple<CoreRangeSet,CoreRangeSet> select_worker_cores(AllGatherConfig const& all_gather_config, uint32_t num_links, uint32_t link, uint32_t full_send_direction, CoreCoord const& core_grid_offset) {
     constexpr uint32_t worker_grid_width = 8;
     const bool fit_sender_and_receiver_workers_on_same_row = (worker_grid_width / 2) >= all_gather_config.get_num_eth_buffers_per_edm();
     std::set<CoreRange> receiver_worker_cores = {};
     std::set<CoreRange> sender_worker_cores = {};
     uint32_t max_cols = 8;
     uint32_t curr_row = link * (((all_gather_config.get_num_eth_buffers_per_edm() * 2 - 1) / max_cols) + 1) +
-        (full_send_direction * num_links * (((all_gather_config.get_num_eth_buffers_per_edm() * 2 - 1) / max_cols) + 1));
-    uint32_t curr_col = 0;
+        (full_send_direction * num_links * (((all_gather_config.get_num_eth_buffers_per_edm() * 2 - 1) / max_cols) + 1)) + core_grid_offset.y;
+    uint32_t curr_col = core_grid_offset.x;
     for (uint32_t r = 0; r < all_gather_config.get_num_eth_buffers_per_edm(); r++) {
         receiver_worker_cores.insert(CoreRange(CoreCoord(curr_col, curr_row)));
         curr_col ++;
@@ -171,17 +174,43 @@ static void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pag
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology) {
+
+    tt::tt_metal::Program program{};
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
+    return all_gather_multi_core_with_workers_helper(program, input_tensor, output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, empty_fused_op_signaler);
+}
+
+operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    const std::optional<chip_id_t> receiver_device_id,
+    const std::optional<chip_id_t> sender_device_id,
+    all_gather_op::Topology topology,
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
+    const CoreCoord core_grid_offset) {
+
     TT_FATAL(!(receiver_device_id == std::nullopt && sender_device_id == std::nullopt), "At least one of receiver_device_id or sender_device_id must be specified");
 
     bool is_linear = topology == all_gather_op::Topology::Linear;
     std::unique_ptr<ccl::CclOpTensorConfig> input_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
     std::unique_ptr<ccl::CclOpTensorConfig> output_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
 
-    tt::tt_metal::Program program{};
     // Issue #10978: CCLs need to be tagged as having multi-device dependencies, when running on Galaxy.
     program.capture_multi_device_dependencies();
     const auto& device = input_tensor.device();
-    auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology);
+
+    /* All gather fusion */
+    bool fuse_op = fused_op_signaler.has_value();
+    if (fuse_op) {
+        fused_op_signaler->init_fused_op(device);
+    }
+
+    auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology, fuse_op);
     auto const& topology_config = ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
     bool enable_print = false;
@@ -357,7 +386,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         for (uint32_t i = 0; i < num_links; ++i) {
             // We can't have overlap between the mcast grid for worker cores for different links since mcasting the semaphore in receiver would corrupt other link semaphores
             // We can have overlap between a link's sender and receiver worker grids if we have the semaphores at different addresses
-            auto const& [receiver_workers, sender_workers] = select_worker_cores(all_gather_config, num_links, i, direction);
+            auto const& [receiver_workers, sender_workers] = select_worker_cores(all_gather_config, num_links, i, direction, core_grid_offset);
             uint32_t worker_index = 0;
             uint32_t workers_per_link = all_gather_config.get_num_workers_per_link() / all_gather_config.get_num_eth_buffers_per_edm();
 
@@ -433,6 +462,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
             counter_clockwise_link_buffer_num_messages_to_send.reserve(all_gather_config.get_num_eth_buffers_per_edm());
             edm_semaphores_base_address.reserve(all_gather_config.get_num_eth_buffers_per_edm());
             link_buffer_sender_addresses.reserve(all_gather_config.get_num_eth_buffers_per_edm());
+
+            /* All gather fusion */
+            if (fuse_op) {
+                fused_op_signaler->init_all_gather(program, device, receiver_workers, receiver_worker_cores);
+            }
 
             {
                 for (std::size_t b = 0; b < all_gather_config.get_num_eth_buffers_per_edm(); b++) {
@@ -885,11 +919,21 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             static_cast<uint32_t>(sender_worker_reader_semaphore_id),
                             static_cast<uint32_t>(is_clockwise_direction ? 1 : 0),
                             static_cast<uint32_t>(cb_num_pages / 2),
-                            static_cast<uint32_t>(ring_size)
+                            static_cast<uint32_t>(ring_size),
+                            static_cast<bool>(fuse_op)
                         };
 
                         if (is_sharded) {
                             emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_writer_receiver_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
+                        }
+
+                        if (fuse_op) {
+                            fused_op_signaler->emit_all_gather_fused_op_ct_args(worker_writer_receiver_ct_args, global_num_workers, b);
+                        } else {
+                            // Push dummy args so that kernel doesn't error out at compile time from the lack of args when fuse_op=false
+                            for (uint32_t w = 0; w < experimental::ccl::AllGatherFusedOpSignaler::get_num_ct_args(); ++w) {
+                                worker_writer_receiver_ct_args.push_back(static_cast<uint32_t>(0));
+                            }
                         }
 
                         log_trace(tt::LogOp, "Worker {} RW ct args", b);
@@ -936,6 +980,11 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
 
                         if (is_sharded) {
                             emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_receiver_rt_args);
+                        }
+
+                        /* All Gather fusion */
+                        if (fuse_op) {
+                            fused_op_signaler->emit_all_gather_fused_op_rt_args(worker_writer_receiver_rt_args, is_clockwise_direction ? 0 : 1);
                         }
 
                         log_trace(tt::LogOp, "Worker {} RW rt args", b);
