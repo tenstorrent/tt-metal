@@ -288,7 +288,6 @@ namespace tt::tt_metal{
             return true;
         }
 
-
         /**
          * Copy data from an L1 buffer into a host buffer. Must be a buffer, and not a CB.
          *
@@ -413,79 +412,6 @@ namespace tt::tt_metal{
                 num_host_channels > 0);
         }
 
-        inline void CheckDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges) {
-            bool riscv0_in_use = false; bool riscv1_in_use = false;
-            bool noc0_in_use = false; bool noc1_in_use = false;
-
-            auto set_global_and_local_noc_usage = [&](KernelHandle kernel_id, bool &local_noc0_usage, bool &local_noc1_usage) {
-                const auto kernel = detail::GetKernel(program, kernel_id);
-                auto kernel_config = std::get<DataMovementConfig>(kernel->config());
-                auto noc_value = magic_enum::enum_integer(kernel_config.noc);
-                local_noc0_usage = noc_value == 0;
-                local_noc1_usage = noc_value == 1;
-                noc0_in_use = local_noc0_usage;
-                noc1_in_use = local_noc1_usage;
-            };
-
-            for (const auto &core_range : core_ranges.ranges()) {
-                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                        const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y), CoreType::WORKER);
-                        if (kernel_group != nullptr) {
-                            bool local_noc0_in_use = false; bool local_noc1_in_use = false;
-                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value()) {
-                                riscv0_in_use = true;
-                                set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value(), local_noc0_in_use, local_noc1_in_use);
-                            }
-                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
-                                riscv1_in_use = true;
-                                set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value(), local_noc0_in_use, local_noc1_in_use);
-                            }
-                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
-                                kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
-                                TT_FATAL(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!", CoreCoord(x, y).str());
-                            }
-                        }
-                    }
-                }
-            }
-
-            TT_FATAL(not (riscv0_in_use and riscv1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because both data movement processors are in use!", file_name);
-            TT_FATAL(not (noc0_in_use and noc1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernels for {} across specified cores because both NOCs are in use!", file_name);
-        }
-
-        inline CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {
-            ZoneScoped;
-            return std::visit(
-                [](auto&& core_spec) -> CoreRangeSet
-                {
-                    using T = std::decay_t<decltype(core_spec)>;
-                    if constexpr (std::is_same_v<T, CoreCoord>) {
-                        return CoreRangeSet({CoreRange(core_spec, core_spec)});
-                    }
-                    else if constexpr (std::is_same_v<T, CoreRange>) {
-                        return CoreRangeSet({core_spec});
-                    }
-                    else if constexpr (std::is_same_v<T, CoreRangeSet>) {
-                        return core_spec;
-                    }
-                },
-                specified_core_spec
-            );
-        }
-
-        inline void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
-            // Push empty work to threads and ensure its been picked up
-            static auto empty_work = std::make_shared<std::function<void()>>([](){});
-            for (auto target_device : workers) {
-                target_device->work_executor.push_work(empty_work);
-            }
-            // Block until work has been picked up, to flush the queue
-            for (auto target_device : workers) {
-                while(not target_device->work_executor.worker_queue.empty());
-            }
-        }
-        
         // TODO: Find a better home for this function
         template <typename CoreRangeContainer>
         vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(Device* device, const CoreRangeContainer& ranges, const CoreType core_type) {

@@ -18,6 +18,20 @@
 
 using namespace tt::constants;
 
+namespace{
+    inline void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
+        // Push empty work to threads and ensure its been picked up
+        static auto empty_work = std::make_shared<std::function<void()>>([](){});
+        for (auto target_device : workers) {
+            target_device->work_executor.push_work(empty_work);
+        }
+        // Block until work has been picked up, to flush the queue
+        for (auto target_device : workers) {
+            while(not target_device->work_executor.worker_queue.empty());
+        }
+    }
+}
+
 namespace tt {
 
 namespace tt_metal {
@@ -497,7 +511,7 @@ Tensor Tensor::cpu(bool blocking) const {
     }
 
     if (blocking) {
-        detail::SynchronizeWorkerThreads(workers);
+        SynchronizeWorkerThreads(workers);
     }
     // Update main_thread_ref_count for tensor after pushing to queue.
     this->tensor_attributes->update_main_thread_ref_count(workers.at(0), original_tensor_ref_count);
