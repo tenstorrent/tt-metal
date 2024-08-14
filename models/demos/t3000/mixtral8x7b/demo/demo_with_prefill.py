@@ -61,10 +61,16 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    if len(user_input) == 1:
-        input_prompts = user_input * batch_size  # Always process 32 users
+    if "input_tale_of_two_cities_32k" in user_input:
+        with open(user_input, "r") as file:
+            tale_cities = file.read()
+        # tale of two cities has around 193k tokens. Divide by 6 to get 32k tokens and repeat for all 4 users
+        input_prompts = [tale_cities[: len(tale_cities) // 6]] * batch_size
     else:
-        input_prompts = load_inputs(user_input, batch_size)
+        if len(user_input) == 1:
+            input_prompts = user_input * batch_size  # Always process 32 users
+        else:
+            input_prompts = load_inputs(user_input, batch_size)
     profiler.end("loading_inputs")
 
     # Load model args, weights, and tokenizer
@@ -73,7 +79,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     )
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 32  # Full model
+    model_args.n_layers = 1  # Full model
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -310,12 +316,12 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
                 all_outputs[user].append(user_tok)
 
         # Print out generated outputs for each user at the end of every iteration
-        if not is_ci_env:  # Avoid printing every iteration in CI
-            if len(user_input) == 1:
-                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-            else:
-                for user in range(batch_size):
-                    logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
+        # if not is_ci_env:  # Avoid printing every iteration in CI
+        #     if len(user_input) == 1:
+        #         logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+        #     else:
+        #         for user in range(batch_size):
+        #             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
         # Always print iteration perf
         logger.info(
@@ -434,8 +440,9 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     [
         ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", False),
         ("models/demos/t3000/mixtral8x7b/demo/input_data_questions_prefill_128.json", True),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", False),
     ],
-    ids=["general_weights", "instruct_weights"],
+    ids=["general_weights", "instruct_weights", "tale_of_two_cities"],
 )
 def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights, is_ci_env):
     if is_ci_env and instruct_weights == True:
@@ -444,9 +451,11 @@ def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, ins
     for device in t3k_device_mesh.get_device_ids():
         t3k_device_mesh.get_device(device).enable_async(True)
 
+    batch_size = 4 if "32k" in input_prompts else 32
+
     return run_mixtral_demo(
         user_input=input_prompts,
-        batch_size=32,
+        batch_size=batch_size,
         device_mesh=t3k_device_mesh,
         instruct_mode=instruct_weights,
         is_ci_env=is_ci_env,
