@@ -6,7 +6,6 @@ import math
 import ttnn
 import torch
 import os
-import tt_lib as ttl
 from ttnn import squeeze, unsqueeze_to_4D
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     is_tile_dim_alligned,
