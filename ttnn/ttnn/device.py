@@ -4,6 +4,7 @@
 
 import contextlib
 import os
+from typing import Optional
 
 import ttnn
 from ttnn._ttnn.deprecated.device import Arch
@@ -52,13 +53,15 @@ def disable_and_clear_program_cache(device):
     ttnn._ttnn.device.disable_and_clear_program_cache(device)
 
 
-def synchronize_device(device):
+def synchronize_device(device: "ttnn.Device", queue_id: Optional[int] = None) -> None:
     """
-    synchronize_device(device: ttnn.Device) -> None:
+    synchronize_device(device: ttnn.Device, queue_id: Optional[int] = None) -> None:
 
     Synchronize the device with host by waiting for all operations to complete.
+    If queue_id is provided then only the operations associated with that queue_id are waited for,
+    otherwise operations for all command queues are waited on.
     """
-    ttnn._ttnn.deprecated.device.Synchronize(device)
+    ttnn._ttnn.deprecated.device.Synchronize(device, queue_id)
 
 
 @contextlib.contextmanager

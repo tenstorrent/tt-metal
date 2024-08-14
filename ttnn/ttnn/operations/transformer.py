@@ -53,7 +53,7 @@ ttnn.attach_golden_function(
 )
 
 ttnn.attach_golden_function(
-    ttnn.experimental.transformer.split_query_key_value_and_split_heads,
+    ttnn.experimental.split_query_key_value_and_split_heads,
     golden_function=_golden_function,
 )
 
@@ -100,7 +100,7 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
 
 ttnn.attach_golden_function(ttnn.transformer.concatenate_heads, golden_function=_golden_function)
 
-ttnn.attach_golden_function(ttnn.experimental.transformer.concatenate_heads, golden_function=_golden_function)
+ttnn.attach_golden_function(ttnn.experimental.concatenate_heads, golden_function=_golden_function)
 
 
 def _golden_function(x, cos_cached, sin_cached, token_idx, **_):

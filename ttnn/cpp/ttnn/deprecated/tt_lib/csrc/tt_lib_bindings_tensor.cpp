@@ -14,7 +14,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/fast_reduce_nc/fast_reduce_nc_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_lib_bindings.hpp"
@@ -359,17 +358,6 @@ void TensorModule(py::module& m_tensor) {
         R"doc("dimension along which to apply max", "int", "0, 1, 2, or 3")doc");
 
     m_tensor.def(
-        "fast_reduce_nc",
-        &fast_reduce_nc,
-        py::arg("input").noconvert(),
-        py::kw_only(),
-        py::arg("dims").noconvert() = std::vector<int64_t>(),
-        py::arg("output").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs optimized reduction operation on dim 0, 1, or [0,1]. Returns an output tensor.");
-
-    m_tensor.def(
         "layernorm_pre_allgather",
         tt::operations::primary::layernorm_pre_allgather,
         py::arg("input").noconvert(),
@@ -589,10 +577,8 @@ void TensorModule(py::module& m_tensor) {
             Copy a host tensor to its equivalent tensor on a device.
         )doc");
 
-    detail::TensorModuleCompositeOPs(m_tensor);
     detail::TensorModulePyTensor(m_tensor);
     detail::TensorModuleDMOPs(m_tensor);
-    detail::TensorModuleCustomAndBMMOPs(m_tensor);
 }
 
 }  // namespace tt::tt_metal

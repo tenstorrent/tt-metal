@@ -4,9 +4,6 @@
 import tt_lib as ttl
 import torch
 from tt_lib.utils import _nearest_32 as nearest_32, tilize as tilize_util, untilize as untilize_util
-from tests.tt_eager.python_api_testing.sweep_tests.reference_optimizer import (
-    lamb_optimizer_kernel,
-)
 
 
 ################################################
@@ -1012,14 +1009,6 @@ def celu(x, *args, alpha, **kwargs):
     return torch.celu(x, alpha=alpha)
 
 
-def lamb_optimizer(x, y, z, w, *args, beta1, beta2, step_size, eps, weight_decay, **kwargs):
-    exp_avg_out, exp_avg_sq_out, param = lamb_optimizer_kernel.lamb_kernel(
-        x, y, z, w, beta1=beta1, beta2=beta2, step_size=step_size, eps=eps, weight_decay=weight_decay
-    )
-
-    return [exp_avg_out, exp_avg_sq_out, param]
-
-
 def repeat_interleave(x, *args, repeat, dim, **kwargs):
     return torch.repeat_interleave(x, repeats=repeat, dim=dim)
 
@@ -1609,8 +1598,8 @@ def complex_abs(x, *args, **kwargs):
     return torch.abs(x)
 
 
-def complex_polar(x, y, *args, **kwargs):
-    return torch.polar(x.to(torch.float32), y.to(torch.float32))
+def complex_polar(x, *args, **kwargs):
+    return torch.polar(x.real.to(torch.float32), x.imag.to(torch.float32))
 
 
 def complex_imag(x, *args, **kwargs):
@@ -2076,6 +2065,67 @@ def cos_bw(x, y, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
+
+
+def complex_polar_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.polar(in_data.real, in_data.imag)
+    pyt_y.backward(gradient=grad_data)
+
+    grad_real = torch.real(in_data.grad)
+    grad_imag = torch.imag(in_data.grad)
+
+    return torch.complex(grad_real, grad_imag)
+
+
+def complex_recip_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.reciprocal(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def complex_mul_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = in_data * other_data
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
+def complex_add_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = in_data + other_data
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
 
 
 def global_avg_pool2d(x, *args, **kwargs):

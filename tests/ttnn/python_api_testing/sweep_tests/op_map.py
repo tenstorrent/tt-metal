@@ -925,8 +925,40 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_unary_div_no_nan,
         "pytorch_op": pytorch_ops.unary_div_no_nan,
     },
+    "complex-polar-bw": {
+        "tt_op": ttnn_ops.complex_polar_bw,
+        "pytorch_op": pytorch_ops.complex_polar_bw,
+    },
     "complex-conj": {
         "tt_op": ttnn_ops.complex_conj,
         "pytorch_op": pytorch_ops.complex_conj,
+    },
+    "complex-abs": {
+        "tt_op": ttnn_ops.complex_abs,
+        "pytorch_op": pytorch_ops.complex_abs,
+    },
+    "complex-polar": {
+        "tt_op": ttnn_ops.complex_polar,
+        "pytorch_op": pytorch_ops.complex_polar,
+    },
+    "complex-recip": {
+        "tt_op": ttnn_ops.complex_recip,
+        "pytorch_op": pytorch_ops.complex_recip,
+    },
+    "complex-polar-bw": {
+        "tt_op": ttnn_ops.complex_polar_bw,
+        "pytorch_op": pytorch_ops.complex_polar_bw,
+    },
+    "complex-recip-bw": {
+        "tt_op": ttnn_ops.complex_recip_bw,
+        "pytorch_op": pytorch_ops.complex_recip_bw,
+    },
+    "complex-mul-bw": {
+        "tt_op": ttnn_ops.complex_mul_bw,
+        "pytorch_op": pytorch_ops.complex_mul_bw,
+    },
+    "complex-add-bw": {
+        "tt_op": ttnn_ops.complex_add_bw,
+        "pytorch_op": pytorch_ops.complex_add_bw,
     },
 }

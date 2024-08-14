@@ -6,7 +6,8 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -304,7 +305,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             bool partial_op = num_slices > 1;
             uint32_t starting_idx_h = 0;
             if (partial_op) {
-                uint32_t runtime_slice_index = static_cast<const ShardedPartial*>(operation)->slice_index;
+                uint32_t runtime_slice_index = static_cast<const ttnn::operations::data_movement::InterleavedToShardedPartialDeviceOperation*>(operation)->slice_index;
                 starting_idx_h = calculate_starting_idx_h(input_tensors.at(0), num_slices, runtime_slice_index);
             }
 
@@ -564,7 +565,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                 dst_buffer = input_tensors.at(1).buffer();
 
                 // Calculate starting_idx_h
-                uint32_t runtime_slice_index = static_cast<const ShardedPartial*>(operation)->slice_index;
+                uint32_t runtime_slice_index = static_cast<const ttnn::operations::data_movement::ShardedToInterleavedPartialDeviceOperation*>(operation)->slice_index;
                 starting_idx_h = calculate_starting_idx_h(input_tensors.at(1), num_slices, runtime_slice_index);
             } else {
                 dst_buffer = output_tensors.at(0).buffer();

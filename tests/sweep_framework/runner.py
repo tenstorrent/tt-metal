@@ -298,8 +298,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--elastic",
         required=False,
-        default=ELASTIC_DEFAULT_URL,
-        help="Elastic Connection String for the vector and results database.",
+        default="corp",
+        help="Elastic Connection String for the vector and results database. Available presets are ['corp', 'cloud']",
     )
     parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted.")
     parser.add_argument("--suite-name", required=False, help="Suite of Test Vectors to run, or all tests if omitted.")
@@ -335,7 +335,7 @@ if __name__ == "__main__":
         print("ERROR: Module name is required if vector id is specified.")
 
     global ELASTIC_CONNECTION_STRING
-    ELASTIC_CONNECTION_STRING = args.elastic
+    ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
 
     global MEASURE_PERF
     MEASURE_PERF = args.perf
