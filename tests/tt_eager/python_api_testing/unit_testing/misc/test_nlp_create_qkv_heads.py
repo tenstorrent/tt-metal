@@ -26,7 +26,7 @@ def run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config
 
     in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
 
-    q, k, v = ttl.tensor.nlp_create_qkv_heads_falcon7b(in0_t, out_mem_config)
+    q, k, v = ttnn.experimental.nlp_create_qkv_heads_falcon7b(in0_t, memory_config=out_mem_config)
 
     # Check memory of inputs and outputs
     assert in0_t.memory_config().buffer_type == in0_mem_config.buffer_type

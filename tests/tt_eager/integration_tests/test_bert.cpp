@@ -15,7 +15,8 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/experimental/transformer/transformer.hpp"
+#include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
+#include "ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads.hpp"
 
 using Parameters = std::map<std::string, Tensor>;
 using ttnn::operations::unary::UnaryWithParam;
@@ -49,7 +50,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     );
 
 
-    auto&& [query, key, value] = ttnn::experimental::transformer::split_query_key_value_and_split_heads(fused_qkv_matmul_output, CoreCoord{12, batch_size}, l1_memory_config);
+    auto&& [query, key, value] = ttnn::experimental::split_query_key_value_and_split_heads(fused_qkv_matmul_output, CoreCoord{12, batch_size}, l1_memory_config);
     fused_qkv_matmul_output.deallocate();
 
 
@@ -98,7 +99,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
     value.deallocate();
 
 
-    auto concat_heads_output = ttnn::experimental::transformer::concatenate_heads(post_softmax_bmm_output, CoreCoord{12, batch_size}, l1_memory_config);
+    auto concat_heads_output = ttnn::experimental::concatenate_heads(post_softmax_bmm_output, CoreCoord{12, batch_size}, l1_memory_config);
     post_softmax_bmm_output.deallocate();
 
 

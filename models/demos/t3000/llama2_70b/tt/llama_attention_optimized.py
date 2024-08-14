@@ -223,11 +223,11 @@ class TtLlamaAttention_optimized:
             query_layer,  # [seqlen, n_local_heads, bsz, head_dim]
             key_layer,  # [seqlen, n_local_kv_heads, bsz, head_dim]
             value_layer,  # [seqlen, n_local_kv_heads, bsz, head_dim]
-        ) = ttnn.experimental.tensor.nlp_create_qkv_heads_decode(
+        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
             fused_query_key_value,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
         )
 
         fused_query_key_value.deallocate(True)
@@ -288,7 +288,7 @@ class TtLlamaAttention_optimized:
         attn_output,
     ):
         # ATTENTION SELFOUT
-        attn_output = ttnn.experimental.tensor.nlp_concat_heads_decode(
+        attn_output = ttnn.experimental.nlp_concat_heads_decode(
             attn_output,
             num_heads=self.n_local_heads,
         )  # seqlen, 1, batch, hidden_size
@@ -424,9 +424,9 @@ class TtLlamaAttention_optimized:
 
     def prefill_attn_selfout(self, attn_output):
         # ATTENTION SELFOUT
-        attn_output = ttnn.experimental.tensor.nlp_concat_heads(
+        attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            output_mem_config=self.model_config["L1_MEMCFG"],
+            memory_config=self.model_config["L1_MEMCFG"],
         )  # seqlen, 1, batch, hidden_size
 
         attn_output = ttnn.all_gather(

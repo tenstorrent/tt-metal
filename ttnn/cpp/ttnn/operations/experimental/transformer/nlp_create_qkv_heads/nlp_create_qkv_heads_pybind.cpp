@@ -37,7 +37,7 @@ void bind_nlp_create_qkv_heads_template(pybind11::module& module, const transfor
                 pybind11::arg("num_kv_heads").noconvert() = std::nullopt,
                 pybind11::arg("transpose_k_heads").noconvert() = true,
                 pybind11::arg("memory_config").noconvert() = std::nullopt,
-                pybind11::arg("optional_output_tensors").noconvert() = std::nullopt,
+                pybind11::arg("output_tensors").noconvert() = std::nullopt,
                 pybind11::arg("queue_id") = 0});
 };
 

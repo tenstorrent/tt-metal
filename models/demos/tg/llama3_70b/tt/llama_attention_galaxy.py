@@ -354,11 +354,11 @@ class TtLlamaAttention_galaxy:
             query_layer,  # [seqlen, bsz, padded_n_local_heads, head_dim]
             key_layer,  # [seqlen, bsz, padded_n_local_kv_heads, head_dim]
             value_layer,  # [seqlen, bsz, padded_n_local_kv_heads, head_dim]
-        ) = ttnn.experimental.tensor.nlp_create_qkv_heads_decode(
+        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
             fused_query_key_value,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            output_mem_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         )
 
         fused_query_key_value.deallocate(True)
@@ -427,7 +427,7 @@ class TtLlamaAttention_galaxy:
         # ATTENTION SELFOUT
         # breakpoint()
         # (1, 8, 8(32), 128) - > (1, 1, 8(32), 1024) ->(1, 1, 32, 1024)
-        attn_output = ttnn.experimental.tensor.nlp_concat_heads_decode(
+        attn_output = ttnn.experimental.nlp_concat_heads_decode(
             attn_output,
             num_heads=self.n_local_heads,
         )
