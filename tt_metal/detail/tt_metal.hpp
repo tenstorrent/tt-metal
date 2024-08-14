@@ -328,7 +328,6 @@ namespace tt::tt_metal{
 
         void DeallocateBuffer(Buffer *buffer);
 
-        void GetBufferAddress(const Buffer* Buffer, uint32_t* address_on_host);
 
         void DisableAllocs(Device *device);
         void EnableAllocs(Device *device);
