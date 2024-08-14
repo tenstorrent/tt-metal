@@ -13,9 +13,9 @@ from models.utility_functions import (
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import conv_cache
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import conv_cache
 
 
 def ttnn_to_torch(input):

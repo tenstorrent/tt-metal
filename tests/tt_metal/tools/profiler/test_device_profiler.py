@@ -24,19 +24,14 @@ from models.utility_functions import skip_for_grayskull
 PROG_EXMP_DIR = "programming_examples/profiler"
 
 
-def run_device_profiler_test(testName=None, doubleRun=False, setup=False):
+def run_device_profiler_test(testName=None, setup=False):
     name = inspect.stack()[1].function
+    testCommand = f"build/{PROG_EXMP_DIR}/{name}"
     if testName:
-        name = testName
+        testCommand = testName
     clear_profiler_runtime_artifacts()
-    profilerRun = os.system(f"cd {TT_METAL_HOME} && " f"build/{PROG_EXMP_DIR}/{name}")
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {testCommand}")
     assert profilerRun == 0
-
-    if doubleRun:
-        # Run test under twice to make sure icache is populated
-        # with instructions for test
-        profilerRun = os.system(f"cd {TT_METAL_HOME} && " f"build/{PROG_EXMP_DIR}/{name}")
-        assert profilerRun == 0
 
     setupStr = ""
     if setup:
@@ -182,7 +177,7 @@ def test_profiler_host_device_sync():
     TOLERANCE = 0.1
 
     os.environ["TT_METAL_PROFILER_SYNC"] = "1"
-    deviceData = run_device_profiler_test(testName="test_custom_cycle_count")
+    deviceData = run_device_profiler_test(testName="pytest ./tests/tt_metal/tools/profiler/test_all_devices.py")
     reprotedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
 
     syncInfoFile = PROFILER_LOGS_DIR / PROFILER_HOST_DEVICE_SYNC_INFO
@@ -190,7 +185,9 @@ def test_profiler_host_device_sync():
     assert os.path.isfile(syncInfoFile)
 
     syncinfoDF = pd.read_csv(syncInfoFile)
-    freq = float(syncinfoDF.iloc[-1]["frequency"]) * 1e9
+    devices = sorted(syncinfoDF["device id"].unique())
+    for device in devices:
+        freq = float(syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]) * 1e9
 
-    assert freq < (reprotedFreq * (1 + TOLERANCE)), "Frequency too large on this {ENV_VAR_ARCH_NAME}"
-    assert freq > (reprotedFreq * (1 - TOLERANCE)), "Frequency too small on this {ENV_VAR_ARCH_NAME}"
+        assert freq < (reprotedFreq * (1 + TOLERANCE)), "Frequency too large on this {ENV_VAR_ARCH_NAME}"
+        assert freq > (reprotedFreq * (1 - TOLERANCE)), "Frequency too small on this {ENV_VAR_ARCH_NAME}"

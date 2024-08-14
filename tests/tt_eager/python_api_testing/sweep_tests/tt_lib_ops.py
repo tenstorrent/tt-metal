@@ -730,24 +730,6 @@ def eltwise_polygamma(x, *args, k, device, dtype, layout, input_mem_config, outp
 
 
 @setup_host_and_device
-def eltwise_assign_binary(
-    x,
-    y,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.tensor.assign(t0, t1)
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
 def eltwise_div(
     x,
     y,
@@ -877,45 +859,6 @@ def eltwise_unary_rdiv_trunc(
     t1 = ttnn.rdiv(t0, value, round_mode="trunc", memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def lamb_optimizer(
-    x,
-    y,
-    z,
-    w,
-    *args,
-    beta1,  # 0.9
-    beta2,  # 0.999
-    step_size,  # 1e-3
-    eps,  # 1e-6
-    weight_decay,  # 0.01
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = setup_tt_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
-
-    t4 = ttl.tensor.lamb_optimizer(
-        t0,
-        t1,
-        t2,
-        t3,
-        beta1=beta1,
-        beta2=beta2,
-        step_size=step_size,
-        eps=eps,
-        weight_decay=weight_decay,
-    )
-
-    return [tt2torch_tensor(t4[0]), tt2torch_tensor(t4[1]), tt2torch_tensor(t4[2])]
 
 
 @setup_host_and_device
@@ -2271,7 +2214,6 @@ eltwise_lez = make_unary_op_optional_output(ttnn.lez)
 eltwise_gez = make_unary_op_optional_output(ttnn.gez)
 eltwise_nez = make_unary_op_optional_output(ttnn.nez)
 eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
-eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
 zeros_like = make_ttnn_unary_op(ttnn.zeros_like)
 ones_like = make_ttnn_unary_op(ttnn.ones_like)
 eltwise_ceil = make_unary_op_optional_output(ttnn.ceil)
@@ -3049,7 +2991,7 @@ def interleaved_to_sharded_partial(
     t2 = torch2tt_tensor(out_initial, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype[0])
 
     for slice_index in range(num_slices):
-        t1 = ttl.tensor.interleaved_to_sharded_partial(
+        t1 = ttnn.interleaved_to_sharded_partial(
             t0,
             grid_size,
             height_shard_spec,
@@ -3059,12 +3001,12 @@ def interleaved_to_sharded_partial(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             t1,
             t2,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     returned_res = tt2torch_tensor(t2)
@@ -3102,7 +3044,7 @@ def interleaved_to_sharded_partial_coregrid(
     t2 = torch2tt_tensor(out_initial, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype[0])
 
     for slice_index in range(num_slices):
-        t1 = ttl.tensor.interleaved_to_sharded_partial(
+        t1 = ttnn.interleaved_to_sharded_partial(
             t0,
             grid_size,
             height_shard_spec,
@@ -3112,12 +3054,12 @@ def interleaved_to_sharded_partial_coregrid(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             t1,
             t2,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     returned_res = tt2torch_tensor(t2)

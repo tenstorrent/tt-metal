@@ -484,10 +484,6 @@ all_binary_ops = [
         "name": "ttnn.logical_and",
     },
     {
-        "op": tt_lib.tensor.assign,
-        "name": "tt_lib.tensor.assign_binary",
-    },
-    {
         "op": isclose,
         "name": "ttnn.isclose",
     },
@@ -1809,10 +1805,6 @@ all_unary_ops = [
         "name": "ttnn.multigammaln",
     },
     {
-        "op": tt_lib.tensor.assign,
-        "name": "tt_lib.tensor.assign_unary",
-    },
-    {
         "op": ttnn.i0,
         "name": "ttnn.i0",
     },
@@ -2397,10 +2389,6 @@ def addcdiv(x, y, z):
     ttnn.addcdiv(x, y, z, value=2)
 
 
-def lamb_optimizer(x, y, z):
-    tt_lib.tensor.lamb_optimizer(x, x, y, z, beta1=0.8, beta2=0.99, step_size=1e-3, eps=1e-6, weight_decay=0.02)
-
-
 def addalpha_bw(x, y, z):
     ttnn.addalpha_bw(x, y, z, alpha=5)
 
@@ -2542,11 +2530,6 @@ all_ternary_ops = [
     {
         "op": addcdiv,
         "name": "ttnn.addcdiv",
-    },
-    {
-        "op": lamb_optimizer,
-        "name": "tt_lib.tensor.lamb_optimizer",
-        "num_repeats": 2,
     },
     {
         "op": addalpha_bw,

@@ -253,11 +253,6 @@ Enums
 
 .. autoclass:: tt_lib.tensor.ReduceOpDim
 
-Tensor elementwise operations
-=============================
-
-.. autofunction:: tt_lib.tensor.assign
-
 Tensor manipulation operations
 -=============================
 
@@ -403,5 +398,3 @@ Other Operations
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
 
 .. autofunction:: tt_lib.tensor.mean_hw
-
-.. autofunction:: tt_lib.tensor.lamb_optimizer
