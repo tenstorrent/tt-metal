@@ -21,7 +21,7 @@ What steps are needed to add ttnn operation in C++?
 1. There are 2 options for writing a new operation. Optiona ``a`` is to write a device operation and option ``b`` is to write a composite operation
    a. Implement device operation in C++. Device operation is a struct that specifies how to create output tensors and a program to run on the device.
    b. Implement a composite operation in C++. Composite operation simply defines ``operator()`` method that calls other operations.
-2. Register the struct using `ttnn::register_operation` or using ``TTNN_REGISTER_OPERATION``.
+2. Register the struct using `ttnn::register_operation`.
 
 What steps are needed to add ttnn operation in Python?
 ------------------------------------------------------

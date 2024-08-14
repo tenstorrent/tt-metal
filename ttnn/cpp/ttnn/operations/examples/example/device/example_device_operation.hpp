@@ -149,4 +149,8 @@ struct ExampleDeviceOperation {
 }  // namespace ttnn::operations::examples
 
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-TTNN_REGISTER_OPERATION(ttnn::prim, example, ttnn::operations::examples::ExampleDeviceOperation);
+namespace ttnn::prim {
+constexpr auto example = ttnn::register_operation<
+    "ttnn::prim::example",
+    ttnn::operations::examples::ExampleDeviceOperation>();
+}  // namespace ttnn::prim

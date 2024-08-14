@@ -434,12 +434,17 @@ Tensor RelationalBinary<binary_op_type>::operator()(
         dtype = optional_output_tensor.value().get_dtype();
     }
 
-    return ttnn::device_operation::run<BinaryDeviceOperation>(
+    return ttnn::prim::binary(
         queue_id,
-        BinaryDeviceOperation::operation_attributes_t{
-            //TODO:: Remove the passing of the inplace flag from BinaryDeviceOperation(#11247)
-            binary_op_type, false, activations, input_tensor_a_activation, output_memory_config, dtype, std::nullopt},
-        BinaryDeviceOperation::tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor});
+        input_tensor_a,
+        input_tensor_b,
+        binary_op_type,
+        false,
+        dtype,
+        output_memory_config,
+        optional_output_tensor,
+        activations,
+        input_tensor_a_activation);
 }
 
 template <BinaryOpType binary_op_type>

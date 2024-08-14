@@ -98,16 +98,12 @@ Tensor MaxPoolNewOp::operator()(uint8_t queue_id, const Tensor& input_tensor, ui
         input_tensor_sharded.memory_config(),
         is_out_tiled);
 
-    MaxPoolNew::operation_attributes_t op_attr{
-        .sliding_window_config_ = sliding_window_config,
-        .output_dtype_ = DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
-        .memory_config_ = memory_config};
-
-    // and then call the maxpool uop
-    return ttnn::device_operation::run<MaxPoolNew>(
+    return ttnn::prim::max_pool_new(
         queue_id,
-        op_attr,
-        MaxPoolNew::tensor_args_t{.input_tensor_ = haloed_tensor});
+        haloed_tensor,
+        sliding_window_config,
+        DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
+        memory_config);
 }
 
 // device template specializations
