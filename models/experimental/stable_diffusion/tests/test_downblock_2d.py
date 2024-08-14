@@ -10,7 +10,7 @@ from diffusers import StableDiffusionPipeline
 from loguru import logger
 
 
-import tt_lib as ttl
+import ttnn
 import pytest
 
 from models.utility_functions import (
@@ -56,7 +56,7 @@ def test_run_downblock_real_input_inference(device, model_location_generator):
     tt_downblock = TtDownBlock2D(**kwargs, state_dict=state_dict, base_address=base_address)
 
     tt_out, tt_output_states = tt_downblock(tt_sample, tt_emb)
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     tt_output = tt_to_torch_tensor(tt_out)
 
     passing = comp_pcc(torch_output, tt_output)

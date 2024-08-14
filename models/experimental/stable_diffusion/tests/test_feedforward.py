@@ -9,7 +9,7 @@ from loguru import logger
 from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
-import tt_lib as ttl
+import ttnn
 from models.experimental.stable_diffusion.tt.feedforward import TtFeedForward
 
 
@@ -39,7 +39,7 @@ def test_feedforward_inference(device):
         state_dict=state_dict,
         device=device,
     )
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     tt_input = torch_to_tt_tensor(input, device)
     tt_output = tt_ff(tt_input)
     tt_output = tt_to_torch_tensor(tt_output)

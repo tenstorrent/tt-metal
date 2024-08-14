@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from torch import nn
-import tt_lib
+import ttnn
 
 from collections import OrderedDict
 from typing import (
@@ -38,14 +38,10 @@ class TtSSDLiteFeatureExtractorMobileNet(nn.Module):
         expand_channels = [256, 128, 128, 64]
 
         self.backbone_features = nn.ModuleList()
-        self.features_1 = TtMobileNetV3Features(
-            self.config, state_dict, f"{base_address}.features", self.device
-        )
+        self.features_1 = TtMobileNetV3Features(self.config, state_dict, f"{base_address}.features", self.device)
 
         self.backbone_features.append(self.features_1)
-        self.features_2 = TtMobileNetV3extract(
-            self.config, state_dict, f"{base_address}.features", self.device
-        )
+        self.features_2 = TtMobileNetV3extract(self.config, state_dict, f"{base_address}.features", self.device)
 
         self.backbone_features.append(self.features_2)
         for i in range(4):
@@ -66,7 +62,7 @@ class TtSSDLiteFeatureExtractorMobileNet(nn.Module):
 
             self.backbone_features.append(self.block)
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> Dict[str, tt_lib.tensor.Tensor]:
+    def forward(self, x: ttnn.Tensor) -> Dict[str, ttnn.Tensor]:
         output = []
         for i, block in enumerate(self.backbone_features):
             x = block(x)

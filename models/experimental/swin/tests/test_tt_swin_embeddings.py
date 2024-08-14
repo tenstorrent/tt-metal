@@ -13,7 +13,7 @@ from models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )
-import tt_lib
+import ttnn
 from models.experimental.swin.tt.swin_embeddings import TtSwinEmbeddings
 from models.experimental.swin.swin_utils import get_shape
 from transformers import SwinModel
@@ -41,11 +41,11 @@ def test_swin_embeddings_inference(device, imagenet_sample_input, pcc, reset_see
     torch_output = torch_model(image)
 
     # Run tt model
-    tt_image = tt_lib.tensor.Tensor(
+    tt_image = ttnn.Tensor(
         image.reshape(-1).tolist(),
         get_shape(image.shape),
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
 
     tt_output = tt_model(tt_image)

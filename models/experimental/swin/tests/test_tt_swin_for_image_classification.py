@@ -13,7 +13,6 @@ from models.utility_functions import (
     comp_pcc,
 )
 
-import tt_lib
 from models.experimental.swin.tt.swin_for_image_classification import (
     TtSwinForImageClassification,
 )
