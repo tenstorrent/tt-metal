@@ -24,11 +24,18 @@
 
 from sentencepiece import SentencePieceProcessor
 from pathlib import Path
+<<<<<<< HEAD:models/demos/wormhole/mistral7b/reference/tokenizer.py
 from typing import List
 import torch
 from torch import nn
 
 from models.demos.wormhole.mistral7b.reference.model import Transformer
+=======
+from models.utility_functions import tt_to_torch_tensor
+import json
+from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
+from tt_lib.utils import pad_weight
+>>>>>>> #11433: Replace tt_lib in mistral:models/experimental/mistral/mistral_utils.py
 
 
 class Tokenizer:
@@ -102,4 +109,43 @@ def generate(prompts: List[str], model: Transformer, tokenizer: Tokenizer, max_t
 
         for i, x in enumerate(encoded_prompts):
             res.append(tokenizer.decode(x[:min_prompt_len] + generated[i].tolist()))
+<<<<<<< HEAD:models/demos/wormhole/mistral7b/reference/tokenizer.py
     return res, all_logprobs
+=======
+    return res
+
+
+def cache_weights_in_weka(model_location_generator, device, dtype, reset_seeds):
+    mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
+    state_dict = torch.load(mistral_path / "consolidated.00.pth")
+    with open(mistral_path / "params.json", "r") as f:
+        model_args = TtModelArgs(**json.loads(f.read()))
+    weights_dtype = dtype
+
+    # initial weights are stored in "models/experimental/mistral/weights/" and moved to weka path
+    file_name = "models/experimental/mistral/weights/"
+    for key, value in state_dict.items():
+        if "tok_embeddings" in key:
+            torch.save(value, file_name + str(key) + ".pt")
+            continue
+        if len(value.shape) == 1:
+            value = value.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+        else:
+            value = value.unsqueeze(0).unsqueeze(0)
+        if value.shape[-2] % 32 == 0 and value.shape[-1] % 32 == 0:
+            value = ttnn.Tensor(
+                value.reshape(-1).tolist(),
+                value.shape,
+                weights_dtype,
+                ttnn.ROW_MAJOR_LAYOUT,
+            ).to(ttnn.TILE_LAYOUT)
+        else:
+            value = pad_weight(value)
+            value = ttnn.Tensor(
+                value.reshape(-1).tolist(),
+                value.shape,
+                weights_dtype,
+                ttnn.ROW_MAJOR_LAYOUT,
+            ).to(ttnn.TILE_LAYOUT)
+        ttnn.experimental.tensor.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)
+>>>>>>> #11433: Replace tt_lib in mistral:models/experimental/mistral/mistral_utils.py
