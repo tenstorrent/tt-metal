@@ -9,7 +9,8 @@ from torch.nn import functional as F
 import ttnn
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_merge_heads as bloom_merge_heads
-from ttnn.experimental.fused_ops.softmax import softmax as tt_softmax
+from tt_lib.fused_ops.softmax import softmax as tt_softmax
+
 import models.experimental.bloom.tt.baddbmm as baddbmm
 from typing import Optional, Tuple, Union
 from models.utility_functions import pad_by_zero

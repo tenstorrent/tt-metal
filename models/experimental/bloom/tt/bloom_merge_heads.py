@@ -4,7 +4,7 @@
 
 import torch
 import models.experimental.bloom.bloom_utils as bloom_utils
-from ttnn.experimental.fallback_ops import fallback_ops
+from tt_lib.fallback_ops import fallback_ops
 
 
 def merge_heads(x: torch.Tensor, num_heads, hidden_size, num_attention_heads) -> torch.Tensor:

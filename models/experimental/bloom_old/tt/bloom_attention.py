@@ -259,18 +259,22 @@ class TtBloomAttention(torch.nn.Module):
 
         query_layer = query_layer.transpose(1, 2)
         query_layer = bloom_utils.torch2tt_tensor(query_layer, device)
-        reshaped_query_layer = ttnn.reshape(query_layer, 1, batch_size * self.num_heads, q_length, self.head_dim)
+        reshaped_query_layer = ttnn.reshape_on_device(
+            query_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
+        )
 
         # key_layer = key_layer.permute(0, 2, 3, 1).reshape(batch_size * self.num_heads, self.head_dim, q_length)
         key_layer = key_layer.permute(0, 2, 3, 1)
 
         key_layer = bloom_utils.torch2tt_tensor(key_layer, device)
-        reshaped_key_layer = ttnn.reshape(key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length)
+        reshaped_key_layer = ttnn.reshape_on_device(key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length)
 
         # value_layer = value_layer.transpose(1, 2).reshape(batch_size * self.num_heads, q_length, self.head_dim)
         value_layer = value_layer.transpose(1, 2)
         value_layer = bloom_utils.torch2tt_tensor(value_layer, device)
-        reshaped_value_layer = ttnn.reshape(value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim)
+        reshaped_value_layer = ttnn.reshape_on_device(
+            value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
+        )
 
         _, _, _, kv_length = reshaped_key_layer.get_legacy_shape()
 
@@ -284,7 +288,7 @@ class TtBloomAttention(torch.nn.Module):
         )
 
         # change view to [batch_size, num_heads, q_length, kv_length]
-        attention_scores = ttnn.reshape(matmul_result, batch_size, self.num_heads, q_length, kv_length)
+        attention_scores = ttnn.reshape_on_device(matmul_result, batch_size, self.num_heads, q_length, kv_length)
         attention_scores = bloom_utils.tt2torch_tensor(attention_scores)
 
         attn_weights = torch.masked_fill(
@@ -302,7 +306,9 @@ class TtBloomAttention(torch.nn.Module):
             attention_probs = ttnn.mul(attention_probs, head_mask)
 
         # change view [batch_size x num_heads, q_length, kv_length]
-        attention_probs_reshaped = ttnn.reshape(attention_probs, 1, batch_size * self.num_heads, q_length, kv_length)
+        attention_probs_reshaped = ttnn.reshape_on_device(
+            attention_probs, 1, batch_size * self.num_heads, q_length, kv_length
+        )
 
         # matmul: [batch_size * num_heads, q_length, head_dim]
         context_layer = ttnn.bmm(attention_probs_reshaped, reshaped_value_layer)
