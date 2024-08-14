@@ -36,32 +36,21 @@ struct WorkerToEdmReader{
     {}
 
     FORCE_INLINE void wait_for_payload_available() const {
-        noc_semaphore_wait_min(worker_sem_addr, 1);
-        if (*worker_sem_addr > 1) {
-            DPRINT << "ERROR!!!!!!!!!!!!!!!!!!!!!!!!!\n";
-            ASSERT(false);
-        }
-        noc_semaphore_set(worker_sem_addr, 0);
+        noc_semaphore_wait(this->worker_sem_addr, 1);
+        noc_semaphore_set(this->worker_sem_addr, 0);
     }
 
     FORCE_INLINE void fetch_payload_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size, bool last_message) {
-        uint64_t buffer_address = edm_buffer_addr + (buffer_index * (buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        uint64_t buffer_address = this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
         fetch_chunk(cb_id, num_pages, page_size, buffer_address);
         if constexpr (termination_mode == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
             if (!last_message) {
-                DPRINT << "fetch_payload_blocking: incrementing semaphore to " << (uint32_t)(edm_semaphore_addr & 0xFFFFFFFF) << "\n";
                 noc_semaphore_inc(edm_semaphore_addr, ttnn::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
             }
         } else {
             noc_semaphore_inc(edm_semaphore_addr, ttnn::ccl::EriscDataMoverWorkerSignal::NEXT_MESSAGE_AVAILABLE);
         }
-        buffer_index = (buffer_index == last_buffer_index) ? 0 : buffer_index + 1;
-    }
-
-    FORCE_INLINE void fetch_payload_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        // With worker initiated termination mode, we must always specify if we are sending the last message or not
-        ASSERT(termination_mode != ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED);
-        fetch_payload_blocking(cb_id, num_pages, page_size, false);
+        this->buffer_index = (this->buffer_index == this->last_buffer_index) ? 0 : this->buffer_index + 1;
     }
 
     FORCE_INLINE void close() {
@@ -106,17 +95,17 @@ struct WorkerToEdmSender{
     }
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
-        noc_semaphore_wait(worker_sem_addr, 1);
-        noc_semaphore_set(worker_sem_addr, 0);
+        noc_semaphore_wait(this->worker_sem_addr, 1);
+        noc_semaphore_set(this->worker_sem_addr, 0);
     }
 
     FORCE_INLINE void send_payload_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        uint64_t buffer_address = edm_buffer_addr + (buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
-        DPRINT << "SENDER SEND buffer_size_bytes = " << (uint32_t)(this->buffer_size_bytes) << "\n";
-        DPRINT << "SENDER SEND " << (uint32_t)(buffer_address & 0xffffffff) << " -> " << (uint32_t)((buffer_address & 0xffffffff) + (page_size * num_pages)) << "\n";
-        send_chunk(cb_id, num_pages, page_size, buffer_address);
-        noc_semaphore_inc(edm_semaphore_addr, 1);
-        buffer_index = (buffer_index == last_buffer_index) ? 0 : buffer_index + 1;
+        send_payload_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING>(cb_id, num_pages, page_size);
+    }
+
+    // Does not wait for CB. Assumes caller handles CB data availability
+    FORCE_INLINE void send_payload_non_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
+        send_payload_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(cb_id, num_pages, page_size);
     }
 
     FORCE_INLINE void close() {
@@ -135,6 +124,15 @@ struct WorkerToEdmSender{
     std::size_t edm_l1_sem_addr;
     std::size_t buffer_size_bytes;
     std::size_t buffer_index;
+
+   private:
+    template<ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+    FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
+        uint64_t buffer_address = this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
+        noc_semaphore_inc(edm_semaphore_addr, 1);
+        this->buffer_index = (this->buffer_index == this->last_buffer_index) ? 0 : this->buffer_index + 1;
+    }
 };
 
 

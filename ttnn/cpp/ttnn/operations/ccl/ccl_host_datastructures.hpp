@@ -48,8 +48,6 @@ struct CCLOpConfig {
     CCLOpConfig(
         std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology);
 
-    uint32_t get_input_shard_size_bytes() const;
-    uint32_t get_output_shard_size_bytes() const;
     uint32_t get_page_size() const;
     Topology get_topology() const;
     bool is_input_sharded() const;
@@ -60,8 +58,6 @@ struct CCLOpConfig {
     std::map<string, string> emit_worker_defines() const;
 
    private:
-    std::optional<uint32_t> input_shard_size_bytes;
-    std::optional<uint32_t> output_shard_size_bytes;
     uint32_t page_size;
     uint32_t shard_grid_size;
     Topology topology;
