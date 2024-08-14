@@ -93,16 +93,15 @@ ParallelConfig determine_parallel_config(
             return grid;
         } else if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED){
             uint32_t num_cores_channels = find_closest_common_largest_divisor(
-                conv_out_2d_matrix_width_ntiles, std::ceil((double)input_channels / (double)32), max_num_cores);
-             log_debug(LogOp,"Num cores for Width Sharding : {}",num_cores_channels);
+                conv_out_2d_matrix_width_ntiles, std::ceil((double)input_channels / (double)TILE_WIDTH), max_num_cores);
+             log_debug(LogOp, "Num cores for Width Sharding : {}", num_cores_channels);
             CoreRangeSet grid = num_cores_to_core_range_set(num_cores_channels, device_grid_size_coord, true);
-             std::cout<<"Num cores for Width Sharding : "<<num_cores_channels<<" Grid :"<<grid.str()<<std::endl;
             return grid;
         } else if(shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             uint32_t total_cores_for_channels =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? device_grid_size[1] : device_grid_size[0];
             uint32_t num_cores_channels = find_closest_common_largest_divisor(
-                conv_out_2d_matrix_width_ntiles, std::ceil((double)input_channels / (double)32), total_cores_for_channels);
+                conv_out_2d_matrix_width_ntiles, std::ceil((double)input_channels / (double)TILE_WIDTH), total_cores_for_channels);
             uint32_t cores_x =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_channels;
             uint32_t cores_y =
@@ -111,7 +110,7 @@ ParallelConfig determine_parallel_config(
             CoreRangeSet grid = CoreRangeSet({core_range});
             return grid;
         } else {
-            TT_FATAL("Invalid Shard Layout in Conv Config",shard_layout);
+            TT_FATAL("Invalid Shard Layout in Conv Config", shard_layout);
             return CoreRangeSet({});
         }
     };
