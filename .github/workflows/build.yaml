@@ -35,12 +35,9 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal libraries
+      - name: Build C++ libraries and tests
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -G Ninja
-          cmake --build build
-      - name: Build tt-metal C++ tests
-        run: |
           cmake --build build --target tests
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
