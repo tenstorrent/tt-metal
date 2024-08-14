@@ -171,14 +171,37 @@ def get_job_row_from_github_job(github_job):
 
     assert github_job["status"] == "completed", f"{github_job_id} is not completed"
 
+    # Best effort card type getting
+
+    get_overlap = lambda labels_a, labels_b: bool(set(labels_a) & set(labels_b))
     labels_have_overlap = lambda labels_a, labels_b: bool(set(labels_a) & set(labels_b))
 
+    try:
+        detected_config = return_first_string_starts_with("config-", labels).replace("config-", "")
+    except Exception as e:
+        logger.error(e)
+        logger.info("Seems to have no config- label, so assuming no special config requested")
+        detected_config = None
+
     if labels_have_overlap(["grayskull", "arch-grayskull"], labels):
-        card_type = "grayskull"
+        detected_arch = "grayskull"
     elif labels_have_overlap(["wormhole_b0", "arch-wormhole_b0"], labels):
-        card_type = "wormhole_b0"
+        detected_arch = "wormhole_b0"
     elif labels_have_overlap(["arch-blackhole"], labels):
-        card_type = "blackhole"
+        detected_arch = "blackhole"
+    else:
+        detected_arch = None
+
+    single_cards_list = ("E150", "N150", "N300", "BH")
+    single_cards_overlap = get_overlap(single_cards_list, labels)
+
+    if detected_config:
+        if not detected_arch:
+            raise Exception(f"There must be an arch detected for config {detected_config}")
+        card_type = f"{detected_config}-{detected_arch}"
+    elif single_cards_overlap:
+        logger.info(f"Detected overlap in single cards: {single_cards_overlap}")
+        card_type = list(single_cards_overlap)[0]
     else:
         card_type = None
 
