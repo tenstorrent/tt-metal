@@ -791,13 +791,13 @@ class cross_attention:
             )
             q_proj = ttnn.reshape(q_proj, (2, 1, self.seq_len, self.q_len))
             kv_proj = ttnn.reshape(kv_proj, (2, 1, 96, self.kv_len))
-            query, key, value = ttnn.experimental.tensor.create_qkv_heads_from_separate_tensors(
+            query, key, value = ttnn.experimental.create_qkv_heads_from_separate_tensors(
                 q_proj,
                 kv_proj,
-                num_q_heads=8,
+                num_heads=8,
                 num_kv_heads=8,
                 transpose_k_heads=True,
-                output_mem_config=self.height_sharded_memory_config,
+                memory_config=self.height_sharded_memory_config,
             )
             ttnn.deallocate(kv_proj)
             ttnn.deallocate(q_proj)

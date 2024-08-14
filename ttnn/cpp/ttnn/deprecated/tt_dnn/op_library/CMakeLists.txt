@@ -109,14 +109,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_attn_matmul/multi_core_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_group_attn_matmul/multi_core_group_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_1d_sum_reduce/multi_core_ssm_1d_sum_reduce.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_tms.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_create_qkv_heads_decode.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_concat_heads.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_concat_heads_decode.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_kv_cache_load_slice.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/multi_core_create_q_and_kv_heads_separate/multi_core_create_q_and_kv_heads.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/multi_core/update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/paged_update_cache/multi_core/paged_update_cache_op_multi_core.cpp
