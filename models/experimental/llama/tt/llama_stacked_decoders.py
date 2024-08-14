@@ -6,7 +6,7 @@ from loguru import logger
 import torch
 import numpy as np
 from torch import nn
-import tt_lib
+import ttnn
 from models.utility_functions import (
     tt2torch_tensor,
     torch_to_tt_tensor_rm,
@@ -61,19 +61,17 @@ class TtLlamaDecoderModelStacked(torch.nn.Module):
         )
 
         # if it is CausalLM Llama model
-        self.weight = torch_to_tt_tensor_rm(
-            self.state_dict[f"lm_head.weight"], self.device
-        )
+        self.weight = torch_to_tt_tensor_rm(self.state_dict[f"lm_head.weight"], self.device)
         self.bias = None
 
     def forward(
         self,
-        x: tt_lib.tensor.Tensor,
-        y: tt_lib.tensor.Tensor,
+        x: ttnn.Tensor,
+        y: ttnn.Tensor,
         half: int = 1,
         has_layer_norm: bool = False,
         is_causal: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         result = x
         for idx, decoder_layer in enumerate(self.decoder_list):
             result = decoder_layer(hidden_states=result, position_ids=y)[0]
