@@ -462,7 +462,7 @@ class TtFalconAttentionPrefill(nn.Module):
         # Slice inputs and operate on each slice separately
         for i in range(num_slices):
             slices = [
-                ttnn.experimental.tensor.interleaved_to_sharded_partial(
+                ttnn.interleaved_to_sharded_partial(
                     query_layer[device_id],
                     grid_size,
                     mm_activations_height_shard_spec,
@@ -524,12 +524,12 @@ class TtFalconAttentionPrefill(nn.Module):
             ]
 
             for device_id in range(self.num_devices):
-                ttnn.experimental.tensor.sharded_to_interleaved_partial(
+                ttnn.sharded_to_interleaved_partial(
                     attn_out_slices[device_id],
                     attention_outputs_concatenated[device_id],
                     num_slices,
                     i,
-                    self.model_config["ATTN_OPTIMIZED_MEMCFG"],
+                    memory_config=self.model_config["ATTN_OPTIMIZED_MEMCFG"],
                 )
             for device_id in range(self.num_devices):
                 attn_out_slices[device_id].deallocate(True)
