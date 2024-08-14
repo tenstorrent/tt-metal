@@ -129,7 +129,7 @@ ttnn::Tensor permute_launch(const ttnn::Tensor &a, const std::vector<std::int64_
             if (normalized_dims == seq_dims) {
                 return {AutoFormat::move_tensor_to_mem_config(a, output_mem_config)};
             }
-            return {operation::decorate_as_composite(__func__, permute_impl)(a, normalized_dims, output_mem_config)};
+            return {permute_impl(a, normalized_dims, output_mem_config)};
         }, {a}, output_tensors);
     return output_tensors.at(0);
 }

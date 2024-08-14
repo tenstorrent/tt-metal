@@ -148,7 +148,7 @@ def get_weight_cache_path_galaxy(base_cache_path, tensor_str, device_idx, num_de
 def rms_decomp(x, norm_weight, eps):
     squared = ttnn.pow(x, 2)
     # mean_squared = tt_lib.tensor.mean(squared, )
-    sum_squared = tt_lib.tensor.reduce(squared, tt_lib.tensor.ReduceOpMath.SUM, tt_lib.tensor.ReduceOpDim.W, scaler=1.0)
+    sum_squared = ttnn.sum(squared, 3)
     # Tensor is 1,1,32,1+31 now
     mean_squared = ttnn.multiply(sum_squared, (1 / x.shape[-1]))
     mean_squared_eps = ttnn.add(mean_squared, eps)

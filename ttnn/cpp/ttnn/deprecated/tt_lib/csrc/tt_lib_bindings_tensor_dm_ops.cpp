@@ -7,22 +7,13 @@
 #include "ttnn/deprecated/tt_dnn/op_library/move/move_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sharded_partial/sharded_op_partial.hpp"
-
 
 namespace tt::tt_metal::detail{
 
     void TensorModuleDMOPs( py::module & m_tensor)
     {
-
-        // reduce enums
-        detail::export_enum<ReduceOpMath>(m_tensor);
-
-        detail::export_enum<ReduceOpDim>(m_tensor);
-
         // bcast enums
         detail::export_enum<BcastOpMath>(m_tensor);
         /** TODO: add these to bcast ops - good to have not required
@@ -38,7 +29,6 @@ namespace tt::tt_metal::detail{
 
         detail::bind_unary_op<true, true>(m_tensor, "clone", &clone, R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
         detail::bind_binary_op<false, false, false, false>(m_tensor, "copy", &copy, R"doc(  Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
-        detail::bind_unary_op<true, true>(m_tensor, "assign", py::overload_cast<const Tensor&, const MemoryConfig&, std::optional<const DataType>>(&assign), R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
 
         // *** tensor manipulation ***
         m_tensor.def("typecast", &typecast,
@@ -59,28 +49,6 @@ namespace tt::tt_metal::detail{
                     "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "No"
             )doc"
         );
-
-        m_tensor.def("assign",
-        [](const Tensor& input_a, const Tensor& input_b, uint8_t queue_id){
-            return assign(queue_id, input_a, input_b); },
-            py::arg("input_a").noconvert(),
-            py::arg("input_b").noconvert(),
-            py::arg("queue_id").noconvert() = 0,
-            R"doc(
-            Copies input tensor ``input_a`` to ``input_b`` if their
-            shapes and memory layouts match, and returns input_b tensor.
-
-            Input tensors can be of any data type.
-
-            Output tensor will be of same data type as Input tensor.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input_a", "Tensor assign is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input_b", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-        )doc");
 
         m_tensor.def("reshape", &reshape,
             py::arg("input").noconvert(), py::arg("W"), py::arg("Z"), py::arg("Y"), py::arg("X"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
@@ -146,30 +114,6 @@ namespace tt::tt_metal::detail{
                 "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
         )doc");
 
-        m_tensor.def("reduce", &reduce,
-            py::arg("input").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("scaler"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
-            Perform a reduction of input tensor ``input`` using mathematical operation ``math_op`` on dimension ``dim``.
-
-            For ``arg2=ReduceOpDim::W`` reduce is done on dimension X.
-
-            For ``arg2=ReduceOpDim::H`` reduce is done on dimension Y.
-
-            For ``arg2=ReduceOpDim::HW`` reduce is done on dimensions X and Y.
-
-            Input tensors must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "math_op", "Aggregating math operation", " ReduceOpMath", "SUM, MAX, MIN", "Yes"
-                "dim", "Dimension on which reduction is performed", "ReduceOpDim", "W, H, HW", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_dtype", "DataType of output tensor", "DataType", "Default is None (use input dtype)", "No"
-        )doc");
-
         m_tensor.def("move", &move,
             py::arg().noconvert(), py::arg("output_mem_config").noconvert() = std::nullopt, R"doc(
             Moves the elements of the input tensor ``arg0`` to a location in memory with specified memory layout.
@@ -217,16 +161,6 @@ namespace tt::tt_metal::detail{
             py::arg("input"), py::arg("output_mem_config").noconvert(), py::arg("output_tensor").noconvert() = std::nullopt,
             R"doc(Converts a tensor sharded one way to another way)doc"
         );
-
-        m_tensor.def("interleaved_to_sharded_partial", py::overload_cast<const Tensor &, const std::variant<CoreCoord, CoreRangeSet>, std::array<uint32_t, 2>, const uint32_t, const uint32_t, const TensorMemoryLayout, const ShardOrientation, const std::optional<const DataType>>(&interleaved_to_sharded_partial),
-         py::arg("input"), py::arg("grid"), py::arg("shard_shape"), py::arg("num_slices"), py::arg("slice_index"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
-            R"doc(Converts a part of tensor from interleaved to sharded memory layout)doc");
-
-        m_tensor.def("sharded_to_interleaved_partial", &sharded_to_interleaved_partial,
-            py::arg("input"), py::arg("cache_tensor"), py::arg("num_slices"), py::arg("slice_index"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
-            R"doc(Converts a partial tensor from sharded_to_interleaved memory layout)doc"
-        );
-
     }
 
 }

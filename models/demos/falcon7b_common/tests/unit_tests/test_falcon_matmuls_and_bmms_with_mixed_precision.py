@@ -372,7 +372,7 @@ def test_falcon7b_attnention_sliced(
     mm_output_height_shard_spec = [tiles_per_shard * 32, seq_len]
 
     for i in range(num_slices):
-        slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+        slice = ttnn.interleaved_to_sharded_partial(
             reference_query_layer,
             grid_size,
             mm_activations_height_shard_spec,
@@ -420,7 +420,7 @@ def test_falcon7b_attnention_sliced(
         # So we have to move it after the entire sequence is finished
         # slice.deallocate()
 
-        attn_mask_slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+        attn_mask_slice = ttnn.interleaved_to_sharded_partial(
             attention_mask,
             grid_size,
             mm_output_height_shard_spec,
@@ -478,12 +478,12 @@ def test_falcon7b_attnention_sliced(
             compute_kernel_config=compute_kernel_config,
         )
 
-        ttnn.experimental.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             attn_out_slice,
             attention_output_concatenated,
             num_slices,
             i,
-            dram_interleaved_memory_config,
+            memory_config=dram_interleaved_memory_config,
         )
 
         slice.deallocate()
@@ -667,7 +667,7 @@ def test_falcon7b_attention_softmax_sequence(
     mm_output_height_shard_spec = [tiles_per_shard * 32, seq_len]
 
     for i in range(num_slices):
-        slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+        slice = ttnn.interleaved_to_sharded_partial(
             reference_query_layer,
             grid_size,
             mm_activations_height_shard_spec,
@@ -747,12 +747,12 @@ def test_falcon7b_attention_softmax_sequence(
             compute_kernel_config=compute_kernel_config,
         )
 
-        ttnn.experimental.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             attn_out_slice,
             attention_output_concatenated,
             num_slices,
             i,
-            dram_interleaved_memory_config,
+            memory_config=dram_interleaved_memory_config,
         )
 
         slice.deallocate()
@@ -906,7 +906,7 @@ def test_softmax(device, num_cores, seq_len):
     )
 
     for i in range(num_slices):
-        input_slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+        input_slice = ttnn.interleaved_to_sharded_partial(
             tt_input,
             grid_size,
             height_shard_spec,
@@ -931,8 +931,8 @@ def test_softmax(device, num_cores, seq_len):
             compute_kernel_config=compute_kernel_config,
         )
 
-        ttnn.experimental.tensor.sharded_to_interleaved_partial(
-            input_slice, tt_output_sharded_softmax, num_slices, i, dram_interleaved_memory_config
+        ttnn.sharded_to_interleaved_partial(
+            input_slice, tt_output_sharded_softmax, num_slices, i, memory_config=dram_interleaved_memory_config
         )
         input_slice.deallocate()
 

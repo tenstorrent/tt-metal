@@ -108,6 +108,7 @@ class UNet:
         self.c8_2 = parameters.c8_2
         self.c8_3 = parameters.c8_3
         self.output_layer = parameters.output_layer
+        self.cache = {}
 
     def __call__(self, device, input_tensor, original_shape, perf_mode=False):
         nhw = original_shape[-4] * original_shape[-2] * original_shape[-1]
@@ -251,5 +252,20 @@ class UNet:
         output_tensor = self.c8(output_tensor)
         output_tensor = self.c8_2(output_tensor)
         output_tensor = self.c8_3(output_tensor)
-        output_tensor = self.output_layer(output_tensor)
+        output_tensor, _, _, self.output_layer.conv.weight, self.output_layer.conv.bias = ttnn.conv2d(
+            input_tensor=output_tensor,
+            weight_tensor=self.output_layer.conv.weight,
+            bias_tensor=self.output_layer.conv.bias,
+            in_channels=self.output_layer.in_channels,
+            out_channels=self.output_layer.out_channels,
+            input_height=self.output_layer.input_height,
+            input_width=self.output_layer.input_width,
+            batch_size=self.output_layer.batch_size,
+            kernel_size=(1, 1),
+            stride=(1, 1),
+            padding=(0, 0),
+            conv_op_cache=self.cache,
+            device=device,
+        )
+
         return ttnn.from_device(output_tensor)

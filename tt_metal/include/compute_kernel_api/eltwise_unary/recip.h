@@ -30,6 +30,7 @@ ALWI void recip_tile_init() {
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
+ * Only works for Float32, Float16_b, Bfp8_b data formats for full accuracy.
  *
  * Return value: None
  *
@@ -38,7 +39,7 @@ ALWI void recip_tile_init() {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void recip_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_reciprocal<APPROX>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_reciprocal<APPROX, DST_ACCUM_MODE>(idst) ));
 }
 
 } // namespace ckernel

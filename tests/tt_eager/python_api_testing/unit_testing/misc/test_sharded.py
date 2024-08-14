@@ -526,7 +526,7 @@ def test_sharded_partial_op(
     height_shard_spec = [H // 2, W]
 
     for slice_index in range(num_slices):
-        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+        in0_t_slice = ttnn.interleaved_to_sharded_partial(
             in0_t,
             grid_size,
             height_shard_spec,
@@ -536,17 +536,17 @@ def test_sharded_partial_op(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             in0_t_slice,
             out_tt_tensor,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     pt_out = in0
 
-    tt_out = tt2torch_tensor(out_tt_tensor)
+    tt_out = ttnn.to_torch(out_tt_tensor)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -597,7 +597,7 @@ def test_block_sharded_partial_op(
     num_slices = 2
 
     for slice_index in range(num_slices):
-        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+        in0_t_slice = ttnn.interleaved_to_sharded_partial(
             in0_t,
             grid_size,
             block_shard_spec,
@@ -607,17 +607,17 @@ def test_block_sharded_partial_op(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             in0_t_slice,
             out_tt_tensor,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     pt_out = in0
 
-    tt_out = tt2torch_tensor(out_tt_tensor)
+    tt_out = ttnn.to_torch(out_tt_tensor)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -766,7 +766,7 @@ def test_width_sharded_partial_op(
     width_shard_spec = [H // num_slices, 1 * 32]
 
     for slice_index in range(num_slices):
-        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+        in0_t_slice = ttnn.interleaved_to_sharded_partial(
             in0_t,
             grid_size,
             width_shard_spec,
@@ -776,17 +776,17 @@ def test_width_sharded_partial_op(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             in0_t_slice,
             out_tt_tensor,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     pt_out = in0
 
-    tt_out = tt2torch_tensor(out_tt_tensor)
+    tt_out = ttnn.to_torch(out_tt_tensor)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -858,7 +858,7 @@ def test_partial_sharded_op_binary(
     height_shard_spec = [32, W]
 
     for slice_index in range(num_slices):
-        in0_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+        in0_t_slice = ttnn.interleaved_to_sharded_partial(
             in0_t,
             grid_size,
             height_shard_spec,
@@ -868,7 +868,7 @@ def test_partial_sharded_op_binary(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        in1_t_slice = ttl.tensor.interleaved_to_sharded_partial(
+        in1_t_slice = ttnn.interleaved_to_sharded_partial(
             in1_t,
             grid_size,
             height_shard_spec,
@@ -879,17 +879,13 @@ def test_partial_sharded_op_binary(
         )
 
         sliced_tensor = ttnn.add(in0_t_slice, in1_t_slice, memory_config=output_mem_config, dtype=output_dtype)
-        ttl.tensor.sharded_to_interleaved_partial(
-            sliced_tensor,
-            out_tt_tensor,
-            num_slices,
-            slice_index,
-            interleaved_mem_config,
+        ttnn.sharded_to_interleaved_partial(
+            sliced_tensor, out_tt_tensor, num_slices, slice_index, memory_config=interleaved_mem_config
         )
 
     pt_out = in0 + in1
 
-    tt_out = tt2torch_tensor(out_tt_tensor)
+    tt_out = ttnn.to_torch(out_tt_tensor)
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -1884,13 +1880,7 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    yt = ttl.tensor.reduce(
-        xt,
-        ttl.tensor.ReduceOpMath.MAX,
-        ttl.tensor.ReduceOpDim.H,
-        1.0,
-        output_mem_config=out_mem_config,
-    )
+    yt = ttnn.max(xt, 2, memory_config=out_mem_config)
 
     if out_sharded:
         yt = ttl.tensor.sharded_to_interleaved(
@@ -2211,9 +2201,9 @@ def test_sharded_concat_heads(
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    output_t = ttl.tensor.nlp_concat_heads(
+    output_t = ttnn.experimental.nlp_concat_heads(
         in0_t,
-        output_mem_config=output_mem_config,
+        memory_config=output_mem_config,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
