@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,13 @@
 void kernel_main() {
     uint32_t src0_addr  = get_arg_val<uint32_t>(0);
     uint32_t src1_addr  = get_arg_val<uint32_t>(1);
+    uint32_t src0_dram_noc_x  = get_arg_val<uint32_t>(2);
+    uint32_t src0_dram_noc_y  = get_arg_val<uint32_t>(3);
+    uint32_t src1_dram_noc_x  = get_arg_val<uint32_t>(4);
+    uint32_t src1_dram_noc_y  = get_arg_val<uint32_t>(5);
 
-    uint64_t src0_noc_addr = get_noc_addr(1, 0, src0_addr);
-    uint64_t src1_noc_addr = get_noc_addr(1, 0, src1_addr);
+    uint64_t src0_noc_addr = get_noc_addr(src0_dram_noc_x, src0_dram_noc_y, src0_addr);
+    uint64_t src1_noc_addr = get_noc_addr(src1_dram_noc_x, src1_dram_noc_y, src1_addr);
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
     constexpr uint32_t cb_id_in1 = tt::CB::c_in1;
