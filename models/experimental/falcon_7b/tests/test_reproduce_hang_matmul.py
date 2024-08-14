@@ -17,6 +17,16 @@ import torch
 
 FF1_HANG_PARAMETRIZATION = (1024, 4608, 18432, 4, 72, 3, 1, 8, 100000)
 
+CHIP_ID_TO_COORDINATES_T3K = [None] * 8
+CHIP_ID_TO_COORDINATES_T3K[0] = (1, 0)
+CHIP_ID_TO_COORDINATES_T3K[1] = (1, 1)
+CHIP_ID_TO_COORDINATES_T3K[2] = (2, 1)
+CHIP_ID_TO_COORDINATES_T3K[3] = (2, 0)
+CHIP_ID_TO_COORDINATES_T3K[4] = (0, 0)
+CHIP_ID_TO_COORDINATES_T3K[5] = (0, 1)
+CHIP_ID_TO_COORDINATES_T3K[6] = (3, 1)
+CHIP_ID_TO_COORDINATES_T3K[7] = (3, 0)
+
 
 # Used to reproduce issue #8665 with matmul 2D (Falcon 7b matmuls)
 @pytest.mark.parametrize(
@@ -50,17 +60,6 @@ def test_reproduce_matmul_2d_hang(
         devices = all_devices
 
     print("Running on ", num_devices, " devices")
-
-    if num_devices == 8:
-        logical_chip_id_to_coordinates = [None] * num_devices
-        logical_chip_id_to_coordinates[0] = (1, 0)
-        logical_chip_id_to_coordinates[1] = (0, 0)
-        logical_chip_id_to_coordinates[2] = (0, 1)
-        logical_chip_id_to_coordinates[3] = (1, 1)
-        logical_chip_id_to_coordinates[4] = (2, 1)
-        logical_chip_id_to_coordinates[5] = (3, 1)
-        logical_chip_id_to_coordinates[6] = (3, 0)
-        logical_chip_id_to_coordinates[7] = (2, 0)
 
     in0_mem_config = ttl.tensor.MemoryConfig(
         ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
@@ -158,30 +157,32 @@ def test_reproduce_matmul_2d_hang(
                 compute_kernel_config=compute_config,
             )
 
-        # synchronize
+        # synchronize devices in the order of all_devices fixture list; this list ensures we first synchronize
+        # all local devices and then all remote devices, to avoid misinterpreting a hang on the remote device
+        # caused by problems on the local device it is attached to
         for device_idx in range(num_devices):
             if num_devices != 1:
                 if num_devices == 2:
-                    print("Start sync logicalDeviceID: ", device_idx)
+                    print("Start sync device id: ", device_idx)
                 if num_devices == 8:
                     print(
-                        "Start sync logicalDeviceID: ",
+                        "Start sync device id: ",
                         device_idx,
                         " eth coordinates: ",
-                        logical_chip_id_to_coordinates[device_idx],
+                        CHIP_ID_TO_COORDINATES_T3K[device_idx],
                     )
             else:
                 print("Start single device sync:")
-            ttl.device.Synchronize(devices[device_idx])
+            ttl.device.Synchronize(all_devices[device_idx])
             if num_devices != 1:
                 if num_devices == 2:
-                    print("End sync logicalDeviceID: ", device_idx)
+                    print("End sync device id: ", device_idx)
                 if num_devices == 8:
                     print(
-                        "End sync logicalDeviceID: ",
+                        "End sync device id: ",
                         device_idx,
                         " eth coordinates: ",
-                        logical_chip_id_to_coordinates[device_idx],
+                        CHIP_ID_TO_COORDINATES_T3K[device_idx],
                     )
             else:
                 print("End single device sync")
@@ -231,25 +232,14 @@ def test_specific_chip_reproduce_matmul_2d_hang_t3000(all_devices, logical_chip_
     num_devices_t3000 = 8
     if len(all_devices) != num_devices_t3000:
         pytest.skip("Test is only valid for t3000 machines")
-    devices = get_devices_for_t3000(all_devices, num_devices_t3000)
-
-    logical_chip_id_to_coordinates = [None] * num_devices_t3000
-    logical_chip_id_to_coordinates[0] = (1, 0)
-    logical_chip_id_to_coordinates[1] = (0, 0)
-    logical_chip_id_to_coordinates[2] = (0, 1)
-    logical_chip_id_to_coordinates[3] = (1, 1)
-    logical_chip_id_to_coordinates[4] = (2, 1)
-    logical_chip_id_to_coordinates[5] = (3, 1)
-    logical_chip_id_to_coordinates[6] = (3, 0)
-    logical_chip_id_to_coordinates[7] = (2, 0)
 
     print(
-        "Selecting logical device id: ",
+        "Selecting device id: ",
         logical_chip_index,
         " coordinates: ",
-        logical_chip_id_to_coordinates[logical_chip_index],
+        CHIP_ID_TO_COORDINATES_T3K[logical_chip_index],
     )
-    target_device = devices[logical_chip_index]
+    target_device = all_devices[logical_chip_index]
     devices = [target_device]
 
     test_reproduce_matmul_2d_hang(1, devices, 1024, 4608, 18432, 4, 72, 3, 1, 8, 100000, use_program_cache)
@@ -335,25 +325,14 @@ def test_determinism_specific_chip(
     num_devices_t3000 = 8
     if len(all_devices) != num_devices_t3000:
         pytest.skip("Test is only valid for t3000 machines")
-    devices = get_devices_for_t3000(all_devices, num_devices_t3000)
-
-    logical_chip_id_to_coordinates = [None] * num_devices_t3000
-    logical_chip_id_to_coordinates[0] = (1, 0)
-    logical_chip_id_to_coordinates[1] = (0, 0)
-    logical_chip_id_to_coordinates[2] = (0, 1)
-    logical_chip_id_to_coordinates[3] = (1, 1)
-    logical_chip_id_to_coordinates[4] = (2, 1)
-    logical_chip_id_to_coordinates[5] = (3, 1)
-    logical_chip_id_to_coordinates[6] = (3, 0)
-    logical_chip_id_to_coordinates[7] = (2, 0)
 
     print(
-        "Selecting logical device id: ",
+        "Selecting device id: ",
         logical_chip_index,
         " coordinates: ",
-        logical_chip_id_to_coordinates[logical_chip_index],
+        CHIP_ID_TO_COORDINATES_T3K[logical_chip_index],
     )
-    target_device = devices[logical_chip_index]
+    target_device = all_devices[logical_chip_index]
     devices = [target_device]
 
     test_reproduce_matmul_2d_hang(

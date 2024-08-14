@@ -10,6 +10,16 @@ from models.utility_functions import (
 )
 import torch
 
+CHIP_ID_TO_COORDINATES_T3K = [None] * 8
+CHIP_ID_TO_COORDINATES_T3K[0] = (1, 0)
+CHIP_ID_TO_COORDINATES_T3K[1] = (1, 1)
+CHIP_ID_TO_COORDINATES_T3K[2] = (2, 1)
+CHIP_ID_TO_COORDINATES_T3K[3] = (2, 0)
+CHIP_ID_TO_COORDINATES_T3K[4] = (0, 0)
+CHIP_ID_TO_COORDINATES_T3K[5] = (0, 1)
+CHIP_ID_TO_COORDINATES_T3K[6] = (3, 1)
+CHIP_ID_TO_COORDINATES_T3K[7] = (3, 0)
+
 
 @pytest.mark.parametrize("num_devices", [1, 2, 8], ids=["1chips", "2chips", "8chips"])
 def test_reproduce_lm_head_nd_32(
@@ -20,17 +30,6 @@ def test_reproduce_lm_head_nd_32(
         devices = get_devices_for_t3000(all_devices, num_devices)
     else:
         devices = all_devices
-
-    if num_devices == 8:
-        logical_chip_id_to_coordinates = [None] * num_devices
-        logical_chip_id_to_coordinates[0] = (1, 0)
-        logical_chip_id_to_coordinates[1] = (0, 0)
-        logical_chip_id_to_coordinates[2] = (0, 1)
-        logical_chip_id_to_coordinates[3] = (1, 1)
-        logical_chip_id_to_coordinates[4] = (2, 1)
-        logical_chip_id_to_coordinates[5] = (3, 1)
-        logical_chip_id_to_coordinates[6] = (3, 0)
-        logical_chip_id_to_coordinates[7] = (2, 0)
 
     print("Running on: ", num_devices, " devices.")
     in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
@@ -111,30 +110,32 @@ def test_reproduce_lm_head_nd_32(
                 compute_kernel_config=wh_compute_kernel_config,
             )
 
-        # synchronize
+        # synchronize devices in the order of all_devices fixture list; this list ensures we first synchronize
+        # all local devices and then all remote devices, to avoid misinterpreting a hang on the remote device
+        # caused by problems on the local device it is attached to
         for device_idx in range(num_devices):
             if num_devices != 1:
                 if num_devices == 2:
-                    print("Start sync logicalDeviceID: ", device_idx)
+                    print("Start sync device id: ", device_idx)
                 if num_devices == 8:
                     print(
-                        "Start sync logicalDeviceID: ",
+                        "Start sync device id: ",
                         device_idx,
                         " eth coordinates: ",
-                        logical_chip_id_to_coordinates[device_idx],
+                        CHIP_ID_TO_COORDINATES_T3K[device_idx],
                     )
             else:
                 print("Start single device sync:")
-            ttl.device.Synchronize(devices[device_idx])
+            ttl.device.Synchronize(all_devices[device_idx])
             if num_devices != 1:
                 if num_devices == 2:
-                    print("End sync logicalDeviceID: ", device_idx)
+                    print("End sync device id: ", device_idx)
                 if num_devices == 8:
                     print(
-                        "End sync logicalDeviceID: ",
+                        "End sync device id: ",
                         device_idx,
                         " eth coordinates: ",
-                        logical_chip_id_to_coordinates[device_idx],
+                        CHIP_ID_TO_COORDINATES_T3K[device_idx],
                     )
             else:
                 print("End single device sync")
@@ -178,25 +179,14 @@ def test_specific_chip_lm_head_nd_32_t3000(all_devices, logical_chip_index, use_
     num_devices_t3000 = 8
     if len(all_devices) != num_devices_t3000:
         pytest.skip("Test is only valid for t3000 machines")
-    devices = get_devices_for_t3000(all_devices, num_devices_t3000)
-
-    logical_chip_id_to_coordinates = [None] * num_devices_t3000
-    logical_chip_id_to_coordinates[0] = (1, 0)
-    logical_chip_id_to_coordinates[1] = (0, 0)
-    logical_chip_id_to_coordinates[2] = (0, 1)
-    logical_chip_id_to_coordinates[3] = (1, 1)
-    logical_chip_id_to_coordinates[4] = (2, 1)
-    logical_chip_id_to_coordinates[5] = (3, 1)
-    logical_chip_id_to_coordinates[6] = (3, 0)
-    logical_chip_id_to_coordinates[7] = (2, 0)
 
     print(
-        "Selecting logical device id: ",
+        "Selecting device id: ",
         logical_chip_index,
         " eth coordinates: ",
-        logical_chip_id_to_coordinates[logical_chip_index],
+        CHIP_ID_TO_COORDINATES_T3K[logical_chip_index],
     )
-    target_device = devices[logical_chip_index]
+    target_device = all_devices[logical_chip_index]
     devices = [target_device]
     test_reproduce_lm_head_nd_32(devices, 1, use_program_cache)
 
@@ -230,25 +220,14 @@ def test_determinism_specific_chip(all_devices, logical_chip_index, use_program_
     num_devices_t3000 = 8
     if len(all_devices) != num_devices_t3000:
         pytest.skip("Test is only valid for t3000 machines")
-    devices = get_devices_for_t3000(all_devices, num_devices_t3000)
-
-    logical_chip_id_to_coordinates = [None] * num_devices_t3000
-    logical_chip_id_to_coordinates[0] = (1, 0)
-    logical_chip_id_to_coordinates[1] = (0, 0)
-    logical_chip_id_to_coordinates[2] = (0, 1)
-    logical_chip_id_to_coordinates[3] = (1, 1)
-    logical_chip_id_to_coordinates[4] = (2, 1)
-    logical_chip_id_to_coordinates[5] = (3, 1)
-    logical_chip_id_to_coordinates[6] = (3, 0)
-    logical_chip_id_to_coordinates[7] = (2, 0)
 
     print(
-        "Selecting logical device id: ",
+        "Selecting device id: ",
         logical_chip_index,
         " eth coordinates: ",
-        logical_chip_id_to_coordinates[logical_chip_index],
+        CHIP_ID_TO_COORDINATES_T3K[logical_chip_index],
     )
-    target_device = devices[logical_chip_index]
+    target_device = all_devices[logical_chip_index]
     devices = [target_device]
 
     test_reproduce_lm_head_nd_32(
