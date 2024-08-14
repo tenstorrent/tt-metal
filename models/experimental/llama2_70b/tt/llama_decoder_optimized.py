@@ -6,7 +6,7 @@ from loguru import logger
 from typing import List
 import torch
 from torch import nn
-from ttnn import experimental as tt_lib
+
 import ttnn
 from ttnn import ReplicateTensorToMesh
 
@@ -121,12 +121,12 @@ class TtLlamaDecoder_optimized:
 
     def __call__(
         self,
-        xs: List[tt_lib.tensor.Tensor],
-        rot_mats: List[tt_lib.tensor.Tensor],
+        xs: List[ttnn.Tensor],
+        rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[tt_lib.tensor.Tensor],
+        attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
         elif self.model_config["LLM_MODE"] == "decode":
@@ -136,11 +136,11 @@ class TtLlamaDecoder_optimized:
 
     def decode_forward(
         self,
-        xs: List[tt_lib.tensor.Tensor],
-        rot_mats: List[tt_lib.tensor.Tensor],
+        xs: List[ttnn.Tensor],
+        rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[tt_lib.tensor.Tensor],
-    ) -> List[tt_lib.tensor.Tensor]:
+        attn_masks: List[ttnn.Tensor],
+    ) -> List[ttnn.Tensor]:
         ### xs (residual stream) is fractured on all chips
         xs_replicated = ttnn.all_gather(
             xs,
@@ -235,8 +235,8 @@ class TtLlamaDecoder_optimized:
                 [layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim],
                 num_slices,  # num_slices
                 slice_i,  # slice_index
-                tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
 
             xs_slice = ttnn.rms_norm(
@@ -260,18 +260,18 @@ class TtLlamaDecoder_optimized:
 
     def prefill_forward(
         self,
-        xs: List[tt_lib.tensor.Tensor],
-        rot_mats: List[tt_lib.tensor.Tensor],
+        xs: List[ttnn.Tensor],
+        rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[tt_lib.tensor.Tensor],
+        attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
-    ) -> List[tt_lib.tensor.Tensor]:
+    ) -> List[ttnn.Tensor]:
         ### xs (residual stream) is fractured on all chips
         # TODO: Reenable when typcast supports multidevice
         # xs_replicated = []
         # for i in range(self.num_devices):
         #     xs_replicated.append(
-        #         tt_lib.tensor.typecast(tt_lib.tensor.clone(xs[i]), dtype=tt_lib.tensor.DataType.BFLOAT8_B)
+        #         ttnn.experimental.tensor.typecast(ttnn.experimental.tensor.clone(xs[i]), dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B)
         #     )
 
         xs_replicated = ttnn.all_gather(

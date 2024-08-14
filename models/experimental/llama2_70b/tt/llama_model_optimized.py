@@ -6,7 +6,6 @@ from loguru import logger
 from typing import List
 from tqdm import tqdm
 import torch
-from ttnn import experimental as tt_lib
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 
@@ -237,7 +236,7 @@ class TtLlamaModel_optimized:
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             assert xs.shape == (seq_len, 1, batch, self.hidden_size // self.num_devices)
 
-            xs = tt_lib.tensor.interleaved_to_sharded(
+            xs = ttnn.experimental.tensor.interleaved_to_sharded(
                 xs, sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
             )
 
@@ -255,7 +254,7 @@ class TtLlamaModel_optimized:
             )
             rot_mats = ttnn.to_device(rot_mats, self.device_mesh)
 
-            rot_mats = tt_lib.tensor.interleaved_to_sharded(
+            rot_mats = ttnn.experimental.tensor.interleaved_to_sharded(
                 rot_mats, sharded_mem_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"]
             )
 
@@ -288,7 +287,7 @@ class TtLlamaModel_optimized:
                 attn_mask_shard_shape[-1] = padded_layer_past_len
                 attention_mask_memconfig.shard_spec.shape = attn_mask_shard_shape
 
-                attn_masks = tt_lib.tensor.interleaved_to_sharded(
+                attn_masks = ttnn.experimental.tensor.interleaved_to_sharded(
                     attn_masks, sharded_mem_config=attention_mask_memconfig
                 )
 
@@ -301,12 +300,12 @@ class TtLlamaModel_optimized:
 
     def __call__(
         self,
-        xs: List[tt_lib.tensor.Tensor],
-        rot_mats: List[tt_lib.tensor.Tensor],
+        xs: List[ttnn.Tensor],
+        rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[tt_lib.tensor.Tensor],
+        attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
         elif self.model_config["LLM_MODE"] == "decode":
@@ -316,11 +315,11 @@ class TtLlamaModel_optimized:
 
     def decode_forward(
         self,
-        xs: List[tt_lib.tensor.Tensor],
-        rot_mats: List[tt_lib.tensor.Tensor],
+        xs: List[ttnn.Tensor],
+        rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[tt_lib.tensor.Tensor],
-    ) -> tt_lib.tensor.Tensor:
+        attn_masks: List[ttnn.Tensor],
+    ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
             xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
@@ -345,9 +344,11 @@ class TtLlamaModel_optimized:
         ### Each device does an LM head fracture
         lm_head_out = ttnn.matmul(
             self.lm_head,
-            program_config=self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
-            if self.llama3
-            else self.model_config["LM_HEAD_MM_PROGCFG"],
+            program_config=(
+                self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
+                if self.llama3
+                else self.model_config["LM_HEAD_MM_PROGCFG"]
+            ),
             memory_config=self.model_config["DRAM_MEMCFG"],
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
@@ -388,8 +389,8 @@ class TtLlamaModel_optimized:
                 [layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim],
                 num_slices,  # num_slices
                 slice_i,  # slice_index
-                tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
 
             xs_slice = ttnn.rms_norm(
@@ -413,12 +414,12 @@ class TtLlamaModel_optimized:
 
     def prefill_forward(
         self,
-        xs: List[tt_lib.tensor.Tensor],
-        rot_mats: List[tt_lib.tensor.Tensor],
+        xs: List[ttnn.Tensor],
+        rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[tt_lib.tensor.Tensor],
+        attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
             xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)  # xs is sharded

@@ -6,8 +6,6 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
-import tt_lib as ttl
 import ttnn
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
@@ -16,18 +14,18 @@ DMODEL = 8 * 1024
 FF_DIM = 32 * 1024
 USE_ACC = True
 
-DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
-WIDTH_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1)
-COMPUTE_KERNEL_CONFIG = ttl.tensor.WormholeComputeKernelConfig(
-    math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
+BFP8_DTYPE = ttnn.bfloat8_b
+WIDTH_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=True,
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
 
-COMPUTE_KERNEL_FP16_CONFIG = ttl.tensor.WormholeComputeKernelConfig(
-    math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+COMPUTE_KERNEL_FP16_CONFIG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=True,
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
@@ -208,15 +206,15 @@ def run_prefill_MLP_128(
     inp_shape = (1, 128, DMODEL)
     inp_allgather_shape = (1, 128, FF_DIM)
 
-    inp_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    inp_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(*start_idx),
-                        ttl.tensor.CoreCoord(*end_idx),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(*start_idx),
+                        ttnn.CoreCoord(*end_idx),
                     ),
                 }
             ),
@@ -224,20 +222,20 @@ def run_prefill_MLP_128(
                 inp_shape[-2],
                 inp_shape[-1] // n_cores,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
 
-    inp_allgather_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    inp_allgather_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(*start_idx),
-                        ttl.tensor.CoreCoord(*end_idx),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(*start_idx),
+                        ttnn.CoreCoord(*end_idx),
                     ),
                 }
             ),
@@ -245,7 +243,7 @@ def run_prefill_MLP_128(
                 inp_allgather_shape[-2],
                 inp_allgather_shape[-1] // n_cores,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
@@ -281,15 +279,15 @@ class Prefill_MLP_2k:
             tt_dtype=BFP8_DTYPE,
         )
 
-        self.block_sharded = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        self.block_sharded = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 7),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 7),
                         ),
                     }
                 ),
@@ -297,7 +295,7 @@ class Prefill_MLP_2k:
                     2048 // 8,
                     4096 // 8,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
@@ -399,15 +397,15 @@ def run_decode_ff1(
 
     inp_shape = (1, 32, DMODEL)
 
-    inp_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    inp_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(*start_idx),
-                        ttl.tensor.CoreCoord(*end_idx),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(*start_idx),
+                        ttnn.CoreCoord(*end_idx),
                     ),
                 }
             ),
@@ -415,7 +413,7 @@ def run_decode_ff1(
                 inp_shape[-2],
                 inp_shape[-1] // n_cores,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
@@ -438,15 +436,15 @@ def run_decode_ff2(
 
     inp_shape = (1, 32, FF_DIM)
 
-    inp_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    inp_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(*start_idx),
-                        ttl.tensor.CoreCoord(*end_idx),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(*start_idx),
+                        ttnn.CoreCoord(*end_idx),
                     ),
                 }
             ),
@@ -454,7 +452,7 @@ def run_decode_ff2(
                 inp_shape[-2],
                 inp_shape[-1] // n_cores,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )

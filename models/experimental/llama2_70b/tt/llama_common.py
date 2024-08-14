@@ -9,7 +9,6 @@ from typing import Tuple
 import numpy as np
 import torch
 from torch import nn
-from ttnn import experimental as tt_lib
 import ttnn
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 from loguru import logger
@@ -147,14 +146,18 @@ def get_weight_cache_path_galaxy(base_cache_path, tensor_str, device_idx, num_de
 
 def rms_decomp(x, norm_weight, eps):
     squared = ttnn.pow(x, 2)
-    # mean_squared = tt_lib.tensor.mean(squared, )
-    sum_squared = tt_lib.tensor.reduce(squared, tt_lib.tensor.ReduceOpMath.SUM, tt_lib.tensor.ReduceOpDim.W, scaler=1.0)
+    # mean_squared = ttnn.experimental.tensor.mean(squared, )
+    sum_squared = ttnn.experimental.tensor.reduce(
+        squared, ttnn.experimental.tensor.ReduceOpMath.SUM, ttnn.experimental.tensor.ReduceOpDim.W, scaler=1.0
+    )
     # Tensor is 1,1,32,1+31 now
     mean_squared = ttnn.multiply(sum_squared, (1 / x.shape[-1]))
     mean_squared_eps = ttnn.add(mean_squared, eps)
-    rms = tt_lib.tensor.pow(mean_squared_eps, 0.5)
+    rms = ttnn.experimental.tensor.pow(mean_squared_eps, 0.5)
     rms_recip = ttnn.reciprocal(rms)
-    normed_x = tt_lib.tensor.bcast(x, rms_recip, math_op=tt_lib.tensor.BcastOpMath.MUL, dim=tt_lib.tensor.BcastOpDim.W)
+    normed_x = ttnn.experimental.tensor.bcast(
+        x, rms_recip, math_op=ttnn.experimental.tensor.BcastOpMath.MUL, dim=ttnn.experimental.tensor.BcastOpDim.W
+    )
     norm_out = ttnn.mul(normed_x, norm_weight)
     return norm_out
 

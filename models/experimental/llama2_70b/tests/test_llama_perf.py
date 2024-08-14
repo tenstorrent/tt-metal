@@ -9,7 +9,6 @@ from loguru import logger
 from pathlib import Path
 import torch
 from torch import nn
-import tt_lib
 import ttnn
 
 from models.experimental.llama2_70b.reference.llama.llama import Llama
@@ -143,7 +142,7 @@ def run_test_LlamaModel_end_to_end(
 
     for i in device_mesh.get_device_ids():
         device = device_mesh.get_device(i)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
 
     del state_dict
 
@@ -188,7 +187,7 @@ def run_test_LlamaModel_end_to_end(
     print_output_prompts(generated_ids, tokenizer)
 
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
     logger.info("Finished 1st run prefill stage with compile!")
 
     batch, seq_len = 32, 1
@@ -230,7 +229,7 @@ def run_test_LlamaModel_end_to_end(
 
         for i in device_mesh.get_device_ids():
             device = device_mesh.get_device(i)
-            tt_lib.device.Synchronize(device)
+            ttnn.synchronize_device(device)
 
         logits = ttnn.to_torch(tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
         logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]

@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
 
@@ -90,7 +89,7 @@ def run_test_LlamaModel_stress_test(
     )
     for i in device_mesh.get_device_ids():
         device = device_mesh.get_device(i)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
 
     del state_dict
 

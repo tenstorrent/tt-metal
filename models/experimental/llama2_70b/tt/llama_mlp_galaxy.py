@@ -5,7 +5,6 @@
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib
 import ttnn
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.experimental.llama2_70b.tt.llama_common import (
@@ -88,7 +87,7 @@ class TtLlamaMLP_galaxy(nn.Module):
                         self.cache_path, w1_str, device_id, self.num_devices, x, y
                     )
                     self.w1_list.append(
-                        tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        ttnn.load_tensor(str(tensor_cache_path)).to(
                             self.devices[device_id], self.model_config["DRAM_MEMCFG"]
                         )
                     )
@@ -96,7 +95,7 @@ class TtLlamaMLP_galaxy(nn.Module):
                         self.cache_path, w3_str, device_id, self.num_devices, x, y
                     )
                     self.w3_list.append(
-                        tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        ttnn.load_tensor(str(tensor_cache_path)).to(
                             self.devices[device_id], self.model_config["DRAM_MEMCFG"]
                         )
                     )
@@ -108,7 +107,7 @@ class TtLlamaMLP_galaxy(nn.Module):
                         self.cache_path, w2_str, device_id, self.num_devices, x, y
                     )
                     self.w2_list.append(
-                        tt_lib.tensor.load_tensor(str(tensor_cache_path)).to(
+                        ttnn.load_tensor(str(tensor_cache_path)).to(
                             self.devices[device_id], self.model_config["DRAM_MEMCFG"]
                         )
                     )
@@ -146,7 +145,7 @@ class TtLlamaMLP_galaxy(nn.Module):
                         tt_dtype=self.model_config["BFP8_DTYPE"],
                     )
                     self.w1_list.append(w1_host.to(self.devices[device_id], self.model_config["DRAM_MEMCFG"]))
-                    tt_lib.tensor.dump_tensor(
+                    ttnn.experimental.tensor.dump_tensor(
                         str(get_weight_cache_path_galaxy(self.cache_path, w1_str, device_id, self.num_devices, x, y)),
                         w1_host,
                     )
@@ -157,7 +156,7 @@ class TtLlamaMLP_galaxy(nn.Module):
                         tt_dtype=self.model_config["BFP8_DTYPE"],
                     )
                     self.w3_list.append(w3_host.to(self.devices[device_id], self.model_config["DRAM_MEMCFG"]))
-                    tt_lib.tensor.dump_tensor(
+                    ttnn.experimental.tensor.dump_tensor(
                         str(get_weight_cache_path_galaxy(self.cache_path, w3_str, device_id, self.num_devices, x, y)),
                         w3_host,
                     )
@@ -174,7 +173,7 @@ class TtLlamaMLP_galaxy(nn.Module):
                         tt_dtype=self.model_config["BFP8_DTYPE"],
                     )
                     self.w2_list.append(w2_host.to(self.devices[device_id], self.model_config["DRAM_MEMCFG"]))
-                    tt_lib.tensor.dump_tensor(
+                    ttnn.experimental.tensor.dump_tensor(
                         str(get_weight_cache_path_galaxy(self.cache_path, w2_str, device_id, self.num_devices, x, y)),
                         w2_host,
                     )
@@ -193,7 +192,7 @@ class TtLlamaMLP_galaxy(nn.Module):
                 )
             )
         for i in range(self.num_devices):
-            x_multichip[i] = tt_lib.tensor.interleaved_to_sharded(
+            x_multichip[i] = ttnn.experimental.tensor.interleaved_to_sharded(
                 x_multichip[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
             )
         return x_multichip
@@ -204,7 +203,7 @@ class TtLlamaMLP_galaxy(nn.Module):
         batch, seq_len = 32, 1
         for i in range(len(x_multichip)):
             assert x_multichip[i].shape == (seq_len, 1, batch, self.hidden_size)
-            x_multichip[i] = tt_lib.tensor.sharded_to_interleaved(
+            x_multichip[i] = ttnn.experimental.tensor.sharded_to_interleaved(
                 x_multichip[i], output_mem_config=self.model_config["L1_MEMCFG"]
             )
         for FF1_group in self.FF1_groups:
@@ -250,7 +249,7 @@ class TtLlamaMLP_galaxy(nn.Module):
 
         for i in range(len(w1_32chips)):
             for j in range(len(w1_32chips[i])):
-                w1_32chips[i][j] = tt_lib.tensor.sharded_to_interleaved(
+                w1_32chips[i][j] = ttnn.experimental.tensor.sharded_to_interleaved(
                     w1_32chips[i][j], output_mem_config=self.model_config["L1_MEMCFG"]
                 )
 
@@ -283,7 +282,7 @@ class TtLlamaMLP_galaxy(nn.Module):
 
         for i in range(len(w1_32chips)):
             for j in range(len(w1_32chips[i])):
-                w3_32chips[i][j] = tt_lib.tensor.sharded_to_interleaved(
+                w3_32chips[i][j] = ttnn.experimental.tensor.sharded_to_interleaved(
                     w3_32chips[i][j], output_mem_config=self.model_config["L1_MEMCFG"]
                 )
 
@@ -296,11 +295,11 @@ class TtLlamaMLP_galaxy(nn.Module):
 
         for i in range(len(w1_32chips)):
             for j in range(len(w1_32chips[i])):
-                w1_32chips[i][j] = tt_lib.tensor.interleaved_to_sharded(
+                w1_32chips[i][j] = ttnn.experimental.tensor.sharded_to_interleaved(
                     w1_32chips[i][j],
                     sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"],
                 )
-                w3_32chips[i][j] = tt_lib.tensor.interleaved_to_sharded(
+                w3_32chips[i][j] = ttnn.experimental.tensor.sharded_to_interleaved(
                     w3_32chips[i][j],
                     sharded_mem_config=self.model_config["PADDED_MLP_ALL_GATHER_OUTPUT_MEMCFG"],
                 )
@@ -345,7 +344,7 @@ class TtLlamaMLP_galaxy(nn.Module):
 
         for i in range(len(hidden_states_32chips)):
             for j in range(len(hidden_states_32chips[i])):
-                hidden_states_32chips[i][j] = tt_lib.tensor.sharded_to_interleaved(
+                hidden_states_32chips[i][j] = ttnn.experimental.tensor.sharded_to_interleaved(
                     hidden_states_32chips[i][j], output_mem_config=self.model_config["L1_MEMCFG"]
                 )
 
@@ -374,7 +373,7 @@ class TtLlamaMLP_galaxy(nn.Module):
         if self.emulated:
             # FOR BRINGUP! Outputs are Interaved, Shard them
             for i in range(len(hidden_states_32chips)):
-                hidden_states_32chips[i] = tt_lib.tensor.interleaved_to_sharded(
+                hidden_states_32chips[i] = ttnn.experimental.tensor.sharded_to_interleaved(
                     hidden_states_32chips[i], sharded_mem_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"]
                 )
 

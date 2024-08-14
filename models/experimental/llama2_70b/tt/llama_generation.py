@@ -4,8 +4,6 @@
 
 import torch
 from torch import nn
-from ttnn import experimental as tt_lib
-import tt_lib as ttl
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
 
@@ -47,7 +45,7 @@ class TtLlamaModelForGeneration:
         self.n_devices = device_mesh.get_num_devices()
 
         # for device in devices:
-        #     ttl.device.Synchronize(device)
+        #     ttnn.synchronize_device(device)
 
         del state_dict
 
@@ -90,7 +88,7 @@ class TtLlamaModelForGeneration:
         del attn_mask
 
         # for device in self.devices:
-        #     ttl.device.Synchronize(device)
+        #     ttnn.synchronize_device(device)
         # logits = ttnn.from_device(tt_logits)
         logits = ttnn.to_torch(
             tt_logits, device=self.device_mesh, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=3)
@@ -130,7 +128,7 @@ class TtLlamaModelForGeneration:
             del attn_mask
 
             # for device in self.devices:
-            #     ttl.device.Synchronize(device)
+            #     ttnn.synchronize_device(device)
 
             logits = ttnn.to_torch(
                 tt_logits, device=self.device_mesh, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=3)
