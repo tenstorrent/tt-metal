@@ -25,8 +25,6 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_pybind.hpp"
 
-#include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_pybind.hpp"
-
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
@@ -52,9 +50,6 @@ void py_module(py::module& module) {
     ssm::detail::bind_prefix_scan(module);
     ssm::detail::bind_repeat_and_interleave_eltwise_mul(module);
 
-    // CCL ops
-    auto m_experimental_ccl = module.def_submodule("ccl", "experiemental collective communication operations");
-    ccl::py_bind_all_gather_matmul(m_experimental_ccl);
 }
 
 }  // namespace ttnn::operations::experimental
