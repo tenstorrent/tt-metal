@@ -180,8 +180,6 @@ inline std::vector<uint32_t> create_random_vector_of_bfp4(uint32_t num_bytes, bo
 
     TT_ASSERT(packed_result.size() == packed_data_size);
 
-    // log_info(tt::LogVerif, "Created a random vector of size {}", packed_result.size());
-
     return packed_result;
 }
 
@@ -202,8 +200,6 @@ inline std::vector<uint32_t> create_constant_vector_of_bfp4(uint32_t num_bytes, 
     std::vector<uint32_t> packed_result = pack_fp32_vec_as_bfp4_tiles(fp32_vec, /*row_major_input=*/true, is_exp_a);
 
     TT_ASSERT(packed_result.size() == packed_data_size);
-
-    // log_info(tt::LogVerif, "Created constant vector of size {}", packed_result.size());
 
     return packed_result;
 }
