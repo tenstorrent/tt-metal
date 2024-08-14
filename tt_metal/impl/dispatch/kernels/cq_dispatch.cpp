@@ -80,6 +80,8 @@ static uint32_t cmd_ptr;   // walks through pages in cb cmd by cmd
 static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 static uint32_t write_offset[3];  // added to write address on non-host writes
 
+static uint32_t upstream_total_acquired_page_count;
+
 constexpr uint32_t packed_write_max_multicast_sub_cmds = get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
 constexpr uint32_t max_write_packed_large_cmd =
     CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS *
@@ -181,7 +183,7 @@ void process_write_host_h() {
             }
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
             uint32_t n_pages = cb_acquire_pages<my_noc_xy, my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
-                cb_fence, block_next_start_addr, rd_block_idx);
+                cb_fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
 
             cb_fence += n_pages * dispatch_cb_page_size;
 
@@ -325,7 +327,7 @@ void relay_to_next_cb(uint32_t data_ptr, uint32_t length) {
 
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
             uint32_t n_pages = cb_acquire_pages<my_noc_xy, my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
-                cb_fence, block_next_start_addr, rd_block_idx);
+                cb_fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
             cb_fence += n_pages * dispatch_cb_page_size;
 
             // Release pages for prefetcher
@@ -404,7 +406,7 @@ void process_write_linear(uint32_t num_mcast_dests) {
             }
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
             uint32_t n_pages = cb_acquire_pages<my_noc_xy, my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
-                cb_fence, block_next_start_addr, rd_block_idx);
+                cb_fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
 
             cb_fence += n_pages * dispatch_cb_page_size;
 
@@ -481,7 +483,7 @@ void process_write_paged() {
             }
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
             uint32_t n_pages = cb_acquire_pages<my_noc_xy, my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
-                cb_fence, block_next_start_addr, rd_block_idx);
+                cb_fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
 
             cb_fence += n_pages * dispatch_cb_page_size;
 
@@ -601,7 +603,7 @@ void process_write_packed(uint32_t flags) {
 
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
             uint32_t n_pages = cb_acquire_pages<my_noc_xy, my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
-                cb_fence, block_next_start_addr, rd_block_idx);
+                cb_fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
             cb_fence += n_pages * dispatch_cb_page_size;
 
             // This is done here so the common case doesn't have to restore the pointers
@@ -712,7 +714,7 @@ void process_write_packed_large() {
                     move_rd_to_next_block<dispatch_cb_blocks>(block_noc_writes_to_clear, rd_block_idx);
                 }
                 uint32_t n_pages = cb_acquire_pages<my_noc_xy, my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
-                    cb_fence, block_next_start_addr, rd_block_idx);
+                    cb_fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
                 cb_fence += n_pages * dispatch_cb_page_size;
             }
             // Transfer size is min(remaining_length, data_available_in_cb)
@@ -765,7 +767,7 @@ void process_write_packed_large() {
 
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
             uint32_t n_pages = cb_acquire_pages<my_noc_xy, my_dispatch_cb_sem_id, dispatch_cb_log_page_size>(
-                cb_fence, block_next_start_addr, rd_block_idx);
+                cb_fence, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
             cb_fence += n_pages * dispatch_cb_page_size;
         }
         data_ptr += pad_size;
@@ -1029,11 +1031,14 @@ static inline bool process_cmd_h(uint32_t &cmd_ptr) {
 
 void kernel_main() {
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    // Initialize local state of any additional nocs used instead of the default
     if constexpr (my_noc_index != upstream_noc_index) {
         noc_local_state_init(upstream_noc_index);
     }
 
     static_assert(is_d_variant || split_dispatch_page_preamble_size == 0);
+
+    upstream_total_acquired_page_count = 0;
 
     for (uint32_t i = 0; i < dispatch_cb_blocks; i++) {
         uint32_t next_block = i + 1;
@@ -1066,7 +1071,7 @@ void kernel_main() {
                 dispatch_cb_log_page_size,
                 my_noc_xy,
                 my_dispatch_cb_sem_id>(
-                cmd_ptr, cb_fence, block_noc_writes_to_clear, block_next_start_addr, rd_block_idx);
+                cmd_ptr, cb_fence, block_noc_writes_to_clear, block_next_start_addr, rd_block_idx, upstream_total_acquired_page_count);
         }
 
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
@@ -1106,8 +1111,7 @@ void kernel_main() {
     cb_release_pages<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>(npages);
 
     // Confirm expected number of pages, spinning here is a leak
-    // TODO: We need to pass in our static counter here
-    // cb_wait_all_pages<my_dispatch_cb_sem_id>(0);
+    cb_wait_all_pages<my_dispatch_cb_sem_id>(upstream_total_acquired_page_count);
 
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": out" << ENDL();
 }

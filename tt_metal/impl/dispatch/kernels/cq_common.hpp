@@ -174,8 +174,7 @@ void cb_wait_all_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
     DEBUG_STATUS("TAPW");
-    // TODO: this masks off the upper bit used by mux/dmux for terminate, remove
-    while ((*sem_addr & 0x7FFFFFFF) != n);
+    while ((*sem_addr) != n);
     DEBUG_STATUS("TAPD");
 }
 
@@ -212,18 +211,18 @@ template<uint32_t noc_xy,
 FORCE_INLINE
 uint32_t cb_acquire_pages(uint32_t cb_fence,
                           uint32_t block_next_start_addr[],
-                          uint32_t rd_block_idx) {
+                          uint32_t rd_block_idx,
+                          uint32_t& local_count) {
 
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
 
-    static uint32_t counter = 0;
-    static uint32_t sem = 0;
+    static uint32_t upstream_count = 0;
 
-    if (counter == sem) {
+    if (local_count == upstream_count) {
         DEBUG_STATUS("UAPW");
         uint32_t heartbeat = 0;
-        while ((sem = *sem_addr) == counter) {
+        while ((upstream_count = *sem_addr) == local_count) {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
         }
         DEBUG_STATUS("UAPD");
@@ -231,10 +230,10 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
 
     // Set a fence to limit how much is processed at once
     uint32_t limit = (block_next_start_addr[rd_block_idx] - cb_fence) >> cb_log_page_size;
-    uint32_t available = sem - counter;
+    uint32_t available = upstream_count - local_count;
     uint32_t usable = (available > limit) ? limit : available;
 
-    counter += usable;
+    local_count += usable;
 
     return usable;
 }
@@ -295,7 +294,8 @@ uint32_t get_cb_page(uint32_t& cmd_ptr,
                      uint32_t& cb_fence,
                      uint32_t block_noc_writes_to_clear[],
                      uint32_t block_next_start_addr[],
-                     uint32_t& rd_block_idx) {
+                     uint32_t& rd_block_idx,
+                     uint32_t& local_count) {
 
     // Strided past the data that has arrived, get the next page
     if (cb_fence == block_next_start_addr[rd_block_idx]) {
@@ -312,7 +312,8 @@ uint32_t get_cb_page(uint32_t& cmd_ptr,
                                         cb_sem,
                                         cb_log_page_size>(cb_fence,
                                                           block_next_start_addr,
-                                                          rd_block_idx);
+                                                          rd_block_idx,
+                                                          local_count);
     cb_fence += n_pages << cb_log_page_size;
 
     return n_pages;
