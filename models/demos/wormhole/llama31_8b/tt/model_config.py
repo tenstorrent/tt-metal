@@ -174,6 +174,7 @@ class TtModelArgs:
                 fused_activation=None,
                 fuse_batch=False,
             )
+            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
             self.model_config[
                 "PREFILL_MLP_W1_PRG_CONFIG_128"
             ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -187,7 +188,7 @@ class TtModelArgs:
                 fused_activation=ttnn.UnaryOpType.SILU,
                 fuse_batch=False,
             )
-
+            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
             self.model_config[
                 "PREFILL_MLP_W3_PRG_CONFIG_128"
             ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -201,7 +202,7 @@ class TtModelArgs:
                 fused_activation=None,
                 fuse_batch=False,
             )
-
+            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
             self.model_config[
                 "PREFILL_MLP_W2_PRG_CONFIG_128"
             ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -243,6 +244,7 @@ class TtModelArgs:
                 fuse_batch=seq_len <= 2048,
             )
 
+            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
             self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(7, 8),
                 in0_block_w=1,
