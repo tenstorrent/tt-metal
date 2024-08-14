@@ -8,8 +8,6 @@ from typing import List, Optional, Tuple
 import torch
 import ttnn
 
-import tt_lib
-
 from models.demos.falcon7b_common.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.falcon7b_common.tt.model_utils import get_weights_cached, layernorm
 from models.utility_functions import nearest_32, torch_tensors_to_tt_tensors
@@ -286,7 +284,7 @@ class TtFalconModelShared(torch.nn.Module):
 
             if device_perf_run and idx % 8 == 0:
                 for i in range(self.num_devices):
-                    tt_lib.device.DumpDeviceProfiler(layer_output[i].device())
+                    ttnn.experimental.device.DumpDeviceProfiler(layer_output[i].device())
 
         # apply final norm layer
         layer_output = layernorm(

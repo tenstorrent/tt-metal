@@ -8,7 +8,7 @@ from loguru import logger
 import numpy as np
 from sklearn.metrics import top_k_accuracy_score
 
-import tt_lib
+import ttnn
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 
 from models.demos.falcon7b_common.tt.falcon_common import (
@@ -230,12 +230,12 @@ def run_test_FalconCausalLM_end_to_end(
                 use_cache=use_cache,
             )
         for device in devices:
-            tt_lib.device.Synchronize(device)
+            ttnn.synchronize_device(device)
         profiler.end("first_model_run_with_compile", force_enable=e2e_perf)
 
         # Dump device profiler data before second run to avoid exceeding profiler memory limits when using tracy
         for device in devices:
-            tt_lib.device.DumpDeviceProfiler(device)
+            ttnn.experimental.device.DumpDeviceProfiler(device)
 
         del tt_out
         del tt_layer_past
@@ -313,7 +313,7 @@ def run_test_FalconCausalLM_end_to_end(
             device_perf_run=device_perf,
         )
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
     profiler.end(f"model_run_for_inference")
 
     if llm_mode == "prefill":

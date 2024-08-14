@@ -5,7 +5,7 @@
 import numpy as np
 import pytest
 import torch
-import tt_lib
+import ttnn
 from loguru import logger
 from models.demos.falcon7b_common.tests.test_utils import (
     concat_device_out_layer_present,
@@ -160,7 +160,7 @@ def run_test_FalconCausalLM_end_to_end(
             use_cache=use_cache,
         )
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
     profiler.end("first_model_run_with_compile", force_enable=True)
     del tt_out
     del tt_layer_past
@@ -236,7 +236,7 @@ def run_test_FalconCausalLM_end_to_end(
             use_cache=use_cache,
         )
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
     profiler.end(f"model_run_for_inference")
 
     if llm_mode == "prefill":
