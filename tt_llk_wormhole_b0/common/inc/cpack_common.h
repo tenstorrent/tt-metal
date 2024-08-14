@@ -343,6 +343,12 @@ namespace ckernel::packer
       TTI_REG2FLOP(2,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
       TTI_REG2FLOP(2,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
 
+      uint32_t reconfig_PCK_DEST_RD_CTRL_Read_unsigned = 0;
+      if (pack_dst_format == (uint)DataFormat::UInt8) {
+         reconfig_PCK_DEST_RD_CTRL_Read_unsigned = 1;
+      }
+      cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_unsigned_RMW>(reconfig_PCK_DEST_RD_CTRL_Read_unsigned);
+
       if (IS_BFP_FORMAT(pack_dst_format)) {
          // Override exp section size for packers 1,2,3
          // Tile header + exp size + datum size
