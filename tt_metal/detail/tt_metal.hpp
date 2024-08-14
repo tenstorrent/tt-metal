@@ -322,10 +322,7 @@ namespace tt::tt_metal{
             DispatchStateCheck(true);
             LAZY_COMMAND_QUEUE_MODE = lazy;
         }
-        inline void DumpDeviceProfiler(Device * device, bool last_dump)
-        {
-            tt::tt_metal::detail::DumpDeviceProfileResults(device, last_dump);
-        }
+
 
         void AllocateBuffer(Buffer* buffer, bool bottom_up);
 

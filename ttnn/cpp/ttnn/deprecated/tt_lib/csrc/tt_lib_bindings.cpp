@@ -19,6 +19,13 @@
 
 namespace py = pybind11;
 
+namespace {
+    inline void DumpDeviceProfiler(Device * device, bool last_dump)
+    {
+        tt::tt_metal::detail::DumpDeviceProfileResults(device, last_dump);
+    }
+}
+
 namespace tt {
 
 namespace tt_metal {
@@ -212,7 +219,7 @@ void DeviceModule(py::module &m_device) {
         the FinishCommand. Once set to false, all subsequent commands will immediately notify the device
         that the write pointer has been updated.
     )doc");
-    m_device.def("DumpDeviceProfiler", &detail::DumpDeviceProfiler, py::arg("device"), py::arg("last_dump") = false, R"doc(
+    m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), py::arg("last_dump") = false, R"doc(
         Dump device side profiling data.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
