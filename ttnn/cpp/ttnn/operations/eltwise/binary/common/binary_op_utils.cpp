@@ -152,7 +152,7 @@ std::map<std::string, std::string> get_defines(
     }
 
     if (input_tensor_a_activation.has_value() ) {
-        defines.merge(ttnn::operations::unary::utils::get_defines(input_tensor_a_activation.value().op_type, std::nullopt, "PRE_IN0_0"));
+        defines.merge(ttnn::operations::unary::utils::get_defines(input_tensor_a_activation.value().op_type, std::nullopt, "PRE_IN0_0", idst));
     }
 
     return defines;
