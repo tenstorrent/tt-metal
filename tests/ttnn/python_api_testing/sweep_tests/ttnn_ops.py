@@ -3383,7 +3383,7 @@ def unary_add_bw(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t3 = ttnn.add_bw(t0, t1, alpha=scalar, memory_config=output_mem_config)
+    t3 = ttnn.add_bw(t0, t1, scalar, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t3[0])
 
@@ -3509,7 +3509,7 @@ def addalpha_bw(
     y,  # input_tensor
     z,  # other_tensor1
     *args,
-    scalar,
+    alpha,
     device,
     dtype,
     layout,
@@ -3521,7 +3521,7 @@ def addalpha_bw(
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
-    t3 = ttnn.addalpha_bw(t0, t1, t2, scalar, memory_config=output_mem_config)
+    t3 = ttnn.addalpha_bw(t0, t1, t2, alpha, memory_config=output_mem_config)
 
     return [ttnn_tensor_to_torch(t3[0]), ttnn_tensor_to_torch(t3[1])]
 
