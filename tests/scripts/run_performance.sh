@@ -31,13 +31,13 @@ run_perf_models_llm_javelin() {
     local tt_arch=$1
     local test_marker=$2
 
-    # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b_common/tests -m $test_marker
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b_common/tests -m $test_marker
 
-    # if [ "$tt_arch" == "wormhole_b0" ]; then
-        # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker
-    # fi
+    if [ "$tt_arch" == "wormhole_b0" ]; then
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker
+    fi
 
-    # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/llama31_8b/tests -m $test_marker
 
     ## Merge all the generated reports
