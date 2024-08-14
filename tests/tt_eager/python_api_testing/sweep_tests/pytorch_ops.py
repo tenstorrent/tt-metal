@@ -2414,3 +2414,15 @@ def floor_bw(x, y, *args, **kwargs):
 
 def complex_angle(x, *args, **kwargs):
     return torch.angle(x)
+
+
+def complex_conj_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.conj(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
