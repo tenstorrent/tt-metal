@@ -1,12 +1,11 @@
 ---
 test-list:
-  - complex-polar:
+  - complex-recip-bw:
       shape:
         start-shape: [1, 1, 32, 64]
         end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 64]
-        num-dims: [2, 3, 4]
-        num-shapes: 1
+        num-shapes: 2
         num-samples: 128
         args-sampling-strategy: "all"
       env:
@@ -21,7 +20,7 @@ test-list:
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        data-type: ["BFLOAT16"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: complex_polar_sweep.csv
+      output-file: complex_bw_recip_sweep.csv
