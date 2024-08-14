@@ -96,7 +96,7 @@ void notify_dispatch_core_done(uint64_t dispatch_addr) {
         while (!noc_cmd_buf_ready(n, NCRISC_AT_CMD_BUF))
             ;
     }
-    DEBUG_SANITIZE_NOC_ADDR(dispatch_addr, 4);
+    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
     noc_fast_atomic_increment(
         noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
 }

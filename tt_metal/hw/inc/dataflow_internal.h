@@ -32,7 +32,7 @@ FORCE_INLINE
 void noc_fast_read(uint32_t src_addr, uint32_t dest_addr) {
     DEBUG_STATUS("NFRW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(
-        (uint64_t)(src_addr) | (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE) << 32,
+        noc_index, (uint64_t)(src_addr) | (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE) << 32,
         dest_addr,
         NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE)
     );
@@ -81,7 +81,7 @@ void noc_fast_write_set_len(uint32_t len_bytes) {
 FORCE_INLINE
 void noc_fast_write(uint32_t src_addr, uint64_t dest_addr) {
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
-        dest_addr | (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE) << 32,
+        noc_index, dest_addr | (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE) << 32,
         dest_addr,
         NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE)
     );
