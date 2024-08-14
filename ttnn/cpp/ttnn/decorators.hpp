@@ -371,24 +371,9 @@ struct lambda_operation_t {
 };
 }  // namespace detail
 
-// If you are feeling lazy, you can use this macro to create an operation struct from a lambda
-// You  will have to implement async manually
-#define TTNN_REGISTER_OPERATION_FROM_FUNCTION(cpp_fully_qualified_name, function) \
-    (::ttnn::decorators::register_operation<                                 \
-        cpp_fully_qualified_name,                                            \
-        ::ttnn::decorators::detail::lambda_operation_t<[](auto&&... args) {  \
-            return function(std::forward<decltype(args)>(args)...);          \
-        }>>())
-
 }  // namespace decorators
 
 using ttnn::decorators::register_operation;
 using ttnn::decorators::register_operation_with_auto_launch_op;
-
-#define TTNN_REGISTER_OPERATION(NAMESPACE, OPERATION_NAME, OPERATION_TYPE) \
-    namespace NAMESPACE { \
-    constexpr auto OPERATION_NAME = ttnn::decorators::register_operation<reflect::fixed_string{#NAMESPACE "::" #OPERATION_NAME}, OPERATION_TYPE>(); \
-    }
-
 
 }  // namespace ttnn
