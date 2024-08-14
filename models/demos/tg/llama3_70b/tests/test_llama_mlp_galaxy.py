@@ -150,11 +150,7 @@ def run_test_LlamaMLP_inference(
 )
 @pytest.mark.parametrize(
     "llama_version",
-    (
-        # ("llama2"),
-        ("llama3"),
-        # ("llama3-405b"),
-    ),
+    (("llama3-tg"),),
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
