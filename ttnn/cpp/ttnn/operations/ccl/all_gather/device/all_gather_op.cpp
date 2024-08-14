@@ -13,8 +13,38 @@
 
 namespace ttnn {
 
+AllGather create_all_gather_struct(
+    const Tensor& input_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::vector<Device*>& devices
+) {
+    uint32_t num_devices = devices.size();
 
-AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor const& input_tensor) {
+    uint32_t device_index = 0; // Initialize device index
+    uint32_t receiver_device_id = 0; // Initialize receiver device ID
+    uint32_t sender_device_id = 0; // Initialize sender device ID
+
+    for (uint32_t i = 0; i < num_devices; ++i) {
+        if (devices[i] == input_tensor.device()) {
+            device_index = i;
+            receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
+            sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
+            break;
+        }
+    }
+
+    return ttnn::AllGather{
+        dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config())};
+}
+
+
+AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor const& input_tensor, bool fuse_op) {
+    if (fuse_op) {
+        return AllGatherBidirectionalMode::FULL_TENSOR;
+    }
+
     std::size_t eth_l1_capacity = eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     std::size_t tensor_size_bytes = input_tensor.shape().volume() * input_tensor.element_size();
     // This is currently a guestimate. We need a lot more hard data to identify where this dividing line is.
@@ -25,7 +55,7 @@ AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor con
     return AllGatherBidirectionalMode::FULL_TENSOR;
 }
 
-AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology) :
+AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology, bool fuse_op) :
     num_links(num_links),
     semaphore_size(32),
     ring_size(ring_size),
@@ -37,7 +67,7 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
     input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
     output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM),
 
-    bidirectional_mode(choose_bidirectional_mode(input_tensor))
+    bidirectional_mode(choose_bidirectional_mode(input_tensor, fuse_op))
 {
     TT_ASSERT(erisc_handshake_address >= eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
     TT_ASSERT(erisc_handshake_address < eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16);
@@ -157,24 +187,9 @@ Tensor all_gather(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
 
             const auto& input_tensor = input_tensors.at(0);
-            uint32_t num_devices = devices.size();
-
-            uint32_t device_index = 0; // Initialize device index
-            uint32_t receiver_device_id = 0; // Initialize receiver device ID
-            uint32_t sender_device_id = 0; // Initialize sender device ID
-
-            for (uint32_t i = 0; i < num_devices; ++i) {
-                if (devices[i] == input_tensor.device()) {
-                    device_index = i;
-                    receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
-                    sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
-                    break;
-                }
-            }
 
             return operation::run(
-                ttnn::AllGather{
-                    dim, num_links, num_devices, device_index, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config())},
+                create_all_gather_struct(input_tensor, dim, num_links, memory_config, devices),
                 {input_tensor});
         },
         {input_tensor},
