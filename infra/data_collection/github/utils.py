@@ -173,8 +173,8 @@ def get_job_row_from_github_job(github_job):
 
     # Best effort card type getting
 
-    get_overlap = lambda labels_a, labels_b: bool(set(labels_a) & set(labels_b))
-    labels_have_overlap = lambda labels_a, labels_b: bool(set(labels_a) & set(labels_b))
+    get_overlap = lambda labels_a, labels_b: set(labels_a) & set(labels_b)
+    labels_have_overlap = lambda labels_a, labels_b: bool(get_overlap(labels_a, labels_b))
 
     try:
         detected_config = return_first_string_starts_with("config-", labels).replace("config-", "")
