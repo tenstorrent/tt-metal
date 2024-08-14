@@ -1,0 +1,55 @@
+name: "(T3K) T3000 nightly tests"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 21 * * *"
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '["wormhole_b0"]'
+    secrets: inherit
+  t3000-nightly-tests:
+    needs: build-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { name: "t3k_ccl_tests", arch: wormhole_b0, cmd: run_t3000_ccl_tests, timeout: 180, owner_id: ULMEPM2MA}, # Sean Nijjar
+        ]
+
+    name: ${{ matrix.test-group.name }}
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    environment: dev
+    runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "pipeline-functional"]
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run demo regression tests
+        shell: bash {0}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_nightly_tests.sh
+          ${{ matrix.test-group.cmd }}
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
