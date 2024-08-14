@@ -15,7 +15,7 @@ namespace operations::unary_backward {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardTwoFloat {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float min,
@@ -28,7 +28,7 @@ struct ExecuteUnaryBackwardTwoFloat {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardFloat {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float scalar,
@@ -37,7 +37,7 @@ struct ExecuteUnaryBackwardFloat {
         return OpHandler<unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, scalar, output_memory_config);
         }
 
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -51,7 +51,7 @@ struct ExecuteUnaryBackwardFloat {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardWoFloat {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
@@ -63,7 +63,7 @@ struct ExecuteUnaryBackwardWoFloat {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardTwoFloatWithDefault {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float parameter_a,
@@ -76,7 +76,7 @@ struct ExecuteUnaryBackwardTwoFloatWithDefault {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardFloatWithDefault {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float parameter_a,
@@ -88,7 +88,7 @@ struct ExecuteUnaryBackwardFloatWithDefault {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardOp {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
@@ -99,7 +99,7 @@ struct ExecuteUnaryBackwardOp {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardOptionalFloatParamsWithDefault {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         std::optional<float> parameter_a,
@@ -112,7 +112,7 @@ struct ExecuteUnaryBackwardOptionalFloatParamsWithDefault {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardFloatStringDefault {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float parameter_a,
@@ -125,7 +125,7 @@ struct ExecuteUnaryBackwardFloatStringDefault {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardStringDefault {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         string parameter_a,
@@ -137,7 +137,7 @@ struct ExecuteUnaryBackwardStringDefault {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardShape {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const tt::tt_metal::Shape &parameter_a,
@@ -149,7 +149,7 @@ struct ExecuteUnaryBackwardShape {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardOptionalFloat {
-    static std::vector<std::optional<Tensor>> operator()(
+    static std::vector<std::optional<Tensor>> invoke(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -164,7 +164,7 @@ struct ExecuteUnaryBackwardOptionalFloat {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardOptional {
-    static std::vector<std::optional<Tensor>> operator()(
+    static std::vector<std::optional<Tensor>> invoke(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
@@ -178,7 +178,7 @@ struct ExecuteUnaryBackwardOptional {
 
 template <UnaryBackwardOpType unary_backward_op_type>
 struct ExecuteUnaryBackwardProdBW {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         bool all_dimensions = true,
@@ -190,12 +190,12 @@ struct ExecuteUnaryBackwardProdBW {
 };
 
 struct ExecuteUnaryBackwardRecip {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 
-    static std::vector<ComplexTensor> operator()(
+    static std::vector<ComplexTensor> invoke(
         const ComplexTensor &grad_tensor_arg,
         const ComplexTensor &input_tensor_a_arg,
         const MemoryConfig &memory_config);
@@ -203,12 +203,12 @@ struct ExecuteUnaryBackwardRecip {
 };
 
 struct ExecuteUnaryBackwardAbs {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 
-    static std::vector<ComplexTensor> operator()(
+    static std::vector<ComplexTensor> invoke(
         const Tensor &grad_tensor_arg,
         const ComplexTensor &input_tensor_a_arg,
         const MemoryConfig &memory_config);

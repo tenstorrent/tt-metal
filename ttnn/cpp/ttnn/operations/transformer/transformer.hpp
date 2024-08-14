@@ -227,7 +227,7 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
 };
 
 struct ExecuteConcatenateHeads {
-    static inline ttnn::Tensor operator()(
+    static inline ttnn::Tensor invoke(
         const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
         return operation::run(ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())}, {input_tensor})
             .at(0);
@@ -235,7 +235,7 @@ struct ExecuteConcatenateHeads {
 };
 
 struct ExecuteRotaryEmbedding {
-    static inline ttnn::Tensor operator()(
+    static inline ttnn::Tensor invoke(
         const Tensor& input_tensor,
         const Tensor& cos_cache,
         const Tensor& sin_cache,
@@ -260,7 +260,7 @@ struct ExecuteRotaryEmbedding {
 
 template <bool in_place>
 struct ExecuteAttentionSoftmax {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const std::optional<int>& head_size_arg = std::nullopt,
         const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,

@@ -164,7 +164,9 @@ TEST_F(DeviceFixture, DirectedStreamRegWriteRead) {
 
                 tt_metal::SetRuntimeArgs(
                     program, kernel_id, logical_core,
-                    {worker_target_core.x, worker_target_core.y, stream_id, stream_reg, value_to_write, L1_UNRESERVED_BASE}
+                    {static_cast<uint32_t>(worker_target_core.x), 
+                     static_cast<uint32_t>(worker_target_core.y), 
+                     stream_id, stream_reg, value_to_write, L1_UNRESERVED_BASE}
                 );
 
                 value_to_write++;

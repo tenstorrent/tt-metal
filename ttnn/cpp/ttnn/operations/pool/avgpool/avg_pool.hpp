@@ -31,7 +31,7 @@ namespace operations {
 namespace pool {
 
 struct GlobalAveragePool2D {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<DataType>& output_dtype = std::nullopt) {

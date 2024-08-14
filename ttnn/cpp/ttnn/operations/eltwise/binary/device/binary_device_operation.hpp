@@ -166,7 +166,7 @@ struct BinaryDeviceOperation {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> operator()(
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         BinaryOpType binary_op_type,

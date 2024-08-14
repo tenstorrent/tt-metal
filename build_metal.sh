@@ -106,7 +106,8 @@ mkdir -p build_$build_type
 ln -nsf build_$build_type build
 
 # Prepare cmake arguments
-cmake_args="-B build_$build_type -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
+#cmake_args="-B build_$build_type -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands -DCMAKE_C_COMPILER=/usr/bin/clang-17 -DCMAKE_CXX_COMPILER=/usr/bin/clang++-17"
+cmake_args="-B build_$build_type -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands -DCMAKE_CXX_COMPILER=g++-12 -DCMAKE_C_COMPILER=gcc-12"
 
 if [ "$enable_ccache" = "ON" ]; then
     cmake_args="$cmake_args -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
@@ -118,8 +119,7 @@ fi
 
 # Run cmake and build
 cmake $cmake_args
-cmake --build build_$build_type --target install    # <- This is a general cmake way, can also just run `ninja install -C build`
 
-# Build cpp tests
-echo "Building cpp tests"
+# Build libraries and cpp tests
+echo "Building libraries and cpp tests"
 cmake --build build_$build_type --target tests      # <- Can also just run `ninja tests -C build`

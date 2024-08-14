@@ -24,7 +24,7 @@ Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& out
     return masked_input;
 }
 // Argmax returns the index of maximum element in the tensor
-Tensor ArgmaxOperation::operator()(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
 
     auto output_memory_config = output_mem_config.value_or(input_t.memory_config());
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_t}))};
@@ -134,7 +134,7 @@ Tensor ArgmaxOperation::operator()(const Tensor& input_t, int64_t _dim, bool all
 
 }
 
-Tensor ArgminOperation::operator()(const Tensor& input_a, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ArgminOperation::invoke(const Tensor& input_a, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor neg_input = ttnn::neg(input_a, output_memory_config);
     return ttnn::experimental::argmax(neg_input, _dim, all, output_memory_config);

@@ -10,7 +10,7 @@ namespace ttnn {
 namespace operations::normalization {
 
 struct ExecuteRMSNorm {
-    static inline ttnn::Tensor operator()(
+    static inline ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         float epsilon = 1e-12,
         const std::optional<const ttnn::Tensor>& weight = std::nullopt,

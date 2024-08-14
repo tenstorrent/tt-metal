@@ -20,7 +20,7 @@ namespace binary {
 
 template <BinaryOpType binary_op_type, bool in_place>
 struct BinaryOperation {
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -30,7 +30,7 @@ struct BinaryOperation {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         const std::optional<const DataType> &output_dtype = std::nullopt,
@@ -41,7 +41,7 @@ struct BinaryOperation {
 
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
     // Currently, this is exactly how tt::tt_metal::add_unary works
-    static Tensor operator()(
+    static Tensor invoke(
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
         const std::optional<const DataType> &dtype = std::nullopt,
@@ -50,7 +50,7 @@ struct BinaryOperation {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
@@ -63,7 +63,7 @@ struct BinaryOperation {
 
 template <BinaryOpType binary_op_type, bool in_place>
 struct RelationalBinary {
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -73,7 +73,7 @@ struct RelationalBinary {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         const std::optional<const DataType> &output_dtype = std::nullopt,
@@ -82,7 +82,7 @@ struct RelationalBinary {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
         const std::optional<const DataType> &dtype = std::nullopt,
@@ -91,7 +91,7 @@ struct RelationalBinary {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
@@ -102,7 +102,7 @@ struct RelationalBinary {
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
     // scalar - tensor combination not available on Pytorch for this op
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const float scalar,
         const ttnn::Tensor &input_tensor_a,

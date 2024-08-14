@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::ccl {
 
-ttnn::Tensor ExecuteReduceScatter::operator()(
+ttnn::Tensor ExecuteReduceScatter::invoke(
     const ttnn::Tensor& input_tensor,
     const uint32_t scatter_dim,
     ReduceOpMath math_op,
