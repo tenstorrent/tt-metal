@@ -9,6 +9,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "device/binary_device_operation.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {
 
@@ -59,6 +60,54 @@ struct BinaryOperation {
         const std::optional<Tensor> &optional_output_tensor = std::nullopt,
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+};
+
+template <BinaryOpType binary_op_type, bool in_place>
+struct BinaryOperationOverload {
+    static Tensor operator()(
+        uint8_t queue_id,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<const DataType> &output_dtype = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+    static Tensor operator()(
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<const DataType> &output_dtype = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+    // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
+    // Currently, this is exactly how tt::tt_metal::add_unary works
+    static Tensor operator()(
+        const ttnn::Tensor &input_tensor_a,
+        const float scalar,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+    static Tensor operator()(
+        uint8_t queue_id,
+        const ttnn::Tensor &input_tensor_a,
+        const float scalar,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+    static ComplexTensor operator()(
+        const ComplexTensor &input_tensor_a_arg,
+        const ComplexTensor &input_tensor_b_arg,
+        const MemoryConfig &memory_config);
 };
 
 template <BinaryOpType binary_op_type>
@@ -125,17 +174,15 @@ struct InplaceRelationalBinary {
 }  // binary
 }  // operations
 
-
-
-constexpr auto add = ttnn::register_operation_with_auto_launch_op<
+constexpr auto add = ttnn::register_operation<
     "ttnn::add",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, false>>();
+    operations::binary::BinaryOperationOverload<operations::binary::BinaryOpType::ADD, false>>();
 constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::add_",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, true>>();
-constexpr auto subtract = ttnn::register_operation_with_auto_launch_op<
+constexpr auto subtract = ttnn::register_operation<
     "ttnn::subtract",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, false>>();
+    operations::binary::BinaryOperationOverload<operations::binary::BinaryOpType::SUB, false>>();
 constexpr auto subtract_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::subtract_",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, true>>();
