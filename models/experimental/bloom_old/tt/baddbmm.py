@@ -2,18 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib as ttm
+import ttnn
 
 
-def tt_baddbmm(device, input, batch1, batch2, beta=1.0, alpha=1.0) -> ttm.tensor.Tensor:
+def tt_baddbmm(device, input, batch1, batch2, beta=1.0, alpha=1.0) -> ttnn.Tensor:
     if beta != 1.0:
-        input = ttm.tensor.mul(beta, input)
+        input = ttnn.mul(beta, input)
 
-    tmp = ttm.tensor.bmm(batch1, batch2)
+    tmp = ttnn.bmm(batch1, batch2)
 
     if alpha != 1.0:
-        tmp = ttm.tensor.mul(alpha, tmp)
+        tmp = ttnn.mul(alpha, tmp)
 
-    result = ttm.tensor.add(input, tmp)
+    result = ttnn.add(input, tmp)
 
     return result
