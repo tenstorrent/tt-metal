@@ -56,14 +56,10 @@ class TtLlamaMLP(torch.nn.Module):
             pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"]
             pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG"]
         else:
-            # elif seq_len == 128:
-            pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"]
-            pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"]
-            pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"]
-        # else:  # For some sequence lengths,just use default program config
-        #     pc_1 = None
-        #     pc_2 = None
-        #     pc_3 = None
+            pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"](seq_len)
+            pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"](seq_len)
+            pc_3 = self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"](seq_len)
+
         w1_out = ttnn.linear(
             x,
             self.w1,
