@@ -773,7 +773,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
     uint32_t curr_C_shard = 0;
     uint32_t curr_H_shard = 0;
 
-    for (uint32_t i = 0; i < num_cores; i++) {
+    uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
+    for (uint32_t i = 0, curr_sticks_read = 0; i < num_cores; i++) {
         auto core = cores[i];
         uint32_t pre_core = curr_core;
         uint32_t pre_N = curr_N;
@@ -781,75 +782,54 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
         std::vector<uint32_t> read_cores_noc_x;
         std::vector<uint32_t> read_cores_noc_y;
         std::vector<uint32_t> read_stick_offset;
-        for (uint32_t j = 0; j < shard_height; ++j) {
-            auto read_stick_core = cores[curr_core];
-            uint32_t N_offset = (curr_N % num_N_per_core) * CH;
-            uint32_t C_offset = (curr_C % num_H_per_core) * H;
-            uint32_t H_offset = curr_H;
-            uint32_t read_stick_index = N_offset + C_offset + H_offset;
 
-            tt::log_debug("read_stick_core: {}", read_stick_core);
+        uint32_t num_sticks_per_core = shard_height;
 
-            auto physical_read_stick_core = device->worker_core_from_logical_core(read_stick_core);
-            read_cores_indices.push_back(curr_core);
-            read_stick_offset.push_back(read_stick_index * stick_size_bytes);
-            read_cores_noc_x.push_back(physical_read_stick_core.x);
-            read_cores_noc_y.push_back(physical_read_stick_core.y);
-
-            curr_C++;
-            if (curr_C == shard_C_per_core) {
-                curr_C = 0;
-                curr_C_shard++;
-                if (curr_C_shard == num_core_per_C) {
-                    curr_C_shard = 0;
-                    curr_H++;
-                    if (curr_H == shard_H_per_core) {
-                        curr_H = 0;
-                        curr_H_shard++;
-                        if (curr_H_shard == num_core_per_H) {
-                            curr_H_shard = 0;
-                            curr_N++;
-                        }
-                    }
-                }
-            }
-
-            if (num_N_per_core == 1) { // each core only has one CH block
-                if (num_H_per_core == 1) { // each core only has one H block or part of H block
-                    curr_core += num_core_per_H;
-                    curr_height += H;
-                    if (curr_height == CH) { // finished collect sticks for full (dst) C block
-                        curr_height = 0;
-                        if (curr_H == 0) { // finished the current shard
-                            if (curr_N != pre_N) { // next batch, change first batch core, new core offset is the top batch core
-                                uint32_t num_core_per_CH = CH / shard_height; // number of cores for a CH block
-                                curr_core_offset = num_core_per_CH * curr_N;
-                            } else { // same batch, move to next shard
-                                curr_core_offset++;
-                            }
-                            curr_core = curr_core_offset;
-                        } else { // current shard not done, start from same first batch core
-                            curr_core = curr_core_offset;
-                        }
-                    }
+        std::vector<uint32_t> stick_ids_per_core;
+        for (uint32_t j = 0; j < num_sticks_per_core; ++j) {
+            stick_ids_per_core.push_back(curr_sticks_read);
+            curr_c++;
+            curr_sticks_read += H;
+            if (curr_c == C) { // end of channel dim
+                curr_h++;
+                curr_c = 0;
+                if (curr_h == H) { // end of H dim
+                    curr_n++;
+                    curr_c = 0;
+                    curr_h = 0;
+                    curr_sticks_read = curr_sticks_read - H + 1;
                 } else {
-                    curr_height += H;
-                    if (curr_height == shard_height) {
-                        curr_core++;
-                        curr_height = 0;
-                        if (curr_C == 0 and curr_N == pre_N) {
-                            curr_core = pre_core;
-                        }
-                    }
+                    curr_sticks_read = curr_sticks_read - C * H + 1;
                 }
-
             }
         }
-        if (num_N_per_core > 1) {
-            curr_core++;
+
+        // figure out the stick id in a shard, and the core id for the stick.
+        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
+        for (uint32_t j = 0; j < num_sticks_per_core; ++j) {
+            uint32_t stick_id = stick_ids_per_core[j];
+            uint32_t shard_id = stick_id / num_sticks_per_core;
+            uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core);
+
+            uint32_t shard_grid_inner_dim = row_major ? num_cores_x : num_cores_y;
+            uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
+            uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
+
+            uint32_t worker_y_logical = row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id;
+            uint32_t worker_x_logical = row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id;
+
+            if (worker_x_logical < num_cores_x and worker_y_logical < num_cores_y) {
+                auto core_physical = device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
+
+                read_cores_indices.push_back(shard_id);
+                read_stick_offset.push_back(stick_id_in_shard * stick_size_bytes);
+                read_cores_noc_x.push_back(core_physical.x);
+                read_cores_noc_y.push_back(core_physical.y);
+            }
         }
 
         // reader rt args
+        std::vector<uint32_t> non_repeat_stick_offset_values;
         std::vector<uint32_t> non_repeat_noc_x_values;
         std::vector<uint32_t> non_repeat_noc_y_values;
 
@@ -857,38 +837,51 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
         uint32_t num_sticks_per_shard_core_reader = 0, num_sticks_per_shard_core_writer = 0, writer_read_stick_offset = 0, writer_write_stick_offset = 0;
         uint32_t num_C_blocks_per_core_reader = num_C_blocks_per_core, num_C_blocks_per_core_writer = 0;
 
-        uint32_t non_repeat_len = read_cores_indices.size();
+        uint32_t num_non_repeat_cores = read_cores_indices.size();
         uint32_t read_stick_stride = read_stick_offset.size() > 1 ? read_stick_offset[1] - read_stick_offset[0] : 0;
+
+        bool has_second_batch = false;
+        uint32_t num_sticks_before_second_batch = 0;
 
         if (num_H_per_core == 1) { // each core only has one H block or part of H block
             for (uint32_t i = 1; i < read_cores_indices.size(); ++i) {
                 if (read_cores_indices[i] == read_cores_indices[0]) {
-                    non_repeat_len = i;
+                    num_non_repeat_cores = i;
                     read_stick_stride = read_stick_offset[i] - read_stick_offset[0];
                     break;
                 }
             }
 
-            num_sticks_per_shard_core = shard_height / non_repeat_len;
+            num_sticks_per_shard_core = shard_height / num_non_repeat_cores;
             num_sticks_per_shard_core_reader = num_sticks_per_shard_core;
             bool split_reader = num_sticks_per_shard_core > 2;
             if (split_reader) {
                 num_sticks_per_shard_core_reader = num_sticks_per_shard_core / 2;
                 num_sticks_per_shard_core_writer = num_sticks_per_shard_core - num_sticks_per_shard_core_reader;
                 writer_read_stick_offset = num_sticks_per_shard_core_reader * read_stick_stride;
-                writer_write_stick_offset = writer_read_stick_offset * non_repeat_len;
+                writer_write_stick_offset = writer_read_stick_offset * num_non_repeat_cores;
             }
 
-            for (uint32_t i = 0; i < non_repeat_len; ++i) {
+            for (uint32_t i = 0; i < num_non_repeat_cores; ++i) {
+                non_repeat_stick_offset_values.push_back(read_stick_offset[i]);
                 non_repeat_noc_x_values.push_back(read_cores_noc_x[i]);
                 non_repeat_noc_y_values.push_back(read_cores_noc_y[i]);
             }
         } else { // contains multiple H blocks
             std::set<uint32_t> unique_values(read_cores_indices.begin(), read_cores_indices.end());
-            non_repeat_len = unique_values.size();
+            num_non_repeat_cores = unique_values.size();
             read_stick_stride = read_stick_offset[1] - read_stick_offset[0];
 
-            num_sticks_per_shard_core = shard_height / non_repeat_len / num_C_blocks_per_core;
+            // TODO: add the second batch args (num_non_repeat_cores, read_stick_offset, non_repeat_noc_x_values, non_repeat_noc_y_values) to support multiple batch in a shard
+            for (uint32_t j = 1; j < num_sticks_per_core; ++j) {
+                num_sticks_before_second_batch ++;
+                if ((read_cores_indices[j-1] == read_cores_indices[j]) and (read_stick_offset[j] == read_stick_offset[j-1] + stick_size_bytes)) {
+                    has_second_batch = true;
+                    break;
+                }
+            }
+
+            num_sticks_per_shard_core = shard_height / num_non_repeat_cores / num_C_blocks_per_core;
             num_sticks_per_shard_core_reader = num_sticks_per_shard_core;
             num_sticks_per_shard_core_writer = num_sticks_per_shard_core;
             bool split_reader = num_C_blocks_per_core > 2;
@@ -896,10 +889,11 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
                 num_C_blocks_per_core_reader = num_C_blocks_per_core / 2;
                 num_C_blocks_per_core_writer = num_C_blocks_per_core - num_C_blocks_per_core_reader;
                 writer_read_stick_offset = num_sticks_per_shard_core * stick_size_bytes;
-                writer_write_stick_offset = num_C_blocks_per_core_reader * non_repeat_len * writer_read_stick_offset;
+                writer_write_stick_offset = num_C_blocks_per_core_reader * num_non_repeat_cores * writer_read_stick_offset;
             }
 
-            for (uint32_t i = 0; i < non_repeat_len; ++i) {
+            for (uint32_t i = 0; i < num_non_repeat_cores; ++i) {
+                non_repeat_stick_offset_values.push_back(read_stick_offset[i * num_sticks_per_shard_core]);
                 non_repeat_noc_x_values.push_back(read_cores_noc_x[i * num_sticks_per_shard_core]);
                 non_repeat_noc_y_values.push_back(read_cores_noc_y[i * num_sticks_per_shard_core]);
             }
@@ -911,12 +905,11 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
             (std::uint32_t) read_single_h_block_per_core,
             (std::uint32_t) num_C_blocks_per_core_reader,
             (std::uint32_t) num_sticks_per_shard_core_reader,
-            (std::uint32_t) non_repeat_len,
+            (std::uint32_t) num_non_repeat_cores,
             (std::uint32_t) read_stick_stride,
-            (std::uint32_t) read_stick_offset[0],
-
         };
 
+        reader_runtime_args.insert(reader_runtime_args.end(), non_repeat_stick_offset_values.begin(), non_repeat_stick_offset_values.end());
         reader_runtime_args.insert(reader_runtime_args.end(), non_repeat_noc_x_values.begin(), non_repeat_noc_x_values.end());
         reader_runtime_args.insert(reader_runtime_args.end(), non_repeat_noc_y_values.begin(), non_repeat_noc_y_values.end());
 
@@ -925,14 +918,14 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
             (std::uint32_t) read_single_h_block_per_core,
             (std::uint32_t) num_C_blocks_per_core_writer,
             (std::uint32_t) num_sticks_per_shard_core_writer,
-            (std::uint32_t) non_repeat_len,
+            (std::uint32_t) num_non_repeat_cores,
             (std::uint32_t) read_stick_stride,
             (std::uint32_t) writer_read_stick_offset,
             (std::uint32_t) writer_write_stick_offset,
-            (std::uint32_t) read_stick_offset[0],
 
         };
 
+        writer_runtime_args.insert(writer_runtime_args.end(), non_repeat_stick_offset_values.begin(), non_repeat_stick_offset_values.end());
         writer_runtime_args.insert(writer_runtime_args.end(), non_repeat_noc_x_values.begin(), non_repeat_noc_x_values.end());
         writer_runtime_args.insert(writer_runtime_args.end(), non_repeat_noc_y_values.begin(), non_repeat_noc_y_values.end());
 

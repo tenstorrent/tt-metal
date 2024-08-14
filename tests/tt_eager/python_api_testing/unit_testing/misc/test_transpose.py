@@ -527,10 +527,10 @@ def run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache)
     assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
 
 
-@pytest.mark.parametrize("n", [16])
-@pytest.mark.parametrize("c", [4])
+@pytest.mark.parametrize("n", [20])
+@pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [256])
-@pytest.mark.parametrize("w", [256])
+@pytest.mark.parametrize("w", [16])
 def test_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     for _ in range(2):
         run_tranpose_hc_rm_with_program_cache(device, n, c, h, w, use_program_cache)
@@ -586,7 +586,6 @@ def run_tranpose_hc_sharded(device, n, c, h, w, grid_size):
         (16, 4, 224, 224, ttnn.CoreGrid(y=8, x=8)),
         (20, 4, 224, 224, ttnn.CoreGrid(y=8, x=7)),
         (24, 3, 224, 224, ttnn.CoreGrid(y=8, x=7)),
-        (16, 128, 256, 16, ttnn.CoreGrid(y=8, x=8)),
     ],
 )
 def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, use_program_cache):

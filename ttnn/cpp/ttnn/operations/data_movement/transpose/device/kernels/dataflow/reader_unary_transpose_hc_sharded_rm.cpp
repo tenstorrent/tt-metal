@@ -15,9 +15,9 @@ void kernel_main() {
         uint32_t num_sticks_per_shard_core = get_arg_val<uint32_t>(2);
         uint32_t num_cores_read = get_arg_val<uint32_t>(3);
         uint32_t read_stick_stride = get_arg_val<uint32_t>(4);
-        uint32_t read_stick_offset = get_arg_val<uint32_t>(5);
-        tt_l1_ptr uint32_t * noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
-        tt_l1_ptr uint32_t * noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_cores_read));
+        tt_l1_ptr uint32_t * read_stick_offset = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
+        tt_l1_ptr uint32_t * noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_cores_read));
+        tt_l1_ptr uint32_t * noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_cores_read * 2));
 
         constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
         constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
@@ -28,7 +28,7 @@ void kernel_main() {
             uint32_t l1_write_offset = 0;
 
             for (uint32_t core = 0; core < num_cores_read; ++core) {
-                uint32_t l1_read_addr = get_read_ptr(cb_in0) + read_stick_offset;
+                uint32_t l1_read_addr = get_read_ptr(cb_in0) + read_stick_offset[core];
                 uint64_t noc_read_addr = get_noc_addr(noc_coord_x[core], noc_coord_y[core], l1_read_addr);
                 uint32_t l1_write_addr = get_write_ptr(cb_out0) + l1_write_offset;
 
@@ -44,13 +44,13 @@ void kernel_main() {
             }
         } else {
             uint32_t l1_write_addr = get_write_ptr(cb_out0);
-            uint32_t l1_read_addr = get_read_ptr(cb_in0) + read_stick_offset;
+            uint32_t l1_read_addr = get_read_ptr(cb_in0);
 
             for (uint32_t c = 0; c < num_C_blocks_per_core; ++c) {
 
                 for (uint32_t core = 0; core < num_cores_read; ++core) {
 
-                    uint64_t noc_read_addr = get_noc_addr(noc_coord_x[core], noc_coord_y[core], l1_read_addr);
+                    uint64_t noc_read_addr = get_noc_addr(noc_coord_x[core], noc_coord_y[core], l1_read_addr + read_stick_offset[core]);
 
                     noc_async_read_one_packet_set_state(noc_read_addr, stick_size_bytes);
 
