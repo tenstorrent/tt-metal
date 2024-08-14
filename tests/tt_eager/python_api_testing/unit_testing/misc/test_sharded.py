@@ -1880,13 +1880,7 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    yt = ttl.tensor.reduce(
-        xt,
-        ttl.tensor.ReduceOpMath.MAX,
-        ttl.tensor.ReduceOpDim.H,
-        1.0,
-        output_mem_config=out_mem_config,
-    )
+    yt = ttnn.max(xt, 2, memory_config=out_mem_config)
 
     if out_sharded:
         yt = ttl.tensor.sharded_to_interleaved(

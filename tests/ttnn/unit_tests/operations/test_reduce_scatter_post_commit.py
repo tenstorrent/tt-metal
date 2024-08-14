@@ -165,7 +165,7 @@ def run_reduce_scatter_test(
         ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
 def test_reduce_scatter_post_commit(
     t3k_device_mesh,
@@ -366,7 +366,7 @@ def run_reduce_scatter_sharded_test(
         ),
     ),
 )
-@pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
 def test_width_sharded_reduce_scatter_post_commit(
     t3k_device_mesh,
@@ -440,7 +440,7 @@ def test_width_sharded_reduce_scatter_post_commit(
         ),
     ),
 )
-@pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
 def test_height_sharded_reduce_scatter_post_commit(
     t3k_device_mesh,
@@ -513,7 +513,7 @@ def test_height_sharded_reduce_scatter_post_commit(
         ),
     ),
 )
-@pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
 def test_block_sharded_reduce_scatter_post_commit(
     t3k_device_mesh,

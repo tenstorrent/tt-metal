@@ -3137,7 +3137,7 @@ def eltwise_mac(x, y, z, *args, device, dtype, layout, input_mem_config, output_
 
 def mean(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.mean(t0, dim, keepdim=True)
+    t1 = ttnn.mean(t0, dim)
 
     return ttnn_tensor_to_torch(t1)
 

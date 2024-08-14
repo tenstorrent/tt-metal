@@ -7,10 +7,8 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
-
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-
 namespace ttnn {
 
 struct ReduceScatter {
@@ -52,7 +50,7 @@ namespace ccl{
     Tensor reduce_scatter(
     const Tensor &input_tensor,
     const uint32_t scatter_split_dim,
-    ReduceOpMath reduce_op  = ReduceOpMath::SUM,
+    ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
     const uint32_t num_links = 1,
     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 } // namespace ccl
