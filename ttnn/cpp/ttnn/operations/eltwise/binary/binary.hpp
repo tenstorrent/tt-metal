@@ -243,7 +243,7 @@ constexpr auto le_ = ttnn::register_operation_with_auto_launch_op<
 constexpr auto lt_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::lt_",
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::LT>>();
-    
+
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
     return add(input_tensor_a, scalar);

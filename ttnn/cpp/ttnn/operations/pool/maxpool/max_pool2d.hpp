@@ -12,7 +12,6 @@
 
 #include "device/max_pool2d_device_op.hpp"
 
-
 namespace ttnn {
 namespace operations::pool {
 

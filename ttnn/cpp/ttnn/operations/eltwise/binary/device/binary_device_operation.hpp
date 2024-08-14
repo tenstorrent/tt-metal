@@ -181,4 +181,6 @@ struct BinaryDeviceOperation {
 }  // namespace ttnn::operations::binary
 
 
-TTNN_REGISTER_OPERATION(ttnn::prim, binary, ttnn::operations::binary::BinaryDeviceOperation);
+namespace ttnn::prim {
+constexpr auto binary = ttnn::register_operation<"ttnn::prim::binary", ttnn::operations::binary::BinaryDeviceOperation>();
+} // namespace ttnn::prim

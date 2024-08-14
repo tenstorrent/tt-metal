@@ -96,23 +96,6 @@ std::vector<Tensor> fold_with_transpose_(
     return output_tensors;
 }
 
-Tensor fold(uint8_t queue_id,
-            const ttnn::Tensor &input_tensor,
-            uint8_t stride_h,
-            uint8_t stride_w,
-            bool use_transpose_as_fold,
-            const std::optional<const tt::tt_metal::Shape> &output_shape,
-            uint8_t pad_c,
-            uint8_t pad_h,
-            uint8_t pad_w) {
-    if (use_transpose_as_fold) {
-        return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w, queue_id).at(0);
-    }
-    bool is_sharded = input_tensor.is_sharded();
-    Fold::operation_attributes_t op_attr = {.stride_h = stride_h, .stride_w = stride_w, .is_sharded = is_sharded};
-    return ttnn::device_operation::run<Fold>(queue_id, op_attr, Fold::tensor_args_t{.input_tensor = input_tensor});
-}
-
 Tensor FoldOperation::operator()(uint8_t queue_id,
                                  const ttnn::Tensor &input_tensor,
                                  uint8_t stride_h,
@@ -122,7 +105,10 @@ Tensor FoldOperation::operator()(uint8_t queue_id,
                                  uint8_t pad_c,
                                  uint8_t pad_h,
                                  uint8_t pad_w) {
-    return fold(queue_id, input_tensor, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w);
+    if (use_transpose_as_fold) {
+        return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w, queue_id).at(0);
+    }
+    return ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }
 
 Tensor FoldOperation::operator()(const ttnn::Tensor &input_tensor,
@@ -134,6 +120,6 @@ Tensor FoldOperation::operator()(const ttnn::Tensor &input_tensor,
                                  uint8_t pad_h,
                                  uint8_t pad_w) {
     uint8_t queue_id = 0;
-    return fold(queue_id, input_tensor, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w);
+    return operator()(queue_id, input_tensor, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w);
 }
 } // namespace ttnn::operations::data_movement
