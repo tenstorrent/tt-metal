@@ -8,8 +8,6 @@ import timm
 
 from loguru import logger
 
-import tt_lib
-
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
@@ -29,13 +27,7 @@ def test_select_adaptive_pool2d_inference(device, pcc, reset_seeds):
 
     torch_model = model.head.global_pool
 
-    tt_model = TtSelectAdaptivePool2d(
-        output_size=1,
-        pool_type="Fast",
-        flatten=True,
-        input_fmt="NCHW",
-        device=device
-    )
+    tt_model = TtSelectAdaptivePool2d(output_size=1, pool_type="Fast", flatten=True, input_fmt="NCHW", device=device)
 
     # run torch model
     input = torch.randn(1, 1024, 7, 7)

@@ -4,11 +4,9 @@
 
 import torch.nn as nn
 
-import tt_lib
-
 from tt_lib import fallback_ops
 from models.experimental.vovnet.tt.osa_block import TtOsaBlock
-
+import ttnn
 
 
 class TtOsaStage(nn.Module):
@@ -55,7 +53,7 @@ class TtOsaStage(nn.Module):
             in_chs = out_chs
         self.blocks = nn.Sequential(*blocks)
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.pool is not None:
             x = self.pool(x)
         x = self.blocks(x)

@@ -8,8 +8,6 @@ import timm
 
 from loguru import logger
 
-import tt_lib
-
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
@@ -23,9 +21,7 @@ from models.experimental.vovnet.tt.conv_norm_act import TtConvNormAct
     "pcc",
     ((0.99),),
 )
-def test_vovnet_conv_norm_act_inference(
-    device, pcc, imagenet_sample_input, reset_seeds
-):
+def test_vovnet_conv_norm_act_inference(device, pcc, imagenet_sample_input, reset_seeds):
     base_address = f"stem.0"
 
     model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
@@ -45,7 +41,7 @@ def test_vovnet_conv_norm_act_inference(
         act_kwargs=None,
         state_dict=model.state_dict(),
         base_address=base_address,
-        device=device
+        device=device,
     )
 
     # run torch model

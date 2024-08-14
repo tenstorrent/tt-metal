@@ -5,7 +5,6 @@
 
 import torch.nn as nn
 
-import tt_lib
 import ttnn
 
 from tt_lib import fallback_ops
@@ -74,7 +73,7 @@ class TtSeparableConvNormAct(nn.Module):
 
         self.bn = create_batchnorm(out_channels, state_dict, base_address=f"{base_address}.bn", device=None)
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.conv_dw(x)
         x = self.conv_pw(x)
         x = self.bn(x)

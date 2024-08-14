@@ -4,7 +4,6 @@
 
 import torch
 import json
-import tt_lib
 from loguru import logger
 
 from transformers import T5Model
@@ -38,9 +37,7 @@ def run_test_T5LayerFF_inference(device, model_name, input_h, input_w):
     pt_out = hf_reference_module(test_input)[0].unsqueeze(1)
 
     # T5-small config file: https://huggingface.co/t5-small/resolve/main/config.json
-    tt_model = TtT5LayerFF(
-        config, hf_reference_model.state_dict(), base_address, device
-    )
+    tt_model = TtT5LayerFF(config, hf_reference_model.state_dict(), base_address, device)
     tt_out = tt_model(torch2tt_tensor(test_input, device))
     tt_out = tt2torch_tensor(tt_out)
 

@@ -8,7 +8,6 @@ import json
 from transformers import T5Model
 from loguru import logger
 
-import tt_lib
 import ttnn
 import pytest
 
