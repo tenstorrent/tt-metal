@@ -123,3 +123,4 @@ cmake $cmake_args
 # Build libraries and cpp tests
 echo "Building libraries and cpp tests"
 cmake --build build_$build_type --target tests      # <- Can also just run `ninja tests -C build`
+cmake --build build_$build_type --target install    # <- This is a general cmake way, can also just run `ninja install -C build`
