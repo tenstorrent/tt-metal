@@ -730,24 +730,6 @@ def eltwise_polygamma(x, *args, k, device, dtype, layout, input_mem_config, outp
 
 
 @setup_host_and_device
-def eltwise_assign_binary(
-    x,
-    y,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.tensor.assign(t0, t1)
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
 def eltwise_div(
     x,
     y,
@@ -2232,7 +2214,6 @@ eltwise_lez = make_unary_op_optional_output(ttnn.lez)
 eltwise_gez = make_unary_op_optional_output(ttnn.gez)
 eltwise_nez = make_unary_op_optional_output(ttnn.nez)
 eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
-eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
 zeros_like = make_ttnn_unary_op(ttnn.zeros_like)
 ones_like = make_ttnn_unary_op(ttnn.ones_like)
 eltwise_ceil = make_unary_op_optional_output(ttnn.ceil)

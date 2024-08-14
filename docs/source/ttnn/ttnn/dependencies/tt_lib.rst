@@ -253,11 +253,6 @@ Enums
 
 .. autoclass:: tt_lib.tensor.ReduceOpDim
 
-Tensor elementwise operations
-=============================
-
-.. autofunction:: tt_lib.tensor.assign
-
 Tensor manipulation operations
 -=============================
 

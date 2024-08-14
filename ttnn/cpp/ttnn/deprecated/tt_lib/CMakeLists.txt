@@ -7,7 +7,6 @@ set(TT_LIB_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/tt_lib_bindings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/type_caster.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/tt_lib_bindings_tensor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/csrc/tt_lib_bindings_tensor_composite_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/tt_lib_bindings_tensor_pytensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/tt_lib_bindings_tensor_dm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/tt_lib_bindings_tensor_custom_bmm_ops.cpp
