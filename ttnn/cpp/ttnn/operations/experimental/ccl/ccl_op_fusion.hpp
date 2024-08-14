@@ -68,7 +68,7 @@ struct AllGatherFusedOpSignaler {
         uint32_t num_workers_to_sync,
         uint32_t curr_worker_index
     ) {
-        TT_ASSERT(initalized_fused_op && initalized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
+        TT_ASSERT(initialized_fused_op && initialized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
 
         ct_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
         ct_args.push_back(static_cast<uint32_t>(curr_worker_index));
@@ -82,7 +82,7 @@ struct AllGatherFusedOpSignaler {
 
         bool all_gather_direction
     ) {
-        TT_ASSERT(initalized_fused_op && initalized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
+        TT_ASSERT(initialized_fused_op && initialized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
 
         // Push the worker core noc coords
         for (const auto& core : this->all_gather_worker_cores_noc) {
