@@ -152,7 +152,7 @@ class TtFalconMLP:
 
         mlp_num_slices = self.model_config["MLP_NUM_SLICES"]
         for slice_idx in range(mlp_num_slices):
-            x_slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+            x_slice = ttnn.interleaved_to_sharded_partial(
                 x,
                 self.model_config["MLP_GRID_SIZE"],
                 self.model_config["MLP_INPUT_SHARD_SPEC"],
@@ -184,12 +184,12 @@ class TtFalconMLP:
                 overwrite_subblock_h=1,
             )
 
-            ttnn.experimental.tensor.sharded_to_interleaved_partial(
+            ttnn.sharded_to_interleaved_partial(
                 hidden_states_slice,
                 self.output,
                 mlp_num_slices,
                 slice_idx,
-                self.model_config["DEFAULT_MEMCFG"],
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
             )
             hidden_states_slice.deallocate()
 

@@ -285,7 +285,7 @@ def test_sharded_partial_op(device, H, num_cores, num_slices, enable_async):
     height_shard_spec = [H // 2, W]
 
     for slice_index in range(num_slices):
-        in0_t_slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+        in0_t_slice = ttnn.interleaved_to_sharded_partial(
             in0_t,
             grid_size,
             height_shard_spec,
@@ -296,12 +296,12 @@ def test_sharded_partial_op(device, H, num_cores, num_slices, enable_async):
         )
         assert in0_t_slice.is_sharded()
 
-        ttnn.experimental.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             in0_t_slice,
             out_tt_tensor,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     pt_out = in0

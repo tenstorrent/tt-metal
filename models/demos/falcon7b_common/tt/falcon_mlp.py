@@ -205,7 +205,7 @@ class TtFalconMLPPrefill(nn.Module):
 
             for slice_idx in range(num_slices):
                 slices = [
-                    ttnn.experimental.tensor.interleaved_to_sharded_partial(
+                    ttnn.interleaved_to_sharded_partial(
                         x[device_id],
                         grid_size,
                         [self.seq_len // num_slices // grid_size[1], padded_hidden_size // grid_size[0]],
@@ -246,12 +246,12 @@ class TtFalconMLPPrefill(nn.Module):
                     hidden_states[i].deallocate()
 
                 for device_id in range(len(self.devices)):
-                    ttnn.experimental.tensor.sharded_to_interleaved_partial(
+                    ttnn.sharded_to_interleaved_partial(
                         out_data[device_id],
                         out_tt[device_id],
                         num_slices,
                         slice_idx,
-                        self.model_config["MLP_INTERLEAVED_TO_SHARDED_MEM_CFG"],
+                        memory_config=self.model_config["MLP_INTERLEAVED_TO_SHARDED_MEM_CFG"],
                     )
                     out_data[device_id].deallocate()
 

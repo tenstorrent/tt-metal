@@ -361,7 +361,7 @@ class cross_attention:
         attention_mask = self.attention_masks[attn_type]
         for j in range(2):
             for i in range(self.num_slices // 2):
-                slice = ttnn.experimental.tensor.interleaved_to_sharded_partial(
+                slice = ttnn.interleaved_to_sharded_partial(
                     query,
                     self.tsa_grid_size,
                     self.tsa_mm_activations_height_shard_spec,
@@ -428,12 +428,12 @@ class cross_attention:
                 )
                 v_slice.deallocate()
 
-                ttnn.experimental.tensor.sharded_to_interleaved_partial(
+                ttnn.sharded_to_interleaved_partial(
                     mm_slice,
                     self.output_tensor,
                     self.num_slices,
                     j * self.num_slices // 2 + i,
-                    self.dram_interleaved_memory_config,
+                    memory_config=self.dram_interleaved_memory_config,
                 )
         output = ttnn.experimental.tensor.interleaved_to_sharded(
             self.output_tensor,

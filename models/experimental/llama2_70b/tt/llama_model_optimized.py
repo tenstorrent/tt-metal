@@ -382,7 +382,7 @@ class TtLlamaModel_optimized:
         )
 
         for slice_i in range(num_slices):
-            xs_slice = tt_lib.tensor.interleaved_to_sharded_partial(
+            xs_slice = ttnn.interleaved_to_sharded_partial(
                 xs,
                 (layernorm_num_cores_x, layernorm_num_cores_y),
                 [layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim],
@@ -401,12 +401,12 @@ class TtLlamaModel_optimized:
                 compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
             )
 
-            tt_lib.tensor.sharded_to_interleaved_partial(
+            ttnn.sharded_to_interleaved_partial(
                 xs_slice,
                 xs_output_cat,
                 num_slices,
                 slice_i,
-                self.model_config["DRAM_MEMCFG"],
+                memory_config=self.model_config["DRAM_MEMCFG"],
             )
             xs_slice.deallocate(True)
         return xs_output_cat
