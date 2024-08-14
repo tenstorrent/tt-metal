@@ -385,10 +385,14 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
             uint32_t worker_y_logical = row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id;
             uint32_t worker_x_logical = row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id;
-            auto core_physical = device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
 
-            // save stick id in a shard, and core coord into a map
-            core_stick_map[{core_physical.x, core_physical.y}].push_back(stick_id_in_shard);
+            if (worker_x_logical < num_cores_x_padded and worker_y_logical < num_cores_y_padded) {
+                auto core_physical = device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
+                // save stick id in a shard, and core coord into a map
+                std::pair<uint32_t, uint32_t> xy_pair = row_major ? std::make_pair(core_physical.y, core_physical.x)
+                                                                    : std::make_pair(core_physical.x, core_physical.y);
+                core_stick_map[xy_pair].push_back(stick_id_in_shard);
+            }
         }
 
         // reader rt args
@@ -399,8 +403,13 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         for (auto core_stick_pair : core_stick_map) {
             auto xy_pair = core_stick_pair.first;
-            reader_kernel_args.push_back(xy_pair.first); // noc x
-            reader_kernel_args.push_back(xy_pair.second); // noc y
+            if (row_major) {
+                reader_kernel_args.push_back(xy_pair.second); // noc x
+                reader_kernel_args.push_back(xy_pair.first); // noc y
+            } else {
+                reader_kernel_args.push_back(xy_pair.first); // noc x
+                reader_kernel_args.push_back(xy_pair.second); // noc y
+            }
 
             tt::log_debug("xy_pair.first: {}", xy_pair.first);
             tt::log_debug("xy_pair.second: {}", xy_pair.second);

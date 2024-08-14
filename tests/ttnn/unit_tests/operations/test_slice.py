@@ -13,8 +13,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 def run_slice_rm_sharded(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
-    n_unpadded = 20
-    c_unpadded = 224
+    n_unpadded = n
+    c_unpadded = 115
     h_unpadded = 115
     torch_output_tensor = torch_input_tensor[:n_unpadded, :c_unpadded, :h_unpadded, :]
     tt_input_tensor = ttnn.from_torch(
@@ -28,7 +28,7 @@ def run_slice_rm_sharded(device, n, c, h, w):
     # shard config
     num_cores_x = 8
     num_cores_y = 7
-    shard_h = n * c * h // (num_cores_x * num_cores_y)
+    shard_h = (n * c * h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
     grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
@@ -41,7 +41,7 @@ def run_slice_rm_sharded(device, n, c, h, w):
     # output shard config
     num_cores_x = 8
     num_cores_y = 7
-    shard_h = n_unpadded * c_unpadded * h_unpadded // (num_cores_x * num_cores_y)
+    shard_h = (n_unpadded * c_unpadded * h_unpadded + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
     grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
@@ -62,8 +62,8 @@ def run_slice_rm_sharded(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
-@pytest.mark.parametrize("n", [20])
-@pytest.mark.parametrize("c", [224])
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
 def test_slice_rm_sharded_with_program_cache(device, n, c, h, w, use_program_cache):
