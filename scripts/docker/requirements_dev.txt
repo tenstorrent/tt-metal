@@ -5,3 +5,4 @@ jq
 openssh-server
 vim
 libmpfr-dev 
+texinfo
