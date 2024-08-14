@@ -106,6 +106,7 @@ mkdir -p build_$build_type
 ln -nsf build_$build_type build
 
 # Prepare cmake arguments
+# -DCXX_INCLUDE_WHAT_YOU_USE=include-what-you-use
 cmake_args="-B build_$build_type -G Ninja -DCMAKE_BUILD_TYPE=$build_type -DCMAKE_EXPORT_COMPILE_COMMANDS=$export_compile_commands"
 
 if [ "$enable_ccache" = "ON" ]; then
@@ -116,10 +117,9 @@ if [ "$enable_time_trace" = "ON" ]; then
     cmake_args="$cmake_args -DENABLE_BUILD_TIME_TRACE=ON"
 fi
 
-# Run cmake and build
+# Configure cmake 
 cmake $cmake_args
-cmake --build build_$build_type --target install    # <- This is a general cmake way, can also just run `ninja install -C build`
 
-# Build cpp tests
-echo "Building cpp tests"
+# Build libraries and cpp tests
+echo "Building libraries and cpp tests"
 cmake --build build_$build_type --target tests      # <- Can also just run `ninja tests -C build`
