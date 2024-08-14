@@ -10,7 +10,6 @@ from typing import Optional, Tuple
 from dataclasses import dataclass
 
 import ttnn
-import tt_lib
 from tt_lib import fallback_ops
 
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
@@ -29,11 +28,11 @@ from models.experimental.trocr.trocr_utils import (
 
 @dataclass
 class TtBaseModelOutputWithPastAndCrossAttentions:
-    last_hidden_state: tt_lib.tensor.Tensor = None
-    past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    cross_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    last_hidden_state: ttnn.Tensor = None
+    past_key_values: Optional[Tuple[Tuple[ttnn.Tensor]]] = None
+    hidden_states: Optional[Tuple[ttnn.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.Tensor]] = None
+    cross_attentions: Optional[Tuple[ttnn.Tensor]] = None
 
 
 class TtTrOCRDecoder(nn.Module):
@@ -136,19 +135,19 @@ class TtTrOCRDecoder(nn.Module):
 
     def forward(
         self,
-        input_ids: Optional[tt_lib.tensor.Tensor] = None,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        cross_attn_head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
-        inputs_embeds: Optional[tt_lib.tensor.Tensor] = None,
+        input_ids: Optional[ttnn.Tensor] = None,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        encoder_hidden_states: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
+        cross_attn_head_mask: Optional[ttnn.Tensor] = None,
+        past_key_values: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
+        inputs_embeds: Optional[ttnn.Tensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states

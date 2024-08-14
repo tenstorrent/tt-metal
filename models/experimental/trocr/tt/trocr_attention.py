@@ -8,7 +8,6 @@ import math
 from typing import Optional, Tuple
 
 import ttnn
-import tt_lib
 from tt_lib import fallback_ops
 
 from models.helper_funcs import Linear
@@ -91,20 +90,20 @@ class TtTrOCRAttention(nn.Module):
         )
         self.out_proj = Linear(embed_dim, embed_dim, self.out_proj_weight, self.out_proj_bias)
 
-    def _shape(self, tensor: tt_lib.tensor.Tensor, seq_len: int, bsz: int):
+    def _shape(self, tensor: ttnn.Tensor, seq_len: int, bsz: int):
         tensor = fallback_ops.reshape(tensor, bsz, seq_len, self.num_heads, self.head_dim)
         tensor = ttnn.transpose(tensor, 1, -2)
         return tensor
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        key_value_states: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_value: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        layer_head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        hidden_states: ttnn.Tensor,
+        key_value_states: Optional[ttnn.Tensor] = None,
+        past_key_value: Optional[Tuple[ttnn.Tensor]] = None,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        layer_head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[tt_lib.tensor.Tensor], Optional[Tuple[tt_lib.tensor.Tensor]],]:
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor], Optional[Tuple[ttnn.Tensor]],]:
         """Input shape: Batch x Time x Channel"""
 
         # if key_value_states are provided this layer is used as a cross-attention layer
