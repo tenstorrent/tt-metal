@@ -64,8 +64,8 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     if "input_tale_of_two_cities_32k" in user_input:
         with open(user_input, "r") as file:
             tale_cities = file.read()
-        # tale of two cities has around 193k tokens. Divide by 6 to get 32k tokens and repeat for all 4 users
-        input_prompts = [tale_cities[: len(tale_cities) // 6]] * batch_size
+        # tale of two cities has around 193k tokens. Divide by 5 to get a bit over 32k tokens and extend to all 4 users
+        input_prompts = [tale_cities[: len(tale_cities) // 5]] * batch_size
     else:
         if len(user_input) == 1:
             input_prompts = user_input * batch_size  # Always process 32 users
