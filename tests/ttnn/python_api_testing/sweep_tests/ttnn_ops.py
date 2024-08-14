@@ -4619,3 +4619,14 @@ def complex_add_bw(
             ttnn_tensor_to_torch(t3[1].real).to(torch.float32), ttnn_tensor_to_torch(t3[1].imag).to(torch.float32)
         ),
     ]
+
+
+def complex_angle(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+
+    t1 = ttnn.angle(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)

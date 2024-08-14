@@ -2410,3 +2410,7 @@ def floor_bw(x, y, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
+
+
+def complex_angle(x, *args, **kwargs):
+    return torch.angle(x)
