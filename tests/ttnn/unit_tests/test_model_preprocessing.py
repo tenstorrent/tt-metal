@@ -59,7 +59,7 @@ def test_linear(device, model_name, batch_size, m_size, k_size, n_size):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9997)
 
 
-# @skip_for_wormhole_b0()
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("model_name", [None, "conv"])
 @pytest.mark.parametrize("batch_size", [1])
