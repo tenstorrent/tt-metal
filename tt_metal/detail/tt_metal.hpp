@@ -486,7 +486,7 @@ namespace tt::tt_metal{
             }
         }
         
-        // TODO: why is this in program.hpp
+        // TODO: Find a better home for this function
         template <typename CoreRangeContainer>
         vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(Device* device, const CoreRangeContainer& ranges, const CoreType core_type) {
             // This API extracts all the pairs of noc multicast encodings given a set of core ranges
