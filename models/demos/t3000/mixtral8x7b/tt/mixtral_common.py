@@ -86,20 +86,36 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instr
     min_prompt_len = min(prompt_lens)
     max_prompt_len = max(prompt_lens)
 
-    assert (
-        max_prompt_len <= model_args.max_seq_len
-    ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
+    # assert (
+    # max_prompt_len <= model_args.max_seq_len
+    # ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
     assert min_prompt_len > 0, "Minimum prompt length must be greater than 0"
     assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
 
+    print(f"Miguel: min_prompt_len = {min_prompt_len}")
+    print(f"Miguel: max_prompt_len = {max_prompt_len}")
     if min_prompt_len < 128:
         prefill_seq_len = 0  # For short prompts do decode-as-prefill instead
     else:
-        prefill_seq_len = (
-            2048 if min_prompt_len > 2048 else (1024 if min_prompt_len > 1024 else 128)
-        )  # TODO Only supports prefill lengths of 128, 1024 and 2048
+        if min_prompt_len > 1024 * 32:
+            prefill_seq_len = 1024 * 16
+        elif min_prompt_len > 1024 * 16:
+            prefill_seq_len = 1024 * 16
+        elif min_prompt_len > 1024 * 8:
+            prefill_seq_len = 1024 * 8
+        elif min_prompt_len > 1024 * 4:
+            prefill_seq_len = 1024 * 4
+        elif min_prompt_len > 1024 * 2:
+            prefill_seq_len = 1024 * 2
+        elif min_prompt_len > 1024:
+            prefill_seq_len = 1024
+        else:
+            prefill_seq_len = 128
         # Initial prefill tensor full of pad tokens
         input_tokens_prefill = torch.full((len(input_prompts), prefill_seq_len), tokenizer.pad_id, dtype=torch.int32)
+
+    print(f" max_prompt_len - prefill_seq_len = {max_prompt_len - prefill_seq_len}")
+    print(f"prefill_seq_len = {prefill_seq_len}")
 
     # Initial decode tensor full of pad tokens
     input_tokens_decode = torch.full(
