@@ -3,38 +3,43 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
+#include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
 
 // A dispatch-agnostic test fixture
 class CommonFixture: public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(tt::tt_metal::Device* device, Program& program) {
+    void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program) {
         static std::unordered_map<uint64_t, uint32_t> trace_captured;
         uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {
-            CommandQueue& cq = device->command_queue();
-            EnqueueProgram(cq, program, false);
-            Finish(cq);
+            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::EnqueueProgram(cq, program, false);
+            tt::tt_metal::Finish(cq);
         }
     }
     void WriteBuffer(tt::tt_metal::Device* device, std::shared_ptr<tt::tt_metal::Buffer> in_buffer, std::vector<uint32_t> &src_vec){
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::WriteToBuffer(in_buffer, src_vec);
         } else {
-            CommandQueue& cq = device->command_queue();
-            EnqueueWriteBuffer(cq, in_buffer, src_vec, false);
+            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::EnqueueWriteBuffer(cq, in_buffer, src_vec, false);
         }
     }
     void ReadBuffer(tt::tt_metal::Device* device, std::shared_ptr<tt::tt_metal::Buffer> out_buffer, std::vector<uint32_t> &dst_vec){
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::ReadFromBuffer(out_buffer, dst_vec);
         } else {
-            CommandQueue& cq = device->command_queue();
-            EnqueueReadBuffer(cq, out_buffer, dst_vec, true);
+            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::EnqueueReadBuffer(cq, out_buffer, dst_vec, true);
         }
     }
     int NumDevices() { return this->devices_.size(); }
@@ -43,7 +48,7 @@ public:
 
 protected:
     tt::ARCH arch_;
-    vector<Device*> devices_;
+    vector<tt::tt_metal::Device*> devices_;
     bool slow_dispatch_;
     bool has_remote_devices_;
 
@@ -103,7 +108,7 @@ protected:
 
     void RunTestOnDevice(
         const std::function<void()>& run_function,
-        Device* device
+        tt::tt_metal::Device* device
     ) {
         if (SkipTest(device->id()))
             return;

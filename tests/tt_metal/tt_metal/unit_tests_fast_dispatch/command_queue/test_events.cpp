@@ -10,6 +10,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/event/event.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
 using namespace tt::tt_metal;
 

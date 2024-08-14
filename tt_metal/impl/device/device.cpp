@@ -4,6 +4,8 @@
 
 #include <string>
 #include <chrono>
+#include "tt_metal/host_api.hpp"
+#include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
@@ -247,7 +249,7 @@ void Device::build_firmware() {
     log_debug(tt::LogMetal, "Building base firmware for device {}", this->id_);
     ZoneScoped;
 
-    detail::GenerateDeviceHeaders(this, this->build_env_.get_out_firmware_root_path());
+    this->generate_device_headers(this->build_env_.get_out_firmware_root_path());
     jit_build_set(this->firmware_build_states_, nullptr, "");
 }
 
@@ -2372,6 +2374,76 @@ void Device::DisableAllocs() {
 
 void Device::EnableAllocs() { 
     tt::tt_metal::allocator::enable_allocs(*(this->allocator_));
+}
+
+void Device::generate_device_headers(const std::string &path) const
+{
+
+    // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
+    const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
+    const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
+    std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
+    std::vector<int32_t> dram_offsets_per_bank(num_dram_banks);
+    for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+        dram_noc_coord_per_bank[bank_id] = this->dram_core_from_dram_channel(this->dram_channel_from_bank_id(bank_id));
+        dram_offsets_per_bank[bank_id] = this->bank_offset(BufferType::DRAM, bank_id);
+    }
+    const size_t num_l1_banks = this->num_banks(BufferType::L1); // 128
+    const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
+    std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
+    std::vector<int32_t> l1_offset_per_bank(num_l1_banks);
+    for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
+        l1_noc_coord_per_bank[bank_id] = this->worker_core_from_logical_core(this->logical_core_from_bank_id(bank_id));
+        l1_offset_per_bank[bank_id] = this->bank_offset(BufferType::L1, bank_id);
+    }
+
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
+
+    // Generate header file in proper location
+    jit_build_genfiles_bank_to_noc_coord_descriptor (
+        path,
+        soc_d.grid_size,
+        dram_noc_coord_per_bank,
+        dram_offsets_per_bank,
+        l1_noc_coord_per_bank,
+        l1_offset_per_bank,
+        soc_d.profiler_ceiled_core_count_perf_dram_bank,
+        soc_d.physical_routing_to_profiler_flat_id
+    );
+
+    // Determine which noc-coords are harvested
+    // TODO(PGK/Almeet): fix this w/ new UMD
+    vector<uint32_t> harvested_rows;
+    uint32_t harvested_noc_rows = tt::Cluster::instance().get_harvested_rows(this->id());
+    for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
+        bool row_harvested = (harvested_noc_rows >> y) & 0x1;
+        if (row_harvested) {
+            harvested_rows.push_back(y);
+        }
+    }
+
+    // Create valid PCIe address ranges
+    // This implementation assumes contiguous ranges and aggregates the ranges into one bounds check
+    // TODO: consider checking multiple ranges to detect straddling transactions
+    uint64_t pcie_chan_base_addr = tt::Cluster::instance().get_pcie_base_addr_from_device(this->id());
+    uint32_t num_host_channels = tt::Cluster::instance().get_num_host_channels(this->id());
+    uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
+    for (int pcie_chan = 0; pcie_chan < num_host_channels; pcie_chan++) {
+        pcie_chan_end_addr += tt::Cluster::instance().get_host_channel_size(this->id(), pcie_chan);
+    }
+
+    jit_build_genfiles_noc_addr_ranges_header(
+        path,
+        pcie_chan_base_addr,
+        pcie_chan_end_addr - pcie_chan_base_addr,
+        0,
+        soc_d.dram_core_size,
+        soc_d.get_pcie_cores(),
+        soc_d.get_dram_cores(),
+        soc_d.get_physical_ethernet_cores(),
+        soc_d.grid_size,
+        harvested_rows,
+        num_host_channels > 0);
 }
 
 }  // namespace tt_metal

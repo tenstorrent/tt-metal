@@ -16,9 +16,12 @@
 #include "impl/debug/dprint_server.hpp"
 #include "impl/dispatch/command_queue.hpp"
 #include "tools/profiler/profiler.hpp"
-#include "tt_metal/detail/program.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace tt {
@@ -222,8 +225,55 @@ inline void SetRuntimeArgs(
 
 namespace detail {
 
+bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer)
+{
+    bool pass = true;
+    TT_FATAL(address >= DRAM_UNRESERVED_BASE, "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", DRAM_UNRESERVED_BASE);
+    tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
+    return pass;
+}
+
+bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
+{
+    bool pass = true;
+    tt::Cluster::instance().dram_barrier(device->id());
+    tt::Cluster::instance().read_dram_vec(host_buffer, size, tt_target_dram{device->id(), dram_channel, 0}, address);
+    return pass;
+}
+
+bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer, CoreType core_type)
+{
+    ZoneScoped;
+    auto worker_core = device->physical_core_from_logical_core(logical_core, core_type);
+    llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
+    return true;
+}
+
+bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval)
+{
+    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    tt::Cluster::instance().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+    return true;
+}
+
+bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
+{
+    tt::Cluster::instance().l1_barrier(device->id());
+    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    host_buffer = llrt::read_hex_vec_from_core(device->id(), worker_core, address, size);
+    return true;
+}
+
+bool ReadRegFromDevice(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t &regval)
+{
+    tt::Cluster::instance().l1_barrier(device->id());
+    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    tt::Cluster::instance().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+    return true;
+}
+
 std::map<chip_id_t, Device *> CreateDevices(
-    std::vector<chip_id_t> device_ids,
+    const std::vector<chip_id_t>& device_ids,
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,

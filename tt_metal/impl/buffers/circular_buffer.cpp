@@ -8,10 +8,12 @@
 #include "llrt/llrt.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
 namespace {
 
-inline void GetBufferAddress(const Buffer *buffer, uint32_t *address_on_host) {
+inline void GetBufferAddress(const tt::tt_metal::Buffer *buffer, uint32_t *address_on_host) {
     EnqueueGetBufferAddr(buffer->device()->command_queue(), address_on_host, buffer, false);
 }
 

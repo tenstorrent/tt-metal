@@ -19,10 +19,12 @@
 #include "noc/noc_parameters.h"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
-#include "tt_metal/detail/program.hpp"
+
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -42,6 +44,21 @@ std::mutex finish_mutex;
 std::condition_variable finish_cv;
 
 namespace tt::tt_metal {
+
+namespace detail {
+
+    bool DispatchStateCheck( bool isFastDispatch){
+        static bool fd = isFastDispatch;
+        TT_FATAL( fd == isFastDispatch, "Mixing fast and slow dispatch is prohibited!" );
+        return fd;
+    }
+
+    void SetLazyCommandQueueMode(bool lazy)
+    {
+        DispatchStateCheck(true);
+        LAZY_COMMAND_QUEUE_MODE = lazy;
+    }
+}
 
 enum DispatchWriteOffsets {
     DISPATCH_WRITE_OFFSET_ZERO = 0,
@@ -615,8 +632,8 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                         }
                     } else {
                         vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                            detail::extract_dst_noc_multicast_info<std::vector<CoreRange>>(
-                                device, kernel->logical_coreranges(), core_type);
+                            device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                                kernel->logical_coreranges(), core_type);
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
                             std::vector<CQDispatchWritePackedMulticastSubCmd>());
                         auto& multicast_sub_cmd =

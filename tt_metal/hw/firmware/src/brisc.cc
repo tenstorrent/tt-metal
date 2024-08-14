@@ -26,6 +26,7 @@
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "dataflow_api.h"
+#include "dev_mem_map.h"
 #include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 
 #include "debug/status.h"

@@ -18,6 +18,9 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/dispatch/device_command.hpp"
 
 namespace tt::tt_metal {
 
@@ -73,6 +76,29 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &
 }
 }  // namespace
 namespace detail {
+
+KernelHandle AddKernel ( Program & program, std::shared_ptr<Kernel> kernel, const CoreType &core_type)
+{
+    return program.add_kernel(kernel, core_type);
+}
+
+std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id) {
+    return program.get_kernel(kernel_id);
+}
+
+std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id) {
+    return program.get_circular_buffer(id);
+}
+
+// Checks that circular buffers do not grow into L1 buffer space
+void ValidateCircularBufferRegion(const Program &program, const Device *device) {
+    program.validate_circular_buffer_region(device);
+}
+
+void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer) {
+    program.add_config_buffer(config_buffer);
+}
+
 void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
 
 void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
@@ -602,8 +628,8 @@ void Program::populate_dispatch_data(Device *device) {
         // TODO: use semaphore.core_type from main
         if (semaphore.core_type() == CoreType::WORKER) {
             vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                detail::extract_dst_noc_multicast_info<std::set<CoreRange>>(
-                    device, semaphore.core_range_set().ranges(), semaphore.core_type());
+                device->extract_dst_noc_multicast_info<std::set<CoreRange>>(
+                    semaphore.core_range_set().ranges(), semaphore.core_type());
             transfer_info transfer_info = {
                 .dst_base_addr = semaphore.address(),
                 .dst_noc_info = dst_noc_multicast_info,
@@ -688,8 +714,8 @@ void Program::populate_dispatch_data(Device *device) {
 
     for (KernelGroup &kernel_group : this->get_kernel_groups(CoreType::WORKER)) {
         std::vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-            detail::extract_dst_noc_multicast_info<std::set<CoreRange>>(
-                device, kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
+            device->extract_dst_noc_multicast_info<std::set<CoreRange>>(
+                kernel_group.core_ranges.ranges(), kernel_group.get_core_type());
 
         vector<KernelHandle> kernel_ids;
         for (auto &optional_id : kernel_group.kernel_ids) {

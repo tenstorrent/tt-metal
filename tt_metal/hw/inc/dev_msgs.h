@@ -11,6 +11,8 @@
 #pragma once
 
 #include "noc/noc_parameters.h"
+#include "dev_mem_map.h"
+#include "eth_l1_address_map.h"
 
 // TODO: move these to processor specific files
 #if defined(COMPILE_FOR_ERISC)

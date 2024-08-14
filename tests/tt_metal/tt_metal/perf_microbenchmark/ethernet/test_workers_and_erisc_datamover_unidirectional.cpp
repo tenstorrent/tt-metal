@@ -14,7 +14,9 @@
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -76,8 +78,8 @@ struct BankedConfig {
     size_t num_pages;
     size_t size_bytes;
     size_t page_size_bytes;
-    BufferType input_buffer_type;   // = BufferType::L1;
-    BufferType output_buffer_type;  // = BufferType::L1;
+    tt_metal::BufferType input_buffer_type;   // = BufferType::L1;
+    tt_metal::BufferType output_buffer_type;  // = BufferType::L1;
     tt::DataFormat l1_data_format;  // = tt::DataFormat::Float16_b;
 };
 

@@ -13,6 +13,7 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/kernels/data_types.hpp"
 #include "tt_metal/impl/trace/trace_buffer.hpp"
+#include "tt_metal/impl/program/program_device_map.hpp"
 #include "tt_metal/jit_build/build.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "llrt/hal.hpp"
@@ -193,6 +194,7 @@ class Device {
     // machine epsilon
     float sfpu_eps() const;
 
+    void generate_device_headers(const std::string &path) const;
     const JitBuildEnv& build_env() const { return this->build_env_; }
     const string build_firmware_target_path(JitBuildProcessorType t, int i) const;
     const string build_kernel_target_path(JitBuildProcessorType t, int i, const string& kernel_name) const;
@@ -315,6 +317,9 @@ class Device {
     template <typename T = DeviceAddr>
     T get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type);
 
+    template <typename CoreRangeContainer>
+    std::vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
+
    private:
     void DisableAllocs();
     void EnableAllocs();
@@ -337,6 +342,22 @@ T Device::get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) {
     }
 
     return hal.get_dev_addr<T>(dispatch_core_type, addr_type);
+}
+
+// TODO: Find a better home for this function
+template <typename CoreRangeContainer>
+std::vector<pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type) {
+    // This API extracts all the pairs of noc multicast encodings given a set of core ranges
+    std::vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
+    dst_noc_multicast_info.reserve(ranges.size());
+    for (const CoreRange& core_range : ranges) {
+        CoreCoord physical_start = this->physical_core_from_logical_core(core_range.start_coord, core_type);
+        CoreCoord physical_end = this->physical_core_from_logical_core(core_range.end_coord, core_type);
+
+        uint32_t num_receivers = core_range.size();
+        dst_noc_multicast_info.push_back(std::make_pair(CoreRange(physical_start, physical_end), num_receivers));
+    }
+    return dst_noc_multicast_info;
 }
 
 }  // namespace tt_metal

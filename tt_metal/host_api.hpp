@@ -7,6 +7,7 @@
 #include <variant>
 #include <vector>
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/kernels/runtime_args_data.hpp"
 
 /** @file */
 
@@ -34,7 +35,6 @@ class Trace;
 class CircularBuffer;
 class Event;
 class Buffer;
-class RuntimeArgsData;
 
 // ==================================================
 //                  HOST API: Device management
