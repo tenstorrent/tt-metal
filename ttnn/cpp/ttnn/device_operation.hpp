@@ -312,7 +312,6 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
             operation_id,
             device->id(),
             program,
-            program_hash,
             operation_attributes,
             tensor_args,
             tensor_return_value);
@@ -347,7 +346,6 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
             operation_id,
             device->id(),
             *program_ptr,
-            program_hash,
             operation_attributes,
             tensor_args,
             tensor_return_value);
