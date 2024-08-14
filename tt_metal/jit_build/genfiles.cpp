@@ -666,10 +666,15 @@ static string generate_noc_addr_ranges_string(
     ss << "     !NOC_DRAM_XY_P(noc_idx, x, y) && \\" << endl;
     ss << "     !NOC_ETH_XY_P(noc_idx, x, y) && \\" << endl;
     ss << "     !NOC_HARVESTED_Y_P(noc_idx, y) && \\" << endl;
+    ss << "     ((noc_idx == 0) ? \\" << endl;
     ss << "     ((x) >= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << 1 << ") && \\" << endl;
     ss << "      (x) <= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
     ss << "      (y) >= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << 1 << ") && \\" << endl;
-    ss << "      (y) <= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << grid_size.y - 1 << ")))" << endl;
+    ss << "      (y) <= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << grid_size.y - 1 << ")) : \\" << endl;
+    ss << "     ((x) <= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << 1 << ") && \\" << endl;
+    ss << "      (x) >= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
+    ss << "      (y) <= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << 1 << ") && \\" << endl;
+    ss << "      (y) >= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << grid_size.y - 1 << "))))" << endl;
     ss << endl;
     ss << endl;
 
