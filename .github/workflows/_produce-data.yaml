@@ -89,6 +89,7 @@ jobs:
         run: ls -hal
       - name: Upload cicd data
         uses: ./.github/actions/upload-data-via-sftp
+        if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main' }}
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/cicd_data_batchfile.txt
