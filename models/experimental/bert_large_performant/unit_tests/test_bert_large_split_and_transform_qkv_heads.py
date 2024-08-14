@@ -36,7 +36,7 @@ def run_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_mem
         .to(device, in0_mem_config)
     )
 
-    q, k, v = ttnn.experimental.transformer.split_query_key_value_and_split_heads(
+    q, k, v = ttnn.experimental.split_query_key_value_and_split_heads(
         a_t, ttl.tensor.CoreCoord(12, 9), memory_config=out_mem_config
     )
 

@@ -54,7 +54,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
             q_heads,
             kt_heads,
             v_heads,
-        ) = ttnn.experimental.transformer.split_query_key_value_and_split_heads(
+        ) = ttnn.experimental.split_query_key_value_and_split_heads(
             qkv,
             compute_with_storage_grid_size=grid_size,
             memory_config=model_config["OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
@@ -129,9 +129,9 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         if num_heads == 1:
             return x
         else:
-            retval = tt_lib.tensor.nlp_concat_heads(
+            retval = ttnn.experimental.nlp_concat_heads(
                 x,
-                output_mem_config=model_config["OP6_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"],
+                memory_config=model_config["OP6_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"],
             )
             return retval
 

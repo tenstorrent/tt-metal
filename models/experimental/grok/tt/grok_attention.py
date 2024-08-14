@@ -182,11 +182,11 @@ class TtGrokAttention(LightweightModule):
             q_heads_1B4D,
             k_heads_1B1D,
             v_heads_1B1D,
-        ) = ttnn.experimental.tensor.nlp_create_qkv_heads_decode(
+        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
         )
         xqkv_fused.deallocate(True)
         # new_key_states = ttnn.to_torch(k_heads_1B1D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))
@@ -228,7 +228,7 @@ class TtGrokAttention(LightweightModule):
         k_heads_1B1D.deallocate(True)
         v_heads_1B1D.deallocate(True)
 
-        keys_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
+        keys_1BPD = ttnn.experimental.nlp_kv_cache_load_slice(
             keys_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
         )
 
@@ -277,7 +277,7 @@ class TtGrokAttention(LightweightModule):
         # post_softmax = ttnn.to_torch(attn_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))[0]
 
         # values matmul
-        values_1BPD = ttnn.experimental.tensor.nlp_kv_cache_load_slice(
+        values_1BPD = ttnn.experimental.nlp_kv_cache_load_slice(
             values_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
         )
 
@@ -296,7 +296,7 @@ class TtGrokAttention(LightweightModule):
 
         # value_output = ttnn.to_torch(attn_output_1B4D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
 
-        attn_output_11BH = ttnn.experimental.tensor.nlp_concat_heads_decode(
+        attn_output_11BH = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_1B4D,
             num_heads=6,
         )

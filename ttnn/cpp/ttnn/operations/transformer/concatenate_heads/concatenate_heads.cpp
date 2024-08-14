@@ -5,11 +5,11 @@
 #include "concatenate_heads.hpp"
 
 
-#include "ttnn/deprecated/tt_dnn/op_library/nlp_tms/nlp_tms.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
 
 namespace ttnn::operations::transformer {
 
-struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
+struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NLPConcatHeadsDeviceOperation {
     void validate(const std::vector<Tensor>& input_tensors) const {
 
         const auto& input_tensor = input_tensors.at(0);
@@ -29,7 +29,7 @@ struct ConcatenateHeads : public tt::tt_metal::NlpConcatHeads {
             fmt::format("Head size ({}) cannot have tile padding. Ensure that the head size is not padded.", head_size));
 
 
-        NlpConcatHeads::validate(input_tensors);
+        NLPConcatHeadsDeviceOperation::validate(input_tensors);
     }
 
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const {

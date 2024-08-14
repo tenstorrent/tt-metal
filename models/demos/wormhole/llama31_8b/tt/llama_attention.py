@@ -449,9 +449,9 @@ class TtLlamaAttention(nn.Module):
         ###
         # Output matmul
         ###
-        attn_output_11SH = ttnn.experimental.tensor.nlp_concat_heads(
+        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
-            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         attn_output_1QSD.deallocate(True)
 

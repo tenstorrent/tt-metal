@@ -198,11 +198,11 @@ class TtMixtralAttention(LightweightModule):
             q_heads_1B4D,
             k_heads_1B1D,
             v_heads_1B1D,
-        ) = ttnn.experimental.tensor.nlp_create_qkv_heads_decode(
+        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
         )
         xqkv_fused.deallocate(True)
 
@@ -252,7 +252,7 @@ class TtMixtralAttention(LightweightModule):
             output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
         )
 
-        attn_output_11BH = ttnn.experimental.tensor.nlp_concat_heads_decode(
+        attn_output_11BH = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_1B4D,
             num_heads=4,
         )
@@ -378,9 +378,9 @@ class TtMixtralAttention(LightweightModule):
         ###
         # Output matmul
         ###
-        attn_output_11SH = ttnn.experimental.tensor.nlp_concat_heads(
+        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_14SD,
-            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         attn_output_14SD.deallocate(True)
 

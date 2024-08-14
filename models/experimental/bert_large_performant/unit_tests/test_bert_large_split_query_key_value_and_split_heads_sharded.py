@@ -62,7 +62,7 @@ def test_split_query_key_value_and_split_heads_with_program_cache(device, dtype,
         ttl.tensor.ShardOrientation.COL_MAJOR,
     )
 
-    q, k, v = ttnn.experimental.transformer.split_query_key_value_and_split_heads(
+    q, k, v = ttnn.experimental.split_query_key_value_and_split_heads(
         in0_t_shard,
         ttl.tensor.CoreCoord(grid_size[0], grid_size[1]),
         memory_config=sharded_mem_config,

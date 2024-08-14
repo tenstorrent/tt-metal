@@ -10,6 +10,7 @@ from models.utility_functions import comp_pcc, tt2torch_tensor
 import torch
 from models.utility_functions import is_wormhole_b0
 from models.utility_functions import is_grayskull
+import ttnn
 
 
 def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device):
@@ -23,7 +24,7 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
 
     in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
 
-    out = ttl.tensor.nlp_concat_heads(in0_t, out_mem_config)
+    out = ttnn.experimental.nlp_concat_heads(in0_t, memory_config=out_mem_config)
 
     # Check memory of inputs and outputs
     assert in0_t.memory_config().buffer_type == in0_mem_config.buffer_type

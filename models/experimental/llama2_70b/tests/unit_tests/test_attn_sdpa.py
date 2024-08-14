@@ -113,8 +113,9 @@ class TtLlamaSDPA(torch.nn.Module):
             # output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
         )  # seqlen, n_heads, batch, dhead
 
-        attn_output = tt_lib.tensor.nlp_concat_heads(
+        attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG
             # output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )  # seqlen, 1, batch, hidden_size
 

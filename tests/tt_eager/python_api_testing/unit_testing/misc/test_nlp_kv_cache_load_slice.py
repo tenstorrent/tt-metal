@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 import tt_lib as ttl
+import ttnn
 from models.utility_functions import is_grayskull, comp_pcc
 
 
@@ -34,7 +35,9 @@ def unpadding_test(
         .to(ttl.tensor.Layout.TILE)
         .to(device)
     )
-    test_tensor_tt = ttl.tensor.nlp_kv_cache_load_slice(test_tensor, seq_len_start, seq_len_end)
+    test_tensor_tt = ttnn.experimental.nlp_kv_cache_load_slice(
+        test_tensor, seq_len_start=seq_len_start, seq_len_end=seq_len_end
+    )
 
     test_tensor_pt = test_tensor_tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 

@@ -35,9 +35,7 @@ def run_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config, 
         .to(device, in0_mem_config)
     )
 
-    out = ttnn.experimental.transformer.concatenate_heads(
-        a_t, ttl.tensor.CoreCoord(12, 9), memory_config=out_mem_config
-    )
+    out = ttnn.experimental.concatenate_heads(a_t, ttl.tensor.CoreCoord(12, 9), memory_config=out_mem_config)
 
     # Check memory of inputs and outputs
     assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type

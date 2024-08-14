@@ -2207,9 +2207,9 @@ def test_sharded_concat_heads(
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    output_t = ttl.tensor.nlp_concat_heads(
+    output_t = ttnn.experimental.nlp_concat_heads(
         in0_t,
-        output_mem_config=output_mem_config,
+        memory_config=output_mem_config,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
