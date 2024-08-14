@@ -316,6 +316,8 @@ class Device {
     T get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type);
 
    private:
+    void DisableAllocs();
+    void EnableAllocs();
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 };
 

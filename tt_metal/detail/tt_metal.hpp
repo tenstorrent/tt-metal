@@ -323,14 +323,9 @@ namespace tt::tt_metal{
             LAZY_COMMAND_QUEUE_MODE = lazy;
         }
 
-
         void AllocateBuffer(Buffer* buffer, bool bottom_up);
 
         void DeallocateBuffer(Buffer *buffer);
-
-
-        void DisableAllocs(Device *device);
-        void EnableAllocs(Device *device);
 
         inline void GenerateDeviceHeaders(Device *device,
                                           const std::string &path)

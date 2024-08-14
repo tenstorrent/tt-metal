@@ -759,9 +759,7 @@ void DeallocateBuffer(Buffer *buffer) {
         false);
 }
 
-void DisableAllocs(Device *device) { tt::tt_metal::allocator::disable_allocs(*(device->allocator_)); }
 
-void EnableAllocs(Device *device) { tt::tt_metal::allocator::enable_allocs(*(device->allocator_)); }
 
 }  // namespace detail
 
