@@ -377,6 +377,20 @@ ComplexTensor BinaryOperationOverload<binary_op_type, in_place>::invoke(
     }else if constexpr(binary_op_type == BinaryOpType::SUB) {
         return ComplexTensor({ ttnn::subtract(input_a[0], input_b[0], std::nullopt, output_mem_config),
              ttnn::subtract(input_a[1], input_b[1], std::nullopt, output_mem_config) });
+    }else if constexpr(binary_op_type == BinaryOpType::MUL) {
+        Tensor re_part = ttnn::subtract(
+            ttnn::multiply(input_a[0],input_b[0],std::nullopt,output_mem_config),
+            ttnn::multiply(input_a[1],input_b[1],std::nullopt,output_mem_config),
+            std::nullopt, output_mem_config);
+
+        Tensor im_part = ttnn::add(
+            ttnn::multiply(input_a[0],input_b[1],std::nullopt,output_mem_config),
+            ttnn::multiply(input_a[1],input_b[0],std::nullopt,output_mem_config),
+            std::nullopt, output_mem_config);
+
+        return ComplexTensor({ re_part, im_part });
+    }else if constexpr(binary_op_type == BinaryOpType::DIV_FAST) {
+        return ttnn::multiply( input_a, ttnn::reciprocal( input_b , output_mem_config ), output_mem_config );
     }else {
         TT_THROW("Unsupported operation (expected MUL or DIV_FAST or ADD or SUB)");
     }
@@ -525,7 +539,7 @@ template struct BinaryOperationOverload<BinaryOpType::ADD, false>;
 template struct BinaryOperation<BinaryOpType::ADD, true>;
 template struct BinaryOperationOverload<BinaryOpType::SUB, false>;
 template struct BinaryOperation<BinaryOpType::SUB, true>;
-template struct BinaryOperation<BinaryOpType::MUL, false>;
+template struct BinaryOperationOverload<BinaryOpType::MUL, false>;
 template struct BinaryOperation<BinaryOpType::MUL, true>;
 template struct BinaryOperation<BinaryOpType::LOGICAL_AND, false>;
 template struct BinaryOperation<BinaryOpType::LOGICAL_OR, false>;
@@ -533,7 +547,7 @@ template struct BinaryOperation<BinaryOpType::LDEXP, false>;
 template struct BinaryOperation<BinaryOpType::LOGADDEXP, false>;
 template struct BinaryOperation<BinaryOpType::LOGADDEXP2, false>;
 template struct BinaryOperation<BinaryOpType::SQUARED_DIFFERENCE, false>;
-template struct BinaryOperation<BinaryOpType::DIV_FAST, false>;
+template struct BinaryOperationOverload<BinaryOpType::DIV_FAST, false>;
 template struct BinaryOperation<BinaryOpType::BIAS_GELU, false>;
 
 template struct RelationalBinary<BinaryOpType::EQ>;
