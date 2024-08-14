@@ -195,6 +195,7 @@ def get_job_row_from_github_job(github_job):
     single_cards_list = ("E150", "N150", "N300", "BH")
     single_cards_overlap = get_overlap(single_cards_list, labels)
 
+    # In order of preference
     if detected_config:
         if not detected_arch:
             raise Exception(f"There must be an arch detected for config {detected_config}")
@@ -202,6 +203,8 @@ def get_job_row_from_github_job(github_job):
     elif single_cards_overlap:
         logger.info(f"Detected overlap in single cards: {single_cards_overlap}")
         card_type = list(single_cards_overlap)[0]
+    elif detected_arch:
+        card_type = detected_arch
     else:
         card_type = None
 
