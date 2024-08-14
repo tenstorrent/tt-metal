@@ -88,6 +88,26 @@ class thread_safe_call_stack {
 
 inline thread_safe_cached_ops_map cached_ops{};
 inline thread_safe_call_stack call_stack;
+
+template <typename device_operation_t>
+inline auto compute_program_hash(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    if constexpr (
+        requires(
+            const typename device_operation_t::operation_attributes_t& operation_attributes,
+            const typename device_operation_t::tensor_args_t& tensor_args) {
+            { device_operation_t::compute_program_hash(operation_attributes, tensor_args)} -> std::convertible_to<tt::stl::hash::hash_t>;
+        }
+    ) {
+        ZoneScopedN("Op profiler Compute custom program hash");
+        return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
+    } else {
+        ZoneScopedN("Op profiler Compute default program hash");
+        return tt::stl::hash::hash_objects_with_default_seed(
+            tt::stl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
+    }
+}
 #endif
 
 static void start_tracy_zone(const string& source, const string& functName, uint32_t lineNum, uint32_t color = 0) {
@@ -311,11 +331,13 @@ inline std::string op_meta_data_serialized_json(
     uint32_t operation_id,
     auto device_id,
     const auto& program,
-    const auto& program_hash,
     const auto& operation_attributes,
     const auto& tensor_args,
     auto& tensor_return_value) {
+
     const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
+    auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
+
     if (!useCachedOps || (cached_ops.find(device_id) == cached_ops.end()) ||
         (cached_ops.at(device_id).find(program_hash) == cached_ops.at(device_id).end())) {
         auto j = get_base_json<device_operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
@@ -355,25 +377,17 @@ inline std::string op_meta_data_serialized_json(
 }
 
 #define TracyOpTTNNDevice(                                                                                           \
-    operation, operation_id, device_id, program, program_hash, operation_attributes, tensor_args, tensor_return_value) \
+    operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value) \
     std::string op_message = op_profiler::op_meta_data_serialized_json(                                                \
         operation,                                                                                                     \
         operation_id,                                                                                                  \
         device_id,                                                                                                     \
         program,                                                                                                       \
-        program_hash,                                                                                                  \
         operation_attributes,                                                                                          \
         tensor_args,                                                                                                   \
         tensor_return_value);                                                                                          \
     std::string op_text = fmt::format("id:{}", operation_id);                                                          \
     ZoneText(op_text.c_str(), op_text.size());                                                                         \
-    TracyMessage(op_message.c_str(), op_message.size());
-
-#define TracyOpTTNNHost(op_id, operation, input_tensors, output_tensors)                            \
-    std::string op_message =                                                                        \
-        op_profiler::op_meta_data_serialized_json(op_id, operation, input_tensors, output_tensors); \
-    std::string op_text = fmt::format("id:{}", op_id);                                              \
-    ZoneText(op_text.c_str(), op_text.size());                                                      \
     TracyMessage(op_message.c_str(), op_message.size());
 
 #define TracyOpTTNNExternal(op_id, op, input_tensors)                                             \
@@ -385,8 +399,7 @@ inline std::string op_meta_data_serialized_json(
 #else
 
 #define TracyOpTTNNDevice( \
-    operation, operation_id, device_id, program, program_hash, operation_attributes, tensor_args, tensor_return_value)
-#define TracyOpTTNNHost(op_id, operation, input_tensors, output_tensors)
+    operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value)
 #define TracyOpTTNNExternal(op_id, op, input_tensors)
 
 #endif
