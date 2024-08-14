@@ -6,7 +6,7 @@ import torch
 from datasets import load_dataset
 from loguru import logger
 import pytest
-import tt_lib
+import ttnn
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
 from models.utility_functions import (
     disable_persistent_kernel_cache,
@@ -63,7 +63,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
 
         profiler.start(first_key)
         tt_output = tt_model.forward(device, input_ids)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
 
@@ -71,7 +71,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
 
         profiler.start(second_key)
         tt_output = tt_model.forward(device, input_ids)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
         del tt_output
 
