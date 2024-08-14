@@ -31,7 +31,7 @@ struct CachedProgram {
 };
 
 struct CachedProgramFactory {
-    static constexpr auto MAX_SIZE = 896;
+    static constexpr auto MAX_SIZE = 4096;
     static constexpr auto ALIGNMENT = 32;
 
     tt::stl::unique_any<MAX_SIZE, ALIGNMENT> cached_program;

@@ -7,7 +7,7 @@
 
 namespace ttnn::operations::data_movement {
 
-Tensor DataTransferToHostOperation::operator()(const Tensor &input_tensor) {
+Tensor DataTransferToHostOperation::invoke(const Tensor &input_tensor) {
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return input_tensor;
     }
@@ -16,7 +16,7 @@ Tensor DataTransferToHostOperation::operator()(const Tensor &input_tensor) {
 }
 
 
-Tensor DataTransferToDeviceOperation::operator()(const Tensor &input_tensor, Device* device, const MemoryConfig& memory_config) {
+Tensor DataTransferToDeviceOperation::invoke(const Tensor &input_tensor, Device* device, const MemoryConfig& memory_config) {
     TT_FATAL(device != nullptr);
 
     if(input_tensor.get_layout() == Layout::ROW_MAJOR) {

@@ -178,7 +178,7 @@ static Tensor reduce_impl(
 }
 
 template <ReduceType reduce_type>
-Tensor Reduce<reduce_type>::operator()(
+Tensor Reduce<reduce_type>::invoke(
     const Tensor& input_tensor_arg,
     const std::optional<std::variant<int, std::vector<int>>>& dim_arg,
     const bool keepdim,

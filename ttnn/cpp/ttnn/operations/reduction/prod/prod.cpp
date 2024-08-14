@@ -62,7 +62,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
         input_shape[2],
         input_shape[3]};
 
-    auto ttnn_shape = ttnn::Shape({required});
+    auto ttnn_shape = ttnn::Shape(required);
     auto ttnn_device = formatted_input_tensor.device();
 
     return tt::operations::primary::prod_nc(
@@ -78,7 +78,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
 }
 
 
-Tensor ProdOperation::operator()(const Tensor& input_a, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& memory_config) {
+Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     if (all_dimensions) {
         return prod_all(input_a, output_mem_config);
@@ -125,7 +125,7 @@ Tensor ProdOperation::operator()(const Tensor& input_a, bool all_dimensions, int
     }
 }
 
-Tensor ProdOperation::operator()(const Tensor &input, const Tensor &output, std::vector<int64_t> &dims, const std::optional<MemoryConfig>& memory_config) {
+Tensor ProdOperation::invoke(const Tensor &input, const Tensor &output, std::vector<int64_t> &dims, const std::optional<MemoryConfig>& memory_config) {
         auto mem_cfg = memory_config.value_or(input.memory_config());
         return tt::operations::primary::prod_nc(input, output, dims, mem_cfg);
 }

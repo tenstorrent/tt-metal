@@ -13,7 +13,7 @@ namespace ttnn {
 namespace operations::reduction {
 
 struct ExecuteArgMax {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
         const std::optional<int> dim = std::nullopt,
@@ -25,12 +25,12 @@ struct ExecuteArgMax {
             .at(0);
     }
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const Tensor& input_tensor,
         const std::optional<int> dim = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return operator()(DefaultQueueId, input_tensor, dim, memory_config, optional_output_tensor);
+        return invoke(DefaultQueueId, input_tensor, dim, memory_config, optional_output_tensor);
     }
 
 };

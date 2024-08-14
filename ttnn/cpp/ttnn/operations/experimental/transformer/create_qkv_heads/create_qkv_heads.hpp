@@ -12,7 +12,7 @@ namespace operations::experimental::transformer {
 
 struct CreateQKVHeadsOperation {
 
-    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> operator()(
+    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
         uint8_t queue_id,
         const Tensor &input_tensor,
         const uint32_t num_q_heads,
@@ -21,7 +21,7 @@ struct CreateQKVHeadsOperation {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<std::array<Tensor, 3>> optional_output_tensors = std::nullopt);
 
-    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> operator()(
+    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
         const Tensor &input_tensor,
         const uint32_t num_q_heads,
         const std::optional<uint32_t> num_kv_heads,

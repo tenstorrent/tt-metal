@@ -13,7 +13,7 @@ namespace operations::transformer {
 
 template <bool in_place>
 struct ExecuteAttentionSoftmax {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const std::optional<int>& head_size_arg = std::nullopt,
         const std::optional<const ttnn::Tensor>& attention_mask = std::nullopt,

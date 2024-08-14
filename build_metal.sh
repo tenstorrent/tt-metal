@@ -117,7 +117,7 @@ if [ "$enable_time_trace" = "ON" ]; then
     cmake_args="$cmake_args -DENABLE_BUILD_TIME_TRACE=ON"
 fi
 
-# Configure cmake 
+# Configure cmake
 cmake $cmake_args
 
 # Build libraries and cpp tests
