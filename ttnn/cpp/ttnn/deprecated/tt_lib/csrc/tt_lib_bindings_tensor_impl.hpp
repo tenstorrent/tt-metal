@@ -69,10 +69,9 @@ void bind_op_with_mem_config_and_dtype_and_opt_output(py::module_ &module, std::
     }
 }
 
-template <bool mem_config_arg = true, bool dtype_arg = true, bool kernel_config = false, typename Func, typename... Extra>
+template <bool mem_config_arg = true, bool dtype_arg = true, typename Func, typename... Extra>
 void bind_op_with_mem_config_and_dtype(
     py::module_ &module, std::string op_name, Func &&f, std::string docstring, Extra &&...extra) {
-    const std::string kernel_config_name = "compute_kernel_config";
     if constexpr (mem_config_arg && dtype_arg) {
         const std::string mem_config_name = "output_mem_config";
         docstring += fmt::format(R"doc(
@@ -84,79 +83,41 @@ void bind_op_with_mem_config_and_dtype(
             "{0}", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No")doc",
             dtype_name
         );
-        if constexpr (kernel_config) {
-            module.def(
-                op_name.c_str(),
-                f,
-                std::forward<Extra>(extra)...,
-                py::arg(mem_config_name.c_str()).noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-                py::arg(dtype_name.c_str()).noconvert() = std::nullopt,
-                py::arg(kernel_config_name.c_str()).noconvert() = std::nullopt,
-                docstring.c_str());
-        } else {
-            module.def(
-                op_name.c_str(),
-                f,
-                std::forward<Extra>(extra)...,
-                py::arg(mem_config_name.c_str()).noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-                py::arg(dtype_name.c_str()).noconvert() = std::nullopt,
-                docstring.c_str());
-        }
+
+        module.def(
+            op_name.c_str(),
+            f,
+            std::forward<Extra>(extra)...,
+            py::arg(mem_config_name.c_str()).noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg(dtype_name.c_str()).noconvert() = std::nullopt,
+            docstring.c_str());
     } else if constexpr (mem_config_arg) {
         const std::string mem_config_name = "output_mem_config";
         docstring += fmt::format(R"doc(
             "{0}", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is {1} in {2}", "No")doc",
             mem_config_name, magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.memory_layout), magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.buffer_type)
         );
-        if constexpr (kernel_config) {
-            module.def(
-                op_name.c_str(),
-                f,
-                std::forward<Extra>(extra)...,
-                py::arg(mem_config_name.c_str()).noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-                py::arg(kernel_config_name.c_str()).noconvert() = std::nullopt,
-                docstring.c_str());
-        } else {
-            module.def(
-                op_name.c_str(),
-                f,
-                std::forward<Extra>(extra)...,
-                py::arg(mem_config_name.c_str()).noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-                docstring.c_str());
-        }
+
+        module.def(
+            op_name.c_str(),
+            f,
+            std::forward<Extra>(extra)...,
+            py::arg(mem_config_name.c_str()).noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            docstring.c_str());
     } else if constexpr (dtype_arg) {
         const std::string dtype_name = "output_dtype";
         docstring += fmt::format(R"doc(
             "{0}", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No")doc",
             dtype_name
         );
-        if constexpr (kernel_config) {
-            module.def(
-                op_name.c_str(),
-                f,
-                std::forward<Extra>(extra)...,
-                py::arg(dtype_name.c_str()).noconvert() = std::nullopt,
-                py::arg(kernel_config_name.c_str()).noconvert() = std::nullopt,
-                docstring.c_str());
-        } else {
-            module.def(
-                op_name.c_str(),
-                f,
-                std::forward<Extra>(extra)...,
-                py::arg(dtype_name.c_str()).noconvert() = std::nullopt,
-                docstring.c_str());
-        }
+        module.def(
+            op_name.c_str(),
+            f,
+            std::forward<Extra>(extra)...,
+            py::arg(dtype_name.c_str()).noconvert() = std::nullopt,
+            docstring.c_str());
     } else {
-        if constexpr (kernel_config) {
-            module.def(
-                op_name.c_str(),
-                f,
-                std::forward<Extra>(extra)...,
-                py::arg(kernel_config_name.c_str()).noconvert() = std::nullopt,
-                docstring.c_str());
-        } else {
-            module.def(op_name.c_str(), f, std::forward<Extra>(extra)..., docstring.c_str());
-        }
+        module.def(op_name.c_str(), f, std::forward<Extra>(extra)..., docstring.c_str());
     }
 }
 
@@ -204,7 +165,7 @@ void bind_binary_op(py::module_ &module, std::string op_name, Func &&f, std::str
 }
 
 //TODO @tt-aho: Update to handle variable number of params
-template <bool mem_config_arg = true, bool dtype_arg = false, bool kernel_config = false, typename Func>
+template <bool mem_config_arg = true, bool dtype_arg = false, typename Func>
 void bind_unary_op(py::module_ &module, std::string op_name, Func &&f, std::string op_desc) {
     const std::string tensor_name = "input";
     op_desc = fmt::format(fmt::runtime(op_desc), tensor_name);
@@ -222,34 +183,7 @@ void bind_unary_op(py::module_ &module, std::string op_name, Func &&f, std::stri
         op_desc, tensor_name, op_name
     );
 
-    bind_op_with_mem_config_and_dtype<mem_config_arg, dtype_arg, kernel_config>(module, op_name, f, docstring, py::arg(tensor_name.c_str()).noconvert());
-}
-
-template <bool mem_config_arg = true, bool dtype_arg = false, bool kernel_config = false, typename Func, typename PyArg, typename std::enable_if<std::is_base_of<py::arg, PyArg>::value, int>::type = 0>
-void bind_unary_op_with_param(py::module_ &module, std::string op_name, Func &&f, PyArg param, std::string op_desc, std::string param_desc) {
-    const std::string tensor_name = "input";
-    std::string param_name = std::string(param.name);
-    op_desc = fmt::format(fmt::runtime(op_desc), tensor_name, param_name);
-    const std::string required_param = std::is_same_v<py::arg_v, PyArg> ? "No" : "Yes";
-    std::string docstring = fmt::format(R"doc(
-        {0}
-
-        Input tensor must have BFLOAT16 data type.
-
-        Output tensor will have BFLOAT16 data type.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "{1}", "Tensor {2} is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes")doc",
-        op_desc, tensor_name, op_name, param_desc
-    );
-
-    docstring += fmt::format(R"doc(
-            "{0}", {1}, "{2}")doc",
-        param_name, param_desc, required_param
-    );
-    bind_op_with_mem_config_and_dtype<mem_config_arg, dtype_arg, kernel_config>(module, op_name, f, docstring, py::arg(tensor_name.c_str()).noconvert(), param);
+    bind_op_with_mem_config_and_dtype<mem_config_arg, dtype_arg>(module, op_name, f, docstring, py::arg(tensor_name.c_str()).noconvert());
 }
 
 template <typename E, typename... Extra>

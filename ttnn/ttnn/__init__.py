@@ -274,6 +274,10 @@ from ttnn.operations.losses import (
     LossReductionMode,
 )
 
+from ttnn.operations.reduction import (
+    ReduceType,
+)
+
 from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config
 from ttnn.operations.pool import TTPyMaxPool, max_pool2d, max_pool2d_legacy, MaxPool2d, global_avg_pool2d, avg_pool2d
 from ttnn.operations.conv1d import Conv1d, Conv1dConfig

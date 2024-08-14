@@ -45,3 +45,5 @@ ttnn.attach_golden_function(ttnn.topk, golden_function=_create_golden_function_t
 
 
 __all__ = []
+
+ReduceType = ttnn._ttnn.operations.reduction.ReduceType

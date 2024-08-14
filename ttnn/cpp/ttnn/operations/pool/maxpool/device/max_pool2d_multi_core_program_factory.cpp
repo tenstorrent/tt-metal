@@ -6,8 +6,9 @@
 
 
 #include "max_pool2d_device_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/common.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+// #include "max_pool2d_multi_core_program_factory.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
+
 /**
  * New maxpool2d implementation that uses the new sliding window infrastructure.
  */

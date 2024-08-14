@@ -121,9 +121,6 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         assert num_dims == 1
 
     # tensor.DataType.BFLOAT16
-    RSUM = tensor.ReduceOpMath.SUM
-    RW = tensor.ReduceOpDim.W
-    RH = tensor.ReduceOpDim.H
     BCW = tensor.BcastOpDim.W
     BCH = tensor.BcastOpDim.H
     BCHW = tensor.BcastOpDim.HW
@@ -144,13 +141,13 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
             H_ = overrideH
 
         # first compute the mean (m)
-        means = tensor.reduce(x, RSUM, RW, 1.0 / W)  # -> NCH1
+        means = ttnn.sum(x, 3, scalar=1.0 / W)  # -> NCH1
         x_minus_mean = tensor.bcast(x, means, BCSUB, BCW)  # need to blank out the H for non-multiple of 32
         if False and refx is not None:
             ry, rmean, rvar, rstd, rinvstd, ry1 = ref_ln(refx, refgamma, refbeta)
 
         var = tensor.mul(x_minus_mean, x_minus_mean)  # (x-m)^2
-        var_redW = tensor.reduce(var, RSUM, RW, 1.0)  # sum[(x-m)^2]
+        var_redW = ttnn.sum(var, 3)  # sum[(x-m)^2]
 
         # print(f"layernorm_1d_ var_scaler shape {var_scaler.get_legacy_shape()} H {H} H_ {H_} W {W}")
 
@@ -181,8 +178,8 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         W = x.get_legacy_shape()[3]
 
         # first compute the mean (m)
-        redW = tensor.reduce(x, RSUM, RW, 1.0 / W)  # -> NCH1
-        mean = tensor.reduce(redW, RSUM, RH, 1.0)  # -> NC11 (HW reduce doesn't behave well with small scaler)
+        redW = ttnn.sum(x, 3, scalar=1.0 / W)  # -> NCH1
+        mean = ttnn.sum(redW, 2)  # -> NC11 (HW reduce doesn't behave well with small scaler)
         x_minus_mean0 = tensor.bcast(x, mean, BCSUB, BCHW)  # need to blank out the H for non-multiple of 32
 
         hmasku = tensor.fill_ones_rm(N, C, H, 32, 1, 1, x)  # generate a H-mask with mask[h, w] = 1.0 where h,w < 1
@@ -192,8 +189,8 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         print(f"layernorm_2d_ hmasku shape {hmasku.get_legacy_shape()}")
 
         var = tensor.mul(x_minus_mean, x_minus_mean)  # (x-m)^2
-        var_redW = tensor.reduce(var, RSUM, RW, 1.0)  # sum[(x-m)^2]
-        var_redHW = tensor.reduce(var_redW, RSUM, RH, 1.0)  # sum[(x-m)^2]
+        var_redW = ttnn.sum(var, 3)  # sum[(x-m)^2]
+        var_redHW = ttnn.sum(var_redW, 2)  # sum[(x-m)^2]
         var_div_n1 = tensor.bcast(var_redHW, var_scaler_, BCMUL, BCHW)  # *= 1/(everything not batch)
         var_plus_eps = tensor.bcast(var_div_n1, epsilon_, BCADD, BCHW)
 

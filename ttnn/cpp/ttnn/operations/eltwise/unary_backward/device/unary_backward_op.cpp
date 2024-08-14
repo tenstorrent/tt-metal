@@ -11,7 +11,6 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -24,6 +23,7 @@
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -442,7 +442,7 @@ std::vector<Tensor> _fill_bw(const Tensor& grad, const Tensor& input, const std:
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
     Tensor val = grad;
-    val = global_sum(val);
+    val = ttnn::sum(val);
     Tensor result = ttnn::full_like(grad, 0.0f);
     result = ttnn::add(result, val, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);

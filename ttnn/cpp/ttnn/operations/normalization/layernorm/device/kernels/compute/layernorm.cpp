@@ -123,7 +123,7 @@ void MAIN {
         #ifndef RMSNORM
         /*
          * E[x]
-         * means = tensor.reduce(x, RSUM, RW, 1.0/W) # -> NCH1
+         * means = ttnn.sum(x, 3, True, None, None, 1.0/W) # -> NCH1
          */
         ACQ();
         cb_reserve_back(cb_ex, onetile);

@@ -7,21 +7,13 @@
 #include "ttnn/deprecated/tt_dnn/op_library/move/move_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
-
 
 namespace tt::tt_metal::detail{
 
     void TensorModuleDMOPs( py::module & m_tensor)
     {
-
-        // reduce enums
-        detail::export_enum<ReduceOpMath>(m_tensor);
-
-        detail::export_enum<ReduceOpDim>(m_tensor);
-
         // bcast enums
         detail::export_enum<BcastOpMath>(m_tensor);
         /** TODO: add these to bcast ops - good to have not required
@@ -120,30 +112,6 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_tensor", "Optional output tensor", "Tensor", "Default is None", "No"
                 "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-        )doc");
-
-        m_tensor.def("reduce", &reduce,
-            py::arg("input").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("scaler"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
-            Perform a reduction of input tensor ``input`` using mathematical operation ``math_op`` on dimension ``dim``.
-
-            For ``arg2=ReduceOpDim::W`` reduce is done on dimension X.
-
-            For ``arg2=ReduceOpDim::H`` reduce is done on dimension Y.
-
-            For ``arg2=ReduceOpDim::HW`` reduce is done on dimensions X and Y.
-
-            Input tensors must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "math_op", "Aggregating math operation", " ReduceOpMath", "SUM, MAX, MIN", "Yes"
-                "dim", "Dimension on which reduction is performed", "ReduceOpDim", "W, H, HW", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_dtype", "DataType of output tensor", "DataType", "Default is None (use input dtype)", "No"
         )doc");
 
         m_tensor.def("move", &move,

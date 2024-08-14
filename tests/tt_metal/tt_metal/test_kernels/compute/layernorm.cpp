@@ -100,7 +100,7 @@ void MAIN {
 
         /*
          * E[x]
-         * means = tensor.reduce(x, RSUM, RW, 1.0/W) # -> NCH1
+         * means = tensor.sum(x, 3, scalar=1.0/W) # -> NCH1
          */
         ACQ();
         cb_reserve_back(cb_ex, 1*onetile);

@@ -11,7 +11,7 @@
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/types.hpp"
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/common.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -27,7 +27,7 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const uint32_t scatter_dim,
-               tt::tt_metal::ReduceOpMath math_op,
+               ttnn::operations::reduction::ReduceType math_op,
                const uint32_t num_links,
                const ttnn::MemoryConfig& memory_config) -> ttnn::Tensor {
                 return self(input_tensor, scatter_dim, math_op, num_links, memory_config);
@@ -48,7 +48,7 @@ void py_bind_reduce_scatter(pybind11::module& module) {
     detail::bind_reduce_scatter(
         module,
         ttnn::reduce_scatter,
-        R"doc(reduce_scatter(input_tensor: std::vector<ttnn.Tensor>, scatter_dim: int, math_op: ReduceOpMath, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> std::vector<ttnn.Tensor>
+        R"doc(reduce_scatter(input_tensor: std::vector<ttnn.Tensor>, scatter_dim: int, math_op: ReduceType, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> std::vector<ttnn.Tensor>
 
         Performs an reduce_scatter operation on multi-device :attr:`input_tensor` across all devices.
 

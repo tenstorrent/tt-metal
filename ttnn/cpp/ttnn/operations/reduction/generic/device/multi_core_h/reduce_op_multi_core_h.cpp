@@ -2,23 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
 using uint32_t = std::uint32_t;
-
 namespace tt {
 
 namespace tt_metal {
 
 operation::ProgramWithCallbacks reduce_multi_core_h(
-    const Tensor &a, Tensor &output, ReduceOpMath reduce_op, const DeviceComputeKernelConfig& compute_kernel_config, float scaler) {
+    const Tensor &a,
+    Tensor &output,
+    ReduceOpMath reduce_op,
+    const DeviceComputeKernelConfig &compute_kernel_config,
+    float scaler) {
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
@@ -124,7 +125,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         reader_defines["REDUCE_SCALER"] = "1";
         reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
@@ -135,9 +136,10 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
         std::map<string, string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
+
         reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_interleaved_input_cols_partitioned.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
@@ -174,9 +176,13 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/kernels/compute/reduce_h.cpp",
+        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
         core_group_1,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args_group_1, .defines = reduce_defines});
+        tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .compile_args = compute_kernel_args_group_1,
+            .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
         vector<uint32_t> compute_kernel_args_group_2 = {
@@ -187,9 +193,13 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
         auto reduce_compute_kernel_group_2_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reduce/kernels/compute/reduce_h.cpp",
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
             core_group_2,
-            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args_group_2, .defines = reduce_defines});
+            tt_metal::ComputeConfig{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .compile_args = compute_kernel_args_group_2,
+                .defines = reduce_defines});
     }
 
     const auto &cores =

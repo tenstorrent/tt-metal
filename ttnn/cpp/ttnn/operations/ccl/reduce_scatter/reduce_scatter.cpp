@@ -11,7 +11,7 @@ namespace ttnn::operations::ccl {
 ttnn::Tensor ExecuteReduceScatter::operator()(
     const ttnn::Tensor& input_tensor,
     const uint32_t scatter_dim,
-    ReduceOpMath math_op,
+    ttnn::operations::reduction::ReduceType math_op,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
 
