@@ -484,10 +484,6 @@ all_binary_ops = [
         "name": "ttnn.logical_and",
     },
     {
-        "op": tt_lib.tensor.assign,
-        "name": "tt_lib.tensor.assign_binary",
-    },
-    {
         "op": isclose,
         "name": "ttnn.isclose",
     },
@@ -1807,10 +1803,6 @@ all_unary_ops = [
     {
         "op": ttnn.multigammaln,
         "name": "ttnn.multigammaln",
-    },
-    {
-        "op": tt_lib.tensor.assign,
-        "name": "tt_lib.tensor.assign_unary",
     },
     {
         "op": ttnn.i0,

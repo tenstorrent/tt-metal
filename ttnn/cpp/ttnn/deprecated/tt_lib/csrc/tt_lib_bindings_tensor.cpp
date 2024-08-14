@@ -577,7 +577,6 @@ void TensorModule(py::module& m_tensor) {
             Copy a host tensor to its equivalent tensor on a device.
         )doc");
 
-    detail::TensorModuleCompositeOPs(m_tensor);
     detail::TensorModulePyTensor(m_tensor);
     detail::TensorModuleDMOPs(m_tensor);
 }
