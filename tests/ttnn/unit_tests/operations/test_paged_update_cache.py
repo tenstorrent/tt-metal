@@ -45,7 +45,7 @@ def run_test_update_cache_decode(
     # Create arbitrary update indices
     cache_idxs = [cache_idx + i * 17 for i in range(num_users)]
 
-    cachett = ttnn.experimental.paged_cache.paged_update_cache(cachett, xt, update_idxs=cache_idxs)
+    cachett = ttnn.experimental.paged_update_cache(cachett, xt, update_idxs=cache_idxs)
 
     for i in range(num_users):
         update_idx = cache_idxs[i]
@@ -245,7 +245,7 @@ def run_test_tensor_index_update_cache_decode(
     logger.info(f"cache_idxs: {cache_idxs}")
     cache_idxs_tt = ttl.tensor.Tensor(torch.tensor(cache_idxs), ttl.tensor.DataType.INT32).to(device)
 
-    cachett = ttnn.experimental.paged_cache.paged_update_cache(cachett, xt, update_idxs_tensor=cache_idxs_tt)
+    cachett = ttnn.experimental.paged_update_cache(cachett, xt, update_idxs_tensor=cache_idxs_tt)
 
     for i in range(num_users):
         update_idx = cache_idxs[i]
@@ -388,7 +388,7 @@ def run_test_paged_update_cache_decode(
     cache_idxs_tt = ttl.tensor.Tensor(torch.tensor(cache_idxs), ttl.tensor.DataType.INT32).to(device)
     page_table_tt = ttl.tensor.Tensor(page_table, ttl.tensor.DataType.INT32).to(device)
 
-    cachett = ttnn.experimental.paged_cache.paged_update_cache(
+    cachett = ttnn.experimental.paged_update_cache(
         cachett, xt, update_idxs_tensor=cache_idxs_tt, page_table=page_table_tt
     )
 
@@ -568,7 +568,7 @@ def run_test_paged_fill_cache(
         x = torch.randn(input_shape).bfloat16().float()
         xt = ttl.tensor.Tensor(x, input_dtype).to(ttl.tensor.Layout.TILE).to(device)
 
-        cachett = ttnn.experimental.paged_cache.paged_fill_cache(cachett, xt, page_table_tt, batch_idx=i)
+        cachett = ttnn.experimental.paged_fill_cache(cachett, xt, page_table_tt, batch_idx=i)
         cache[i : i + 1, :, : x.shape[-2], :] = x
 
     # Unshuffle paged cache and review it as unpaged cache

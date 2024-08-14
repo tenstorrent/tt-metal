@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
     }
 
     uint32_t Wt = cache_tensor.get_legacy_shape()[-1] / TILE_WIDTH;
-    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.get_legacy_shape()[-1] * sizeof(float) : cache_tensor.get_legacy_shape()[-1] * sizeof(bfloat16);
+    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.get_legacy_shape()[-1] * sizeof(float) : cache_tensor.get_legacy_shape()[-1] * 2; // 2 bytes for bfloat16
     uint32_t cache_total_num_tiles = cache_tensor.volume() / TILE_HW;
     uint32_t cache_batch_num_tiles = cache_total_num_tiles / cache_tensor.get_legacy_shape()[0];
     uint32_t num_tiles = input_tensor.volume() / TILE_HW;
@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
     uint32_t num_cores_x = bbox.end_coord.x + 1;
     uint32_t num_cores_y = bbox.end_coord.y + 1;
 
-    tt::tt_metal::Buffer* in1_buffer_address = shard_spec.has_value() ? input_tensor.buffer() : nullptr;
+    auto in1_buffer_address = shard_spec.has_value() ? input_tensor.buffer() : nullptr;
 
     uint32_t num_cache_tiles = 2 * Wt; // double buffered
     uint32_t num_interm_tiles = 2 * Wt; // double buffered
