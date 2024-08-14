@@ -28,7 +28,7 @@ from typing import List
 import torch
 from torch import nn
 
-from models.experimental.mistral.reference.model import Transformer
+from models.demos.wormhole.mistral7b.reference.model import Transformer
 
 
 class Tokenizer:
