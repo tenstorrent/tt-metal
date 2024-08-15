@@ -276,6 +276,5 @@ namespace tt::tt_metal {
         void AllocateBuffer(Buffer* buffer, bool bottom_up);
 
         void DeallocateBuffer(Buffer *buffer);
-
     }
 }

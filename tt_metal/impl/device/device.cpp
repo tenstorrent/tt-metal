@@ -1873,13 +1873,15 @@ void Device::init_command_queue_device() {
     this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs[0];
 
-    for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-        for (const auto &[core_type, logical_dispatch_cores] : command_queue_program.logical_cores()) {
-            for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
-                launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, core_type)->launch_msg;
-                CoreCoord phys_core = this->physical_core_from_logical_core(logical_dispatch_core, core_type);
-                tt::llrt::write_launch_msg_to_core(this->id(), phys_core, &msg, this->get_dev_addr(phys_core, HalMemAddrType::LAUNCH));
-            }
+    // TODO: should get a const ref
+    std::vector<std::vector<CoreCoord>>logical_cores = command_queue_program.logical_cores();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        const auto& logical_dispatch_cores = logical_cores[index];
+        CoreType core_type = hal.get_core_type(index);
+        for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
+            launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
+            CoreCoord phys_core = this->physical_core_from_logical_core(logical_dispatch_core, core_type);
+            tt::llrt::write_launch_msg_to_core(this->id(), phys_core, &msg, this->get_dev_addr(phys_core, HalMemAddrType::LAUNCH));
         }
     }
 
@@ -1888,9 +1890,12 @@ void Device::init_command_queue_device() {
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
             Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
-            for (const auto &[core_type, logical_dispatch_cores] : mmio_command_queue_program.logical_cores()) {
+            std::vector<std::vector<CoreCoord>>logical_cores = mmio_command_queue_program.logical_cores();
+            for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+                const auto& logical_dispatch_cores = logical_cores[index];
+                CoreType core_type = hal.get_core_type(index);
                 for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
-                    launch_msg_t msg = mmio_command_queue_program.kernels_on_core(logical_dispatch_core, core_type)->launch_msg;
+                    launch_msg_t msg = mmio_command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
                     CoreCoord phys_core = mmio_device->physical_core_from_logical_core(logical_dispatch_core, core_type);
                     tt::llrt::write_launch_msg_to_core(mmio_device_id, phys_core, &msg, mmio_device->get_dev_addr(phys_core, HalMemAddrType::LAUNCH));
                 }

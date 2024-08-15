@@ -11,33 +11,27 @@ namespace tt_metal {
 
 constexpr uint32_t kernel_config_entry_count = 8;
 
-WorkerConfigBufferMgr::WorkerConfigBufferMgr(const std::vector<uint32_t>& base_addrs, const std::vector<uint32_t>& sizes) {
-
-    size_t num_core_types = sizes.size();
-    TT_ASSERT(base_addrs.size() == sizes.size());
-
-    this->base_addrs_ = base_addrs;
-    this->end_addrs_.resize(num_core_types);
-    for (uint32_t idx = 0; idx < num_core_types; idx++) {
-        this->end_addrs_[idx] = base_addrs[idx] + sizes[idx];
-    }
+WorkerConfigBufferMgr::WorkerConfigBufferMgr() {
 
     entries_.resize(kernel_config_entry_count);
+}
+
+void WorkerConfigBufferMgr::init_add_core(uint32_t base_addr, uint32_t size) {
+
+    this->base_addrs_.push_back(base_addr);
+    this->end_addrs_.push_back(base_addr + size);
+
     for (auto& entry : this->entries_) {
-        entry.resize(num_core_types, {0, 0});
+        entry.push_back({0, 0});
     }
 
     // when free == alloc, buffer is empty
     // entries[alloc_index].addr is always the next address
-    this->alloc_index_.resize(num_core_types);
-    this->free_index_.resize(num_core_types);
-    for (uint32_t idx = 0; idx < num_core_types; idx++) {
-        this->alloc_index_[idx] = 0;
-        this->free_index_[idx] = 0;
-        this->entries_[0][idx].addr = base_addrs[idx];
-    }
+    this->alloc_index_.push_back(0);
+    this->free_index_.push_back(0);
+    this->entries_[0].back().addr = base_addr;
 
-    this->reservation_.resize(num_core_types);
+    this->reservation_.push_back({});
 }
 
 // First part of returned pair is true if reserving size bytes requires a sync on some core type
