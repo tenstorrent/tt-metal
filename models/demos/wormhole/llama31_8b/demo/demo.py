@@ -67,9 +67,9 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
 def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     # Set Llama flags for CI
     if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
-        os.environ["LLAMA_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Llama/Meta-Llama-3.1-8B-Instruct/"
-        os.environ["LLAMA_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Llama/Meta-Llama-3.1-8B-Instruct/"
-        os.environ["LLAMA_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Llama/Meta-Llama-3.1-8B-Instruct/"
+        os.environ["LLAMA_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
+        os.environ["LLAMA_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
+        os.environ["LLAMA_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
 
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
@@ -239,13 +239,31 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
             users_decoding = False
 
     # In CI only print the final generated output to avoid spamming the logs
-    if is_ci_env or True:
+    if is_ci_env:
         if len(user_input) == 1:
             logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
         else:
             for user in range(batch_size):
                 text = "".join(tokenizer.decode(all_outputs[user]))
                 logger.info("[User {}] {}".format(user, text))
+
+        # When running in CI, check the output against the expected output to avoid accuracy regressions
+        expected_output = "models/demos/wormhole/llama31_8b/demo/expected_outputs.json"
+        with open(expected_output, "r") as f:
+            expected_out = json.load(f)
+        # assert (
+        #     len(expected_out) >= batch_size * 2
+        # ), f"expected_outputs.json should have {batch_size * 2} outputs: {batch_size} for general weights and {batch_size} for instruct weights!"
+
+        for i in range(batch_size):
+            user_output = "".join(tokenizer.decode(all_outputs[i]))
+            if instruct_mode:  # The instruct outputs are at the end of the expected outputs file
+                user_expect = expected_out[i + batch_size]["output_instruct"]
+            else:
+                user_expect = expected_out[i]["output_general"]
+
+            assert user_output == user_expect, f"Output for user {i} does not match expected output!"
+        logger.info("[CI-Only] Output token validation passed!")
 
 
 @pytest.mark.parametrize(
