@@ -11,9 +11,12 @@
 #include "gtest/gtest.h"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
+
 
 using namespace tt;
 using namespace tt::tt_metal;

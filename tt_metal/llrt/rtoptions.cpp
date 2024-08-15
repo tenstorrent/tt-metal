@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-
+#include <string>
 #include <cstring>
 
 #include "impl/debug/dprint_server.hpp"
@@ -32,7 +32,7 @@ RunTimeOptions OptionsG;
 
 RunTimeOptions::RunTimeOptions() {
     if (const char *root_dir_ptr = std::getenv("TT_METAL_HOME")) {
-        root_dir = string(root_dir_ptr) + "/";
+        root_dir = std::string(root_dir_ptr) + "/";
     }
 
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);

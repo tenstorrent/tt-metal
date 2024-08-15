@@ -15,6 +15,7 @@
 #include "hostdevcommon/profiler_common.h"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 namespace tt {
 

@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/detail/tt_metal.hpp"
+#include "host_api.hpp"
+#include "impl/device/device.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -18,16 +19,16 @@ int main(int argc, char **argv) {
     constexpr CoreCoord core = {0, 0};
 
     constexpr uint32_t single_tile_size = 2 * 1024;
-    tt_metal::InterleavedBufferConfig dram_config{
+    InterleavedBufferConfig dram_config{
                 .device= device,
                 .size = single_tile_size,
                 .page_size = single_tile_size,
-                .buffer_type = tt_metal::BufferType::DRAM
+                .buffer_type = BufferType::DRAM
     };
 
-    std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-    std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
-    std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+    std::shared_ptr<Buffer> src0_dram_buffer = CreateBuffer(dram_config);
+    std::shared_ptr<Buffer> src1_dram_buffer = CreateBuffer(dram_config);
+    std::shared_ptr<Buffer> dst_dram_buffer = CreateBuffer(dram_config);
 
     auto src0_dram_noc_coord = src0_dram_buffer->noc_coordinates();
     auto src1_dram_noc_coord = src1_dram_buffer->noc_coordinates();

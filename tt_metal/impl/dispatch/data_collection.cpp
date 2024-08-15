@@ -4,6 +4,8 @@
 
 #include "data_collection.hpp"
 #include "llrt/rtoptions.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/common/core_coord.h"
 
 using namespace tt;
 

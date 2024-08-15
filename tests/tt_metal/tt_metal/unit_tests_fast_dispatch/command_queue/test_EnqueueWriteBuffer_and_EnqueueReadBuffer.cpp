@@ -11,6 +11,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt::tt_metal;
 

@@ -7,10 +7,12 @@
 #include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "impl/buffers/buffer.hpp"
+#include "impl/device/device.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 using namespace tt::tt_metal;
 

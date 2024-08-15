@@ -12,10 +12,14 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/device/device.hpp"
+
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -31,8 +35,8 @@ struct BankedConfig {
     size_t num_pages = 1;
     size_t size_bytes = 1 * 2 * 32 * 32;
     size_t page_size_bytes = 2 * 32 * 32;
-    BufferType input_buffer_type = BufferType::L1;
-    BufferType output_buffer_type = BufferType::L1;
+    tt_metal::BufferType input_buffer_type = tt_metal::BufferType::L1;
+    tt_metal::BufferType output_buffer_type = tt_metal::BufferType::L1;
     tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
 };
 

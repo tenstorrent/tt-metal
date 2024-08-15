@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
@@ -122,8 +121,6 @@ inline std::vector<std::uint32_t> create_arange_vector_of_bfloat16(uint32_t num_
         vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
 
-    log_info(tt::LogVerif, "Created an arange vector of size {}", vec.size());
-
     return vec;
 }
 
@@ -135,7 +132,6 @@ inline std::vector<bfloat16> create_random_vector_of_bfloat16_native(uint32_t nu
         float num_1_float = rand_float() + offset;
         vec[i] = bfloat16(num_1_float);
     }
-    log_info(tt::LogVerif, "Created a random vector of size {}", vec.size());
     return vec;
 }
 
@@ -169,8 +165,6 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(uint32_t num_
         vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
 
-    log_info(tt::LogVerif, "Created a random vector of size {}", vec.size());
-
     return vec;
 }
 
@@ -198,8 +192,6 @@ inline std::vector<std::uint32_t> create_constant_vector_of_bfloat16(uint32_t nu
         vec.at(i) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
     }
 
-    log_info(tt::LogVerif, "Created a constant vector of size {} with value {}, bf16 = {}", vec.size(), value, vec[0]);
-
     return vec;
 }
 
@@ -211,7 +203,6 @@ inline std::vector<bfloat16> create_identity_matrix(int rows, int cols, int num_
     for(int i = 0; i < num_ones; i++) {
         vec.at(i * cols + i) = bfloat16((float)1);
     }
-    log_info(tt::LogVerif, "Created identity matrix of size {}x{}: {}",rows, cols, vec.size());
     return vec;
 }
 

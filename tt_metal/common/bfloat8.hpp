@@ -10,7 +10,6 @@
 #include <immintrin.h>
 
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "blockfloat_common.hpp"
@@ -283,8 +282,6 @@ inline std::vector<uint32_t> create_random_vector_of_bfp8(uint32_t num_bytes, bo
 
     TT_ASSERT(packed_result.size() == packed_data_size);
 
-    log_info(tt::LogVerif, "Created a random vector of size {}", packed_result.size());
-
     return packed_result;
 }
 
@@ -305,8 +302,6 @@ inline std::vector<uint32_t> create_constant_vector_of_bfp8(uint32_t num_bytes, 
     std::vector<uint32_t> packed_result = pack_fp32_vec_as_bfp8_tiles(fp32_vec, /*row_major_input=*/true, is_exp_a);
 
     TT_ASSERT(packed_result.size() == packed_data_size);
-
-    log_info(tt::LogVerif, "Created constant vector of size {}", packed_result.size());
 
     return packed_result;
 }

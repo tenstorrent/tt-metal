@@ -8,6 +8,16 @@
 #include "llrt/llrt.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+
+namespace {
+
+inline void GetBufferAddress(const tt::tt_metal::Buffer *buffer, uint32_t *address_on_host) {
+    EnqueueGetBufferAddr(buffer->device()->command_queue(), address_on_host, buffer, false);
+}
+
+}
 namespace tt {
 
 namespace tt_metal {
@@ -89,7 +99,7 @@ uint32_t CircularBuffer::address() const {
 }
 
 void CircularBuffer::assign_global_address() {
-    detail::GetBufferAddress(config_.shadow_global_buffer, &globally_allocated_address_);
+    GetBufferAddress(config_.shadow_global_buffer, &globally_allocated_address_);
 }
 
 }  // namespace tt_metal

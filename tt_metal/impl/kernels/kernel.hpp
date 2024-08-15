@@ -6,60 +6,25 @@
 
 #include <vector>
 #include <map>
-#include <optional>
 #include <variant>
 #include <type_traits>
 #include <memory>
 
 #include "jit_build/build.hpp"
 #include "common/base_types.hpp"
-#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/llrt/tt_memory.h"
+#include "runtime_args_data.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 
+class Device;
 constexpr uint32_t max_runtime_args = 256;
 constexpr uint32_t idle_eth_max_runtime_args = eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE / sizeof(uint32_t);
 
 using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
-
-// RuntimeArgsData provides an indirection to the runtime args
-// Prior to generating the cq cmds for the device, this points into a vector within the kernel
-// After generation, this points into the cq cmds so that runtime args API calls
-// update the data directly in the command
-struct RuntimeArgsData {
-    uint32_t * rt_args_data;
-    size_t rt_args_count;
-
-    inline uint32_t & operator[](size_t index) {
-        TT_ASSERT(index < rt_args_count, "Index specified is larger than runtime args size");
-        return this->rt_args_data[index];
-    }
-    inline const uint32_t& operator[](size_t index) const {
-        TT_ASSERT(index < rt_args_count, "Index specified is larger than runtime args size");
-        return this->rt_args_data[index];
-    }
-    inline uint32_t & at(size_t index) {
-        TT_FATAL(index < rt_args_count, "Index specified is larger than runtime args size");
-        return this->rt_args_data[index];
-    }
-    inline const uint32_t& at(size_t index) const {
-        TT_FATAL(index < rt_args_count, "Index specified is larger than runtime args size");
-        return this->rt_args_data[index];
-    }
-    inline uint32_t * data() noexcept {
-        return rt_args_data;
-    }
-    inline const uint32_t * data() const noexcept {
-        return rt_args_data;
-    }
-    inline size_t size() const noexcept{
-        return rt_args_count;
-    }
-};
 
 class Kernel : public JitBuildSettings {
    public:

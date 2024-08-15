@@ -14,6 +14,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;

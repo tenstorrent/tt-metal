@@ -6,7 +6,6 @@
 
 #include <unordered_map>
 
-#include "tt_metal/common/logger.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tt_stl/unique_any.hpp"
 

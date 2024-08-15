@@ -10,6 +10,7 @@
 #include "common/bfloat16.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "tt_numpy/functions.hpp"
+#include "tt_metal/impl/event/event.hpp"
 #include <cmath>
 
 using namespace tt;

@@ -7,7 +7,8 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
+
 #include "common/bfloat16.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"

@@ -18,7 +18,7 @@ void tilize(std::vector<T>& input, uint32_t m, uint32_t n) {
     uint32_t num_blocks = input.size() / block_num_elements;
 
     const auto write_face =
-        [](vector<T>& tilized_input, const vector<T>& input, uint32_t face_height, uint32_t face_width, uint32_t face_idx, uint32_t n)
+        [](std::vector<T>& tilized_input, const std::vector<T>& input, uint32_t face_height, uint32_t face_width, uint32_t face_idx, uint32_t n)
         -> void {
         for (uint32_t i = 0; i < face_height; i++) {
             for (uint32_t j = 0; j < face_width; j++) {
@@ -76,8 +76,8 @@ void untilize(std::vector<T>& input, uint32_t m, uint32_t n) {
     uint32_t block_num_elements = m * n;
     uint32_t num_blocks = input.size() / block_num_elements;
 
-    const auto untilize_row = [](vector<T>& untilized_input,
-                                 const vector<T>& input,
+    const auto untilize_row = [](std::vector<T>& untilized_input,
+                                 const std::vector<T>& input,
                                  uint32_t face_height,
                                  uint32_t face_width,
                                  uint32_t tile_idx,

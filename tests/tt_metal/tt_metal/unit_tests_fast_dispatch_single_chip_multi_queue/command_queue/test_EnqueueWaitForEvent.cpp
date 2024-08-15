@@ -9,8 +9,9 @@
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
 #include "command_queue_test_utils.hpp"
+#include "tt_metal/impl/event/event.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt::tt_metal;
 

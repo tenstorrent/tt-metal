@@ -4,6 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

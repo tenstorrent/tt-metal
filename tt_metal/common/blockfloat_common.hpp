@@ -10,7 +10,6 @@
 #include <immintrin.h>
 
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 

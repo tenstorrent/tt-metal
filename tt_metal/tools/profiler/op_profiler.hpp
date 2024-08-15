@@ -13,6 +13,7 @@
 #include "third_party/json/json.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tools/profiler/profiler.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"

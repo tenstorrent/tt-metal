@@ -8,7 +8,7 @@
 
 #include <vector>
 
-#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/host_api.hpp"
 #include "debug/dprint_buffer.h"
 #include "llrt/hal.hpp"

@@ -58,7 +58,7 @@ static void print_stack_trace (void) {
 
 static void watcher_sanitize_host_noc(const char* what,
                                       const metal_SocDescriptor& soc_d,
-                                      CoreCoord core,
+                                      const CoreCoord &core,
                                       uint64_t addr,
                                       uint32_t lbytes) {
 
@@ -89,11 +89,11 @@ static void watcher_sanitize_host_noc(const char* what,
     }
 }
 
-void watcher_sanitize_host_noc_read(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t lbytes) {
+void watcher_sanitize_host_noc_read(const metal_SocDescriptor& soc_d, const CoreCoord& core, uint64_t addr, uint32_t lbytes) {
     watcher_sanitize_host_noc("read", soc_d, core, addr, lbytes);
 }
 
-void watcher_sanitize_host_noc_write(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t lbytes) {
+void watcher_sanitize_host_noc_write(const metal_SocDescriptor& soc_d, const CoreCoord& core, uint64_t addr, uint32_t lbytes) {
     watcher_sanitize_host_noc("write", soc_d, core, addr, lbytes);
 }
 

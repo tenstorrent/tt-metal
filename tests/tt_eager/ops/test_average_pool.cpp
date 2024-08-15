@@ -10,7 +10,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "common/constants.hpp"
 
-using tt::tt_metal::Host;
 using tt::tt_metal::Device;
 using tt::tt_metal::Tensor;
 using tt::tt_metal::DataType;

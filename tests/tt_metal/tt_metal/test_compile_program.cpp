@@ -13,7 +13,9 @@
 #include "tt_metal/llrt/tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/program.hpp"
+
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
