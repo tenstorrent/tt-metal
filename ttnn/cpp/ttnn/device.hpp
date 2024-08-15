@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "tt_metal/detail/tt_metal.hpp"
 #include "ttnn/types.hpp"
 namespace ttnn {
 

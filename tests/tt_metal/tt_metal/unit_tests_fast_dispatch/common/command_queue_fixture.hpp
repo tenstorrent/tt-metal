@@ -3,17 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/common/tt_backend_api_types.hpp"
 
-using namespace tt::tt_metal;
 class CommandQueueFixture : public ::testing::Test {
    protected:
     tt::ARCH arch_;
-    Device* device_;
+    tt::tt_metal::Device* device_;
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
@@ -102,7 +100,7 @@ class CommandQueueSingleCardFixture : public ::testing::Test {
 
 class SingleDeviceTraceFixture: public ::testing::Test {
 protected:
-    Device* device_;
+    tt::tt_metal::Device* device_;
     tt::ARCH arch_;
 
     void Setup(const size_t buffer_size, const uint8_t num_hw_cqs = 1) {

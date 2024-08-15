@@ -12,7 +12,8 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/buffers/semaphore.hpp"
-#include "tt_metal/detail/program.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

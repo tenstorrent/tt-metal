@@ -4,15 +4,10 @@
 
 #pragma once
 
-#include <optional>
 #include <variant>
 #include <vector>
-#include <future>
-#include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/impl/kernels/runtime_args_data.hpp"
 
 /** @file */
 
@@ -26,16 +21,20 @@
  * https://www.tablesgenerator.com/markdown_tables
  * */
 
+class CoreRange;
+class CoreRangeSet;
+
 namespace tt {
 
 namespace tt_metal {
 
 class Program;
-class Host;
 class Device;
 class CommandQueue;
 class Trace;
 class CircularBuffer;
+class Event;
+class Buffer;
 
 // ==================================================
 //                  HOST API: Device management

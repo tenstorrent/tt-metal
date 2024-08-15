@@ -15,6 +15,8 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
