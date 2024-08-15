@@ -27,6 +27,9 @@ jobs:
     name: cmake ${{ matrix.build.type }} ${{ matrix.build.cxx_compiler }} ${{ matrix.arch }} ${{ matrix.build.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Check disk space after clone
+        run: |
+          df -h
       - name: Install dependencies
         uses: ./.github/actions/install-metal-deps
         with:
@@ -35,6 +38,9 @@ jobs:
         uses: ./.github/actions/install-metal-dev-deps
         with:
           os: ${{ matrix.build.runs-on }}
+      - name: Check disk space after installing deps
+        run: |
+          df -h
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -42,6 +48,9 @@ jobs:
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -G Ninja
           cmake --build build --target tests
+      - name: Check disk space after building
+        run: |
+          df -h      
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
