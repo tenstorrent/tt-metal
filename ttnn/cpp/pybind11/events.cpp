@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "events.hpp"
-
+#include "tt_metal/impl/event/event.hpp"
 namespace ttnn::events {
 
     void py_module(py::module& module) {
