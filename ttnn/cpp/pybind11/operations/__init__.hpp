@@ -23,7 +23,7 @@
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
-#include "ttnn/operations/conv2d/conv2d_pybind.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
 #include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
 #include "ttnn/operations/examples/examples_pybind.hpp"
 #include "ttnn/operations/normalization/normalization_pybind.hpp"

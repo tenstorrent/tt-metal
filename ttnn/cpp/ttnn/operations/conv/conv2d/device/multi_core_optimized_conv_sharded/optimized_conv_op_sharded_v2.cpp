@@ -4,7 +4,7 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
-#include "ttnn/operations/conv2d/device/optimized_conv_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
