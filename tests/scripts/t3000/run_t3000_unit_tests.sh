@@ -35,6 +35,7 @@ run_t3000_ttnn_tests() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/ttnn/test_multi_device
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/ttnn/unit_tests_ttnn
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_events.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/test_multi_device.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/test_multi_device_async.py ; fail+=$?
   # Record the end time

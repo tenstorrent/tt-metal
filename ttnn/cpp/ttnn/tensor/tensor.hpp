@@ -15,6 +15,7 @@
 #include "common/bfloat8.hpp"
 #include "common/test_tiles.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
@@ -261,8 +262,7 @@ struct Tensor {
 
     Tensor pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const;
 
-    Tensor cpu(CommandQueue &queue, bool blocking = true) const;
-    Tensor cpu(bool blocking = true) const;
+    Tensor cpu(bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) const;
 
     Tensor cpu_sharded() const;
 
@@ -439,7 +439,7 @@ Tensor allocate_tensor_on_device(
     Layout layout,
     DeviceMesh *device_mesh,
     const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
-void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id = 0);
+void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
 
 // Maps a tensor to the set of devices in the device-mesh that the shards will be distributed across.
 std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, DeviceMesh& device_mesh);

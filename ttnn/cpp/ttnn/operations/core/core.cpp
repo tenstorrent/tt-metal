@@ -138,7 +138,7 @@ void copy_host_to_device_tensor(ttnn::Tensor host_tensor, ttnn::Tensor device_te
     tt::tt_metal::write_tensor(host_tensor, device_tensor, cq_id);
 }
 
-ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking) { return tensor.cpu(blocking); }
+ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, uint8_t cq_id) { return tensor.cpu(blocking, cq_id); }
 
 void deallocate(Tensor& tensor, bool force) { tensor.deallocate(force); }
 

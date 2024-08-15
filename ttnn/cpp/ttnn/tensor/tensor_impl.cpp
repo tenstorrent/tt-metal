@@ -646,7 +646,7 @@ std::string to_string<bfloat4_b>(const Tensor& tensor, std::optional<DataType> o
 // ======================================================================================
 
 template <typename T>
-Tensor to_host_helper(const Tensor& tensor, bool blocking = true) {
+Tensor to_host_helper(const Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) {
     TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
     auto device_buffer = tensor.device_buffer();
     auto device = tensor.device();
@@ -656,7 +656,7 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true) {
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         data_vec.resize(size_in_bytes / sizeof(T));
-        read_data_from_device_buffer<T>(device->command_queue(), device_buffer, data_vec.data(), blocking);
+        read_data_from_device_buffer<T>(device->command_queue(cq_id), device_buffer, data_vec.data(), blocking);
     } else {
         read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
@@ -665,16 +665,16 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true) {
 }
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking) {
+Tensor to_host(const Tensor& tensor, bool blocking, uint8_t cq_id) {
     if (tensor.storage_type() == StorageType::DEVICE) {
-        return to_host_helper<T>(tensor, blocking);
+        return to_host_helper<T>(tensor, blocking, cq_id);
     } else if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
         auto devices = get_devices(tensor);
         Tensor host_tensor({}, devices.size());
         for (int device_index = 0; device_index < devices.size(); ++device_index) {
             const auto& device = devices[device_index];
             auto shard = get_shard_for_device(tensor, device);
-            shard = to_host_helper<T>(shard, blocking);
+            shard = to_host_helper<T>(shard, blocking, cq_id);
             host_tensor.set_shape(tensor.get_shape());
             host_tensor.set_dtype(tensor.get_dtype());
             host_tensor.set_layout(tensor.get_layout());
@@ -686,21 +686,21 @@ Tensor to_host(const Tensor& tensor, bool blocking) {
     }
 }
 
-template Tensor to_host<bfloat16>(const Tensor& tensor, bool blocking);
-template Tensor to_host<float>(const Tensor& tensor, bool blocking);
-template Tensor to_host<int32_t>(const Tensor& tensor, bool blocking);
-template Tensor to_host<uint32_t>(const Tensor& tensor, bool blocking);
-template Tensor to_host<uint16_t>(const Tensor& tensor, bool blocking);
-template Tensor to_host<uint8_t>(const Tensor& tensor, bool blocking);
+template Tensor to_host<bfloat16>(const Tensor& tensor, bool blocking, uint8_t cq_id);
+template Tensor to_host<float>(const Tensor& tensor, bool blocking, uint8_t cq_id);
+template Tensor to_host<int32_t>(const Tensor& tensor, bool blocking, uint8_t cq_id);
+template Tensor to_host<uint32_t>(const Tensor& tensor, bool blocking, uint8_t cq_id);
+template Tensor to_host<uint16_t>(const Tensor& tensor, bool blocking, uint8_t cq_id);
+template Tensor to_host<uint8_t>(const Tensor& tensor, bool blocking, uint8_t cq_id);
 
 template <>
-Tensor to_host<bfloat4_b>(const Tensor& tensor, bool blocking) {
-    return to_host<uint32_t>(tensor, blocking);
+Tensor to_host<bfloat4_b>(const Tensor& tensor, bool blocking, uint8_t cq_id) {
+    return to_host<uint32_t>(tensor, blocking, cq_id);
 }
 
 template <>
-Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking) {
-    return to_host<uint32_t>(tensor, blocking);
+Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, uint8_t cq_id) {
+    return to_host<uint32_t>(tensor, blocking, cq_id);
 }
 
 // ======================================================================================

@@ -36,10 +36,7 @@ try:
 except ModuleNotFoundError:
     use_signpost = False
 
-# TODO: Create ttnn apis for these
-ttnn.create_event = tt_lib.device.CreateEvent
-ttnn.wait_for_event = tt_lib.device.WaitForEvent
-ttnn.record_event = tt_lib.device.RecordEvent
+# TODO: Create ttnn apis for this
 ttnn.dump_device_profiler = tt_lib.device.DumpDeviceProfiler
 
 model_config = {
@@ -88,40 +85,40 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
     ops_parallel_config = {}
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(device, tt_inputs, tt_resnet50)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
-    op_event = ttnn.create_event()
-    write_event = ttnn.create_event()
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
     # Initialize the op event so we can write
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
     profiler.start("compile")
-    ttnn.wait_for_event(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(device, 1, write_event)
-    ttnn.wait_for_event(device, 0, write_event)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("compile")
     ttnn.dump_device_profiler(device)
 
     profiler.start("cache")
-    ttnn.wait_for_event(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(device, 1, write_event)
-    ttnn.wait_for_event(device, 0, write_event)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("cache")
     ttnn.dump_device_profiler(device)
 
     for iter in range(0, num_warmup_iterations):
-        ttnn.wait_for_event(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(device, 1, write_event)
-        ttnn.wait_for_event(device, 0, write_event)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
         reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-        ttnn.record_event(device, 0, op_event)
+        ttnn.record_event(0, op_event)
         _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
         ttnn.dump_device_profiler(device)
 
@@ -131,12 +128,12 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
-        ttnn.wait_for_event(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(device, 1, write_event)
-        ttnn.wait_for_event(device, 0, write_event)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
         reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-        ttnn.record_event(device, 0, op_event)
+        ttnn.record_event(0, op_event)
         outputs.append(ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=False))
     ttnn.synchronize_device(device)
     profiler.end(f"run")
@@ -199,42 +196,42 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(device, tt_inputs, tt_resnet50)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
-    op_event = ttnn.create_event()
-    write_event = ttnn.create_event()
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
     # Initialize the op event so we can write
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
     profiler.start("compile")
-    ttnn.wait_for_event(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(device, 1, write_event)
-    ttnn.wait_for_event(device, 0, write_event)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("compile")
     ttnn.dump_device_profiler(device)
 
     profiler.start("cache")
-    ttnn.wait_for_event(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(device, 1, write_event)
-    ttnn.wait_for_event(device, 0, write_event)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
     first_out_addr = reshard_out.buffer_address()
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("cache")
     ttnn.dump_device_profiler(device)
 
     # Capture
-    ttnn.wait_for_event(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(device, 1, write_event)
+    ttnn.record_event(1, write_event)
 
-    ttnn.wait_for_event(device, 0, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = tt_resnet50(reshard_out, device, ops_parallel_config)
@@ -246,12 +243,12 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     ttnn.dump_device_profiler(device)
 
     for iter in range(0, num_warmup_iterations):
-        ttnn.wait_for_event(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(device, 1, write_event)
-        ttnn.wait_for_event(device, 0, write_event)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
         reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, input_mem_config, reshard_out)
-        ttnn.record_event(device, 0, op_event)
+        ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
         ttnn.dump_device_profiler(device)
 
@@ -261,13 +258,13 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
-        ttnn.wait_for_event(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(device, 1, write_event)
-        ttnn.wait_for_event(device, 0, write_event)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
         # TODO: Add in place support to ttnn to_memory_config
         reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, input_mem_config, reshard_out)
-        ttnn.record_event(device, 0, op_event)
+        ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(tt_output_res.cpu(blocking=False))
     ttnn.synchronize_device(device)

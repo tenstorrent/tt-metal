@@ -7,7 +7,7 @@ from loguru import logger
 from transformers import AutoImageProcessor
 import pytest
 import tt_lib
-
+import ttnn
 from models.utility_functions import is_e75, profiler, divup, disable_persistent_kernel_cache, skip_for_wormhole_b0
 from models.perf.perf_utils import prep_perf_report
 
@@ -58,32 +58,32 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
     tt_image_res = tt_lib.tensor.allocate_tensor_on_device(
         tt_inputs.shape, tt_inputs.dtype, tt_inputs.layout, device, sharded_mem_config_DRAM
     )
-    op_event = tt_lib.device.CreateEvent()
-    write_event = tt_lib.device.CreateEvent()
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
     # Initialize the op event so we can write
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
     profiler.start("compile")
-    tt_lib.device.WaitForEvent(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.record_event(1, write_event)
     _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
     profiler.end("compile")
     tt_lib.device.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.record_event(1, write_event)
         _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
         tt_lib.device.DumpDeviceProfiler(device)
 
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.record_event(1, write_event)
         outputs.append(tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=False))
     tt_lib.device.Synchronize(device)
     profiler.end(f"run")
@@ -172,33 +172,33 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
     )
 
-    op_event = tt_lib.device.CreateEvent()
-    write_event = tt_lib.device.CreateEvent()
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
     # Initialize the op event so we can write
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
     # Compile
     profiler.start("compile")
-    tt_lib.device.WaitForEvent(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.record_event(1, write_event)
 
-    tt_lib.device.WaitForEvent(device, 0, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config)
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.record_event(0, op_event)
     first_out_addr = reshard_out.buffer_address()
     tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config).cpu(blocking=True)
     profiler.end("compile")
     tt_lib.device.DumpDeviceProfiler(device)
 
     # Capture
-    tt_lib.device.WaitForEvent(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.record_event(1, write_event)
 
-    tt_lib.device.WaitForEvent(device, 0, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config)
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
     tid = tt_lib.device.BeginTraceCapture(device, 0)
     tt_output_res = tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config)
@@ -210,13 +210,13 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     tt_lib.device.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.record_event(1, write_event)
 
-        tt_lib.device.WaitForEvent(device, 0, write_event)
+        ttnn.wait_for_event(0, write_event)
         reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
-        tt_lib.device.RecordEvent(device, 0, op_event)
+        ttnn.record_event(0, op_event)
         tt_lib.device.ReplayTrace(device, 0, tid, False)
         _ = tt_output_res.cpu(blocking=True)
         tt_lib.device.DumpDeviceProfiler(device)
@@ -224,13 +224,13 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         tt_lib.tensor.write_tensor(tt_inputs, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.record_event(1, write_event)
 
-        tt_lib.device.WaitForEvent(device, 0, write_event)
+        ttnn.wait_for_event(0, write_event)
         reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
-        tt_lib.device.RecordEvent(device, 0, op_event)
+        ttnn.record_event(0, op_event)
         tt_lib.device.ReplayTrace(device, 0, tid, False)
         outputs.append(tt_output_res.cpu(blocking=False))
     tt_lib.device.Synchronize(device)

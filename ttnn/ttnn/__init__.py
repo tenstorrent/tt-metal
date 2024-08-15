@@ -95,6 +95,8 @@ def manage_config(name, value):
 
 from ttnn._ttnn.multi_device import get_device_tensor, get_device_tensors, aggregate_as_tensor
 
+from ttnn._ttnn.events import create_event, record_event, wait_for_event
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
