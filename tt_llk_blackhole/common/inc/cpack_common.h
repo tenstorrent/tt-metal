@@ -289,6 +289,12 @@ namespace ckernel::packer
       TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
       TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2);
 
+      uint32_t reconfig_PCK_DEST_RD_CTRL_Read_unsigned = 0;
+      if (pack_dst_format == (uint)DataFormat::UInt8) {
+         reconfig_PCK_DEST_RD_CTRL_Read_unsigned = 1;
+      }
+      cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_unsigned_RMW>(reconfig_PCK_DEST_RD_CTRL_Read_unsigned);
+
       if (IS_BFP_FORMAT(pack_output_dst_format)) {
          TTI_WRCFG(p_gpr_pack::EXP0_SEC_SIZE_BFP, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
       } else if ((pack_output_dst_format == (uint)DataFormat::Lf8) || (pack_output_dst_format == (uint)DataFormat::Int8)) {
