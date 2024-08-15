@@ -4619,3 +4619,44 @@ def complex_add_bw(
             ttnn_tensor_to_torch(t3[1].real).to(torch.float32), ttnn_tensor_to_torch(t3[1].imag).to(torch.float32)
         ),
     ]
+
+
+def complex_angle(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+
+    t1 = ttnn.angle(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def complex_conj_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    if dtype[0] == tt_lib.tensor.DataType.BFLOAT8_B:
+        dtype[0] = tt_lib.tensor.DataType.BFLOAT16
+
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+    t1 = ttnn.complex_tensor(
+        setup_ttnn_tensor(y.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(y.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+
+    t2 = ttnn.conj_bw(t0, t1, memory_config=output_mem_config)[0]
+
+    return torch.complex(
+        ttnn_tensor_to_torch(t2.real).to(torch.float32), ttnn_tensor_to_torch(t2.imag).to(torch.float32)
+    )
