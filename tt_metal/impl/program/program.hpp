@@ -17,7 +17,7 @@
 namespace tt {
 
 namespace tt_metal {
-    
+
 // Fwd declares
 class Buffer;
 class Kernel;
@@ -28,7 +28,7 @@ class JitBuildOptions;
 class CircularBufferConfig;
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
-    KernelHandle AddKernel ( Program & program, std::shared_ptr<Kernel> kernel, const CoreType &core_type);
+    KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
     void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
@@ -37,7 +37,7 @@ namespace detail{
 typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
 
 struct KernelGroup {
-    CoreType core_type;
+    uint32_t programmable_core_type_index;
     CoreRangeSet core_ranges;
     kernel_id_array_t kernel_ids;
     uint32_t rta_sizes[DISPATCH_CLASS_MAX];
@@ -47,11 +47,13 @@ struct KernelGroup {
     KernelGroup();
     KernelGroup(
         const Program &program,
-        CoreType core_type,
+        uint32_t programmable_core_type_index,
         kernel_id_array_t kernel_ids,
         bool erisc_is_idle,
         int last_cb_index,
         const CoreRangeSet &new_ranges);
+
+    uint32_t get_programmable_core_type_index() const;
 
     CoreType get_core_type() const;
 };
@@ -85,7 +87,7 @@ class Program {
 
     size_t num_kernels() const {
       size_t count = 0;
-      for (const auto& [core_type, kernels] : kernels_) {
+      for (const auto& kernels : kernels_) {
         count += kernels.size();
       }
       return count;
@@ -95,8 +97,8 @@ class Program {
 
     const std::vector< Semaphore > & semaphores() const { return semaphores_; }
 
-    KernelGroup * kernels_on_core(const CoreCoord &core, const CoreType &core_type);
-    std::vector<KernelGroup>& get_kernel_groups(const CoreType &core_type);
+    KernelGroup * kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index);
+    std::vector<KernelGroup>& get_kernel_groups(uint32_t programmable_core_type_index);
     inline void add_buffer(std::shared_ptr<Buffer> buf) { owned_buffer_pool.push_back(buf); }
     inline void release_buffers() { owned_buffer_pool = {}; }
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
@@ -117,8 +119,9 @@ class Program {
 
     size_t num_semaphores ( const CoreCoord & core ) const;
     size_t num_semaphores () const;
-    void init_semaphores ( const Device & device, const CoreCoord &logical_core, const CoreType core_type) const;
-    std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores() const;
+    void init_semaphores ( const Device & device, const CoreCoord &logical_core, CoreType core_type) const;
+    // XXXXX TODO: this should return a const reference
+    std::vector<std::vector<CoreCoord>> logical_cores() const;
 
     // Is worker_crs_ used anywhere?
     const CoreRangeSet& get_worker_core_range_set() const { return worker_crs_; };
@@ -178,8 +181,8 @@ class Program {
     uint64_t id; // Need to make non-const due to move constructor
     uint64_t runtime_id;
     static std::atomic<uint64_t> program_counter;
-    std::unordered_map<CoreType, std::unordered_map<KernelHandle, std::shared_ptr<Kernel> >> kernels_;
-    std::unordered_map<CoreType, CoreCoord> grid_extent_;
+    std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel> >> kernels_;
+    std::vector<CoreCoord> grid_extent_;
 
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_;
     std::unordered_map<CBHandle,  std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
@@ -195,8 +198,8 @@ class Program {
     bool local_circular_buffer_allocation_needed_;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
-    std::unordered_map<CoreType, std::vector<KernelGroup>> kernel_groups_;
-    std::unordered_map<CoreType, std::vector<uint8_t>> core_to_kernel_group_index_table_;
+    std::vector<std::vector<KernelGroup>> kernel_groups_;
+    std::vector<std::vector<uint8_t>> core_to_kernel_group_index_table_;
     uint32_t tensix_go_signal_count_;
 
     std::vector<std::shared_ptr<Buffer>> config_buffers_;
@@ -208,16 +211,16 @@ class Program {
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
-    friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel, const CoreType &core_type);
+    friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
-    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const CoreType &core_type);
+    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType &core_type);
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
-    void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type=CoreType::WORKER);
+    void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
     friend void detail::AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
     void add_config_buffer(std::shared_ptr<Buffer> config_buffer);
@@ -227,12 +230,12 @@ class Program {
 
     void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
-    void update_kernel_groups(const CoreType &core_type);
+    void update_kernel_groups(uint32_t programmable_core_type_index);
 
-    ProgramConfig& get_program_config(CoreType core_type);
-    uint32_t& get_program_config_size(CoreType core_type);
+    ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
+    uint32_t& get_program_config_size(uint32_t programmable_core_type_index);
 
-    uint32_t finalize_rt_args(CoreType core_type, uint32_t base_offset);
+    uint32_t finalize_rt_args(uint32_t programmable_core_type_index, uint32_t base_offset);
 
     friend class HWCommandQueue;
     friend class EnqueueProgramCommand;

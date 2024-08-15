@@ -42,14 +42,28 @@ void Hal::initialize(tt::ARCH arch) {
     }
 }
 
+uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const {
+    uint32_t index = static_cast<uint32_t>(programmable_core_type_index);
+
+    // TODO: this assumes unused entries occur at the end
+    // Assumes unused indices go at the end
+    if (index >= core_info_.size()) {
+        return -1;
+    } else {
+        return index;
+    }
+}
+
 HalCoreInfoType::HalCoreInfoType(HalProgrammableCoreType programmable_core_type,
                                  CoreType core_type,
                                  uint32_t core_proc_count,
-                                 const std::vector<DeviceAddr>& core_mem_map) :
+                                 const std::vector<DeviceAddr>& mem_map_bases,
+                                 const std::vector<uint32_t>& mem_map_sizes) :
     programmable_core_type_(programmable_core_type),
     core_type_(core_type),
     proc_count_(core_proc_count),
-    mem_map_(core_mem_map) {
+    mem_map_bases_(mem_map_bases),
+    mem_map_sizes_(mem_map_sizes) {
 }
 
 }  // namespace tt_metal

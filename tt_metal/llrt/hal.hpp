@@ -34,35 +34,46 @@ enum class HalMemAddrType : uint8_t {
     WATCHER = 2,
     DPRINT = 3,
     PROFILER = 4,
-    KERNEL_CONFIG_BASE = 5,
-    UNRESERVED_BASE = 6,
+    KERNEL_CONFIG = 5,
+    UNRESERVED = 6,
     COUNT = 7
 };
 
 using DeviceAddr = std::uint64_t;
 
+class Hal;
+
 // Core information instanced once per core type
 class HalCoreInfoType {
+    friend class Hal;
+
   private:
     HalProgrammableCoreType programmable_core_type_;
     CoreType core_type_;
     std::uint32_t proc_count_; // eventually a vector of attributes?
-    std::vector<DeviceAddr> mem_map_;
+    std::vector<DeviceAddr> mem_map_bases_;
+    std::vector<uint32_t> mem_map_sizes_;
 
   public:
-    HalCoreInfoType(HalProgrammableCoreType programmable_core_type, CoreType core_type,
-        uint32_t core_proc_count, const std::vector<DeviceAddr>& mem_map);
+    HalCoreInfoType(HalProgrammableCoreType programmable_core_type, CoreType core_type, uint32_t core_proc_count,
+        const std::vector<DeviceAddr>& mem_map_bases, const std::vector<uint32_t>& mem_map_sizes);
 
-    uint32_t get_processor_count();
     template <typename T = DeviceAddr>
-    T get_dev_addr(HalMemAddrType addr_type);
+    T get_dev_addr(HalMemAddrType addr_type) const;
+    uint32_t get_dev_size(HalMemAddrType addr_type) const;
 };
 
 template <typename T>
-inline T HalCoreInfoType::get_dev_addr(HalMemAddrType addr_type) {
+inline T HalCoreInfoType::get_dev_addr(HalMemAddrType addr_type) const {
     uint32_t index = static_cast<std::underlying_type<HalMemAddrType>::type>(addr_type);
-    TT_ASSERT(index < this->mem_map_.size());
-    return reinterpret_cast<T>(this->mem_map_[index]);
+    TT_ASSERT(index < this->mem_map_bases_.size());
+    return reinterpret_cast<T>(this->mem_map_bases_[index]);
+}
+
+inline uint32_t HalCoreInfoType::get_dev_size(HalMemAddrType addr_type) const {
+    uint32_t index = static_cast<std::underlying_type<HalMemAddrType>::type>(addr_type);
+    TT_ASSERT(index < this->mem_map_sizes_.size());
+    return this->mem_map_sizes_[index];
 }
 
 class Hal {
@@ -80,21 +91,41 @@ class Hal {
 
     void initialize(tt::ARCH arch);
 
-    uint32_t get_core_type_count();
-    HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index);
-    CoreType get_core_type(uint32_t core_type_index);
+    uint32_t get_programmable_core_type_count() const;
+    HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
+    uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
+    CoreType get_core_type(uint32_t programmable_core_type_index) const;
 
-    uint32_t get_processor_count(uint32_t core_type_index);
+    uint32_t get_processor_count(uint32_t core_type_index) const;
 
     template <typename T = DeviceAddr>
-    T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type);
+    T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) const;
+    uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) const;
 };
 
+inline uint32_t Hal::get_programmable_core_type_count() const {
+    return core_info_.size();
+}
+
+inline HalProgrammableCoreType Hal::get_programmable_core_type(uint32_t core_type_index) const {
+    return core_info_[core_type_index].programmable_core_type_;
+}
+
+inline CoreType Hal::get_core_type(uint32_t core_type_index) const {
+    return core_info_[core_type_index].core_type_;
+}
+
 template <typename T>
-inline T Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) {
+inline T Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) const {
     uint32_t index = static_cast<std::underlying_type<HalProgrammableCoreType>::type>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     return this->core_info_[index].get_dev_addr<T>(addr_type);
+}
+
+inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) const {
+    uint32_t index = static_cast<std::underlying_type<HalProgrammableCoreType>::type>(programmable_core_type);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].get_dev_size(addr_type);
 }
 
 extern Hal hal;
