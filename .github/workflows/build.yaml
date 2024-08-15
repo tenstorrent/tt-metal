@@ -42,7 +42,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build C++ libraries and tests
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -G Ninja
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -DCMAKE_CXX_COMPILER=${{ matrix.build.cxx_compiler }} -DCMAKE_C_COMPILER=${{ matrix.build.c_compiler }} -G Ninja
           cmake --build build --target tests
       - name: Check disk space
         run: |
