@@ -343,11 +343,24 @@ namespace ckernel::packer
       TTI_REG2FLOP(2,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
       TTI_REG2FLOP(2,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
 
-      uint32_t reconfig_PCK_DEST_RD_CTRL_Read_unsigned = 0;
+      dest_rd_ctrl_u dest_rd_ctrl;
+      dest_rd_ctrl.val = 0;
+      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = (pack_src_format == (uint)DataFormat::Int8) | 
+                                                      (pack_src_format == (uint)DataFormat::UInt8) |
+                                                      (pack_src_format == (uint)DataFormat::Int32) |
+                                                      (pack_src_format == (uint)DataFormat::Float32) |
+                                                      (is_fp32_dest_acc_en ? 1 : 0);
       if (pack_dst_format == (uint)DataFormat::UInt8) {
-         reconfig_PCK_DEST_RD_CTRL_Read_unsigned = 1;
+         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
       }
-      cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_unsigned_RMW>(reconfig_PCK_DEST_RD_CTRL_Read_unsigned);
+      //Round to 10 bit mantissa from fp32 dest
+      if(is_fp32_dest_acc_en && (pack_src_format!=(uint)DataFormat::Float32)) {
+         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
+      }
+      cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
+                         PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
+                         PCK_DEST_RD_CTRL_Read_32b_data_MASK | PCK_DEST_RD_CTRL_Read_unsigned_MASK | PCK_DEST_RD_CTRL_Round_10b_mant_MASK>
+                         (dest_rd_ctrl.val);
 
       if (IS_BFP_FORMAT(pack_dst_format)) {
          // Override exp section size for packers 1,2,3
