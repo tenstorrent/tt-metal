@@ -13,7 +13,7 @@
 namespace py = pybind11;
 
 namespace ttnn {
-namespace operations {
+namespace operations::conv {
 namespace conv2d {
 
 void py_module(py::module& module) {
@@ -49,7 +49,7 @@ void py_module(py::module& module) {
             uint32_t groups,
             std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
             std::optional<const Conv2dConfig> conv_config_ = std::nullopt) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
-            return ttnn::operations::conv2d::conv2d<ttnn::Device>(
+            return ttnn::operations::conv::conv2d::conv2d<ttnn::Device>(
                 input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation,
                     groups, bias_tensor, conv_config_);
         },
@@ -87,7 +87,7 @@ void py_module(py::module& module) {
             uint32_t groups,
             std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
             std::optional<const Conv2dConfig> conv_config_ = std::nullopt) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
-            return ttnn::operations::conv2d::conv2d<DeviceMesh>(
+            return ttnn::operations::conv::conv2d::conv2d<DeviceMesh>(
                 input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation,
                     groups, bias_tensor, conv_config_);
         },
@@ -159,7 +159,7 @@ void py_module(py::module& module) {
             uint32_t width,
             uint32_t in_channels,
             uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
-            return ttnn::operations::conv2d::get_conv_padded_input_shape_and_mem_config<ttnn::Device>(
+            return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<ttnn::Device>(
                 device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels);
         },
         py::kw_only(),
@@ -182,7 +182,7 @@ void py_module(py::module& module) {
             uint32_t width,
             uint32_t in_channels,
             uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
-            return ttnn::operations::conv2d::get_conv_padded_input_shape_and_mem_config<DeviceMesh>(
+            return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<DeviceMesh>(
                 device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels);
         },
         py::kw_only(),

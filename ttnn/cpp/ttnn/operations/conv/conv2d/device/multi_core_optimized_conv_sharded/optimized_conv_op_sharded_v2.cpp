@@ -18,9 +18,10 @@
 
 using namespace tt::constants;
 
-namespace tt {
+namespace ttnn::operations::conv {
+namespace conv2d {
 
-namespace tt_metal {
+using namespace tt;
 
 const uint32_t act_cb = CB::c_in0;
 const uint32_t weight_cb = CB::c_in1;
@@ -49,11 +50,11 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     uint32_t num_reblock_cb_tiles,
     uint32_t num_writer_output_tiles,
     bool untilize_out,
-    DataFormat act_df,
-    DataFormat weight_df,
-    DataFormat tilized_act_df,
-    DataFormat out_df,
-    DataFormat bias_df,
+    tt::DataFormat act_df,
+    tt::DataFormat weight_df,
+    tt::DataFormat tilized_act_df,
+    tt::DataFormat out_df,
+    tt::DataFormat bias_df,
     bool weight_width_sliced,
     const Tensor& output,
     uint32_t bias_ntiles,
@@ -224,11 +225,11 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
     uint32_t num_reblock_cb_tiles,
     uint32_t num_writer_output_tiles,
     bool untilize_out,
-    DataFormat act_df,
-    DataFormat weight_df,
-    DataFormat tilized_act_df,
-    DataFormat out_df,
-    DataFormat bias_df,
+    tt::DataFormat act_df,
+    tt::DataFormat weight_df,
+    tt::DataFormat tilized_act_df,
+    tt::DataFormat out_df,
+    tt::DataFormat bias_df,
     bool weight_width_sliced,
     const Tensor& output,
     uint32_t bias_ntiles,
@@ -344,12 +345,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     // out_subblock_h_ntiles = 8;
 
-    DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    DataFormat bias_df =
-        has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype()) : DataFormat::Float16_b;
-    DataFormat tilized_act_df = out_df;
+    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat bias_df =
+        has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat tilized_act_df = out_df;
 
     log_debug(LogOp, "act_df: {}", act_df);
     log_debug(LogOp, "weight_df: {}", weight_df);
@@ -491,7 +492,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0,
             "Out_block_h must be divisible by out_subblock_h!");
     }
-    Shape ashape_with_channels_padded = {ashape[0], ashape[1], ashape[2], input_channels_padded};
+    Shape ashape_with_channels_padded(std::vector<uint32_t>({ashape[0], ashape[1], ashape[2], input_channels_padded}));
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
@@ -505,7 +506,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
+            ashape_with_channels_padded.value, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
@@ -651,7 +652,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t weight_dram_addr = src1_dram_buffer->address();
 
     // bias
-    Buffer* bias_buffer = nullptr;
+    tt_metal::Buffer* bias_buffer = nullptr;
     uint32_t bias_dram_addr = 0;
     uint32_t bias_ntiles = 0;
     if (has_bias) {
@@ -1047,20 +1048,20 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     string writer_mcast_receiver_kernel;
     bool tilize_in0 = true;
 
-    compute_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
+    compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
     // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
     if (weight_size_h >= 1 and weight_size_w >= 1 and (stride_h == 1 or stride_h == 2)) {
         if (!is_conv1d and weight_width_sliced) {
             // 2D conv
             assert(read_window_in_inner_loop == true);
             reader_kernel =
-                "ttnn/cpp/ttnn/operations/conv2d/device/kernels/"
+                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
                 "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
             writer_mcast_sender_kernel =
-                "ttnn/cpp/ttnn/operations/conv2d/device/kernels/"
+                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
                 "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
             writer_mcast_receiver_kernel =
-                "ttnn/cpp/ttnn/operations/conv2d/device/kernels/"
+                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
                 "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
             act_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
             act_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -1086,33 +1087,33 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             TT_ASSERT(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));
             TT_ASSERT(split_reader == false, "Split reader not supported for this conv yet!");
 
-            compute_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
+            compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
             reader_kernel =
-                "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_depthwise_conv1d.cpp";
+                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_depthwise_conv1d.cpp";
             writer_mcast_sender_kernel =
-                "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_mcast_sender_depthwise_conv1d.cpp";
+                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_mcast_sender_depthwise_conv1d.cpp";
             writer_mcast_receiver_kernel =
-                "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_mcast_receiver_depthwise_conv1d.cpp";
+                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_mcast_receiver_depthwise_conv1d.cpp";
 
         } else {
             // 1D conv
             TT_ASSERT(act_block_w_datums == round_up(conv_act_size_c * weight_size_w, TILE_WIDTH));
 
             reader_kernel =
-                "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
+                "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
             if (split_reader) {
                 writer_mcast_sender_kernel =
-                    "ttnn/cpp/ttnn/operations/conv2d/device/kernels/"
+                    "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
                     "reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
                 writer_mcast_receiver_kernel =
-                    "ttnn/cpp/ttnn/operations/conv2d/device/kernels/"
+                    "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
                     "reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
             } else {
                 writer_mcast_sender_kernel =
-                    "ttnn/cpp/ttnn/operations/conv2d/device/kernels/"
+                    "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
                     "writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
                 writer_mcast_receiver_kernel =
-                    "ttnn/cpp/ttnn/operations/conv2d/device/kernels/"
+                    "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
                     "writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
             }
         }
@@ -1594,7 +1595,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             auto src_buffer_b = input_tensors.at(1).buffer();
             bool src_a_is_sharded = input_tensors[0].is_sharded();
 
-            std::optional<Buffer*> src_buffer_c = std::nullopt;
+            std::optional<tt_metal::Buffer*> src_buffer_c = std::nullopt;
             if (has_bias) {
                 src_buffer_c = optional_input_tensors.at(0).value().buffer();
                 TT_ASSERT(src_buffer_c.value() != nullptr);

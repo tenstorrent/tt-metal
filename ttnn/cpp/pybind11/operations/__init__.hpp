@@ -101,7 +101,7 @@ void py_module(py::module& module) {
     data_movement::py_module(m_data_movement);
 
     auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
-    conv2d::py_module(m_conv2d);
+    conv::conv2d::py_module(m_conv2d);
 
     auto m_pool = module.def_submodule("pool", "pooling  operations");
     pool::py_module(m_pool);

@@ -7,9 +7,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn::operations::conv {
+namespace conv2d {
 
 // TODO: Accept parallelization
 enum class ConvOpParallelizationStrategy {
@@ -38,7 +37,7 @@ struct Conv {
           math_fidelity(mfidelity) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const;
 
