@@ -24,7 +24,7 @@ enum class ReduceType {
 
 template <ReduceType reduce_type>
 struct Reduce {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_arg,
         const std::optional<std::variant<int, std::vector<int>>>& dim_arg = std::nullopt,
         const bool keepdim = true,

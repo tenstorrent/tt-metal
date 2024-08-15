@@ -17,7 +17,7 @@ namespace tt::tt_metal {
 
 // Forward declaration of DeviceMesh
 class DeviceMesh;
-using DeviceGrid = std::pair<int, int>;
+using DeviceGrid = std::pair<size_t, size_t>;
 
 struct Coordinate {
     std::size_t row;
@@ -65,8 +65,8 @@ public:
     DeviceMeshView(const DeviceMesh& mesh, Coordinate top_left, Coordinate bottom_right);
     DeviceMeshView(std::vector<device_pointer> devices, CoordinateMapper mapper);
 
-    [[nodiscard]] device_pointer get_device(int row, int col);
-    [[nodiscard]] const_device_pointer get_device(int row, int col) const;
+    [[nodiscard]] device_pointer get_device(size_t row, size_t col);
+    [[nodiscard]] const_device_pointer get_device(size_t row, size_t col) const;
 
     [[nodiscard]] const std::vector<device_pointer>& get_devices() const;
 
@@ -75,8 +75,8 @@ public:
     [[nodiscard]] DeviceView get_devices(const Coordinate& start, const Coordinate& end);
     [[nodiscard]] DeviceView get_devices(const DeviceGrid& shape);
 
-    [[nodiscard]] DeviceView get_devices_on_row(int row) const;
-    [[nodiscard]] DeviceView get_devices_on_column(int col) const;
+    [[nodiscard]] DeviceView get_devices_on_row(size_t row) const;
+    [[nodiscard]] DeviceView get_devices_on_column(size_t col) const;
 
     [[nodiscard]] DeviceViews get_row_views() const;
     [[nodiscard]] DeviceViews get_column_views() const;
@@ -86,7 +86,7 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] size_t size() const noexcept;
-    [[nodiscard]] std::pair<int, int> shape() const noexcept;
+    [[nodiscard]] std::pair<size_t, size_t> shape() const noexcept;
     [[nodiscard]] bool contains(const Coordinate& coord) const noexcept;
     [[nodiscard]] const_device_pointer at(const Coordinate& coord) const noexcept;
 

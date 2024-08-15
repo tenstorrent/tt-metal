@@ -314,7 +314,7 @@ TEST_F(DeviceFixture, ComputeReduceH) {
     }
     std::vector<uint32_t> shape = {1, 3, 19*TILE_HEIGHT, 17*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
-    for (int do_max = 0; do_max <= 1; do_max++) {
+    for (bool do_max : {false, true}) {
         unit_tests::compute::reduce::ReduceConfig test_config = {
             .shape = shape,
             .reduce_dim = unit_tests::compute::reduce::ReduceDim::H,
@@ -334,7 +334,7 @@ TEST_F(DeviceFixture, ComputeReduceH) {
 TEST_F(DeviceFixture, ComputeReduceW) {
     std::vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
-    for (int do_max = 0; do_max <= 1; do_max++) {
+    for (bool do_max : {false, true}) {
         unit_tests::compute::reduce::ReduceConfig test_config = {
             .shape = shape,
             .reduce_dim = unit_tests::compute::reduce::ReduceDim::W,
@@ -354,7 +354,7 @@ TEST_F(DeviceFixture, ComputeReduceW) {
 TEST_F(DeviceFixture, ComputeReduceHW) {
     std::vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
-    for (int do_max = 0; do_max <= 1; do_max++) {
+    for (bool do_max : {false, true}) {
         unit_tests::compute::reduce::ReduceConfig test_config = {
             .shape = shape,
             .reduce_dim = unit_tests::compute::reduce::ReduceDim::HW,

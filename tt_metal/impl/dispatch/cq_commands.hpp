@@ -178,7 +178,6 @@ struct CQDispatchWritePagedCmd {
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE      = 0x00;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST     = 0x01;
 constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE = 0x02;
-constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_RELAY = 0x03;
 
 struct CQDispatchWritePackedCmd {
     uint8_t flags;            // see above
@@ -197,11 +196,14 @@ struct CQDispatchWritePackedMulticastSubCmd {
     uint32_t num_mcast_dests;
 } __attribute__((packed));
 
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE   = 0x00;
+constexpr uint32_t CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK = 0x01;
 struct CQDispatchWritePackedLargeSubCmd {
     uint32_t noc_xy_addr;
     uint32_t addr;
     uint16_t length;          // multiples of L1 cache line alignment
-    uint16_t num_mcast_dests;
+    uint8_t num_mcast_dests;
+    uint8_t flags;
 } __attribute__((packed));
 
 constexpr inline __attribute__((always_inline)) uint32_t get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cmds) {

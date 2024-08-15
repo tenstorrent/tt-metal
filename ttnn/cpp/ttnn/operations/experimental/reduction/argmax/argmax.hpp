@@ -12,7 +12,7 @@ namespace operations::experimental {
 namespace reduction {
 
 struct ArgmaxOperation {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor,
         int64_t dim,
         bool all,
@@ -20,7 +20,7 @@ struct ArgmaxOperation {
 };
 
 struct ArgminOperation {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor,
         int64_t dim,
         bool all,

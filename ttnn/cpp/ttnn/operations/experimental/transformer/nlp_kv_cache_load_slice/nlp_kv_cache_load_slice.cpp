@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-    ttnn::Tensor NLPKVCacheLoadSliceOperation::operator()(
+    ttnn::Tensor NLPKVCacheLoadSliceOperation::invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
         const uint32_t seq_len_start,
@@ -44,13 +44,13 @@ namespace ttnn::operations::experimental::transformer {
             return operation::run(NlpKVCacheLoadSliceDeviceOperation{output_tensor_start, output_tensor_end, output_tensor_shape, input_tensor_shape}, {input_tensor}, {}, {optional_output_tensor}).at(0);
     }
 
-    ttnn::Tensor NLPKVCacheLoadSliceOperation::operator()(
+    ttnn::Tensor NLPKVCacheLoadSliceOperation::invoke(
         const Tensor& input_tensor,
         const uint32_t seq_len_start,
         const uint32_t seq_len_end,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor) {
-        return operator()(
+        return invoke(
             ttnn::DefaultQueueId, input_tensor, seq_len_start, seq_len_end, memory_config, optional_output_tensor);
     }
 };  // namespace ttnn::operations::experimental::transformer

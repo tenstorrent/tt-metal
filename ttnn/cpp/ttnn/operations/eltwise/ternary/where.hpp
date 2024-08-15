@@ -18,7 +18,7 @@ namespace ternary {
 struct WhereOperation
 {
 
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor& predicate,
         const Tensor& value_true,
@@ -26,7 +26,7 @@ struct WhereOperation
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor& predicate,
         const float value_true,
@@ -34,7 +34,7 @@ struct WhereOperation
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor& predicate,
         const Tensor& value_true,
@@ -42,7 +42,7 @@ struct WhereOperation
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor& predicate,
         const float value_true,
@@ -50,13 +50,13 @@ struct WhereOperation
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& predicate,
         const Tensor& value_true,
         const Tensor& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return operator() (
+        return invoke (
             DefaultQueueId,
             predicate,
             value_true,
@@ -65,13 +65,13 @@ struct WhereOperation
             output_tensor);
     }
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& predicate,
         const float value_true,
         const Tensor& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return operator() (
+        return invoke (
             DefaultQueueId,
             predicate,
             value_true,
@@ -80,13 +80,13 @@ struct WhereOperation
             output_tensor);
     }
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& predicate,
         const Tensor& value_true,
         const float value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return operator() (
+        return invoke (
             DefaultQueueId,
             predicate,
             value_true,
@@ -95,13 +95,13 @@ struct WhereOperation
             output_tensor);
     }
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& predicate,
         const float value_true,
         const float value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> output_tensor = std::nullopt) {
-        return operator() (
+        return invoke (
             DefaultQueueId,
             predicate,
             value_true,

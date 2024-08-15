@@ -14,12 +14,12 @@ namespace operations::data_movement {
 
 struct NonZeroIndicesOperation {
 
-    static std::vector<ttnn::Tensor> operator()(
+    static std::vector<ttnn::Tensor> invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config);
 
-    static std::vector<ttnn::Tensor> operator()(
+    static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config);
 };

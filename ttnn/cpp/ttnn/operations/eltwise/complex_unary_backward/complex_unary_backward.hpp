@@ -15,7 +15,7 @@ namespace operations::complex_unary_backward {
 
 template <ComplexUnaryBackwardOpType complex_unary_backward_op_type>
 struct ExecuteComplexUnaryBackward {
-    static std::vector<ComplexTensor> operator()(
+    static std::vector<ComplexTensor> invoke(
         const ComplexTensor &grad_tensor_arg,
         const ComplexTensor &input_tensor_arg,
         const MemoryConfig &memory_config) {
@@ -25,7 +25,7 @@ struct ExecuteComplexUnaryBackward {
 
 template <ComplexUnaryBackwardOpType complex_unary_backward_op_type>
 struct ExecuteComplexUnaryBackwardTensor {
-    static std::vector<ComplexTensor> operator()(
+    static std::vector<ComplexTensor> invoke(
         const Tensor &grad_tensor_arg, const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
         return OpHandler<complex_unary_backward_op_type>::handle(grad_tensor_arg, input_tensor_arg, memory_config);
     }

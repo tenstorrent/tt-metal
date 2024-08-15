@@ -8,7 +8,7 @@ namespace ttnn {
 namespace operations::transformer {
 
 struct ExecuteConcatenateHeads {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
 };
 }

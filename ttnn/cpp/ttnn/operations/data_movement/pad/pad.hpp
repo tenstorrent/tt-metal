@@ -15,8 +15,8 @@ namespace operations::data_movement {
 
 // We overload over Array1D-8D
 #define PAD_OVERLOAD_DIM(ShapeType) \
-    static ttnn::Tensor operator()(uint8_t, const ttnn::Tensor&, const ShapeType&, const ShapeType&, const float, const bool, const std::optional<MemoryConfig>&); \
-    static ttnn::Tensor operator()(const ttnn::Tensor&, const ShapeType&, const ShapeType&, const float);
+    static ttnn::Tensor invoke(uint8_t, const ttnn::Tensor&, const ShapeType&, const ShapeType&, const float, const bool, const std::optional<MemoryConfig>&); \
+    static ttnn::Tensor invoke(const ttnn::Tensor&, const ShapeType&, const ShapeType&, const float);
 
 struct ExecutePad {
     PAD_OVERLOAD_DIM(tt::tt_metal::Array1D)
@@ -30,7 +30,7 @@ struct ExecutePad {
 
     // This function signature is similar to pytorch's signature
     // Any rank tensor supported
-    static ttnn::Tensor operator()(uint8_t queue_id,
+    static ttnn::Tensor invoke(uint8_t queue_id,
                                    const ttnn::Tensor& input_tensor,
                                    const std::vector<std::pair<uint32_t, uint32_t>>& padding,
                                    const float value,

@@ -32,6 +32,7 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       TT_METAL_WATCHER: 60
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     name: ${{ matrix.runner-info.machine-type }} ${{ matrix.runner-info.name }}
