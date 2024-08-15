@@ -2199,7 +2199,7 @@ class ResNet(nn.Module):
                 shard_spec,
             )
             if write_event is not None:
-                tt_lib.device.WaitForEvent(self.device, 0, write_event)
+                ttnn.wait_for_event(self.device, 0, write_event)
             if x.storage_type() != tt_lib.tensor.StorageType.DEVICE:
                 x = x.to(self.device, mem_config)
             elif x.memory_config().is_sharded():
@@ -2210,7 +2210,7 @@ class ResNet(nn.Module):
             else:
                 x = tt_lib.tensor.interleaved_to_sharded(x, mem_config)
             if op_event is not None:
-                tt_lib.device.RecordEvent(self.device, 0, op_event)
+                ttnn.record_event(self.device, 0, op_event)
 
         x = self.conv1(x)
         if x_in is not None:

@@ -6,7 +6,7 @@ from loguru import logger
 import torch
 import pytest
 import tt_lib
-
+import ttnn
 from models.utility_functions import is_e75, skip_for_wormhole_b0, divup
 
 from models.demos.resnet.tests.demo_utils import load_resnet50_model
@@ -139,22 +139,22 @@ def run_2cq_model(device, tt_image, tt_resnet50):
     tt_image_res = tt_lib.tensor.allocate_tensor_on_device(
         tt_image.shape, tt_image.dtype, tt_image.layout, device, sharded_mem_config_DRAM
     )
-    op_event = tt_lib.device.CreateEvent()
-    write_event = tt_lib.device.CreateEvent()
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
     # Initialize the op event so we can write
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
-    tt_lib.device.WaitForEvent(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.record_event(1, write_event)
     _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
 
     # Test overlapping write
     outputs = []
     for iter in range(0, 2):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.record_event(1, write_event)
         outputs.append(tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=False))
     tt_lib.device.Synchronize(device)
     return outputs[1]
@@ -231,31 +231,31 @@ def run_trace_2cq_model(device, tt_image, tt_resnet50):
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
     )
 
-    op_event = tt_lib.device.CreateEvent()
-    write_event = tt_lib.device.CreateEvent()
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
     # Initialize the op event so we can write
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
     # Compile
-    tt_lib.device.WaitForEvent(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.record_event(1, write_event)
 
-    tt_lib.device.WaitForEvent(device, 0, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config)
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.record_event(0, op_event)
     first_out_addr = reshard_out.buffer_address()
 
     tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config)
     tt_lib.device.Synchronize(device)
     # Trace
-    tt_lib.device.WaitForEvent(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
-    tt_lib.device.RecordEvent(device, 1, write_event)
+    ttnn.record_event(1, write_event)
 
-    tt_lib.device.WaitForEvent(device, 0, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config)
-    tt_lib.device.RecordEvent(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
     tid = tt_lib.device.BeginTraceCapture(device, 0)
     tt_output_res = tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config)
@@ -269,13 +269,13 @@ def run_trace_2cq_model(device, tt_image, tt_resnet50):
     # Test overlapping write
     outputs = []
     for iter in range(0, 2):
-        tt_lib.device.WaitForEvent(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         tt_lib.tensor.write_tensor(tt_image, tt_image_res, 1)
-        tt_lib.device.RecordEvent(device, 1, write_event)
+        ttnn.record_event(1, write_event)
 
-        tt_lib.device.WaitForEvent(device, 0, write_event)
+        ttnn.wait_for_event(0, write_event)
         reshard_out = tt_lib.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
-        tt_lib.device.RecordEvent(device, 0, op_event)
+        ttnn.record_event(0, op_event)
 
         tt_lib.device.ReplayTrace(device, 0, tid, False)
         outputs.append(tt_output_res.cpu(blocking=False))
