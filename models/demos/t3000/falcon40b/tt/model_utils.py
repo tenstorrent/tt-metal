@@ -29,7 +29,7 @@ def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=F
                 if clone:
                     tensor = ttnn.clone(tensor, memory_config=output_memory_layout)
                 else:
-                    tensor = ttnn.experimental.tensor.move(tensor, output_mem_config=output_memory_layout)
+                    tensor = ttnn.move(tensor, memory_config=output_memory_layout)
             else:  # reshard
                 tensor = ttnn.experimental.tensor.sharded_to_interleaved(
                     tensor,

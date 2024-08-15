@@ -9,6 +9,7 @@ from loguru import logger
 import ttnn
 from models.utility_functions import comp_pcc, skip_for_wormhole_b0
 import torch
+import ttnn
 
 shapes = [
     [1, 1, 25088, 64],
@@ -101,7 +102,7 @@ def run_move_op(shape, device):
     # Free up dummy tensor from memory to make available to move
     tt_dummy_tensor.deallocate()
 
-    output = ttnn.experimental.tensor.move_sharded(tt_tensor, height_sharded_mem_config)
+    output = ttnn.move(tt_tensor, memory_config=height_sharded_mem_config)
 
     tt_host_rm = output.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     pyt_got_back_rm = tt_host_rm.to_torch()

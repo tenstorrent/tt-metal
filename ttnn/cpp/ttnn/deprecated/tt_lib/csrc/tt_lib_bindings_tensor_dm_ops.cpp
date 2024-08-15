@@ -4,10 +4,8 @@
 
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/move/move_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
 
 namespace tt::tt_metal::detail{
@@ -26,29 +24,6 @@ namespace tt::tt_metal::detail{
         */
 
         detail::export_enum<BcastOpDim>(m_tensor);
-
-        detail::bind_unary_op<true, true>(m_tensor, "clone", &clone, R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
-        detail::bind_binary_op<false, false, false, false>(m_tensor, "copy", &copy, R"doc(  Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
-
-        // *** tensor manipulation ***
-        m_tensor.def("typecast", &typecast,
-            py::arg("input_tensors").noconvert(), py::arg("dtype"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-                Returns a new tensor which is a typecast of input tensor with new datatype``{0}``.
-
-                Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
-
-                Datatype must be one of the following types BFLOAT16, BFLOAT8_B, BFLOAT4_B, UINT32, INT32, UINT16 and UINT8.
-
-                Output tensor will be on device, in same layout, and have the given data type.
-
-                .. csv-table::
-                    :header: "Argument", "Description", "Data type", "Required"
-
-                    "input_tensors", "Input tensors to typecast", "List of Tensors", "Yes"
-                    "dtype", "datatype of typecast", "Datatype", "Yes"
-                    "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "No"
-            )doc"
-        );
 
         m_tensor.def("reshape", &reshape,
             py::arg("input").noconvert(), py::arg("W"), py::arg("Z"), py::arg("Y"), py::arg("X"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
@@ -112,36 +87,6 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_tensor", "Optional output tensor", "Tensor", "Default is None", "No"
                 "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-        )doc");
-
-        m_tensor.def("move", &move,
-            py::arg().noconvert(), py::arg("output_mem_config").noconvert() = std::nullopt, R"doc(
-            Moves the elements of the input tensor ``arg0`` to a location in memory with specified memory layout.
-
-            If no memory layout is specified, output memory will be the same as the input tensor memory config.
-
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | Argument | Description                | Data type                  | Valid range                     | Required |
-            +==========+============================+============================+=================================+==========+
-            | arg0     | Tensor to move             | Tensor                     | Tensor of shape [W, Z, Y, X]    | Yes      |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | arg1     | MemoryConfig of tensor of  | tt_lib.tensor.MemoryConfig | Default is same as input tensor | No       |
-            |          | TT accelerator device      |                            |                                 |          |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-        )doc");
-
-        m_tensor.def("move_sharded", &move_sharded,
-            py::arg().noconvert(), py::arg("output_mem_config").noconvert() = std::nullopt, R"doc(
-            Moves the elements of the sharded input tensor ``arg0`` to a location in local L1.
-
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | Argument | Description                | Data type                  | Valid range                     | Required |
-            +==========+============================+============================+=================================+==========+
-            | arg0     | Tensor to move             | Tensor                     | Tensor of shape [W, Z, Y, X]    | Yes      |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | arg1     | MemoryConfig of tensor of  | tt_lib.tensor.MemoryConfig | Default is same as input tensor | No       |
-            |          | TT accelerator device      |                            |                                 |          |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
         )doc");
 
         // Sharding ops

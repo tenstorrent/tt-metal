@@ -30,6 +30,7 @@
 
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/copy/copy_pybind.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/move/move_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -62,6 +63,7 @@ void py_module(py::module& module) {
     detail::py_bind_copy(module);
     detail::py_bind_clone(module);
     detail::py_bind_assign(module);
+    detail::py_bind_move(module);
 }
 
 }  // namespace data_movement

@@ -1350,7 +1350,7 @@ class Bottleneck:
             output_tensor=out if self.out_in_place else None,
         )
         if self.module_input_shape[0] == 20 and self.module_input_shape[1] == 56 and self.module_input_shape[3] == 64:
-            out = ttnn.experimental.tensor.move_sharded(out)
+            out = ttnn.move(out)
 
         return out
 
@@ -2191,7 +2191,7 @@ class ResNet(nn.Module):
         # Relu is fused with conv1
 
         if self.batch_size == 20:
-            x = ttnn.experimental.tensor.move_sharded(x)
+            x = ttnn.move(x)
 
         if not self.sharded:
             x = format_tensor(x, ttnn.ROW_MAJOR_LAYOUT, self.device, self.memory_config)
@@ -2216,7 +2216,7 @@ class ResNet(nn.Module):
             use_multicore=True,
         )
         if self.batch_size == 20:
-            x = ttnn.experimental.tensor.move_sharded(x)
+            x = ttnn.move(x)
 
         x = self.layer1_module1(x)
         x = self.layer1_module2(x)
