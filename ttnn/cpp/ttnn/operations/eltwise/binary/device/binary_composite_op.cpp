@@ -238,7 +238,7 @@ Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::opti
 }
 
 // Binary remainder will be overloaded by unary remainder in another PR
-Tensor ExecuteBinaryRemainder::operator()(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteBinaryRemainder::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input_a.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     DataType input_dtype = input_a.get_dtype();
@@ -252,12 +252,12 @@ Tensor ExecuteBinaryRemainder::operator()(const Tensor& input_a, const Tensor& i
 }
 
 
-Tensor ExecuteBinaryRemainder::operator()(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteBinaryRemainder::invoke(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::unary_remainder(input, scalar);
 }
 
 // Binary FMOD will be overloaded by unary FMOD in another PR
-Tensor ExecuteBinaryFmod::operator()(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteBinaryFmod::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input_a.device()->arch();
     TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
     DataType input_dtype = input_a.get_dtype();
@@ -268,7 +268,7 @@ Tensor ExecuteBinaryFmod::operator()(const Tensor& input_a, const Tensor& input_
     return typecast(result, input_dtype);
 }
 
-Tensor ExecuteBinaryFmod::operator()(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteBinaryFmod::invoke(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::unary_fmod(input, scalar);
 }
 

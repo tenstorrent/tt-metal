@@ -44,10 +44,6 @@ enum class EnqueueCommandType {
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
-// TEMPORARY! TODO(agrebenisan): need to use proper macro based on loading noc
-#define NOC_X(x) x
-#define NOC_Y(y) y
-
 class CommandQueue;
 class CommandInterface;
 

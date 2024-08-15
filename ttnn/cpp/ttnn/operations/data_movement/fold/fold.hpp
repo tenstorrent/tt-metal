@@ -18,7 +18,7 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct FoldOperation {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor &input_tensor,
         uint8_t stride_h,
         uint8_t stride_w,
@@ -27,7 +27,7 @@ struct FoldOperation {
         uint8_t pad_c = 0,
         uint8_t pad_h = 0,
         uint8_t pad_w = 0);
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor,
         uint8_t stride_h,

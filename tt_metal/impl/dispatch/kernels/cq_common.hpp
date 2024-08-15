@@ -117,18 +117,30 @@ void cq_noc_async_write_with_state(uint32_t src_addr, uint64_t dst_addr, uint32_
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config (dst_noc,
 // VC..) have been specified.
+template<bool write_last_packet = true>
 FORCE_INLINE
-void cq_noc_async_write_with_state_any_len(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
-    while(size > NOC_MAX_BURST_SIZE) {
+uint32_t cq_noc_async_write_with_state_any_len(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+    if (size > NOC_MAX_BURST_SIZE) {
         cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
         src_addr += NOC_MAX_BURST_SIZE;
         dst_addr += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
+        while(size > NOC_MAX_BURST_SIZE) {
+            cq_noc_async_write_with_state<CQ_NOC_SnDl>(src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
+            src_addr += NOC_MAX_BURST_SIZE;
+            dst_addr += NOC_MAX_BURST_SIZE;
+            size -= NOC_MAX_BURST_SIZE;
+        }
     }
-    cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, size, ndests);
+    if constexpr (write_last_packet) {
+        cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, size, ndests);
+        return 0;
+    } else {
+        return size;
+    }
 }
 
-template<enum CQNocFlags flags, bool mcast = false>
+template<enum CQNocFlags flags, bool mcast = false, bool linked = false>
 FORCE_INLINE
 void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0) {
 
@@ -139,9 +151,8 @@ void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_
     }
     DEBUG_STATUS("NSID");
 
-    constexpr bool multicast_path_reserve = mcast;
+    constexpr bool multicast_path_reserve = true;
     constexpr bool posted = false;
-    constexpr bool linked = false;
     constexpr uint32_t vc = mcast ? NOC_DISPATCH_MULTICAST_WRITE_VC : NOC_UNICAST_WRITE_VC;
 
     constexpr uint32_t noc_cmd_field =
@@ -163,8 +174,7 @@ void cb_wait_all_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
     DEBUG_STATUS("TAPW");
-    // TODO: this masks off the upper bit used by mux/dmux for terminate, remove
-    while ((*sem_addr & 0x7FFFFFFF) != n);
+    while ((*sem_addr) != n);
     DEBUG_STATUS("TAPD");
 }
 
@@ -189,10 +199,10 @@ void cb_acquire_pages(uint32_t n) {
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
 }
 
-template<uint32_t noc_xy, uint32_t sem_id>
+template<uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE
 void cb_release_pages(uint32_t n) {
-    noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore(sem_id)), n);
+    noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore(sem_id)), n, noc_idx);
 }
 
 template<uint32_t noc_xy,
@@ -201,19 +211,18 @@ template<uint32_t noc_xy,
 FORCE_INLINE
 uint32_t cb_acquire_pages(uint32_t cb_fence,
                           uint32_t block_next_start_addr[],
-                          uint32_t rd_block_idx) {
+                          uint32_t rd_block_idx,
+                          uint32_t& local_count) {
 
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
 
-    static uint32_t available = 0;
+    static uint32_t upstream_count = 0;
 
-    if (available == 0) {
-        // Ensure last sem_inc has landed
-        noc_async_atomic_barrier();
-
+    if (local_count == upstream_count) {
+        DEBUG_STATUS("UAPW");
         uint32_t heartbeat = 0;
-        while ((available = *sem_addr) == 0) {
+        while ((upstream_count = *sem_addr) == local_count) {
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
         }
         DEBUG_STATUS("UAPD");
@@ -221,15 +230,16 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
 
     // Set a fence to limit how much is processed at once
     uint32_t limit = (block_next_start_addr[rd_block_idx] - cb_fence) >> cb_log_page_size;
+    uint32_t available = upstream_count - local_count;
     uint32_t usable = (available > limit) ? limit : available;
 
-    noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -usable);
-    available -= usable;
+    local_count += usable;
 
     return usable;
 }
 
-template<uint32_t noc_xy,
+template<uint8_t noc_idx,
+         uint32_t noc_xy,
          uint32_t sem_id,
          uint32_t cb_blocks,
          uint32_t cb_pages_per_block>
@@ -241,7 +251,7 @@ void cb_block_release_pages(uint32_t block_noc_writes_to_clear[],
 
     uint32_t noc_progress = NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT);
     if (wrap_ge(noc_progress, block_noc_writes_to_clear[wr_block_idx])) {
-        noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block);
+        noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block, noc_idx);
         wr_block_idx++;
         wr_block_idx &= (cb_blocks - 1);
 
@@ -249,7 +259,7 @@ void cb_block_release_pages(uint32_t block_noc_writes_to_clear[],
         // then we can fall behind by a block and never catch up
         // checking twice ensures we "gain" on the front if possible
         if (wrap_ge(noc_progress, block_noc_writes_to_clear[wr_block_idx])) {
-            noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block);
+            noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), cb_pages_per_block, noc_idx);
             wr_block_idx++;
             wr_block_idx &= (cb_blocks - 1);
         }
@@ -284,7 +294,8 @@ uint32_t get_cb_page(uint32_t& cmd_ptr,
                      uint32_t& cb_fence,
                      uint32_t block_noc_writes_to_clear[],
                      uint32_t block_next_start_addr[],
-                     uint32_t& rd_block_idx) {
+                     uint32_t& rd_block_idx,
+                     uint32_t& local_count) {
 
     // Strided past the data that has arrived, get the next page
     if (cb_fence == block_next_start_addr[rd_block_idx]) {
@@ -301,7 +312,8 @@ uint32_t get_cb_page(uint32_t& cmd_ptr,
                                         cb_sem,
                                         cb_log_page_size>(cb_fence,
                                                           block_next_start_addr,
-                                                          rd_block_idx);
+                                                          rd_block_idx,
+                                                          local_count);
     cb_fence += n_pages << cb_log_page_size;
 
     return n_pages;

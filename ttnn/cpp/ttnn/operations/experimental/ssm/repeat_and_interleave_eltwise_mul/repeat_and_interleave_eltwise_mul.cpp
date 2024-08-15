@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::experimental::ssm {
 
-ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::operator()(
+ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::invoke(
     uint8_t queue_id,
     const Tensor& a,
     const Tensor& b,
@@ -23,13 +23,13 @@ ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::operator()(
     return operation::run(program, {a, b}, {}, {}, queue_id).at(0);
 }
 
-ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::operator()(
+ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::invoke(
     const Tensor& a,
     const Tensor& b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
     const std::optional<MathFidelity> math_fidelity) {
-    return operator()(DefaultQueueId, a, b, memory_config, dtype, math_fidelity);
+    return invoke(DefaultQueueId, a, b, memory_config, dtype, math_fidelity);
 }
 
 }  // namespace ttnn::operations::experimental::ssm

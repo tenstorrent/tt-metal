@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor ExecuteUntilizeWithHaloV2::operator()(
+ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const Tensor& padding_config,
@@ -42,7 +42,7 @@ ttnn::Tensor ExecuteUntilizeWithHaloV2::operator()(
         .at(0);
 }
 
-ttnn::Tensor ExecuteUntilizeWithHaloV2::operator()(
+ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
     const ttnn::Tensor& input_tensor,
     const Tensor& padding_config,
     const Tensor& local_config,
@@ -53,7 +53,7 @@ ttnn::Tensor ExecuteUntilizeWithHaloV2::operator()(
     const std::optional<MemoryConfig>& memory_config,
     const bool remote_read,
     const bool transpose_mcast) {
-    return operator()(
+    return invoke(
         DefaultQueueId,
         input_tensor,
         padding_config,

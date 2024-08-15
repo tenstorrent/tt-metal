@@ -90,6 +90,8 @@ class Device {
     uint32_t l1_size_per_core() const;
     uint32_t dram_size_per_channel() const;
 
+    CoreCoord grid_size() const;
+
     CoreCoord logical_grid_size() const;
 
     CoreCoord compute_with_storage_grid_size() const;
@@ -225,7 +227,7 @@ class Device {
     void init_command_queue_device();
     void initialize_synchronous_sw_cmd_queue();
     void configure_kernel_variant(Program& program, string path, std::vector<uint32_t> compile_args, CoreCoord kernel_core, CoreCoord Kernel_physical_core,
-                                  CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, std::map<string, string> defines_in, NOC noc_index, bool is_active_eth_core = false);
+                                  CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false);
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();

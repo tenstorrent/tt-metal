@@ -10,7 +10,7 @@
 
 namespace ttnn:: operations::experimental::transformer {
 
-    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperation::operator()(
+    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperation::invoke(
         uint8_t queue_id,
         const Tensor &input_tensor,
         const uint32_t num_heads,
@@ -33,13 +33,13 @@ namespace ttnn:: operations::experimental::transformer {
         return {out.at(0), out.at(1), out.at(2)};
     }
 
-    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperation::operator()(
+    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperation::invoke(
         const Tensor &input_tensor,
         const uint32_t num_heads,
         const std::optional<const uint32_t> num_kv_heads,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::array<Tensor, 3>> optional_output_tensors) {
-        return operator()(
+        return invoke(
             ttnn::DefaultQueueId, input_tensor, num_heads, num_kv_heads, memory_config, optional_output_tensors);
     }
 
