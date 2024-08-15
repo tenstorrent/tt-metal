@@ -198,14 +198,14 @@ void kernel_main() {
                         weights_mcast_dest_noc_end_y,
                         weights_start_address);
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_async_write_multicast(weights_start_address, weights_multicast_data_addr, weights_block_size_bytes, weights_mcast_num_cores, false, false);
+                    noc_async_write_multicast(weights_start_address, weights_multicast_data_addr, weights_block_size_bytes, weights_mcast_num_cores, true, true);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
                     // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
                     // We should also multicast the flag to destinations
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores, false, false);
+                    noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores);
                 #endif
 
                 cb_push_back(cb_id_weight, weight_block_num_tiles);
@@ -243,14 +243,14 @@ void kernel_main() {
                         weights_mcast_dest_noc_end_y,
                         bias_start_address);
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_async_write_multicast(bias_start_address, bias_multicast_data_addr, bias_block_size_bytes, weights_mcast_num_cores, false, false);
+                    noc_async_write_multicast(bias_start_address, bias_multicast_data_addr, bias_block_size_bytes, weights_mcast_num_cores, true, true);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
                     // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
                     // We should also multicast the flag to destinations
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores, false, false);
+                    noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores);
                 #endif
 
                 cb_push_back(bias_cb_id, bias_ntiles);

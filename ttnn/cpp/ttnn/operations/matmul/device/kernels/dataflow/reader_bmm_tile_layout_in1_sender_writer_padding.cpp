@@ -245,7 +245,7 @@ void kernel_main() {
 
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_async_write_multicast(
-                in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_cores, false, false);
+                in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_cores, true, true);
 
             // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same
             // cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
@@ -255,10 +255,7 @@ void kernel_main() {
             noc_semaphore_set_multicast(
                 in1_mcast_receiver_semaphore_addr,
                 in1_mcast_receiver_semaphore_noc_addr,
-                in1_mcast_num_cores,
-                false,
-                false);
-
+                in1_mcast_num_cores);
 #endif
 
 #ifndef IN1_SHARDED
@@ -329,7 +326,7 @@ void kernel_main() {
 
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_async_write_multicast(
-                in3_start_address, in3_multicast_data_addr, in3_block_size_bytes, in1_mcast_num_cores, false, false);
+                in3_start_address, in3_multicast_data_addr, in3_block_size_bytes, in1_mcast_num_cores, true, true);
             // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same
             // cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
@@ -338,10 +335,7 @@ void kernel_main() {
             noc_semaphore_set_multicast(
                 in1_mcast_receiver_semaphore_addr,
                 in1_mcast_receiver_semaphore_noc_addr,
-                in1_mcast_num_cores,
-                false,
-                false);
-
+                in1_mcast_num_cores);
 #endif
 
             cb_push_back(cb_id_in3, in1_block_w);

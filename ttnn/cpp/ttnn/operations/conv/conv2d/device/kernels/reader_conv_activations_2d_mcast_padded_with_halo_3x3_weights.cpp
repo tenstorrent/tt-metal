@@ -210,7 +210,7 @@ void kernel_main() {
             uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
             uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
             // num_dests will source, since we are copying to a different local CB as well
-            noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores + 1);
+            noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores + 1, true, true);
 
             // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
             // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
