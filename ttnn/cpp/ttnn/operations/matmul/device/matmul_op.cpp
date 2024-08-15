@@ -326,9 +326,10 @@ MatmulProgramConfig create_matmul_program_config(
         auto shard_shape = input_tensor_a_memory_config.shard_spec.value().shape;
         m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
         n_tiles_per_core = (n * shard_shape[1]) / (k * ttnn::TILE_SIZE);
-        k_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
+        k_tiles_per_core = std::gcd(shard_shape[1] / ttnn::TILE_SIZE, k);
     }
 
+    n_tiles_per_core = std::max(n_tiles_per_core, (unsigned int)1);
     auto matmul_params = get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
     uint32_t out_subblock_h = std::get<0>(matmul_params);
     uint32_t out_subblock_w = std::get<1>(matmul_params);
@@ -508,7 +509,7 @@ MatmulProgramConfig get_matmul_program_config(
 
             uint32_t per_core_M = div_up(M, virtual_y);
             uint32_t per_core_N = div_up(N, virtual_x);
-            uint32_t in0_block_w = cores_along_x_match_grid_size ? shard_shape[1] / TILE_WIDTH : 1;
+            uint32_t in0_block_w = cores_along_x_match_grid_size ? std::gcd(shard_shape[1] / TILE_WIDTH, K) : 1;
 
             auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
                 per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
@@ -575,7 +576,7 @@ MatmulProgramConfig get_matmul_program_config(
         };
     }
     return create_matmul_program_config(
-        input_tensor_a, input_tensor_b, grid_size, fused_activation, compute_kernel_config);
+        input_tensor_a, input_tensor_b, user_core_coord, fused_activation, compute_kernel_config);
 }
 
 inline uint32_t get_estimated_size_of_cbs(
@@ -675,7 +676,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 false /* out_sharded */,
                 std::nullopt /* compute_with_storage_grid_size */,
                 compute_kernel_config);
-        } else if (core_range.y > 0) {
+        } else if (core_range.y > 0 && num_blocks_x <= num_cores_x && num_blocks_y <= num_cores_y) {
             bool transpose_mcast = input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED &&
                                    input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
             out_subblock_h = 4;
