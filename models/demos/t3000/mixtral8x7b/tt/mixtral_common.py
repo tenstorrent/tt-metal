@@ -82,24 +82,33 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instr
         encoded_prompts = [tokenizer.encode(prompt) for prompt in input_prompts]
 
     prompt_lens = [len(x) for x in encoded_prompts]
-
     min_prompt_len = min(prompt_lens)
     max_prompt_len = max(prompt_lens)
 
-    # assert (
-    # max_prompt_len <= model_args.max_seq_len
-    # ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
+    # For very large prompts > 16k tokens, clip to 16k tokens to avoid prefill as decode
+    if min_prompt_len > 1024 * 16:
+        logger.info(
+            "Clipping prompts to 16k tokens to avoid prefill-as-decode for the entire demo and instead generate new tokens"
+        )
+        if instruct:
+            encoded_prompts = [encod[: (1024 * 16) + 1] + tokenizer.encode(" [/INST]") for encod in encoded_prompts]
+        else:
+            encoded_prompts = [encod[: (1024 * 16) + 1] for encod in encoded_prompts]
+        # Update prompt lengths
+        prompt_lens = [len(x) for x in encoded_prompts]
+        min_prompt_len = min(prompt_lens)
+        max_prompt_len = max(prompt_lens)
+
+    assert (
+        max_prompt_len <= model_args.max_seq_len
+    ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
     assert min_prompt_len > 0, "Minimum prompt length must be greater than 0"
     assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
 
-    print(f"Miguel: min_prompt_len = {min_prompt_len}")
-    print(f"Miguel: max_prompt_len = {max_prompt_len}")
     if min_prompt_len < 128:
         prefill_seq_len = 0  # For short prompts do decode-as-prefill instead
-    else:
-        if min_prompt_len > 1024 * 32:
-            prefill_seq_len = 1024 * 16
-        elif min_prompt_len > 1024 * 16:
+    else:  # Maximum KV-cache length support is 32k. If we prefill 32k tokens, then we can't generate any new tokens after.
+        if min_prompt_len > 1024 * 16:
             prefill_seq_len = 1024 * 16
         elif min_prompt_len > 1024 * 8:
             prefill_seq_len = 1024 * 8
@@ -114,13 +123,11 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instr
         # Initial prefill tensor full of pad tokens
         input_tokens_prefill = torch.full((len(input_prompts), prefill_seq_len), tokenizer.pad_id, dtype=torch.int32)
 
-    print(f" max_prompt_len - prefill_seq_len = {max_prompt_len - prefill_seq_len}")
-    print(f"prefill_seq_len = {prefill_seq_len}")
-
+    initial_decode_token = max_prompt_len - prefill_seq_len
+    if initial_decode_token == 0:
+        initial_decode_token = 1
     # Initial decode tensor full of pad tokens
-    input_tokens_decode = torch.full(
-        (len(input_prompts), max_prompt_len - prefill_seq_len), tokenizer.pad_id, dtype=torch.int32
-    )
+    input_tokens_decode = torch.full((len(input_prompts), initial_decode_token), tokenizer.pad_id, dtype=torch.int32)
 
     logger.info(f"# of users: {len(encoded_prompts)}")
     for i, encoded in enumerate(encoded_prompts):
@@ -174,7 +181,7 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instr
     return (
         input_tokens_prefill_tt,
         input_tokens_decode_tt,
-        max_prompt_len,
+        max_prompt_len - prefill_seq_len,
         input_mask_tt,
         input_tokens_prefill,
         input_tokens_decode,
