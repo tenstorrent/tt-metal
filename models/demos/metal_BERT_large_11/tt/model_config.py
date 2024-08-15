@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
 import ttnn
 from loguru import logger
 from pathlib import Path
@@ -109,16 +108,10 @@ def pretty_print_model_config(model_config):
 
 def get_model_config(batch, device_grid_size, model_config_str):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
-    DRAM_MEMCFG = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-    )
-    L1_MEMCFG = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
-    BLOCK_SHARDED_MEMCFG = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED, tt_lib.tensor.BufferType.L1
-    )
-    HEIGHT_SHARDED_MEMCFG = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
-    )
+    DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
+    L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
+    BLOCK_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in (
@@ -129,13 +122,13 @@ def get_model_config(batch, device_grid_size, model_config_str):
     ):
         dtype_str, mem_config_str = model_config_str.split("-")
         mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
-        dtype = tt_lib.tensor.DataType.BFLOAT16 if dtype_str == "BFLOAT16" else tt_lib.tensor.DataType.BFLOAT8_B
+        dtype = ttnn.bfloat16 if dtype_str == "BFLOAT16" else ttnn.bfloat8_b
 
     elif model_config_str in ("MIXED_PRECISION_BATCH9", "MIXED_PRECISION_BATCH8"):
-        dtype = tt_lib.tensor.DataType.BFLOAT8_B
+        dtype = ttnn.bfloat8_b
         mem_config = L1_MEMCFG
     elif model_config_str in ("BFLOAT8_B-SHARDED"):
-        dtype = tt_lib.tensor.DataType.BFLOAT8_B
+        dtype = ttnn.bfloat8_b
         mem_config = BLOCK_SHARDED_MEMCFG
     else:
         raise NotImplementedError(f"Model config {model_config_str} is not supported!")
@@ -146,20 +139,20 @@ def get_model_config(batch, device_grid_size, model_config_str):
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_ENCODER_OUTPUT_BOOL": False,
         "DEALLOC_INPUT_EMBEDS_AFTER_POSITION_EMBEDS": False,
-    }  # DEFAULT_MEMCFG also used to determine banking for tt_lib.device.InitializeDevice
+    }  # DEFAULT_MEMCFG also used to determine banking for ttnn.experimental.device.InitializeDevice
     model_config.update(dict(zip(OP_MEMCFG_KEYS, [mem_config] * len(OP_MEMCFG_KEYS))))
     model_config.update(dict(zip(OP_DTYPE_KEYS, [dtype] * len(OP_DTYPE_KEYS))))
 
     # Layernorm Gamma Beta must always be BFLOAT16
     model_config.update(
         {
-            "INPUT_EMBEDDINGS_WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "EMBEDDINGS_LAYERNORM_GAMMA_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "EMBEDDINGS_LAYERNORM_BETA_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "OP8_LAYERNORM_GAMMA_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "OP8_LAYERNORM_BETA_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "OP11_LAYERNORM_GAMMA_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "OP11_LAYERNORM_BETA_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "INPUT_EMBEDDINGS_WEIGHTS_DTYPE": ttnn.bfloat16,
+            "EMBEDDINGS_LAYERNORM_GAMMA_DTYPE": ttnn.bfloat16,
+            "EMBEDDINGS_LAYERNORM_BETA_DTYPE": ttnn.bfloat16,
+            "OP8_LAYERNORM_GAMMA_DTYPE": ttnn.bfloat16,
+            "OP8_LAYERNORM_BETA_DTYPE": ttnn.bfloat16,
+            "OP11_LAYERNORM_GAMMA_DTYPE": ttnn.bfloat16,
+            "OP11_LAYERNORM_BETA_DTYPE": ttnn.bfloat16,
         }
     )
 
@@ -196,7 +189,7 @@ def get_model_config(batch, device_grid_size, model_config_str):
         model_config.update(new_config_values)
 
     elif model_config_str == "BFLOAT8_B-L1" or model_config_str == "BFLOAT8_B-DRAM":
-        grid_size = tt_lib.tensor.CoreCoord(12, batch)
+        grid_size = ttnn.CoreCoord(12, batch)
         new_config_values = {
             "OP3_PRE_SOFTMAX_BMM_CONFIG": ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=grid_size,
@@ -255,18 +248,18 @@ def get_model_config(batch, device_grid_size, model_config_str):
             # MHA
             "OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG": DRAM_MEMCFG,
             # MHA
-            "OP1_FUSED_QKV_MM_INPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "OP4_SOFTMAX_ATTENTION_MASK_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP1_FUSED_QKV_MM_INPUT_DTYPE": ttnn.bfloat16,
+            "OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE": ttnn.bfloat16,
+            "OP4_SOFTMAX_ATTENTION_MASK_DTYPE": ttnn.bfloat16,
             # MHA SELFOUT ATTENTION
-            "OP7_SELFOUT_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP7_SELFOUT_OUTPUT_DTYPE": ttnn.bfloat16,
             # MHA LAYERNORM
-            "OP8_LAYERNORM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,  # Used for ffn sub-graph test, might need in the future with mixed precision
+            "OP8_LAYERNORM_OUTPUT_DTYPE": ttnn.bfloat16,  # Used for ffn sub-graph test, might need in the future with mixed precision
             # FFN
-            "OP10_FF2_MM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP10_FF2_MM_OUTPUT_DTYPE": ttnn.bfloat16,
             # After all encoders
-            "QA_LINEAR_WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "QA_LINEAR_BIAS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "QA_LINEAR_WEIGHTS_DTYPE": ttnn.bfloat16,
+            "QA_LINEAR_BIAS_DTYPE": ttnn.bfloat16,
         }
         model_config.update(new_config_values)
 
@@ -275,18 +268,18 @@ def get_model_config(batch, device_grid_size, model_config_str):
             "DEALLOC_INPUT_EMBEDS_AFTER_POSITION_EMBEDS": True,
             "MOVE_ENCODER_OUTPUT_BOOL": True,
             # MHA
-            "OP1_FUSED_QKV_MM_INPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "OP4_SOFTMAX_ATTENTION_MASK_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP1_FUSED_QKV_MM_INPUT_DTYPE": ttnn.bfloat16,
+            "OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE": ttnn.bfloat16,
+            "OP4_SOFTMAX_ATTENTION_MASK_DTYPE": ttnn.bfloat16,
             # MHA SELFOUT ATTENTION
-            "OP7_SELFOUT_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP7_SELFOUT_OUTPUT_DTYPE": ttnn.bfloat16,
             # MHA LAYERNORM
-            "OP8_LAYERNORM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,  # Used for ffn sub-graph test, might need in the future with mixed precision
+            "OP8_LAYERNORM_OUTPUT_DTYPE": ttnn.bfloat16,  # Used for ffn sub-graph test, might need in the future with mixed precision
             # FFN
-            "OP10_FF2_MM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP10_FF2_MM_OUTPUT_DTYPE": ttnn.bfloat16,
             # After all encoders
-            "QA_LINEAR_WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            "QA_LINEAR_BIAS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "QA_LINEAR_WEIGHTS_DTYPE": ttnn.bfloat16,
+            "QA_LINEAR_BIAS_DTYPE": ttnn.bfloat16,
         }
         model_config.update(new_config_values)
 
@@ -296,29 +289,29 @@ def get_model_config(batch, device_grid_size, model_config_str):
         # Opposite for other arch like WH where ROW_MAJOR is more optimal
         if is_grayskull():
             if batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
-                grid_size = tt_lib.tensor.CoreCoord(batch, activation_grid_dim)
-                shard_orientation = tt_lib.tensor.ShardOrientation.COL_MAJOR
+                grid_size = ttnn.CoreCoord(batch, activation_grid_dim)
+                shard_orientation = ttnn.ShardOrientation.COL_MAJOR
             elif activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
-                grid_size = tt_lib.tensor.CoreCoord(activation_grid_dim, batch)
-                shard_orientation = tt_lib.tensor.ShardOrientation.ROW_MAJOR
+                grid_size = ttnn.CoreCoord(activation_grid_dim, batch)
+                shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
             else:
                 assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
         else:
             if activation_grid_dim <= device_grid_size.x and batch <= device_grid_size.y:
-                grid_size = tt_lib.tensor.CoreCoord(activation_grid_dim, batch)
-                shard_orientation = tt_lib.tensor.ShardOrientation.ROW_MAJOR
+                grid_size = ttnn.CoreCoord(activation_grid_dim, batch)
+                shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
             elif batch <= device_grid_size.x and activation_grid_dim <= device_grid_size.y:
-                grid_size = tt_lib.tensor.CoreCoord(batch, activation_grid_dim)
-                shard_orientation = tt_lib.tensor.ShardOrientation.COL_MAJOR
+                grid_size = ttnn.CoreCoord(batch, activation_grid_dim)
+                shard_orientation = ttnn.ShardOrientation.COL_MAJOR
             else:
                 assert False, f"Device grid size does not support batch {batch} {model_config_str} configuration"
-        transpose_mm_mcast = shard_orientation == tt_lib.tensor.ShardOrientation.COL_MAJOR
+        transpose_mm_mcast = shard_orientation == ttnn.ShardOrientation.COL_MAJOR
         new_config_values = {
             "GRID_SIZE": grid_size,
             "SHARD_SIZE": [384, 128],
             "SHARD_ORIENTATION": shard_orientation,
             "QKV_INTERLEAVED": activation_grid_dim,
-            "OP4_SOFTMAX_ATTENTION_MASK_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP4_SOFTMAX_ATTENTION_MASK_DTYPE": ttnn.bfloat16,
             "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG": BLOCK_SHARDED_MEMCFG,
             "OP1_FUSED_QKV_MM_INPUT_MEMCFG": L1_MEMCFG,
             "OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG": HEIGHT_SHARDED_MEMCFG,
