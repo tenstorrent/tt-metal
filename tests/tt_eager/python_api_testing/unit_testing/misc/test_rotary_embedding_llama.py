@@ -7,13 +7,13 @@ from loguru import logger
 import torch
 import ttnn
 
-from models.experimental.llama2_70b.reference.llama.llama.model import precompute_freqs_cis, apply_rotary_emb
+from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis, apply_rotary_emb
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import skip_for_grayskull
 
-from models.experimental.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
+from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
 
 
 def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
