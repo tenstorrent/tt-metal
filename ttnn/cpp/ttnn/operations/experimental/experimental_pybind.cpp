@@ -26,6 +26,8 @@
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
@@ -51,7 +53,12 @@ void py_module(py::module& module) {
     ssm::detail::bind_prefix_scan(module);
     ssm::detail::bind_repeat_and_interleave_eltwise_mul(module);
     ssm::detail::bind_hc_sum_reduce(module);
+
     copy::detail::py_bind_typecast(module);
+
+    matmul::detail::bind_attn_matmul(module);
+    matmul::detail::bind_attn_matmul_from_cache(module);
+    matmul::detail::bind_group_attn_matmul(module);
 }
 
 }  // namespace ttnn::operations::experimental
