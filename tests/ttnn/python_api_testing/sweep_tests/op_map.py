@@ -964,9 +964,9 @@ op_map = {
     "complex-angle": {
         "tt_op": ttnn_ops.complex_angle,
         "pytorch_op": pytorch_ops.complex_angle,
-    },    
+    },
     "complex-conj-bw": {
         "tt_op": ttnn_ops.complex_conj_bw,
         "pytorch_op": pytorch_ops.complex_conj_bw,
-    },    
+    },
 }
