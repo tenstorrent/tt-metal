@@ -50,7 +50,7 @@ DatacopyParams setup_datacopy(
     all_gather_op::Topology topology,
 
     CoreCoord datacopy_core_coord,
-    ttnn::experimental::ccl::MatmulFusedOpSignaler matmul_fused_op_signaler
+    const ttnn::experimental::ccl::MatmulFusedOpSignaler& matmul_fused_op_signaler
 ) {
 
     std::size_t num_edm_buffers_per_channel = 2;
@@ -116,8 +116,7 @@ DatacopyParams setup_datacopy(
         static_cast<uint32_t>(datacopy_signal_semaphore_id_dir0),
         static_cast<uint32_t>(datacopy_signal_semaphore_id_dir1),
         static_cast<uint32_t>(datacopy_buffer_size),
-        // static_cast<uint32_t>(matmul_fused_op_signaler.num_fused_op_cores_to_signal),
-        // static_cast<uint32_t>(matmul_fused_op_signaler.fused_op_receiver_signal_semaphores[0])
+        static_cast<uint32_t>(matmul_fused_op_signaler.num_fused_op_cores_to_signal)
     };
 
     uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -131,13 +130,15 @@ DatacopyParams setup_datacopy(
     std::vector<uint32_t> datacopy_rt_args = {
         static_cast<uint32_t>(all_gather_output_buffer->address()),
         static_cast<uint32_t>(datacopy_output_buffer->address()),
+        static_cast<uint32_t>(matmul_fused_op_signaler.fused_op_receiver_signal_semaphores[0]),
+        static_cast<uint32_t>(matmul_fused_op_signaler.fused_op_receiver_signal_semaphores[1]),
     };
 
-    // // Push the matmul core NOC coordinates
-    // for (auto coord : matmul_fused_op_signaler.fused_op_receiver_cores_noc) {
-    //     datacopy_rt_args.push_back(coord.x);
-    //     datacopy_rt_args.push_back(coord.y);
-    // }
+    // Push the matmul core NOC coordinates
+    for (auto coord : matmul_fused_op_signaler.fused_op_receiver_cores_noc) {
+        datacopy_rt_args.push_back(static_cast<uint32_t>(coord.x));
+        datacopy_rt_args.push_back(static_cast<uint32_t>(coord.y));
+    }
 
     std::map<string, string> kernel_defines = {
         {"TILED_LAYOUT", "1"},
@@ -254,29 +255,29 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     );
 
     // Matmul
-    // auto matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
-    //     program,
-    //     datacopy_output_tensor,
-    //     weight_tensor,
-    //     bias,
-    //     matmul_output_tensor,
-    //     bcast_batch,
-    //     compute_with_storage_grid_size,
-    //     compute_kernel_config,
-    //     in0_block_w,
-    //     out_subblock_h,
-    //     out_subblock_w,
-    //     per_core_M,
-    //     per_core_N,
-    //     fuse_batch,
-    //     transpose_mcast,
-    //     fused_activation,
-    //     untilize_out,
-    //     matmul_fused_op_signaler
-    // );
+    auto matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+        program,
+        datacopy_output_tensor,
+        weight_tensor,
+        bias,
+        matmul_output_tensor,
+        bcast_batch,
+        compute_with_storage_grid_size,
+        compute_kernel_config,
+        in0_block_w,
+        out_subblock_h,
+        out_subblock_w,
+        per_core_M,
+        per_core_N,
+        fuse_batch,
+        transpose_mcast,
+        fused_activation,
+        untilize_out,
+        matmul_fused_op_signaler
+    );
 
     DatacopyParams datacopy_params = setup_datacopy(
-        program, // matmul_program_with_callbacks.program,
+        matmul_program_with_callbacks.program,
         input_tensor,
         all_gather_output_tensor,
         datacopy_output_tensor,
@@ -295,7 +296,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
 
     // Pass in the datacopy cores and sempahore address (Using optional arguments)
     operation::ProgramWithCallbacks program_with_callbacks = ttnn::all_gather_multi_core_with_workers_helper(
-        program, // matmul_program_with_callbacks.program,
+        matmul_program_with_callbacks.program,
         input_tensor,
         all_gather_output_tensor,
         dim,

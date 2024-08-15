@@ -60,19 +60,18 @@ def run_all_gather_matmul_on_t3000_impl(
     )
 
     # torch matmul output
-    silu = torch.nn.SiLU()
-    matmul_output = torch.chunk(torch.matmul(silu(input_tensor), weights_tensor), num_devices, 3)
+    matmul_output = torch.chunk(torch.matmul(input_tensor, weights_tensor), num_devices, 3)
 
     # Configs for ttnn.matmul
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(8, 4),
-        in0_block_w=4,  # how much inner dim you take each time
+        in0_block_w=1,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-        per_core_M=8,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-        per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+        per_core_M=max(1, input_shape[2] // 32 // 4),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+        per_core_N=max(1, matmul_output_dim // 32 // 8),  # N / TILE_WIDTH / Grid_Size
         transpose_mcast=False,
-        fused_activation=ttnn.UnaryOpType.SILU,
+        fused_activation=None,  # ttnn.UnaryOpType.SILU,
         fuse_batch=False,
     )
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -198,7 +197,7 @@ def run_all_gather_matmul_on_t3000_impl(
         (
             8,
             1,
-            [1, 1, 128, 1024 * 32],
+            [1, 1, 1024, 1024 * 32],
             3,
             ttl.tensor.Layout.TILE,
             1024,
