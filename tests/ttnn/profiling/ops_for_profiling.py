@@ -1503,6 +1503,14 @@ def assign_unary(x):
     ttnn.assign(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=x.get_dtype())
 
 
+def split_dim_3(x):
+    ttnn.split(x, 2, 3)
+
+
+def split_dim_2(x):
+    ttnn.split(x, 2, 2)
+
+
 from tt_lib.fused_ops.softmax import softmax as fused_softmax
 
 
