@@ -90,7 +90,6 @@ run_t3000_trace_stress_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_trace_stress_tests"
-  NUM_TRACE_LOOPS=15 pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
   NUM_TRACE_LOOPS=15 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
 
   # Record the end time

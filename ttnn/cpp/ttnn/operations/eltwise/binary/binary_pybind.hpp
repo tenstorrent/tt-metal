@@ -168,15 +168,15 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
 template <typename binary_operation_t>
 void bind_binary_operation_with_complex(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, activations: Optional[List[str]] = None) -> ttnn.Tensor
+        R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor], input_tensor_b: Union[ttnn.Tensor, ComplexTensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, activations: Optional[List[str]] = None) -> ttnn.Tensor
 
         {2}
 
         Supports broadcasting.
 
         Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
+            * :attr:`input_tensor_a` (ttnn.Tensor or ComplexTensor)
+            * :attr:`input_tensor_b` (ttnn.Tensor or ComplexTensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
 
         Keyword args:
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
@@ -244,8 +244,8 @@ void bind_binary_operation_with_complex(py::module& module, const binary_operati
             py::arg("activations") = std::nullopt,
             py::arg("input_tensor_a_activation") = std::nullopt,
             py::arg("queue_id") = 0},
-            
-        // tensor and tensor
+
+        // ComplexTensor and ComplexTensor
         ttnn::pybind_overload_t{
             [](const binary_operation_t& self,
                const ComplexTensor& input_tensor_a,
@@ -451,6 +451,8 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                 * :attr:`round_mode`
 
             Keyword Args:
+                * :attr:`accurate_mode`: ``false`` if input_tensor_b is non-zero, else ``true`` (Only if the input tensor is not ComplexTensor)
+                * :attr:`round_mode` : (Only if the input tensor is not ComplexTensor)
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
 
             Example:
@@ -661,7 +663,7 @@ void py_module(py::module& module) {
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place
         .. math:: \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation_with_complex(
         module,
         ttnn::multiply,
         R"doc(Multiplies :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
@@ -751,7 +753,7 @@ void py_module(py::module& module) {
         R"doc(Compute bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation_with_complex(
         module,
         ttnn::divide,
         R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
