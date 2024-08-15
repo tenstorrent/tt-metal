@@ -4,7 +4,7 @@
 
 import pytest
 from loguru import logger
-
+import ttnn
 import numpy as np
 import tt_lib as ttl
 from tt_lib.utils import _nearest_32, _nearest_y
@@ -72,7 +72,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     assert conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE
 
     # Run TT metal OP
-    out = ttl.tensor.conv_with_address_map(
+    out = ttnn.experimental.tensor.conv_with_address_map(
         A,
         B_tiled,
         None,

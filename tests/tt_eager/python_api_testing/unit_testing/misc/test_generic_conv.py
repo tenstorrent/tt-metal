@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 import numpy as np
 
-import tt_lib as ttl
 from tt_lib.utils import (
     tilize_to_list,
     tilize,
@@ -156,7 +155,7 @@ def test_run_generic_conv(
         # Run TT metal OP
         if run_conv_with_address_map:
             untilize_out = True
-            out = ttl.tensor.conv_with_address_map(
+            out = ttnn.experimental.tensor.conv_with_address_map(
                 A,
                 B_tiled,
                 [R, S, stride_h, stride_w, pad_h, pad_w],

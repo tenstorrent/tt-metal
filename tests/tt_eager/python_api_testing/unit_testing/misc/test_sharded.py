@@ -7,7 +7,6 @@ import torch
 import math
 
 import ttnn
-import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
@@ -1652,7 +1651,7 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
 
     yt = ttnn.untilize_with_unpadding(
         xt,
-        output_tensor_end=ttl.tensor.Shape([0, 0, 391, 511]),
+        output_tensor_end=ttnn.experimental.tensor.Shape([0, 0, 391, 511]),
         memory_config=out_mem_config,
     )
 
@@ -1740,7 +1739,7 @@ def test_width_sharded_untilize_with_unpadding(
 
     yt = ttnn.untilize_with_unpadding(
         xt,
-        output_tensor_end=ttl.tensor.Shape([N - 1, C - 1, output_H - 1, W - 1]),
+        output_tensor_end=ttnn.experimental.tensor.Shape([N - 1, C - 1, output_H - 1, W - 1]),
         memory_config=out_mem_config,
     )
 
@@ -1807,7 +1806,7 @@ def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dt
 
     yt = ttnn.tilize_with_val_padding(
         xt,
-        ttl.tensor.Shape([N, C, roundup32(H), W]),
+        ttnn.experimental.tensor.Shape([N, C, roundup32(H), W]),
         1.0,
         memory_config=out_mem_config,
         dtype=output_dtype,
@@ -2259,7 +2258,7 @@ def run_reshard_test(
         output_dtype=tt_dtype,
     )
 
-    tt_tensor_reshard = ttl.tensor.reshard(tt_tensor_sharded, output_mem_config)
+    tt_tensor_reshard = ttnn.experimental.tensor.reshard(tt_tensor_sharded, output_mem_config)
 
     tt_tensor_interleaved = ttnn.experimental.tensor.sharded_to_interleaved(
         tt_tensor_reshard,

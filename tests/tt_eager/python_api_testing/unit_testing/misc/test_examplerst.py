@@ -6,7 +6,6 @@
 
 import torch
 import ttnn
-from tt_lib.fallback_ops import fallback_ops
 
 if __name__ == "__main__":
     # Initialize TT Accelerator device on PCI slot 0

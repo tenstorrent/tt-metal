@@ -7,7 +7,6 @@ import torch
 import math
 import ttnn
 
-import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
@@ -137,7 +136,7 @@ class TestBertOpsTrace:
                     ttnn.ShardOrientation.COL_MAJOR,
                 )
             else:
-                in0_t = ttnn.clone(in0_t_res, memory_config=interleaved_mem_config_L1)
+                in0_t = ttnn.experimental.tensor.clone(in0_t_res, interleaved_mem_config_L1)
 
             if has_bias:
                 output_t = ttnn.linear(

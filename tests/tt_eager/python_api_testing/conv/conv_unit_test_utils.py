@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttl
 import ttnn
 from tt_lib.utils import _nearest_32, _nearest_y
 
@@ -51,7 +50,7 @@ def create_conv_weight_tensor(torch_tensor, K, C, R, S, in1_block_h, in1_block_w
     B_ = ttnn.Tensor(torch.flatten(torch_tensor).tolist(), weights_shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT).pad(
         weights_channels_padded_shape, (0, 0, 0, 0), 0.0
     )
-    B_tiled_host = ttl.tensor.convert_conv_weight_tensor_to_tiled_layout(B_, in1_block_h, in1_block_w)
+    B_tiled_host = ttnn.experimental.tensor.convert_conv_weight_tensor_to_tiled_layout(B_, in1_block_h, in1_block_w)
     return B_tiled_host
 
 
@@ -65,7 +64,9 @@ def create_conv_weight_tensor_special_special(torch_tensor, K, C, R, S, in1_bloc
     B_ = ttnn.Tensor(torch.flatten(torch_tensor).tolist(), weights_shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT).pad(
         weights_channels_padded_shape, (0, 0, 0, 0), 0.0
     )
-    B_tiled_host = ttl.tensor.convert_conv_weight_tensor_to_special_padding_tiled_layout(B_, in1_block_h, in1_block_w)
+    B_tiled_host = ttnn.experimental.tensor.convert_conv_weight_tensor_to_special_padding_tiled_layout(
+        B_, in1_block_h, in1_block_w
+    )
     return B_tiled_host
 
 
@@ -79,5 +80,7 @@ def create_conv_weight_tensor_special_padding(torch_tensor, K, C, R, S, in1_bloc
     B_ = ttnn.Tensor(torch.flatten(torch_tensor).tolist(), weights_shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT).pad(
         weights_channels_padded_shape, (0, 0, 0, 0), 0.0
     )
-    B_tiled_host = ttl.tensor.convert_conv_weight_tensor_to_special_padding_tiled_layout(B_, in1_block_h, in1_block_w)
+    B_tiled_host = ttnn.experimental.tensor.convert_conv_weight_tensor_to_special_padding_tiled_layout(
+        B_, in1_block_h, in1_block_w
+    )
     return B_tiled_host

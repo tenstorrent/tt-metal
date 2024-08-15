@@ -10,7 +10,6 @@ import pathlib
 import torch
 import numpy as np
 
-import tt_lib as ttl
 import ttnn
 
 tt_dtype_to_torch_dtype = {
@@ -52,9 +51,9 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
         ttnn.uint32,
         ttnn.uint16,
     }:
-        assert tt_tensor.storage_type() == ttl.tensor.StorageType.BORROWED
+        assert tt_tensor.storage_type() == ttnn.experimental.tensor.StorageType.BORROWED
     else:
-        assert tt_tensor.storage_type() == ttl.tensor.StorageType.OWNED
+        assert tt_tensor.storage_type() == ttnn.experimental.tensor.StorageType.OWNED
 
     if tt_dtype in {ttnn.bfloat8_b, ttnn.bfloat4_b}:
         tt_tensor = tt_tensor.to(ttnn.TILE_LAYOUT)
@@ -120,7 +119,7 @@ def test_tensor_conversion_between_torch_and_np(shape, tt_dtype, device):
 
     tt_tensor = ttnn.Tensor(np_tensor, tt_dtype)
     if tt_dtype in {ttnn.float32, ttnn.uint32, ttnn.uint16}:
-        assert tt_tensor.storage_type() == ttl.tensor.StorageType.BORROWED
+        assert tt_tensor.storage_type() == ttnn.experimental.tensor.StorageType.BORROWED
 
     if tt_dtype in {
         ttnn.float32,

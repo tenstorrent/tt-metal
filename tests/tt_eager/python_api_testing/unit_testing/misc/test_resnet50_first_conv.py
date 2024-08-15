@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 import numpy as np
 
-import tt_lib as ttl
 import ttnn
 
 from tt_lib.utils import (
@@ -197,7 +196,7 @@ def test_resnet50_first_conv(
         output_mem_config = (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1) if sharded_out else None
         )
-        out = ttl.tensor.optimized_conv(
+        out = ttnn.operations.conv2d.optimized_conv(
             A_cl_device,
             B_tiled,
             bias_device,
@@ -208,13 +207,13 @@ def test_resnet50_first_conv(
             has_bias,
             fuse_relu,
             ttnn.MathFidelity.HiFi4,
-            ttl.tensor.OptimizedConvParallelizationConfig(
+            ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
                 grid_size=grid_size,
                 num_cores_nhw=grid_size[0],
                 per_core_out_matrix_height_ntiles=per_core_out_h_ntiles,
                 per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
             ),
-            ttl.tensor.OptimizedConvBlockConfig(
+            ttnn.operations.conv2d.OptimizedConvBlockConfig(
                 act_block_h_ntiles=act_block_h,
                 act_block_w_ntiles=act_block_w,
                 out_subblock_h_ntiles=out_subblock_h,
