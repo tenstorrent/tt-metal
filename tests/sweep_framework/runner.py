@@ -14,6 +14,7 @@ from queue import Empty
 import subprocess
 from statuses import TestStatus, VectorValidity, VectorStatus
 import tt_smi_util
+from device_fixtures import default_device
 from elasticsearch import Elasticsearch, NotFoundError
 from elastic_config import *
 
@@ -37,20 +38,15 @@ def get_username():
 
 def get_devices(test_module):
     try:
-        device = test_module.device_fixture()
-        return device, True
+        return test_module.device_fixture()
     except:
-        device = ttnn.open_device(0)
-        return device, False
+        return default_device()
 
 
 def run(test_module, input_queue, output_queue):
-    device_generator, custom_device = get_devices(test_module)
-    if custom_device:
-        print("SWEEPS: Opening custom device configuration.")
-        device = next(device_generator)
-    else:
-        device = device_generator
+    device_generator, device_name = get_devices(test_module)
+    print(f"SWEEPS: Opening device configuration, {device_name}.")
+    device = next(device_generator)
     try:
         while True:
             test_vector = input_queue.get(block=True, timeout=1)
@@ -68,14 +64,11 @@ def run(test_module, input_queue, output_queue):
                 e2e_perf = None
             output_queue.put([status, message, e2e_perf])
     except Empty as e:
-        if custom_device:
-            try:
-                # Run teardown in device_fixture
-                next(device_generator)
-            except StopIteration:
-                print("SWEEPS: Closing custom device configuration.")
-        else:
-            ttnn.close_device(device)
+        try:
+            # Run teardown in device_fixture
+            next(device_generator)
+        except StopIteration:
+            print("SWEEPS: Closing device configuration.")
 
 
 def get_timeout(test_module):
