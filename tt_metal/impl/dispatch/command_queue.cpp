@@ -503,9 +503,6 @@ void generate_runtime_args_cmds(
 
 // Generate command sequence for unique (unicast) and common (multicast) runtime args
 void EnqueueProgramCommand::assemble_runtime_args_commands() {
-    // TODO: provide this at a lower level
-    static vector<CoreType> core_types = {CoreType::WORKER, CoreType::ETH};
-
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
 
@@ -523,15 +520,15 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
     this->cached_program_command_sequences[program.id].runtime_args_command_sequences = {};
 
     uint32_t command_count = 0;
-    for (CoreType core_type : core_types) {
-        for (auto& kg : program.get_kernel_groups(core_type)) {
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < hal.get_programmable_core_type_count(); programmable_core_type_index++) {
+        for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
             if (kg.total_rta_size != 0) {
                 // Reserve 2x for unique rtas as we pontentially split the cmds due to not fitting in one prefetch cmd
                 command_count += 2;
             }
         }
         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-            uint32_t common_size = program.get_program_config(core_type).crta_sizes[dispatch_class];
+            uint32_t common_size = program.get_program_config(programmable_core_type_index).crta_sizes[dispatch_class];
             if (common_size != 0) {
                 command_count++;
             }
@@ -540,8 +537,15 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
 
     this->cached_program_command_sequences[program.id].runtime_args_command_sequences.reserve(command_count);
     // Unique Runtime Args (Unicast)
-    for (CoreType core_type : core_types) {
-        for (auto& kg : program.get_kernel_groups(core_type)) {
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        if (hal.get_programmable_core_type(index) == HalProgrammableCoreType::IDLE_ETH) {
+            // Fast dispatch not supported on IDLE_ETH yet
+            // TODO: can't just loop here as code below confuses ACTIVE/IDLE
+            continue;
+        }
+        CoreType core_type = hal.get_core_type(index);
+
+        for (auto& kg : program.get_kernel_groups(index)) {
             if (kg.total_rta_size != 0) {
                 for (const CoreRange& core_range : kg.core_ranges.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -574,7 +578,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                         }
                     }
                 }
-                uint32_t rta_offset = program.get_program_config(core_type).rta_offset;
+                uint32_t rta_offset = program.get_program_config(index).rta_offset;
                 generate_runtime_args_cmds(
                     this->cached_program_command_sequences[program.id].runtime_args_command_sequences,
                     rta_offset,
@@ -599,7 +603,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
         }
 
         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
-            uint32_t common_size = program.get_program_config(core_type).crta_sizes[dispatch_class];
+            uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
             for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
                 auto kernel = detail::GetKernel(program, kernel_id);
                 if (kernel->get_kernel_core_type() != core_type)
@@ -650,7 +654,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
             }
 
             if (common_size != 0) {
-                uint32_t crta_offset = program.get_program_config(core_type).crta_offsets[dispatch_class];
+                uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
 
                 // Common rtas are always expected to fit in one prefetch cmd
                 // TODO: use a linear write instead of a packed-write
@@ -974,7 +978,11 @@ void EnqueueProgramCommand::assemble_device_commands(
         constexpr uint32_t go_signal_sizeB = sizeof(launch_msg_t);
         constexpr uint32_t aligned_go_signal_sizeB = align(go_signal_sizeB, L1_ALIGNMENT);
         constexpr uint32_t go_signal_size_words = aligned_go_signal_sizeB / sizeof(uint32_t);
-        for (KernelGroup& kernel_group : program.get_kernel_groups(CoreType::WORKER)) {
+
+        // TODO: eventually the code below could be structured to loop over programmable_indices
+        // and check for mcast/unicast
+        uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        for (KernelGroup& kernel_group : program.get_kernel_groups(programmable_core_index)) {
             kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
             kernel_group.launch_msg.kernel_config.dispatch_core_x = this->dispatch_core.x;
             kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
@@ -1003,25 +1011,31 @@ void EnqueueProgramCommand::assemble_device_commands(
                 this->packed_write_max_unicast_sub_cmds,
                 multicast_go_signals_payload);
         }
-        for (KernelGroup& kernel_group : program.get_kernel_groups(CoreType::ETH)) {
-            kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
-            kernel_group.launch_msg.kernel_config.dispatch_core_x = this->dispatch_core.x;
-            kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
-            kernel_group.launch_msg.kernel_config.kernel_config_base = eth_l1_kernel_config_base;
-            kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
-            const void* launch_message_data = (const launch_msg_t*)(&kernel_group.launch_msg);
-            for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
-                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                        CoreCoord physical_coord =
-                            device->physical_core_from_logical_core(CoreCoord({x, y}), kernel_group.get_core_type());
-                        unicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                            .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_coord)});
-                        unicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
+
+        programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        // TODO: ugly, can be fixed by looping over indices w/ some work
+        if (programmable_core_index != -1) {
+            for (KernelGroup& kernel_group : program.get_kernel_groups(programmable_core_index)) {
+                kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
+                kernel_group.launch_msg.kernel_config.dispatch_core_x = this->dispatch_core.x;
+                kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
+                kernel_group.launch_msg.kernel_config.kernel_config_base = eth_l1_kernel_config_base;
+                kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
+                const void* launch_message_data = (const launch_msg_t*)(&kernel_group.launch_msg);
+                for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
+                    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                            CoreCoord physical_coord =
+                                device->physical_core_from_logical_core(CoreCoord({x, y}), kernel_group.get_core_type());
+                            unicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
+                                    .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_coord)});
+                            unicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
+                        }
                     }
                 }
             }
         }
+
         if (unicast_go_signal_sub_cmds.size() > 0) {
             cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
                 unicast_go_signal_sub_cmds.size(),
@@ -1234,6 +1248,7 @@ void EnqueueProgramCommand::process() {
     this->manager.get_config_buffer_mgr().free(reservation.first.sync_count);
     this->manager.get_config_buffer_mgr().alloc(
         this->expected_num_workers_completed + program.program_transfer_info.num_active_cores);
+    // TODO: fix hard coded values below
     uint32_t tensix_l1_write_offset = reservation.second[0].addr;
     uint32_t eth_l1_write_offset = reservation.second[1].addr;
 
@@ -1247,8 +1262,9 @@ void EnqueueProgramCommand::process() {
         this->assemble_runtime_args_commands();
 
         // Record kernel groups in this program, only need to do it once.
-        for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
-            RecordKernelGroups(program, core_type, program.get_kernel_groups(core_type));
+        for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+            CoreType core_type = hal.get_core_type(index);
+            RecordKernelGroups(program, core_type, program.get_kernel_groups(index));
         }
     } else {
         static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));

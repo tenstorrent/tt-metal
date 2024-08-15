@@ -22,10 +22,18 @@ namespace tt_metal {
 
 void DumpDeviceProfileResults(Device* device, const Program& program) {
 #if defined(TRACY_ENABLE)
-    auto const& worker_cores_in_program =
-        device->worker_cores_from_logical_cores(program.logical_cores().at(CoreType::WORKER));
-    auto const& eth_cores_in_program =
-        device->ethernet_cores_from_logical_cores(program.logical_cores().at(CoreType::ETH));
+    std::vector<CoreCoord> worker_cores_in_program;
+    std::vector<CoreCoord> eth_cores_in_program;
+
+    std::vector<std::vector<CoreCoord>>logical_cores = program.logical_cores();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        if (hal.get_core_type(index) == CoreType::WORKER) {
+            worker_cores_in_program = device->worker_cores_from_logical_cores(logical_cores[index]);
+        }
+        if (hal.get_core_type(index) == CoreType::ETH) {
+            eth_cores_in_program = device->ethernet_cores_from_logical_cores(logical_cores[index]);
+        }
+    }
 
     std::vector<CoreCoord> cores_in_program;
     cores_in_program.reserve(worker_cores_in_program.size() + eth_cores_in_program.size());
