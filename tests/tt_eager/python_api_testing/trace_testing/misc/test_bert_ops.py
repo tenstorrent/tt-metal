@@ -18,9 +18,7 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
 
 
 @pytest.mark.skipif(is_wormhole_b0(), reason="Unsupported parallelizations for WH B0")
-@pytest.mark.parametrize(
-    "fidelity", [ttl.tensor.MathFidelity.LoFi, ttl.tensor.MathFidelity.HiFi2], ids=["LoFi", "HiFi2"]
-)
+@pytest.mark.parametrize("fidelity", [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2], ids=["LoFi", "HiFi2"])
 @pytest.mark.parametrize(
     "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation",
     [
@@ -86,40 +84,32 @@ class TestBertOpsTrace:
         logger.debug("out block w h " + str(out_block_w * 32) + " " + str(out_block_h * 32))
         logger.debug("out subblock w h " + str(out_subblock_w * 32) + " " + str(out_subblock_h * 32))
 
-        interleaved_mem_config_L1 = ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+        interleaved_mem_config_L1 = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.L1,
         )
-        interleaved_mem_config_DRAM = ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.DRAM,
+        interleaved_mem_config_DRAM = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.DRAM,
         )
-        sharded_mem_config = ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            buffer_type=ttl.tensor.BufferType.L1,
+        sharded_mem_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
         )
 
         in0 = torch.randn(in0_shape).bfloat16().float()
         in1 = torch.randn(in1_shape).bfloat16().float()
         bias = torch.randn(bias_shape).bfloat16().float()
-        in0_t_res = torch2tt_tensor(
-            in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-        )
+        in0_t_res = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttnn.bfloat8_b)
 
         if in1_in_dram:
-            in1_t = torch2tt_tensor(
-                in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-            )
+            in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttnn.bfloat8_b)
         else:
-            in1_t = torch2tt_tensor(
-                in1, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-            )
+            in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttnn.bfloat8_b)
 
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config_L1
 
-        bias_t = pad_by_zero(
-            bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
-        )[0]
+        bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttnn.bfloat8_b)[0]
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -133,18 +123,18 @@ class TestBertOpsTrace:
             fused_activation=activation,
         )
 
-        compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(math_fidelity=fidelity, math_approx_mode=True)
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(math_fidelity=fidelity, math_approx_mode=True)
 
         trace_loops = 4
 
         def run_ops(in0_t_res):
             if in0_sharded:
-                in0_t = ttl.tensor.interleaved_to_sharded(
+                in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
                     in0_t_res,
                     grid_size,
                     [M // grid_size[0], K // grid_size[1]],
-                    ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                    ttl.tensor.ShardOrientation.COL_MAJOR,
+                    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    ttnn.ShardOrientation.COL_MAJOR,
                 )
             else:
                 in0_t = ttnn.clone(in0_t_res, memory_config=interleaved_mem_config_L1)
@@ -167,26 +157,26 @@ class TestBertOpsTrace:
                     compute_kernel_config=compute_kernel_config,
                 )
             if out_sharded:
-                output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+                output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
             return output_t
 
         # Compile
         run_ops(in0_t_res)
         # Capture
         logger.info("Start Trace capture")
-        tid = ttl.device.BeginTraceCapture(device, cq_id)
+        tid = ttnn.experimental.device.BeginTraceCapture(device, cq_id)
         output_t_res = run_ops(in0_t_res)
-        ttl.device.EndTraceCapture(device, cq_id, tid)
+        ttnn.experimental.device.EndTraceCapture(device, cq_id, tid)
         logger.info("Trace captured")
 
         for iter in range(trace_loops):
             in0 = torch.randn(in0_shape).bfloat16().float()
             in0_t_updated = torch2tt_tensor(
-                in0, None, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+                in0, None, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttnn.bfloat8_b
             )
-            ttl.tensor.write_tensor(in0_t_updated, in0_t_res)
+            ttnn.experimental.tensor.write_tensor(in0_t_updated, in0_t_res)
             logger.info(f"Running iteration {iter}")
-            ttl.device.ReplayTrace(device, cq_id, tid, True)
+            ttnn.experimental.device.ReplayTrace(device, cq_id, tid, True)
 
             pt_out = in0 @ in1
 
@@ -202,7 +192,7 @@ class TestBertOpsTrace:
             assert passing
 
         # Done with the trace, can deallocate the buffers now.
-        ttl.device.ReleaseTrace(device, tid)
+        ttnn.experimental.device.ReleaseTrace(device, tid)
         device.enable_async(False)
 
     @pytest.mark.parametrize("device_params", [{"trace_region_size": 34816}], indirect=True)

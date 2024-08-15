@@ -5,7 +5,7 @@
 import pytest
 import torch
 from functools import partial
-import tt_lib as ttl
+import ttnn
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
@@ -17,25 +17,25 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
 )
 
 mem_configs = [
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
 ]
 
 
 @pytest.mark.parametrize(
     "pt_input_dtype, tt_input_dtype",
     (
-        (torch.float16, ttl.tensor.DataType.FLOAT32),
-        (torch.float32, ttl.tensor.DataType.BFLOAT8_B),
-        (torch.bfloat16, ttl.tensor.DataType.BFLOAT16),
-        (torch.int, ttl.tensor.DataType.UINT32),
+        (torch.float16, ttnn.float32),
+        (torch.float32, ttnn.bfloat8_b),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.int, ttnn.uint32),
     ),
 )
 @pytest.mark.parametrize(
     "pt_output_dtype, tt_output_dtype",
     (
-        (torch.bfloat16, ttl.tensor.DataType.BFLOAT16),
-        (torch.float32, ttl.tensor.DataType.BFLOAT8_B),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.bfloat8_b),
     ),
 )
 @pytest.mark.parametrize(
@@ -70,7 +70,7 @@ class TestTypecast:
         device,
         function_level_defaults,
     ):
-        if tt_input_dtype in [ttl.tensor.DataType.FLOAT32, ttl.tensor.DataType.UINT32]:
+        if tt_input_dtype in [ttnn.float32, ttnn.uint32]:
             pytest.skip(f"{tt_input_dtype} cannot be converted yet. Skip")
         if tt_input_dtype == tt_output_dtype:
             pytest.skip("Same I/O data types. Skip.")

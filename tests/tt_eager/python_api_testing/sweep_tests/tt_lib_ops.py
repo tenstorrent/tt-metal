@@ -29,7 +29,7 @@ def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
 def setup_host_and_device(func):
     def wrap(*args, device, **kwargs):
         output = func(*args, device=device, **kwargs)
-        ttl.device.DeallocateBuffers(device)
+        ttnn.experimental.device.DeallocateBuffers(device)
         return output
 
     return wrap
@@ -315,10 +315,10 @@ def eltwise_rsqrt(
         # either use this format or move the test to non-working as ttnn does not use run_with_autoformat
         input_shape = t0.shape
         t0 = t0.cpu().pad_to_tile(0)
-        t0 = t0.to(ttl.tensor.Layout.TILE)
+        t0 = t0.to(ttnn.TILE_LAYOUT)
         t0 = t0.to(device)
         t1 = ttnn.rsqrt(t0, fast_and_approximate_mode=fast_and_approx, memory_config=output_mem_config)
-        t1 = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(input_shape)
+        t1 = t1.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(input_shape)
 
     return tt2torch_tensor(t1)
 
@@ -630,10 +630,10 @@ def add_layernorm_noweights(x, y, *args, device, dtype, layout, input_mem_config
 
 @setup_host_and_device
 def layernorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    if layout[1] == ttl.tensor.Layout.TILE:
+    if layout[1] == ttnn.TILE_LAYOUT:
         y = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
 
-    if layout[2] == ttl.tensor.Layout.TILE:
+    if layout[2] == ttnn.TILE_LAYOUT:
         z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -1197,7 +1197,7 @@ def fill_rm(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.fill_rm(
+    t1 = ttnn.fill_rm(
         x.shape[0],
         x.shape[1],
         x.shape[2],
@@ -1207,7 +1207,7 @@ def fill_rm(
         t0,
         val_hi,
         val_lo,
-        output_mem_config=output_mem_config,
+        memory_config=output_mem_config,
     )
 
     return tt2torch_tensor(t1)
@@ -1227,7 +1227,7 @@ def fill_ones_rm(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.fill_ones_rm(
+    t1 = ttnn.fill_ones_rm(
         x.shape[0],
         x.shape[1],
         x.shape[2],
@@ -1235,7 +1235,7 @@ def fill_ones_rm(
         hOnes,
         wOnes,
         t0,
-        output_mem_config=output_mem_config,
+        memory_config=output_mem_config,
     )
 
     return tt2torch_tensor(t1)
@@ -1438,17 +1438,17 @@ def eltwise_add_unary(
 @setup_host_and_device
 def bcast_add_h(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = y
-    if layout[1] == ttl.tensor.Layout.TILE:
+    if layout[1] == ttnn.TILE_LAYOUT:
         t1 = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(t1, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttl.tensor.bcast(
+    t2 = ttnn.experimental.tensor.bcast(
         t0,
         t1,
-        ttl.tensor.BcastOpMath.ADD,
-        ttl.tensor.BcastOpDim.H,
+        ttnn.experimental.tensor.BcastOpMath.ADD,
+        ttnn.experimental.tensor.BcastOpDim.H,
         output_mem_config=output_mem_config,
     )
 
@@ -1458,17 +1458,17 @@ def bcast_add_h(x, y, *args, device, dtype, layout, input_mem_config, output_mem
 @setup_host_and_device
 def bcast_add_w(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = y
-    if layout[1] == ttl.tensor.Layout.TILE or (input_mem_config[1] and layout[1] == ttl.tensor.Layout.ROW_MAJOR):
+    if layout[1] == ttnn.TILE_LAYOUT or (input_mem_config[1] and layout[1] == ttnn.ROW_MAJOR_LAYOUT):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(t1, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttl.tensor.bcast(
+    t2 = ttnn.experimental.tensor.bcast(
         t0,
         t1,
-        ttl.tensor.BcastOpMath.ADD,
-        ttl.tensor.BcastOpDim.W,
+        ttnn.experimental.tensor.BcastOpMath.ADD,
+        ttnn.experimental.tensor.BcastOpDim.W,
         output_mem_config=output_mem_config,
     )
 
@@ -1478,19 +1478,19 @@ def bcast_add_w(x, y, *args, device, dtype, layout, input_mem_config, output_mem
 @setup_host_and_device
 def bcast_add_hw(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = y
-    if layout[1] == ttl.tensor.Layout.TILE:
+    if layout[1] == ttnn.TILE_LAYOUT:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3], 0, 32 - y.shape[2]))
-    elif input_mem_config[1] and layout[1] == ttl.tensor.Layout.ROW_MAJOR:
+    elif input_mem_config[1] and layout[1] == ttnn.ROW_MAJOR_LAYOUT:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(t1, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttl.tensor.bcast(
+    t2 = ttnn.experimental.tensor.bcast(
         t0,
         t1,
-        ttl.tensor.BcastOpMath.ADD,
-        ttl.tensor.BcastOpDim.HW,
+        ttnn.experimental.tensor.BcastOpMath.ADD,
+        ttnn.experimental.tensor.BcastOpDim.HW,
         output_mem_config=output_mem_config,
     )
 
@@ -1500,17 +1500,17 @@ def bcast_add_hw(x, y, *args, device, dtype, layout, input_mem_config, output_me
 @setup_host_and_device
 def bcast_sub_h(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = y
-    if layout[1] == ttl.tensor.Layout.TILE:
+    if layout[1] == ttnn.TILE_LAYOUT:
         t1 = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(t1, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttl.tensor.bcast(
+    t2 = ttnn.experimental.tensor.bcast(
         t0,
         t1,
-        ttl.tensor.BcastOpMath.SUB,
-        ttl.tensor.BcastOpDim.H,
+        ttnn.experimental.tensor.BcastOpMath.SUB,
+        ttnn.experimental.tensor.BcastOpDim.H,
         output_mem_config=output_mem_config,
     )
 
@@ -1520,17 +1520,17 @@ def bcast_sub_h(x, y, *args, device, dtype, layout, input_mem_config, output_mem
 @setup_host_and_device
 def bcast_sub_w(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = y
-    if layout[1] == ttl.tensor.Layout.TILE or (input_mem_config[1] and layout[1] == ttl.tensor.Layout.ROW_MAJOR):
+    if layout[1] == ttnn.TILE_LAYOUT or (input_mem_config[1] and layout[1] == ttnn.ROW_MAJOR_LAYOUT):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(t1, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttl.tensor.bcast(
+    t2 = ttnn.experimental.tensor.bcast(
         t0,
         t1,
-        ttl.tensor.BcastOpMath.SUB,
-        ttl.tensor.BcastOpDim.W,
+        ttnn.experimental.tensor.BcastOpMath.SUB,
+        ttnn.experimental.tensor.BcastOpDim.W,
         output_mem_config=output_mem_config,
     )
 
@@ -1540,19 +1540,19 @@ def bcast_sub_w(x, y, *args, device, dtype, layout, input_mem_config, output_mem
 @setup_host_and_device
 def bcast_sub_hw(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = y
-    if layout[1] == ttl.tensor.Layout.TILE:
+    if layout[1] == ttnn.TILE_LAYOUT:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3], 0, 32 - y.shape[2]))
-    elif input_mem_config[1] and layout[1] == ttl.tensor.Layout.ROW_MAJOR:
+    elif input_mem_config[1] and layout[1] == ttnn.ROW_MAJOR_LAYOUT:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(t1, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttl.tensor.bcast(
+    t2 = ttnn.experimental.tensor.bcast(
         t0,
         t1,
-        ttl.tensor.BcastOpMath.SUB,
-        ttl.tensor.BcastOpDim.HW,
+        ttnn.experimental.tensor.BcastOpMath.SUB,
+        ttnn.experimental.tensor.BcastOpDim.HW,
         output_mem_config=output_mem_config,
     )
 
@@ -1562,17 +1562,17 @@ def bcast_sub_hw(x, y, *args, device, dtype, layout, input_mem_config, output_me
 @setup_host_and_device
 def bcast_mul_h(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = y
-    if layout[1] == ttl.tensor.Layout.TILE:
+    if layout[1] == ttnn.TILE_LAYOUT:
         t1 = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(t1, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttl.tensor.bcast(
+    t2 = ttnn.experimental.tensor.bcast(
         t0,
         t1,
-        ttl.tensor.BcastOpMath.MUL,
-        ttl.tensor.BcastOpDim.H,
+        ttnn.experimental.tensor.BcastOpMath.MUL,
+        ttnn.experimental.tensor.BcastOpDim.H,
         output_mem_config=output_mem_config,
     )
 
@@ -1582,17 +1582,17 @@ def bcast_mul_h(x, y, *args, device, dtype, layout, input_mem_config, output_mem
 @setup_host_and_device
 def bcast_mul_w(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = y
-    if layout[1] == ttl.tensor.Layout.TILE or (input_mem_config[1] and layout[1] == ttl.tensor.Layout.ROW_MAJOR):
+    if layout[1] == ttnn.TILE_LAYOUT or (input_mem_config[1] and layout[1] == ttnn.ROW_MAJOR_LAYOUT):
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(t1, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttl.tensor.bcast(
+    t2 = ttnn.experimental.tensor.bcast(
         t0,
         t1,
-        ttl.tensor.BcastOpMath.MUL,
-        ttl.tensor.BcastOpDim.W,
+        ttnn.experimental.tensor.BcastOpMath.MUL,
+        ttnn.experimental.tensor.BcastOpDim.W,
         output_mem_config=output_mem_config,
     )
 
@@ -1602,19 +1602,19 @@ def bcast_mul_w(x, y, *args, device, dtype, layout, input_mem_config, output_mem
 @setup_host_and_device
 def bcast_mul_hw(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = y
-    if layout[1] == ttl.tensor.Layout.TILE:
+    if layout[1] == ttnn.TILE_LAYOUT:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3], 0, 32 - y.shape[2]))
-    elif input_mem_config[1] and layout[1] == ttl.tensor.Layout.ROW_MAJOR:
+    elif input_mem_config[1] and layout[1] == ttnn.ROW_MAJOR_LAYOUT:
         t1 = torch.nn.functional.pad(y, (0, 32 - y.shape[3]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(t1, device, layout[1], input_mem_config[1], dtype[1])
 
-    t2 = ttl.tensor.bcast(
+    t2 = ttnn.experimental.tensor.bcast(
         t0,
         t1,
-        ttl.tensor.BcastOpMath.MUL,
-        ttl.tensor.BcastOpDim.HW,
+        ttnn.experimental.tensor.BcastOpMath.MUL,
+        ttnn.experimental.tensor.BcastOpDim.HW,
         output_mem_config=output_mem_config,
     )
 
@@ -1826,18 +1826,18 @@ def tilize_with_val_padding(
 @setup_host_and_device
 def untilize(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     if input_mem_config[0] is None:
-        t0 = ttl.tensor.Tensor(
+        t0 = ttnn.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
             dtype[0],
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
         )
     else:
-        t0 = ttl.tensor.Tensor(
+        t0 = ttnn.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
             dtype[0],
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             device,
             input_mem_config[0],
         )
@@ -1859,18 +1859,18 @@ def untilize_with_unpadding(
     **kwargs,
 ):
     if input_mem_config[0] is None:
-        t0 = ttl.tensor.Tensor(
+        t0 = ttnn.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
             dtype[0],
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
         )
     else:
-        t0 = ttl.tensor.Tensor(
+        t0 = ttnn.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
             dtype[0],
-            ttl.tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             device,
             input_mem_config[0],
         )
@@ -1972,9 +1972,7 @@ def make_unary_op(ttl_tensor_unop):
         dtype,
         layout,
         input_mem_config,
-        output_mem_config=ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-        ),
+        output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         **kwargs,
     ):
         t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -1994,9 +1992,7 @@ def make_ttnn_unary_op(ttl_tensor_unop):
         dtype,
         layout,
         input_mem_config,
-        output_mem_config=ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-        ),
+        output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         **kwargs,
     ):
         t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -2017,7 +2013,7 @@ def transpose(
     dtype,
     layout,
     input_mem_config,
-    memory_config=ttnn.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+    memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -2342,11 +2338,11 @@ def tensor_unpad(
     output_tensor_end,
     **kwargs,
 ):
-    t0 = ttl.tensor.Tensor(
+    t0 = ttnn.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
         dtype[0],
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
 
     t0 = t0.to(layout[0])
@@ -2388,11 +2384,11 @@ def unpad_from_tile(
     output_tensor_shape,
     **kwargs,
 ):
-    t0 = ttl.tensor.Tensor(
+    t0 = ttnn.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
         dtype[0],
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
 
     t0 = t0.to(layout[0])
@@ -2456,11 +2452,11 @@ def bert_large_fused_qkv_matmul(
     b_t = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     bias_t = (
-        ttl.tensor.Tensor(
+        ttnn.Tensor(
             z.flatten().tolist(),
             z.shape,
             dtype[2],
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
         .pad([1, 1, 32, 3072], [0, 0, 0, 0], 0)
         .to(layout[2])
@@ -2473,7 +2469,7 @@ def bert_large_fused_qkv_matmul(
 
 @setup_host_and_device
 def bert_large_selfout_matmul(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    if layout[2] == ttl.tensor.Layout.TILE:
+    if layout[2] == ttnn.TILE_LAYOUT:
         z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -2487,7 +2483,7 @@ def bert_large_selfout_matmul(x, y, z, *args, device, dtype, layout, input_mem_c
 
 @setup_host_and_device
 def bert_large_ff2_matmul(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    if layout[2] == ttl.tensor.Layout.TILE:
+    if layout[2] == ttnn.TILE_LAYOUT:
         z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -2501,7 +2497,7 @@ def bert_large_ff2_matmul(x, y, z, *args, device, dtype, layout, input_mem_confi
 
 @setup_host_and_device
 def bert_large_ff1_matmul(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    if layout[2] == ttl.tensor.Layout.TILE:
+    if layout[2] == ttnn.TILE_LAYOUT:
         z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -2544,9 +2540,9 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
     x_ref = x.detach().clone()
 
     t0 = torch.clamp(x_ref, min=0, max=y.shape[-2] - 1)
-    t0 = ttl.tensor.Tensor(t0, dtype[0]).to(device, input_mem_config[0])
+    t0 = ttnn.Tensor(t0, dtype[0]).to(device, input_mem_config[0])
 
-    t1 = ttl.tensor.Tensor(y, dtype[1]).to(device, input_mem_config[1])
+    t1 = ttnn.Tensor(y, dtype[1]).to(device, input_mem_config[1])
 
     t2 = ttnn.embedding(t0, t1, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config)
     t2 = ttnn.reshape(t2, [t2.shape[0], 1, t2.shape[1], t2.shape[2]])
@@ -2568,10 +2564,10 @@ def rmsnorm_noweights(x, *args, device, dtype, layout, input_mem_config, output_
 
 @setup_host_and_device
 def rmsnorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    if layout[1] == ttl.tensor.Layout.TILE:
+    if layout[1] == ttnn.TILE_LAYOUT:
         y = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
 
-    if layout[2] == ttl.tensor.Layout.TILE:
+    if layout[2] == ttnn.TILE_LAYOUT:
         z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -2930,9 +2926,9 @@ def interleaved_to_sharded_partial(
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
     out_initial = torch.randn(x.shape).bfloat16().float()
@@ -2946,8 +2942,8 @@ def interleaved_to_sharded_partial(
             height_shard_spec,
             num_slices,
             slice_index,
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
 
         ttnn.sharded_to_interleaved_partial(
@@ -2983,9 +2979,9 @@ def interleaved_to_sharded_partial_coregrid(
 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    interleaved_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
     out_initial = torch.randn(x.shape).bfloat16().float()
@@ -2999,8 +2995,8 @@ def interleaved_to_sharded_partial_coregrid(
             height_shard_spec,
             num_slices,
             slice_index,
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
 
         ttnn.sharded_to_interleaved_partial(

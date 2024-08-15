@@ -5,7 +5,7 @@
 from loguru import logger
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_rsqrt as tt_eltwise_rsqrt
@@ -52,10 +52,10 @@ while x < 10:
     test_sweep_args.append(
         (
             (3, 11, 92, 100),
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             x,
             y,
             5147678,
