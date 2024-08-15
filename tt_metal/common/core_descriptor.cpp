@@ -23,6 +23,13 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
     std::bitset<32> mask_bitset(harvesting_mask);
     uint32_t num_harvested_rows = mask_bitset.count();
 
+    if (num_harvested_rows > 2) {
+        TT_THROW("At most two rows can be harvested, but detected {} harvested rows", num_harvested_rows);
+    }
+    if (num_harvested_rows == 1 and arch == tt::ARCH::GRAYSKULL) {
+        TT_THROW("One row harvested Grayskull is not supported");
+    }
+
     std::string product_name = get_product_name(arch, num_harvested_rows);
     if (tt::Cluster::instance().is_galaxy_cluster()) {
         if (tt::Cluster::instance().get_board_type(device_id) == BoardType::N150) {
@@ -32,13 +39,6 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
         } else {
             TT_ASSERT(tt::Cluster::instance().get_board_type(device_id) == BoardType::GALAXY, "Invalid Board Type in Galaxy Cluster. Only GALAXY and N150 are supported.");
         }
-    }
-
-    if (num_harvested_rows > 2) {
-        TT_THROW("At most two rows can be harvested, but detected {} harvested rows", num_harvested_rows);
-    }
-    if (num_harvested_rows == 1 and arch == tt::ARCH::GRAYSKULL) {
-        TT_THROW("One row harvested Grayskull is not supported");
     }
 
     if (config_by_arch.count(arch) and config_by_arch.at(arch).count(product_name) and config_by_arch.at(arch).at(product_name).count(num_hw_cqs)) {
