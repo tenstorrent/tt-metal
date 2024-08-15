@@ -237,20 +237,19 @@ class TtLlamaMLP_galaxy:
         )
 
         w1_out = ttnn.to_memory_config(w1_out, self.FULL_GRID_MEMCFG)
-        w1_out = ttnn.silu(w1_out)
-
-        w1_out = ttnn.to_memory_config(w1_out, self.FF2_ACT_MEMCFG)
-        w3_out = ttnn.to_memory_config(w3_out, self.FF2_ACT_MEMCFG)
+        w3_out = ttnn.to_memory_config(w3_out, self.FULL_GRID_MEMCFG)
 
         hidden_states = ttnn.mul(
             w1_out,
             w3_out,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat16,
         )
         w1_out.deallocate(True)
         w3_out.deallocate(True)
 
+        hidden_states = ttnn.to_memory_config(hidden_states, self.FF2_ACT_MEMCFG)
         hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
