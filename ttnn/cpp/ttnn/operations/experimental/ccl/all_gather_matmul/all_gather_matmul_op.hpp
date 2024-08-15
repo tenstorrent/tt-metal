@@ -8,12 +8,10 @@
 #include "ttnn/cpp/ttnn/multi_device.hpp"
 
 namespace ttnn {
-namespace operations {
-namespace experimental {
-namespace ccl {
+namespace operations::experimental::ccl {
 
 struct ExecuteAllGatherMatmul {
-    static std::vector<ttnn::Tensor> operator()(
+    static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         const uint32_t dim,
@@ -31,13 +29,13 @@ struct ExecuteAllGatherMatmul {
     }
 };
 
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
+}  // namespace opereations::experimental::ccl
 
 namespace experimental {
 
-constexpr auto all_gather_matmul = ttnn::register_operation<"ttnn::experimental::all_gather_matmul", ttnn::operations::experimental::ccl::ExecuteAllGatherMatmul>();
+constexpr auto all_gather_matmul = ttnn::register_operation<
+    "ttnn::experimental::all_gather_matmul",
+    ttnn::operations::experimental::ccl::ExecuteAllGatherMatmul>();
 
 }  // namespace experimental
 }  // namespace ttnn
