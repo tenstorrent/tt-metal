@@ -7,7 +7,7 @@ import ttnn
 
 
 def subalpha(x, y):
-    tt_lib.tensor.subalpha(x, y, 5)
+    ttnn.subalpha(x, y, 5)
 
 
 def addalpha(x, y):
@@ -465,7 +465,7 @@ all_binary_ops = [
     },
     {
         "op": subalpha,
-        "name": "tt_lib.tensor.subalpha",
+        "name": "ttnn.subalpha",
     },
     {
         "op": addalpha,
@@ -589,13 +589,13 @@ all_binary_ops = [
         "need_out_mem_cfg": True,
     },
     {
-        "op": ttnn.mul,
+        "op": ttnn.multiply,
         "name": "ttnn.complex_mul",
         "is_complex": [True, True],
         "need_out_mem_cfg": True,
     },
     {
-        "op": ttnn.div,
+        "op": ttnn.divide,
         "name": "ttnn.complex_div",
         "is_complex": [True, True],
         "need_out_mem_cfg": True,
@@ -1286,7 +1286,7 @@ def typecast(x):
 
 
 def arange(x):
-    ttnn.arange(0, 100, 2, x.device())
+    ttnn.arange(0, 100, 2, device=x.device())
 
 
 def full(x):
@@ -1577,6 +1577,14 @@ def primary_moreh_norm_3(x):
 
 def clone(x):
     ttnn.clone(x, ttnn.get_memory_config(x), dtype=x.dtype)
+
+
+def split_dim_3(x):
+    ttnn.split(x, 2, 3)
+
+
+def split_dim_2(x):
+    ttnn.split(x, 2, 2)
 
 
 from tt_lib.fused_ops.softmax import softmax as fused_softmax
@@ -1972,8 +1980,12 @@ all_unary_ops = [
         "name": "ttnn.full_like",
     },
     {
-        "op": ttnn.split,
-        "name": "tt_lib.tensor.split_last_dim_two_chunks_tiled",
+        "op": split_dim_3,
+        "name": "ttnn.split_dim_3",
+    },
+    {
+        "op": split_dim_2,
+        "name": "ttnn.split_dim_2",
     },
     {
         "op": empty,
