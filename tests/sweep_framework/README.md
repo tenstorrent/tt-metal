@@ -173,16 +173,18 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 Vectors marked invalid will not be run by the test runner, but it will be recorded that it was skipped due to its invalidity.
 
 ### Device Fixture
-Each op test file can optionally have a `device_fixture` generator which will be picked up by the infra for when a developer wants to use a custom (multi-chip, mesh, or otherwise) device configuration.
+Each op test file can optionally have a `device_mesh_fixture` generator which will be picked up by the infra for when a developer wants to use a custom (multi-chip, mesh, or otherwise) device configuration.
 
-This function should have two stages, setup and teardown of the device. These stages will be executed before, and after the test suite is executed. They are seperated by the yield statement.
+This function should have two stages, setup and teardown of the device. These stages will be executed before, and after the test suite is executed. They are separated by the yield statement.
 
 The `yield` statement in the generator should yield all of the devices at once, if there are multiple. This object will be passed to `run()` when the tests are executed as the `device` parameter.
+
+The `yield` statement must give a tuple of your device object, and a label for this device configuration. See the below example.
 
 #### Example
 
 ```
-def device_fixture() -> (device, device_config_name):
+def device_mesh_fixture():
     # SETUP (called before test suite is executed)
     import tt_lib as ttl
 
@@ -198,8 +200,8 @@ def device_fixture() -> (device, device_config_name):
     print("ADD: Opened device mesh")
     # YIELD to test infrastructure
     # IMPORTANT: Whatever device object(s) you want to pass to your run function need to be ONE object here, as this generator will only be referenced once before executing the tests.
-    # i.e. If you have four seperate devices to use in your test, use 'yield [device1, device2, device3, device4]' inside of a list here.
-    yield (device_mesh, "T3000")
+    # i.e. If you have four separate devices to use in your test, use 'yield ([device1, device2, device3, device4], "4 Device Setup")' inside of a list.
+    yield (device_mesh, "T3000 Mesh")
 
     # TEARDOWN (called after test suite is finished executing)
     print("ADD: Closing device mesh")
@@ -217,7 +219,7 @@ The run function will be called by the test runner with all defined parameters p
 
 This is where to define the test case itself including setup and teardown and golden comparison.
 
-If you defined a `device_fixture` generator, the object you yielded will be passed into this function as `device`. Otherwise, `device` will be the default ttnn device opened by the infra.
+If you defined a `device_mesh_fixture` generator, the object you yielded will be passed into this function as `device`. Otherwise, `device` will be the default ttnn device opened by the infra.
 
 The runner expects one of two returns from the run function:
 

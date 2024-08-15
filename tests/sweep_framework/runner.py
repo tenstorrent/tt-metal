@@ -38,15 +38,15 @@ def get_username():
 
 def get_devices(test_module):
     try:
-        return test_module.device_fixture()
+        return test_module.device_mesh_fixture()
     except:
         return default_device()
 
 
 def run(test_module, input_queue, output_queue):
-    device_generator, device_name = get_devices(test_module)
-    print(f"SWEEPS: Opening device configuration, {device_name}.")
-    device = next(device_generator)
+    device_generator = get_devices(test_module)
+    device, device_name = next(device_generator)
+    print(f"SWEEPS: Opened device configuration, {device_name}.")
     try:
         while True:
             test_vector = input_queue.get(block=True, timeout=1)
@@ -65,10 +65,10 @@ def run(test_module, input_queue, output_queue):
             output_queue.put([status, message, e2e_perf])
     except Empty as e:
         try:
-            # Run teardown in device_fixture
+            # Run teardown in device_mesh_fixture
             next(device_generator)
         except StopIteration:
-            print("SWEEPS: Closing device configuration.")
+            print(f"SWEEPS: Closed device configuration, {device_name}.")
 
 
 def get_timeout(test_module):
