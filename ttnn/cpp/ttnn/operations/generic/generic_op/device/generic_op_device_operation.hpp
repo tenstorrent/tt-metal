@@ -20,7 +20,7 @@
 namespace ttnn::operations::generic {
 
 struct circular_buffer_attributes_t {
-    CoreRangeSet core_spec;
+    CoreRangeSet core_spec = {{}};
     uint32_t total_size;
     uint32_t page_size;
     // uint8_t buffer_index;
@@ -28,14 +28,10 @@ struct circular_buffer_attributes_t {
 
     // this needs better solution as we now have input tensors (std::vector) and output tensor so index is not great
     std::optional<int> set_globally_allocated_address = std::nullopt; // an index to io_tensors that will set globally allocated address on CB
-
-    std::string str() const {
-        return "circular_buffer_attributes_t(" + std::to_string(total_size) + ")";
-    }
 };
 
 struct data_movement_attributes_t {
-    CoreRangeSet core_spec;
+    CoreRangeSet core_spec= {{}};
     std::string kernel_path;
     tt::tt_metal::DataMovementConfig config;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> runtime_args_per_core = {};
@@ -44,21 +40,15 @@ struct data_movement_attributes_t {
     // std::shared_ptr<RuntimeArgs> runtime_args;
     // std::vector<std::shared_ptr<RuntimeArgs>> runtime_args;
 
-    std::string str() const {
-        return "data_movement_attributes_t(" + kernel_path + ")";
-    }
 };
 
 struct compute_attributes_t {
-    CoreRangeSet core_spec;
+    CoreRangeSet core_spec = {{}};
     std::string  kernel_path;
     tt::tt_metal::ComputeConfig config;
     // std::vector<uint32_t> runtime_args = {};
     std::unordered_map<CoreCoord, std::vector<uint32_t>> runtime_args_per_core = {};
 
-    std::string str() const {
-        return "compute_attributes_t(" + kernel_path + ")";
-    }
 };
 
 struct GenericOpDeviceOperation {
@@ -138,45 +128,3 @@ struct GenericOpDeviceOperation {
 };  // struct GenericOpDeviceOperation
 
 }   // namespace ttnn::operations::generic
-
-// #include <fmt/format.h>
-// #include <sstream>
-
-// template <>
-// struct fmt::formatter<ttnn::operations::generic::circular_buffer_attributes_t> {
-//     constexpr auto parse(format_parse_context &ctx) -> format_parse_context::iterator {
-//         return ctx.end();
-//     }
-
-//     auto format(const ttnn::operations::generic::circular_buffer_attributes_t &attr, format_context &ctx) const -> format_context::iterator {
-//         std::stringstream ss;
-//         ss << attr.str();
-//         return fmt::format_to(ctx.out(), "{}", ss.str());
-//     }
-// };
-
-// template <>
-// struct fmt::formatter<ttnn::operations::generic::data_movement_attributes_t> {
-//     constexpr auto parse(format_parse_context &ctx) -> format_parse_context::iterator {
-//         return ctx.end();
-//     }
-
-//     auto format(const ttnn::operations::generic::data_movement_attributes_t &attr, format_context &ctx) const -> format_context::iterator {
-//         std::stringstream ss;
-//         ss << attr.str();
-//         return fmt::format_to(ctx.out(), "{}", ss.str());
-//     }
-// };
-
-// template <>
-// struct fmt::formatter<ttnn::operations::generic::compute_attributes_t> {
-//     constexpr auto parse(format_parse_context &ctx) -> format_parse_context::iterator {
-//         return ctx.end();
-//     }
-
-//     auto format(const ttnn::operations::generic::compute_attributes_t &attr, format_context &ctx) const -> format_context::iterator {
-//         std::stringstream ss;
-//         ss << attr.str();
-//         return fmt::format_to(ctx.out(), "{}", ss.str());
-//     }
-// };
