@@ -181,8 +181,8 @@ void kernel_main() {
 
                 uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1 ? num_tiles_per_worker_last_bytes : num_tiles_per_worker_bytes;
 
-                noc_async_write_multicast(l1_read_addr_ex_global, multicast_data_noc | l1_read_addr_ex_global, num_tiles_bytes, num_blocks-1, false, false);
-                noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1, false, false);
+                noc_async_write_multicast(l1_read_addr_ex_global, multicast_data_noc | l1_read_addr_ex_global, num_tiles_bytes, num_blocks-1, true, true);
+                noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
 
                 l1_read_addr_ex_global += num_tiles_bytes;
                 noc_async_write_barrier();
