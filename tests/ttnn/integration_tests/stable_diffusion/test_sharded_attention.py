@@ -16,7 +16,7 @@ from models.utility_functions import (
     skip_for_wormhole_b0,
     skip_for_grayskull,
 )
-from models.demos.wormhole.stable_diffusion.tt2.ttnn_functional_utility_functions import (
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     determine_largest_subblock_size,
     determine_blocking,
 )
@@ -119,7 +119,7 @@ def test_time_sharded_attnention_hwb(
 
     heads_per_slice = num_heads // num_slices
     for i in range(num_slices):
-        q_slice = ttl.tensor.interleaved_to_sharded_partial(
+        q_slice = ttnn.interleaved_to_sharded_partial(
             reference_query_layer,
             ttl.tensor.CoreCoord(1, grid_size[0]),
             [M // grid_size[0], K],
@@ -128,7 +128,7 @@ def test_time_sharded_attnention_hwb(
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
-        k_slice = ttl.tensor.interleaved_to_sharded_partial(
+        k_slice = ttnn.interleaved_to_sharded_partial(
             reference_key_layer_transposed,
             ttl.tensor.CoreCoord(grid_size[1], 1),
             [K, N // grid_size[1]],
@@ -222,12 +222,12 @@ def test_time_sharded_attnention_hwb(
         )
         v_slice.deallocate()
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             mm_slice,
             mm_out,
             num_slices,
             i,
-            dram_interleaved_memory_config,
+            memory_config=dram_interleaved_memory_config,
         )
 
         mm_slice.deallocate()
@@ -327,7 +327,7 @@ def test_time_sharded_attnention(
 
     heads_per_slice = num_heads // num_slices
     for i in range(num_slices):
-        slice = ttl.tensor.interleaved_to_sharded_partial(
+        slice = ttnn.interleaved_to_sharded_partial(
             reference_query_layer,
             grid_size,
             mm_activations_height_shard_spec,
@@ -401,12 +401,12 @@ def test_time_sharded_attnention(
         )
         v_slice.deallocate()
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             mm_slice,
             mm_out,
             num_slices,
             i,
-            dram_interleaved_memory_config,
+            memory_config=dram_interleaved_memory_config,
         )
 
         mm_slice.deallocate()

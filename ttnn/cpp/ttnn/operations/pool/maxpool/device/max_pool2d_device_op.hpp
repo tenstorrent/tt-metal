@@ -12,7 +12,8 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/conv2d/conv2d.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
+#include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/decorators.hpp"
 
 
 namespace ttnn::operations {
@@ -25,7 +26,7 @@ inline uint32_t ceil_multiple_of(uint32_t n, uint32_t m) {
 // new maxpool uop -- called from the macro-op
 struct MaxPoolNew {
     struct operation_attributes_t {
-        tt::tt_metal::SlidingWindowConfig sliding_window_config_;
+        sliding_window::SlidingWindowConfig sliding_window_config_;
         DataType output_dtype_;
         MemoryConfig memory_config_;
     };
@@ -68,7 +69,17 @@ struct MaxPoolNew {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static operation::OpPerformanceModel create_op_performance_model(const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const sliding_window::SlidingWindowConfig& sliding_window_config,
+        DataType output_dtype,
+        MemoryConfig memory_config);
+
 };
 
 }  // namespace pool
 }  // namespace ttnn::operations
+
+namespace ttnn::prim {
+constexpr auto max_pool_new = ttnn::register_operation<"ttnn::prim::max_pool_new", ttnn::operations::pool::MaxPoolNew>();
+}  // namespace ttnn::prim

@@ -484,10 +484,6 @@ all_binary_ops = [
         "name": "ttnn.logical_and",
     },
     {
-        "op": tt_lib.tensor.assign,
-        "name": "tt_lib.tensor.assign_binary",
-    },
-    {
         "op": isclose,
         "name": "ttnn.isclose",
     },
@@ -1342,11 +1338,11 @@ def rdiv(x):
 
 
 def sum_0(x):
-    tt_lib.tensor.sum(x, 0)
+    ttnn.sum(x, 0)
 
 
 def sum_1(x):
-    tt_lib.tensor.sum(x, 1)
+    ttnn.sum(x, 1)
 
 
 def sum_2(x):
@@ -1809,10 +1805,6 @@ all_unary_ops = [
         "name": "ttnn.multigammaln",
     },
     {
-        "op": tt_lib.tensor.assign,
-        "name": "tt_lib.tensor.assign_unary",
-    },
-    {
         "op": ttnn.i0,
         "name": "ttnn.i0",
     },
@@ -1994,20 +1986,20 @@ all_unary_ops = [
         "name": "ttnn.max_dim_23",
     },
     {
-        "op": tt_lib.tensor.global_min,
-        "name": "tt_lib.tensor.global_min",
+        "op": ttnn.min,
+        "name": "ttnn.min",
     },
     {
-        "op": tt_lib.tensor.global_max,
-        "name": "tt_lib.tensor.global_max",
+        "op": ttnn.max,
+        "name": "ttnn.max",
     },
     {
-        "op": tt_lib.tensor.global_sum,
-        "name": "tt_lib.tensor.global_sum",
+        "op": ttnn.sum,
+        "name": "ttnn.sum",
     },
     {
-        "op": tt_lib.tensor.global_mean,
-        "name": "tt_lib.tensor.global_mean",
+        "op": ttnn.mean,
+        "name": "ttnn.mean",
     },
     {
         "op": rpow,
@@ -2059,12 +2051,12 @@ all_unary_ops = [
     },
     {
         "op": sum_0,
-        "name": "tt_lib.tensor.sum_dim_0",
+        "name": "ttnn.sum_dim_0",
         "num_repeats": 2,
     },
     {
         "op": sum_1,
-        "name": "tt_lib.tensor.sum_dim_1",
+        "name": "ttnn.sum_dim_1",
     },
     {
         "op": ttnn.log_sigmoid,
@@ -2119,7 +2111,7 @@ all_unary_ops = [
         "name": "tt_lib.tensor.fill_ones_rm",
     },
     {
-        "op": tt_lib.tensor.mean_hw,
+        "op": ttnn.mean,
         "name": "tt_lib.tensor.mean_hw",
     },
     {
@@ -2397,10 +2389,6 @@ def addcdiv(x, y, z):
     ttnn.addcdiv(x, y, z, value=2)
 
 
-def lamb_optimizer(x, y, z):
-    tt_lib.tensor.lamb_optimizer(x, x, y, z, beta1=0.8, beta2=0.99, step_size=1e-3, eps=1e-6, weight_decay=0.02)
-
-
 def addalpha_bw(x, y, z):
     ttnn.addalpha_bw(x, y, z, alpha=5)
 
@@ -2542,11 +2530,6 @@ all_ternary_ops = [
     {
         "op": addcdiv,
         "name": "ttnn.addcdiv",
-    },
-    {
-        "op": lamb_optimizer,
-        "name": "tt_lib.tensor.lamb_optimizer",
-        "num_repeats": 2,
     },
     {
         "op": addalpha_bw,

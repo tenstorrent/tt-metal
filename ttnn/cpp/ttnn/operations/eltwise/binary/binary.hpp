@@ -9,6 +9,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "device/binary_device_operation.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {
 
@@ -20,7 +21,7 @@ namespace binary {
 
 template <BinaryOpType binary_op_type, bool in_place>
 struct BinaryOperation {
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -30,7 +31,7 @@ struct BinaryOperation {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         const std::optional<const DataType> &output_dtype = std::nullopt,
@@ -41,7 +42,7 @@ struct BinaryOperation {
 
     // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
     // Currently, this is exactly how tt::tt_metal::add_unary works
-    static Tensor operator()(
+    static Tensor invoke(
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
         const std::optional<const DataType> &dtype = std::nullopt,
@@ -50,7 +51,7 @@ struct BinaryOperation {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
@@ -62,8 +63,8 @@ struct BinaryOperation {
 };
 
 template <BinaryOpType binary_op_type, bool in_place>
-struct RelationalBinary {
-    static Tensor operator()(
+struct BinaryOperationOverload {
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -73,7 +74,7 @@ struct RelationalBinary {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         const std::optional<const DataType> &output_dtype = std::nullopt,
@@ -82,7 +83,9 @@ struct RelationalBinary {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
-    static Tensor operator()(
+    // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
+    // Currently, this is exactly how tt::tt_metal::add_unary works
+    static Tensor invoke(
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
         const std::optional<const DataType> &dtype = std::nullopt,
@@ -91,7 +94,53 @@ struct RelationalBinary {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
+        uint8_t queue_id,
+        const ttnn::Tensor &input_tensor_a,
+        const float scalar,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+    static ComplexTensor invoke(
+        const ComplexTensor &input_tensor_a_arg,
+        const ComplexTensor &input_tensor_b_arg,
+        const MemoryConfig &memory_config);
+};
+
+template <BinaryOpType binary_op_type>
+struct RelationalBinary {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<const DataType> &output_dtype = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<const DataType> &output_dtype = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+    static Tensor invoke(
+        const ttnn::Tensor &input_tensor_a,
+        const float scalar,
+        const std::optional<const DataType> &dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
+        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+    static Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor_a,
         const float scalar,
@@ -102,7 +151,7 @@ struct RelationalBinary {
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 
     // scalar - tensor combination not available on Pytorch for this op
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const float scalar,
         const ttnn::Tensor &input_tensor_a,
@@ -111,20 +160,29 @@ struct RelationalBinary {
         const std::optional<Tensor> &optional_output_tensor = std::nullopt);
 };
 
+template <BinaryOpType binary_op_type>
+struct InplaceRelationalBinary {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const float scalar);
+};
+
 }  // binary
 }  // operations
 
-
-
-constexpr auto add = ttnn::register_operation_with_auto_launch_op<
+constexpr auto add = ttnn::register_operation<
     "ttnn::add",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, false>>();
+    operations::binary::BinaryOperationOverload<operations::binary::BinaryOpType::ADD, false>>();
 constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::add_",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, true>>();
-constexpr auto subtract = ttnn::register_operation_with_auto_launch_op<
+constexpr auto subtract = ttnn::register_operation<
     "ttnn::subtract",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, false>>();
+    operations::binary::BinaryOperationOverload<operations::binary::BinaryOpType::SUB, false>>();
 constexpr auto subtract_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::subtract_",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, true>>();
@@ -134,6 +192,24 @@ constexpr auto multiply = ttnn::register_operation_with_auto_launch_op<
 constexpr auto multiply_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::multiply_",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL, true>>();
+constexpr auto eq = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::eq",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ>>();
+constexpr auto ne = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::ne",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE>>();
+constexpr auto ge = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::ge",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::GTE>>();
+constexpr auto gt = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::gt",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT>>();
+constexpr auto le = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::le",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::LTE>>();
+constexpr auto lt = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::lt",
+    operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT>>();
 constexpr auto logical_and = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logical_and",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_AND, false>>();
@@ -143,7 +219,6 @@ constexpr auto logical_or = ttnn::register_operation_with_auto_launch_op<
 constexpr auto ldexp = ttnn::register_operation_with_auto_launch_op<
     "ttnn::ldexp",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LDEXP, false>>();
-
 constexpr auto logaddexp = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logaddexp",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGADDEXP, false>>();
@@ -156,26 +231,18 @@ constexpr auto squared_difference = ttnn::register_operation_with_auto_launch_op
 constexpr auto divide = ttnn::register_operation_with_auto_launch_op<
     "ttnn::divide",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::DIV_FAST, false>>();
-
-
-constexpr auto eq = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::eq",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ, false>>();
-constexpr auto ne = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::ne",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE, false>>();
-constexpr auto ge = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::ge",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::GTE, false>>();
-constexpr auto gt = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::gt",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT, false>>();
-constexpr auto le = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::le",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::LTE, false>>();
-constexpr auto lt = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::lt",
-    operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT, false>>();
+constexpr auto gt_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::gt_",
+    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GT>>();
+constexpr auto ge_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::ge_",
+    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GTE>>();
+constexpr auto le_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::le_",
+    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::LTE>>();
+constexpr auto lt_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::lt_",
+    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::LT>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {

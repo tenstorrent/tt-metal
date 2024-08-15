@@ -3,19 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 
-#include <optional>
-#include <variant>
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/operations/conv2d/conv2d.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sliding_window_op_infra/sliding_window.hpp"
 
 #include "max_pool2d_device_op.hpp"
 // #include "max_pool2d_multi_core_program_factory.hpp"
-#include "tt_dnn/op_library/reduce/reduce_op.hpp"  // for reduce_op_utils
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
 
 /**
  * New maxpool2d implementation that uses the new sliding window infrastructure.
@@ -333,7 +325,7 @@ MaxPoolNew::MultiCore::cached_program_t MaxPoolNew::MultiCore::create(const oper
 
     tt::tt_metal::Program program{};
 
-    ParallelConfig parallel_config = ParallelConfig{
+    auto parallel_config = sliding_window::ParallelConfig{
         .grid = input.shard_spec().value().grid,
         .shard_scheme = input.memory_config().memory_layout,
         .shard_orientation = input.shard_spec().value().orientation,

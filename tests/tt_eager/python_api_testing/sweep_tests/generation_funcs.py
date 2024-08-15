@@ -959,32 +959,6 @@ def gen_unpad_args(
             yield input_info
 
 
-def gen_lamb_optimized_args(
-    input_shapes,
-    dtypes,
-    layouts,
-    mem_configs,
-    do_sanitize_args=True,
-    coregrid=[],
-):
-    for input_info in gen_dtype_layout_device(
-        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
-    ):
-        if input_info is not None:
-            beta1 = random.uniform(0.8, 0.99)  # (0.8, 0.99) (0.9, 0.9)
-            beta2 = random.uniform(0.99, 0.9999)  # (0.99, 0.9999) (0.999, 0.999)
-            step_size = random.uniform(1e-4, 1e-2)  # (1e-4, 1e-2) (1e-3, 1e-3)
-            eps = random.uniform(1e-7, 1e-5)  # (1e-7, 1e-5) (1e-6, 1e-6)
-            weight_decay = random.uniform(0.001, 0.05)  # (0.001, 0.05) (0.01, 0.01)
-
-            input_info.update({"beta1": beta1})
-            input_info.update({"beta2": beta2})
-            input_info.update({"step_size": step_size})
-            input_info.update({"eps": eps})
-            input_info.update({"weight_decay": weight_decay})
-            yield input_info
-
-
 def gen_scalar_args(
     input_shapes,
     dtypes,
@@ -2263,5 +2237,33 @@ def gen_floor_args(
         coregrid=coregrid,
     ):
         input_info.update({"value": random.uniform(low, high) + 0.5})
+
+        yield input_info
+
+
+def gen_div_no_nan_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1,
+    high=10,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "value",
+        low,
+        high,
+        dtype,
+        do_sanitize_args=do_sanitize_args,
+        coregrid=coregrid,
+    ):
+        input_info.update({"value": random.uniform(low, high)})
 
         yield input_info

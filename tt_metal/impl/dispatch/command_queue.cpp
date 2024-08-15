@@ -909,7 +909,8 @@ void EnqueueProgramCommand::assemble_device_commands(
                             .noc_xy_addr = noc_encoding,
                             .addr = dst_addr,
                             .length = (uint16_t)write_length,
-                            .num_mcast_dests = (uint16_t)num_mcast_dests});
+                            .num_mcast_dests = (uint8_t)num_mcast_dests,
+                            .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
                         RecordDispatchData(
                             program, DISPATCH_DATA_BINARY, write_length, kg_transfer_info.riscvs[kernel_idx]);
                         dst_addr += write_length;
@@ -924,6 +925,10 @@ void EnqueueProgramCommand::assemble_device_commands(
                         kernel_bins_write_packed_large_data_aligned_sizeB.back() += read_length;
                     }
                 }
+            }
+            // Unlink the last subcmd of the current core range
+            if (!write_linear) {
+                kernel_bins_dispatch_subcmds.back().back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
             }
         }
         for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
@@ -1365,14 +1370,16 @@ EnqueueRecordEventCommand::EnqueueRecordEventCommand(
     SystemMemoryManager& manager,
     uint32_t event_id,
     uint32_t expected_num_workers_completed,
-    bool clear_count) :
+    bool clear_count,
+    bool write_barrier) :
     command_queue_id(command_queue_id),
     device(device),
     noc_index(noc_index),
     manager(manager),
     event_id(event_id),
     expected_num_workers_completed(expected_num_workers_completed),
-    clear_count(clear_count) {}
+    clear_count(clear_count),
+    write_barrier(write_barrier) {}
 
 void EnqueueRecordEventCommand::process() {
     std::vector<uint32_t> event_payload(dispatch_constants::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
@@ -1404,7 +1411,7 @@ void EnqueueRecordEventCommand::process() {
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     command_sequence.add_dispatch_wait(
-        false, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count);
+        this->write_barrier, DISPATCH_MESSAGE_ADDR, this->expected_num_workers_completed, this->clear_count);
 
     CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
@@ -2101,7 +2108,8 @@ void HWCommandQueue::enqueue_record_event(std::shared_ptr<Event> event, bool cle
         this->manager,
         event->event_id,
         this->expected_num_workers_completed,
-        clear_count);
+        clear_count,
+        true);
     this->enqueue_command(command, false);
 
     if (clear_count) {

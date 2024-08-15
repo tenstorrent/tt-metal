@@ -198,11 +198,11 @@ class TtMixtralAttention(LightweightModule):
             q_heads_1B4D,
             k_heads_1B1D,
             v_heads_1B1D,
-        ) = ttnn.experimental.tensor.nlp_create_qkv_heads_decode(
+        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
         )
         xqkv_fused.deallocate(True)
 
@@ -252,7 +252,7 @@ class TtMixtralAttention(LightweightModule):
             output_mem_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
         )
 
-        attn_output_11BH = ttnn.experimental.tensor.nlp_concat_heads_decode(
+        attn_output_11BH = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_1B4D,
             num_heads=4,
         )
@@ -338,12 +338,12 @@ class TtMixtralAttention(LightweightModule):
         # Rotary embeddings
         ###
 
-        q_heads_14SD = ttnn.experimental.tensor.rotary_embedding_llama(
+        q_heads_14SD = ttnn.experimental.rotary_embedding_llama(
             q_heads_14SD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
         )
         q_heads_14SD_pre_rot.deallocate(True)
 
-        k_heads_11SD = ttnn.experimental.tensor.rotary_embedding_llama(
+        k_heads_11SD = ttnn.experimental.rotary_embedding_llama(
             k_heads_11SD_pre_rot, rot_mats[0], rot_mats[1], transformation_mats
         )
         k_heads_11SD_pre_rot.deallocate(True)
@@ -378,9 +378,9 @@ class TtMixtralAttention(LightweightModule):
         ###
         # Output matmul
         ###
-        attn_output_11SH = ttnn.experimental.tensor.nlp_concat_heads(
+        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_14SD,
-            output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         attn_output_14SD.deallocate(True)
 
@@ -407,7 +407,7 @@ class TtMixtralAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, (1, 1, seq_len, -1))
         output_11BH_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1)
         output_11SH.deallocate(True)
-        output_11BH_reduced = ttnn.experimental.tensor.fast_reduce_nc(
+        output_11BH_reduced = ttnn.experimental.fast_reduce_nc(
             output_11BH_gathered, dims=[1], output=None, compute_kernel_config=None
         )
         output_11BH_gathered.deallocate(True)

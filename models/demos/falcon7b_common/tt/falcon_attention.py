@@ -98,12 +98,12 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         output = []
         for i in range(len(layer)):
             output.append(
-                ttnn.experimental.tensor.rotary_embedding(
+                ttnn.experimental.rotary_embedding(
                     layer[i],
                     self.tt_cos_cached[i],
                     self.tt_sin_cached[i],
                     token_idx,
-                    output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
+                    memory_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
                 )
             )
         return output
@@ -249,9 +249,9 @@ class TtFalconAttentionPrefill(nn.Module):
         ###########
         query_layer, key_layer, value_layer = [], [], []
         for i in range(self.num_devices):
-            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
+            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.nlp_create_qkv_heads_falcon7b(
                 fused_query_key_value[i],
-                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
             fused_query_key_value[i].deallocate()
             query_layer.append(query_layer_i)
@@ -353,9 +353,9 @@ class TtFalconAttentionPrefill(nn.Module):
         ### ATTENTION SELFOUT ###
         #########################
         for i in range(self.num_devices):
-            attn_output[i] = ttnn.experimental.tensor.nlp_concat_heads(
+            attn_output[i] = ttnn.experimental.nlp_concat_heads(
                 attn_output[i],
-                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
 
         for i in range(self.num_devices):
@@ -412,9 +412,9 @@ class TtFalconAttentionPrefill(nn.Module):
         ###########
         query_layer, key_layer, value_layer = [], [], []
         for i in range(self.num_devices):
-            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
+            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.nlp_create_qkv_heads_falcon7b(
                 fused_query_key_value[i],
-                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
             fused_query_key_value[i].deallocate()
             query_layer.append(query_layer_i)
@@ -462,7 +462,7 @@ class TtFalconAttentionPrefill(nn.Module):
         # Slice inputs and operate on each slice separately
         for i in range(num_slices):
             slices = [
-                ttnn.experimental.tensor.interleaved_to_sharded_partial(
+                ttnn.interleaved_to_sharded_partial(
                     query_layer[device_id],
                     grid_size,
                     mm_activations_height_shard_spec,
@@ -524,12 +524,12 @@ class TtFalconAttentionPrefill(nn.Module):
             ]
 
             for device_id in range(self.num_devices):
-                ttnn.experimental.tensor.sharded_to_interleaved_partial(
+                ttnn.sharded_to_interleaved_partial(
                     attn_out_slices[device_id],
                     attention_outputs_concatenated[device_id],
                     num_slices,
                     i,
-                    self.model_config["ATTN_OPTIMIZED_MEMCFG"],
+                    memory_config=self.model_config["ATTN_OPTIMIZED_MEMCFG"],
                 )
             for device_id in range(self.num_devices):
                 attn_out_slices[device_id].deallocate(True)
@@ -543,9 +543,9 @@ class TtFalconAttentionPrefill(nn.Module):
         layer_present = layer_past if use_cache else None
 
         attn_outputs = [
-            ttnn.experimental.tensor.nlp_concat_heads(
+            ttnn.experimental.nlp_concat_heads(
                 attention_outputs_concatenated[device_id],
-                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
             for device_id in range(self.num_devices)
         ]
@@ -683,9 +683,9 @@ class TtFalconAttentionDecode(nn.Module):
         ###########
         query_layer, key_layer, value_layer = [], [], []
         for i in range(self.num_devices):
-            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.tensor.nlp_create_qkv_heads_falcon7b(
+            query_layer_i, key_layer_i, value_layer_i = ttnn.experimental.nlp_create_qkv_heads_falcon7b(
                 fused_query_key_value[i],
-                output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
             )
             fused_query_key_value[i].deallocate(True)
             query_layer.append(query_layer_i)
@@ -977,9 +977,9 @@ class TtFalconAttentionDecode(nn.Module):
         ### ATTENTION SELFOUT ###
         #########################
         for i in range(self.num_devices):
-            attn_output[i] = ttnn.experimental.tensor.nlp_concat_heads(
+            attn_output[i] = ttnn.experimental.nlp_concat_heads(
                 attn_output[i],
-                output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+                memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
             )
 
         for i in range(self.num_devices):

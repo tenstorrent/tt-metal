@@ -101,7 +101,9 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
                 .defines = kernel_defines}
             );
     }
-    EnqueueProgram(device->command_queue(), sync_program, false);
+    constexpr bool wait_for_all_cores_done = false;
+    constexpr bool force_slow_dispatch = true;
+    LaunchProgram(device, sync_program, wait_for_all_cores_done, force_slow_dispatch);
 
     std::filesystem::path output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
@@ -126,7 +128,8 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
 
-    Finish(device->command_queue());
+    std::unordered_set<CoreCoord> not_done_cores({core});
+    llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
 
     log_info ("SYNC PROGRAM FINISH IS DONE ON {}",device_id);
     if ((smallestHostime[device_id] == 0) || (smallestHostime[device_id] > hostStartTime))

@@ -104,12 +104,12 @@ class TtFalconRotaryEmbedding:
         seq_len = layer.get_legacy_shape()[2]
         assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
         # TODO: Make rotary embedding in place
-        output = ttnn.experimental.tensor.rotary_embedding(
+        output = ttnn.experimental.rotary_embedding(
             layer,
             self.tt_cos_cached,
             self.tt_sin_cached,
             token_idx,
-            output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
         )
 
         return output
@@ -361,9 +361,9 @@ class TtFalconAttention:
         value_layer.deallocate(True)
 
         # Output projection
-        attn_output = ttnn.experimental.tensor.nlp_concat_heads(
+        attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )
         attn_output = ttnn.all_gather(
             attn_output,
@@ -580,9 +580,9 @@ class TtFalconAttention:
         #########################
         ### ATTENTION SELFOUT ###
         #########################
-        attn_output = ttnn.experimental.tensor.nlp_concat_heads(
+        attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )
         attn_output = ttnn.experimental.tensor.sharded_to_interleaved(
             attn_output,

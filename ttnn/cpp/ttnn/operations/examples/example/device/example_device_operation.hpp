@@ -128,7 +128,7 @@ struct ExampleDeviceOperation {
     // The user will be able to call the operation using `tensor_return_value_t output = ttnn::prim::example(input_tensor)` after the op is registered
     // Keep in mind that the the overload with `queue_id` argument will be added automatically for primitive operations
     // So, the user can also call this operation using `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`
-    static std::tuple<operation_attributes_t, tensor_args_t> operator()(const Tensor& input_tensor);
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(const Tensor& input_tensor);
 
     // Optional methods
 
@@ -149,4 +149,8 @@ struct ExampleDeviceOperation {
 }  // namespace ttnn::operations::examples
 
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
-TTNN_REGISTER_OPERATION(ttnn::prim, example, ttnn::operations::examples::ExampleDeviceOperation);
+namespace ttnn::prim {
+constexpr auto example = ttnn::register_operation<
+    "ttnn::prim::example",
+    ttnn::operations::examples::ExampleDeviceOperation>();
+}  // namespace ttnn::prim

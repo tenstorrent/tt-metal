@@ -6,6 +6,11 @@ import torch
 import ttnn
 import tt_lib as ttl
 from functools import partial
+
+import ttnn._ttnn
+import ttnn.operations
+import ttnn.operations.matmul
+import ttnn.operations.reduction
 from models.helper_funcs import Linear as tt_Linear
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
@@ -361,8 +366,7 @@ def var_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config,
 @setup_host_and_device
 def mean_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.mean_hw(t0, output_mem_config=output_mem_config)
-
+    t1 = ttnn.mean(t0, [2, 3], memory_config=output_mem_config)
     output = tt2torch_tensor(t1)
     output = output[:, :, 0, 0]
 
@@ -730,24 +734,6 @@ def eltwise_polygamma(x, *args, k, device, dtype, layout, input_mem_config, outp
 
 
 @setup_host_and_device
-def eltwise_assign_binary(
-    x,
-    y,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.tensor.assign(t0, t1)
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
 def eltwise_div(
     x,
     y,
@@ -862,43 +848,6 @@ def eltwise_round(
 
 
 @setup_host_and_device
-def eltwise_div_no_nan(
-    x,
-    y,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttnn.div_no_nan(t0, t1, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
-def eltwise_unary_div_no_nan(
-    x,
-    *args,
-    value,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.div_no_nan(t0, value, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def eltwise_unary_rdiv_trunc(
     x,
     *args,
@@ -914,45 +863,6 @@ def eltwise_unary_rdiv_trunc(
     t1 = ttnn.rdiv(t0, value, round_mode="trunc", memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def lamb_optimizer(
-    x,
-    y,
-    z,
-    w,
-    *args,
-    beta1,  # 0.9
-    beta2,  # 0.999
-    step_size,  # 1e-3
-    eps,  # 1e-6
-    weight_decay,  # 0.01
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-    t3 = setup_tt_tensor(w, device, layout[3], input_mem_config[3], dtype[3])
-
-    t4 = ttl.tensor.lamb_optimizer(
-        t0,
-        t1,
-        t2,
-        t3,
-        beta1=beta1,
-        beta2=beta2,
-        step_size=step_size,
-        eps=eps,
-        weight_decay=weight_decay,
-    )
-
-    return [tt2torch_tensor(t4[0]), tt2torch_tensor(t4[1]), tt2torch_tensor(t4[2])]
 
 
 @setup_host_and_device
@@ -1714,14 +1624,7 @@ def bcast_mul_hw(x, y, *args, device, dtype, layout, input_mem_config, output_me
 @setup_host_and_device
 def reduce_sum_h(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.SUM,
-        ttl.tensor.ReduceOpDim.H,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
-
+    t1 = ttnn.sum(t0, 2, memory_config=output_mem_config)
     output = tt2torch_tensor(t1)
 
     # Slice out the 0 values from reduction
@@ -1731,13 +1634,7 @@ def reduce_sum_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_sum_w(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.SUM,
-        ttl.tensor.ReduceOpDim.W,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.sum(t0, 3, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1748,13 +1645,7 @@ def reduce_sum_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_sum_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.SUM,
-        ttl.tensor.ReduceOpDim.HW,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.sum(t0, [2, 3], memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1765,13 +1656,7 @@ def reduce_sum_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 @setup_host_and_device
 def reduce_max_h(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MAX,
-        ttl.tensor.ReduceOpDim.H,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.max(t0, 2, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1782,13 +1667,7 @@ def reduce_max_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_max_w(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MAX,
-        ttl.tensor.ReduceOpDim.W,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.max(t0, 3, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1799,13 +1678,7 @@ def reduce_max_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_max_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MAX,
-        ttl.tensor.ReduceOpDim.HW,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.max(t0, [2, 3], memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1816,13 +1689,7 @@ def reduce_max_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 @setup_host_and_device
 def reduce_min_h(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MIN,
-        ttl.tensor.ReduceOpDim.H,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.min(t0, 2, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1833,13 +1700,7 @@ def reduce_min_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_min_w(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MIN,
-        ttl.tensor.ReduceOpDim.W,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.min(t0, 3, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1850,13 +1711,7 @@ def reduce_min_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_min_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MIN,
-        ttl.tensor.ReduceOpDim.HW,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.min(t0, [2, 3], memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1868,7 +1723,7 @@ def reduce_min_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 def sum(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     assert dim >= 0 and dim <= 3
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.sum(t0, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.sum(t0, dim, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -2308,7 +2163,6 @@ eltwise_lez = make_unary_op_optional_output(ttnn.lez)
 eltwise_gez = make_unary_op_optional_output(ttnn.gez)
 eltwise_nez = make_unary_op_optional_output(ttnn.nez)
 eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
-eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
 zeros_like = make_ttnn_unary_op(ttnn.zeros_like)
 ones_like = make_ttnn_unary_op(ttnn.ones_like)
 eltwise_ceil = make_unary_op_optional_output(ttnn.ceil)
@@ -2740,17 +2594,6 @@ def complex_real(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 
 
 @setup_host_and_device
-def complex_recip(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    temp = torch.cat([x.real, x.imag], -1)
-    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
-
-    tt_result = ttl.tensor.complex_recip(t0, output_mem_config=output_mem_config)
-    result = ttl_complex_2_torch_complex(tt_result)
-
-    return result
-
-
-@setup_host_and_device
 def complex_div(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     tempx = torch.cat([x.real, x.imag], -1)
     t0 = setup_tt_tensor(tempx, device, layout[0], input_mem_config[0], dtype[0])
@@ -2776,37 +2619,6 @@ def complex_mul(x, y, *args, device, dtype, layout, input_mem_config, output_mem
     result = ttl_complex_2_torch_complex(tt_result)
 
     return result
-
-
-@setup_host_and_device
-def complex_conj(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    temp = torch.cat([x.real, x.imag], -1)
-    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
-
-    tt_result = ttl.tensor.conj(t0, output_mem_config=output_mem_config)
-    result = ttl_complex_2_torch_complex(tt_result)
-
-    return result
-
-
-@setup_host_and_device
-def complex_abs(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    temp = torch.cat([x.real, x.imag], -1)
-    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
-
-    tt_result = ttl.tensor.complex_abs(t0, output_mem_config=output_mem_config)
-    tt_result = tt2torch_tensor(tt_result)
-
-    return tt_result
-
-
-@setup_host_and_device
-def complex_polar(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    tt_result = ttl.tensor.polar(t0, t1, output_mem_config=output_mem_config)
-    return ttl_complex_2_torch_complex(tt_result)
 
 
 @setup_host_and_device
@@ -3128,7 +2940,7 @@ def interleaved_to_sharded_partial(
     t2 = torch2tt_tensor(out_initial, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype[0])
 
     for slice_index in range(num_slices):
-        t1 = ttl.tensor.interleaved_to_sharded_partial(
+        t1 = ttnn.interleaved_to_sharded_partial(
             t0,
             grid_size,
             height_shard_spec,
@@ -3138,12 +2950,12 @@ def interleaved_to_sharded_partial(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             t1,
             t2,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     returned_res = tt2torch_tensor(t2)
@@ -3181,7 +2993,7 @@ def interleaved_to_sharded_partial_coregrid(
     t2 = torch2tt_tensor(out_initial, device, tt_memory_config=interleaved_mem_config, tt_dtype=dtype[0])
 
     for slice_index in range(num_slices):
-        t1 = ttl.tensor.interleaved_to_sharded_partial(
+        t1 = ttnn.interleaved_to_sharded_partial(
             t0,
             grid_size,
             height_shard_spec,
@@ -3191,12 +3003,12 @@ def interleaved_to_sharded_partial_coregrid(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-        ttl.tensor.sharded_to_interleaved_partial(
+        ttnn.sharded_to_interleaved_partial(
             t1,
             t2,
             num_slices,
             slice_index,
-            interleaved_mem_config,
+            memory_config=interleaved_mem_config,
         )
 
     returned_res = tt2torch_tensor(t2)

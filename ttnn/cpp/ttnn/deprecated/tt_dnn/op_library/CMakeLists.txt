@@ -4,23 +4,12 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/sharded_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/multi_core/sharded_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/sharded_op_partial.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sharded_partial/multi_core/sharded_op_partial_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/sliding_window.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/reference_sliding_window.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/copy_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/copy/multi_core/copy_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/move_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_overlap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_sharded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sliding_window_op_infra/halo_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/reduce_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/single_core_hw/reduce_op_single_core_hw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_h/reduce_op_multi_core_h.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_w/reduce_op_multi_core_w.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fast_reduce_nc/fast_reduce_nc_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fast_reduce_nc/reduce_nc_impl/reduce_nc_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/bcast_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_multi_core_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h.cpp
@@ -112,33 +101,14 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/reshape/reshape_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/composite/composite_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/optimizer_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/transformer_tms.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_attn_matmul/multi_core_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_group_attn_matmul/multi_core_group_attn_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_1d_sum_reduce/multi_core_ssm_1d_sum_reduce.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_tms.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_create_qkv_heads_falcon7b.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_create_qkv_heads_decode.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_concat_heads.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_concat_heads_decode.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/nlp_kv_cache_load_slice.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/multi_core_create_qkv_heads/multi_core_create_qkv_heads.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nlp_tms/multi_core_create_q_and_kv_heads_separate/multi_core_create_q_and_kv_heads.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotate_half/single_core/rotate_half_op_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotate_half/rotate_half_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/multi_core/rotary_embedding_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/rotary_embedding_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/multi_core/rotary_embedding_llama_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rotary_embedding/rotary_embedding_llama_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/multi_core/update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/paged_update_cache/multi_core/paged_update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/paged_update_cache/paged_update_cache_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fold/fold_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fold/single_core/fold_op_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fold/multi_core/fold_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp

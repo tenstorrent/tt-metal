@@ -160,18 +160,14 @@ class TtDistributedLayernorm:
             total_count += count_local
             counts.append(count_local)
 
-            meanx_local = ttl.tensor.reduce(
-                xs[i], ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
-            )
+            meanx_local = ttnn.sum(xs[i], 3, scaler=1.0 / counts[i])
             meanxs.append(meanx_local)
 
         # meanx2 = torch.mean(torch.square(xs), dim=-1, keepdim=True)
         meanx2s = []
         for i in range(num_devices):
             x2_local = ttnn.pow(xs[i], 2)
-            meanx2_local = ttl.tensor.reduce(
-                x2_local, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / counts[i]
-            )
+            meanx2_local = ttnn.sum(x2_local, dim=3, scaler=1.0 / counts[i])
             meanx2s.append(meanx2_local)
 
         # AllReduce meanx and meanx2
@@ -190,8 +186,10 @@ class TtDistributedLayernorm:
         mean = []
         for i in range(num_devices):
             mean.append(
-                ttl.tensor.reduce(
-                    meanxs[i], ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / total_count
+                ttnn.sum(
+                    meanxs[i],
+                    dim=3,
+                    scaler=1.0 / total_count,
                 )
             )
 
@@ -210,8 +208,10 @@ class TtDistributedLayernorm:
         meanx2 = []
         for i in range(num_devices):
             meanx2.append(
-                ttl.tensor.reduce(
-                    meanx2s[i], ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, scaler=1.0 / total_count
+                ttnn.sum(
+                    meanx2s[i],
+                    dim=3,
+                    scaler=1.0 / total_count,
                 )
             )
 

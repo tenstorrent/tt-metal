@@ -15,10 +15,7 @@ from models.demos.tg.llama3_70b.tests.test_llama_model_galaxy import run_test_Ll
 )
 @pytest.mark.parametrize(
     "llama_version",
-    (
-        # ("llama2"),
-        ("llama3"),
-    ),
+    (("llama3-tg"),),
 )
 @pytest.mark.parametrize(
     "pcc, n_layers",

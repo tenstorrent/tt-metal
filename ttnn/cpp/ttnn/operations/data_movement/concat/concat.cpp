@@ -17,7 +17,7 @@ namespace operations {
 namespace data_movement {
 
     // Wrapper for TTDNN
-    ttnn::Tensor ConcatOperation::operator()(
+    ttnn::Tensor ConcatOperation::invoke(
         uint8_t queue_id,
         const std::vector<ttnn::Tensor>& input_tensors,
         int dim,
@@ -100,12 +100,12 @@ namespace data_movement {
         return output_tensor;
     }
 
-    ttnn::Tensor ConcatOperation::operator() (
+    ttnn::Tensor ConcatOperation::invoke (
         const std::vector<ttnn::Tensor>& input_tensors,
         int dim,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<ttnn::Tensor> optional_output_tensor) {
-        return operator()(DefaultQueueId, input_tensors, dim, memory_config, optional_output_tensor);
+        return invoke(DefaultQueueId, input_tensors, dim, memory_config, optional_output_tensor);
     }
 };
 

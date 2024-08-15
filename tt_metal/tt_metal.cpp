@@ -197,7 +197,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
     // the main thread will modify device state while the CCL is running on device.
     for (const auto &[device_id, dev] : devices) {
         dev->synchronize(); // Synchronize worker queue
-        detail::Synchronize(dev); // Synchronize device
+        Synchronize(dev); // Synchronize device
     }
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     std::map<chip_id_t, Device *> mmio_devices = {};
@@ -512,21 +512,21 @@ void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const u
     }
 }
 
-void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done) {
-    LaunchProgram(device, *program, wait_until_cores_done);
+void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done, bool force_slow_dispatch) {
+    LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
 }
 
-void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done) {
+void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
         ZoneScoped;
-        detail::DispatchStateCheck(false);
+        detail::DispatchStateCheck(force_slow_dispatch);
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
             program.finalize();
         }
 
-        detail::WriteRuntimeArgsToDevice(device, program);
-        detail::ConfigureDeviceWithProgram(device, program);
+        detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
+        detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
 
         auto device_id = device->id();
 
@@ -622,10 +622,10 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
     return pass;
 }
 
-void WriteRuntimeArgsToDevice(Device *device, Program &program) {
+void WriteRuntimeArgsToDevice(Device *device, Program &program, bool force_slow_dispatch) {
     ZoneScoped;
     auto device_id = device->id();
-    detail::DispatchStateCheck(false);
+    detail::DispatchStateCheck(force_slow_dispatch);
 
     static vector<CoreType>core_types = {CoreType::WORKER, CoreType::ETH }; // TODO: make this global
 
@@ -962,6 +962,18 @@ void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const 
 }
 
 void ReleaseTrace(Device *device, const uint32_t tid) { device->release_trace(tid); }
+
+void Synchronize(Device *device, const std::optional<uint8_t> cq_id) {
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+        if (cq_id.has_value()) {
+            Finish(device->command_queue(cq_id.value()));
+        } else {
+            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+                Finish(device->command_queue(cq_id));
+            }
+        }
+    }
+}
 
 }  // namespace tt_metal
 

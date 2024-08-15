@@ -44,10 +44,6 @@ enum class EnqueueCommandType {
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
-// TEMPORARY! TODO(agrebenisan): need to use proper macro based on loading noc
-#define NOC_X(x) x
-#define NOC_Y(y) y
-
 class CommandQueue;
 class CommandInterface;
 
@@ -335,6 +331,7 @@ class EnqueueRecordEventCommand : public Command {
     uint32_t event_id;
     uint32_t expected_num_workers_completed;
     bool clear_count;
+    bool write_barrier;
 
    public:
     EnqueueRecordEventCommand(
@@ -344,7 +341,8 @@ class EnqueueRecordEventCommand : public Command {
         SystemMemoryManager& manager,
         uint32_t event_id,
         uint32_t expected_num_workers_completed,
-        bool clear_count = false);
+        bool clear_count = false,
+        bool write_barrier = true);
 
     void process();
 

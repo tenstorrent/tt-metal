@@ -205,18 +205,18 @@ struct registered_operation_t {
     template <typename... args_t>
     requires PrimitiveOperationConcept<operation_t>
     auto invoke(uint8_t queue_id, args_t&&... args) const {
-        static_assert(requires { operation_t::operator()(std::forward<decltype(args)>(args)...); },
+        static_assert(requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
                       "Primitive Operation must implement operator() method to be invoked.");
         ZoneScopedN("Run primitive ttnn operation");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
-        auto [operation_attributes, tensors_args] = operation_t::operator()(std::forward<decltype(args)>(args)...);
+        auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
         return ttnn::device_operation::run<operation_t>(queue_id, operation_attributes, tensors_args);
     }
 
     template <typename... args_t>
     requires(PrimitiveOperationConcept<operation_t>)
     auto invoke(args_t&&... args) const {
-        return operator()(DefaultQueueId, std::forward<args_t>(args)...);
+        return invoke(DefaultQueueId, std::forward<args_t>(args)...);
     }
 
 
@@ -225,7 +225,7 @@ struct registered_operation_t {
     auto invoke_composite(args_t&&... args) const {
         ZoneScopedN("Run composite ttnn operation ");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
-        return operation_t::operator()(std::forward<decltype(args)>(args)...);
+        return operation_t::invoke(std::forward<decltype(args)>(args)...);
     }
 
     template <typename... args_t>
@@ -238,7 +238,7 @@ struct registered_operation_t {
         // detail::log("Arguments: ", std::forward<args_t>(args)...);
 
         using execute_on_worker_thread_return_t =
-            decltype(operation_t::operator()(std::forward<decltype(args)>(args)...));
+            decltype(operation_t::invoke(std::forward<decltype(args)>(args)...));
 
         const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(std::forward<args_t>(args)...);
         const OptionalConstTensors optional_input_tensors =
@@ -262,7 +262,7 @@ struct registered_operation_t {
                 return std::apply(
                     [](auto&&... args) -> Tensors {
                         return detail::map_execute_on_worker_thread_return_to_launch_op_return<operation_t>(
-                            operation_t::operator()(std::forward<decltype(args)>(args)...));
+                            operation_t::invoke(std::forward<decltype(args)>(args)...));
                     },
                     execute_on_worker_thread_args);
             },
@@ -333,7 +333,9 @@ consteval void assert_operation_in_correct_namespace() {
             constexpr auto namespace_substring = tt::stl::reflection::fixed_string_substring<0, sizeof(prim_namespace)>(cpp_fully_qualified_name);
             static_assert(tt::stl::reflection::fixed_string_equals(namespace_substring, prim_namespace), "Primitive operations must be in the `ttnn::prim` namespace.");
         } else {
+            #ifndef DISABLE_NAMESPACE_STATIC_ASSERT
             static_assert(false, "Primitive operations must be in the `ttnn::prim` namespace.");
+            #endif
         }
     } else {
         if constexpr (cpp_fully_qualified_name.size() > sizeof(prim_namespace)) {
@@ -367,28 +369,13 @@ constexpr auto register_operation_with_auto_launch_op() {
 namespace detail {
 template <auto lambda_t>
 struct lambda_operation_t {
-    static auto operator()(auto&&... args) { return lambda_t(std::forward<decltype(args)>(args)...); }
+    static auto invoke(auto&&... args) { return lambda_t(std::forward<decltype(args)>(args)...); }
 };
 }  // namespace detail
-
-// If you are feeling lazy, you can use this macro to create an operation struct from a lambda
-// You  will have to implement async manually
-#define TTNN_REGISTER_OPERATION_FROM_FUNCTION(cpp_fully_qualified_name, function) \
-    (::ttnn::decorators::register_operation<                                 \
-        cpp_fully_qualified_name,                                            \
-        ::ttnn::decorators::detail::lambda_operation_t<[](auto&&... args) {  \
-            return function(std::forward<decltype(args)>(args)...);          \
-        }>>())
 
 }  // namespace decorators
 
 using ttnn::decorators::register_operation;
 using ttnn::decorators::register_operation_with_auto_launch_op;
-
-#define TTNN_REGISTER_OPERATION(NAMESPACE, OPERATION_NAME, OPERATION_TYPE) \
-    namespace NAMESPACE { \
-    constexpr auto OPERATION_NAME = ttnn::decorators::register_operation<reflect::fixed_string{#NAMESPACE "::" #OPERATION_NAME}, OPERATION_TYPE>(); \
-    }
-
 
 }  // namespace ttnn

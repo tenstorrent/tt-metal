@@ -54,7 +54,7 @@ Tensor where_impl(
 }
 
 }
-Tensor WhereOperation::operator()(
+Tensor WhereOperation::invoke(
     uint8_t queue_id,
     const Tensor& predicate,
     const Tensor& value_true,
@@ -65,7 +65,7 @@ Tensor WhereOperation::operator()(
     return ternary_utils::where_impl(queue_id, predicate, value_true, value_false, output_mem_config.value_or(predicate.memory_config()), output_tensor);
 }
 
-Tensor WhereOperation::operator()(
+Tensor WhereOperation::invoke(
     uint8_t queue_id,
     const Tensor& predicate,
     const float value_true,
@@ -76,7 +76,7 @@ Tensor WhereOperation::operator()(
     return ternary_utils::where_impl(queue_id, predicate, value_true, value_false, output_mem_config.value_or(predicate.memory_config()), output_tensor);
 }
 
-Tensor WhereOperation::operator()(
+Tensor WhereOperation::invoke(
     uint8_t queue_id,
     const Tensor& predicate,
     const Tensor& value_true,
@@ -87,7 +87,7 @@ Tensor WhereOperation::operator()(
     return ternary_utils::where_impl(queue_id, predicate, value_true, value_false, output_mem_config.value_or(predicate.memory_config()), output_tensor);
 }
 
-Tensor WhereOperation::operator()(
+Tensor WhereOperation::invoke(
     uint8_t queue_id,
     const Tensor& predicate,
     const float value_true,

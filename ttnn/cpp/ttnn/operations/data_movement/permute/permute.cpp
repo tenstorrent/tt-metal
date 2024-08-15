@@ -129,7 +129,7 @@ ttnn::Tensor permute_launch(const ttnn::Tensor &a, const std::vector<std::int64_
             if (normalized_dims == seq_dims) {
                 return {AutoFormat::move_tensor_to_mem_config(a, output_mem_config)};
             }
-            return {operation::decorate_as_composite(__func__, permute_impl)(a, normalized_dims, output_mem_config)};
+            return {permute_impl(a, normalized_dims, output_mem_config)};
         }, {a}, output_tensors);
     return output_tensors.at(0);
 }
@@ -145,7 +145,7 @@ Tensor composite_invoke(
 
 } // detail namespace
 
-ttnn::Tensor ExecutePermute::operator()(
+ttnn::Tensor ExecutePermute::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const std::vector<int64_t>& dims,
@@ -209,15 +209,15 @@ ttnn::Tensor ExecutePermute::operator()(
     return output_tensor;
 }
 
-ttnn::Tensor ExecutePermute::operator()(
+ttnn::Tensor ExecutePermute::invoke(
     const ttnn::Tensor& input_tensor,
     const std::vector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
-    return operator()(DefaultQueueId, input_tensor, dims, memory_config);
+    return invoke(DefaultQueueId, input_tensor, dims, memory_config);
 }
 
-ttnn::Tensor ExecutePermute::operator()(const ttnn::Tensor& input_tensor, const std::vector<int64_t>& dims) {
-    return operator()(input_tensor, dims, std::nullopt);
+ttnn::Tensor ExecutePermute::invoke(const ttnn::Tensor& input_tensor, const std::vector<int64_t>& dims) {
+    return invoke(input_tensor, dims, std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace

@@ -225,11 +225,11 @@ class TtLlamaAttention_optimized:
             query_layer,  # [seqlen, n_local_heads, bsz, head_dim]
             key_layer,  # [seqlen, n_local_kv_heads, bsz, head_dim]
             value_layer,  # [seqlen, n_local_kv_heads, bsz, head_dim]
-        ) = tt_lib.tensor.nlp_create_qkv_heads_decode(
+        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
             fused_query_key_value,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            output_mem_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
+            memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
         )
 
         fused_query_key_value.deallocate(True)
@@ -279,7 +279,7 @@ class TtLlamaAttention_optimized:
 
         # key and value layers will have kv_seq_len padded to nearest 32
         keys = self.layer_past[0]
-        key_layer = tt_lib.tensor.nlp_kv_cache_load_slice(keys, 0, padded_layer_past_len)
+        key_layer = ttnn.experimental.nlp_kv_cache_load_slice(keys, seq_len_start=0, seq_len_end=padded_layer_past_len)
 
         # PRE-SOFTMAX MM
         key_layer_transposed = ttnn.transpose(
@@ -325,7 +325,9 @@ class TtLlamaAttention_optimized:
         value_layer.deallocate(True)
 
         values = self.layer_past[1]
-        value_layer = tt_lib.tensor.nlp_kv_cache_load_slice(values, 0, padded_layer_past_len)
+        value_layer = ttnn.experimental.nlp_kv_cache_load_slice(
+            values, seq_len_start=0, seq_len_end=padded_layer_past_len
+        )
 
         # POST-SOFTMAX MM
         scores_prog_config = self.model_config["SCORES_BATCHED_MM_PROGCFG_LAMBDA"](padded_layer_past_len // 32)
@@ -348,7 +350,7 @@ class TtLlamaAttention_optimized:
         attn_output,
     ):
         # ATTENTION SELFOUT
-        attn_output = tt_lib.tensor.nlp_concat_heads_decode(
+        attn_output = ttnn.experimental.nlp_concat_heads_decode(
             attn_output,
             num_heads=self.n_local_heads,
         )  # seqlen, 1, batch, hidden_size
@@ -427,14 +429,14 @@ class TtLlamaAttention_optimized:
         # ROTARY EMBEDDINGS
         # Q Rotary Embeddings
         # query_layer: ttnn.Shape([1, 8, seq_len, 128]) -> [bsz, n_local_heads, seq_len, head_dim]
-        query_layer_ret = ttnn.experimental.tensor.rotary_embedding_llama(
+        query_layer_ret = ttnn.experimental.rotary_embedding_llama(
             query_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
         query_layer.deallocate(True)
 
         # K Rotary Embeddings
         # key_layer: ttnn.Shape([1, 1, seq_len, 128]) -> [bsz, n_local_kv_heads, seq_len, head_dim]
-        key_layer_ret = ttnn.experimental.tensor.rotary_embedding_llama(
+        key_layer_ret = ttnn.experimental.rotary_embedding_llama(
             key_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
         key_layer.deallocate(True)
@@ -481,9 +483,9 @@ class TtLlamaAttention_optimized:
 
     def prefill_attn_selfout(self, attn_output):
         # ATTENTION SELFOUT
-        attn_output = tt_lib.tensor.nlp_concat_heads(
+        attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            output_mem_config=self.model_config["L1_MEMCFG"],
+            memory_config=self.model_config["L1_MEMCFG"],
         )  # seqlen, 1, batch, hidden_size
 
         attn_output = ttnn.all_gather(

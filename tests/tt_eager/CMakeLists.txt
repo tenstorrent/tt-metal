@@ -3,7 +3,7 @@ add_library(test_eager_common_libs INTERFACE)
 target_link_libraries(test_eager_common_libs INTERFACE test_common_libs)
 
 set(TT_EAGER_TESTS_OPS
-    ops/ccl/test_ccl_helpers.cpp
+    #ops/ccl/test_ccl_helpers.cpp
     ops/ccl/test_ccl_tensor_slicers.cpp
     ops/test_average_pool.cpp
     ops/test_eltwise_binary_op.cpp
@@ -16,7 +16,6 @@ set(TT_EAGER_TESTS_OPS
     ops/test_transpose_op.cpp
     ops/test_transpose_wh_single_core.cpp
     ops/test_transpose_wh_multi_core.cpp
-    ops/test_reduce_op.cpp
     ops/test_bcast_op.cpp
     ops/test_bmm_op.cpp
     # ops/test_pad_op.cpp                     # <- not called in run_tt_eager.py

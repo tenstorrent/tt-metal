@@ -10,7 +10,6 @@ from functools import partial
 import torch
 import torch.nn.functional as F
 import ttnn
-import tt_lib
 from loguru import logger
 from models.demos.falcon7b_common.reference.hf_modeling_falcon import FalconConfig
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
@@ -116,7 +115,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 
 def synchronize_devices(devices):
     for device in devices:
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
 
 
 def run_falcon_demo_kv(
@@ -135,6 +134,7 @@ def run_falcon_demo_kv(
     expected_greedy_output_path=None,  # Path for expected outputs for greedy decoding
     save_generated_text_path=None,  # If provided, save generated text to this path (e.g. set to expected_greedy_output_path to update expected output)
     csv_perf_targets={},  # Optional perf targets for CSV output
+    is_ci_env=False,  # Whether is running in CI environment
 ):
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -430,7 +430,7 @@ def run_falcon_demo_kv(
         N_decode = 30
         N_warmup_decode = N_warmup_iter["inference_decode"]
     print_per_generated_token = (
-        expected_greedy_output_path is None and num_devices == 1
+        expected_greedy_output_path is None and num_devices == 1 and not is_ci_env
     )  # print per generated token if not verifying outputs and single device
     for output_token_index in (
         range(N_decode) if print_per_generated_token else tqdm(range(N_decode), desc="Generating tokens")

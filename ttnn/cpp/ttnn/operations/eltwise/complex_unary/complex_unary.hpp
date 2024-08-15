@@ -16,14 +16,14 @@ template <ComplexUnaryOpType complex_unary_op_type>
 struct ExecuteComplexUnaryTensor {
 
     //Type 1: 1 input tensor
-    static Tensor operator()(const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
+    static Tensor invoke(const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
         return OpHandler<complex_unary_op_type>::handle(input_tensor_arg, memory_config);
     }
 };
 
 template <ComplexUnaryOpType complex_unary_op_type>
 struct ExecuteComplexUnaryComplexTensor {
-    static ComplexTensor operator()(const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
+    static ComplexTensor invoke(const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
         return OpHandler<complex_unary_op_type>::handle(input_tensor_arg, memory_config);
     }
 };

@@ -6,7 +6,7 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsOperation::operator() (
+    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsOperation::invoke (
         uint8_t queue_id,
         const Tensor& input_tensor_q,
         const std::optional<Tensor>& input_tensor_kv,
@@ -27,19 +27,10 @@ namespace ttnn::operations::experimental::transformer {
                 head_dim = input_tensor_q.get_legacy_shape()[3] / (num_q_heads + 2 * num_kv_heads_val);
             }
 
-            return ttnn::device_operation::run<NlpCreateHeadsDeviceOperation>(
-                queue_id,
-                NlpCreateHeadsDeviceOperation::operation_attributes_t{.num_q_heads = num_q_heads,
-                                                                    .num_kv_heads = num_kv_heads_val,
-                                                                    .head_dim = head_dim,
-                                                                    .transpose_k_heads = transpose_k_heads,
-                                                                    .output_mem_config = memory_config.value_or(input_tensor_q.memory_config())},
-                NlpCreateHeadsDeviceOperation::tensor_args_t{.input_tensor_q = input_tensor_q,
-                                                            .input_tensor_kv = input_tensor_kv,
-                                                            .optional_output_tensors = optional_output_tensors.value_or(std::vector<std::optional<Tensor>>{})});
+            return ttnn::prim::nlp_create_qkv_heads(queue_id, input_tensor_q, input_tensor_kv, num_q_heads, num_kv_heads, head_dim, transpose_k_heads, memory_config, optional_output_tensors);
     };
 
-    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsOperation::operator() (
+    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsOperation::invoke (
         const Tensor& input_tensor_q,
         const std::optional<Tensor>& input_tensor_kv,
         const uint32_t num_q_heads,
@@ -47,7 +38,7 @@ namespace ttnn::operations::experimental::transformer {
         const bool transpose_k_heads,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors) {
-        return operator()(ttnn::DefaultQueueId, input_tensor_q, input_tensor_kv, num_q_heads, num_kv_heads, transpose_k_heads, memory_config, optional_output_tensors);
+        return invoke(ttnn::DefaultQueueId, input_tensor_q, input_tensor_kv, num_q_heads, num_kv_heads, transpose_k_heads, memory_config, optional_output_tensors);
     };
 
 }  // namespace ttnn::operations::experimental::transformer
