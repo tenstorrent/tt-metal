@@ -2181,7 +2181,7 @@ class ResNet(nn.Module):
                 else:
                     x_in = x
             else:
-                x = ttnn.experimental.tensor.interleaved_to_sharded(x, mem_config)
+                x = ttnn.interleaved_to_sharded(x, mem_config)
             if op_event is not None:
                 ttnn.record_event(0, op_event)
 

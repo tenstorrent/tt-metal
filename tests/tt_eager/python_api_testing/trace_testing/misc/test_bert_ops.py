@@ -128,7 +128,7 @@ class TestBertOpsTrace:
 
         def run_ops(in0_t_res):
             if in0_sharded:
-                in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+                in0_t = ttnn.interleaved_to_sharded(
                     in0_t_res,
                     grid_size,
                     [M // grid_size[0], K // grid_size[1]],

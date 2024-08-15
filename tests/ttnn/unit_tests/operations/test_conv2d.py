@@ -51,7 +51,7 @@ def prepare_conv_input_and_copy_to_device_interleaved(
         else:
             interleaved_mem_config = ttnn.DRAM_MEMORY_CONFIG
             tt_input_tensor_on_device = tt_input_tensor.to(device, interleaved_mem_config)
-            tt_input_tensor_on_device = ttnn.experimental.tensor.interleaved_to_sharded(
+            tt_input_tensor_on_device = ttnn.interleaved_to_sharded(
                 tt_input_tensor_on_device, mem_config
             )
     else:

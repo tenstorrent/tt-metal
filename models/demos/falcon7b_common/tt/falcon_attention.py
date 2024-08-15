@@ -618,7 +618,7 @@ class TtFalconAttentionDecode(nn.Module):
         )
 
         if self.model_config["l1_sharded"]:
-            key_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+            key_layer = ttnn.interleaved_to_sharded(
                 key_layer,
                 sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](padded_layer_past_len, self.head_dim),
             )
@@ -642,9 +642,9 @@ class TtFalconAttentionDecode(nn.Module):
                 self.padded_local_heads,
                 self.head_dim,  # Batch must be in dim 0 to match K cache
             )
-            query_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+            query_layer = ttnn.interleaved_to_sharded(
                 query_layer,
-                sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
+                self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
                     self.padded_local_heads, self.head_dim
                 ),
             )
@@ -748,7 +748,7 @@ class TtFalconAttentionDecode(nn.Module):
             memory_config=self.model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"],
         )
         if self.model_config["l1_sharded"]:
-            value_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+            value_layer = ttnn.interleaved_to_sharded(
                 value_layer,
                 sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](padded_layer_past_len, self.head_dim),
             )

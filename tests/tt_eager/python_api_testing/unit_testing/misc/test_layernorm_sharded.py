@@ -95,7 +95,7 @@ def test_layernorm_sharded_mix_precision_rm(
     in0 = torch.rand(in0_shape) * 2 - 0.95
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
     shard_shape = [M // grid_size[0], math.ceil(K / grid_size[1] / 32) * 32]
-    in0_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
+    in0_t_shard = ttnn.interleaved_to_sharded(
         in0_t,
         grid_size,
         shard_shape,
@@ -106,7 +106,7 @@ def test_layernorm_sharded_mix_precision_rm(
     if test_id <= 5:
         in1 = torch.rand(in0_shape) * 2 - 0.8
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-        in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
+        in1_t_shard = ttnn.interleaved_to_sharded(
             in1_t,
             grid_size,
             shard_shape,
@@ -369,7 +369,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
     in0 = torch.rand(in0_shape) * 2 - 0.95
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
     shard_shape = [M, math.ceil(K / (grid_size[0] * grid_size[1]) / 32) * 32]
-    in0_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
+    in0_t_shard = ttnn.interleaved_to_sharded(
         in0_t,
         grid_size,
         shard_shape,
@@ -380,7 +380,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
     if test_id <= 5:
         in1 = torch.rand(in0_shape) * 2 - 0.8
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-        in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
+        in1_t_shard = ttnn.interleaved_to_sharded(
             in1_t,
             grid_size,
             shard_shape,

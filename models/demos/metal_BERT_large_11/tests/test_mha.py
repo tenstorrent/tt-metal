@@ -62,7 +62,7 @@ def run_mha_inference(
     ).to(ttnn.TILE_LAYOUT)
     if "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG" in model_config:
         tt_mha_input = tt_mha_input.to(device)
-        tt_mha_input = ttnn.experimental.tensor.interleaved_to_sharded(
+        tt_mha_input = ttnn.interleaved_to_sharded(
             tt_mha_input,
             model_config["GRID_SIZE"],
             model_config["SHARD_SIZE"],

@@ -20,9 +20,7 @@ def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=F
             if input_memory_layout.is_sharded() and not output_memory_layout.is_sharded():  # sharded_to_interleaved
                 tensor = ttnn.experimental.tensor.sharded_to_interleaved(tensor, output_mem_config=output_memory_layout)
             elif not input_memory_layout.is_sharded() and output_memory_layout.is_sharded():  # interleaved_to_sharded
-                tensor = ttnn.experimental.tensor.interleaved_to_sharded(
-                    tensor, sharded_mem_config=output_memory_layout
-                )
+                tensor = ttnn.interleaved_to_sharded(tensor, sharded_mem_config=output_memory_layout)
             elif (
                 not input_memory_layout.is_sharded() and not output_memory_layout.is_sharded()
             ):  # interleaved to interleaved with different memory location
@@ -37,9 +35,7 @@ def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=F
                         ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
                     ),
                 )
-                tensor = ttnn.experimental.tensor.interleaved_to_sharded(
-                    tensor, sharded_mem_config=output_memory_layout
-                )
+                tensor = ttnn.interleaved_to_sharded(tensor, sharded_mem_config=output_memory_layout)
             return tensor
 
 
@@ -532,7 +528,7 @@ def fused_partial_layernorm(
             output1 = out_tensor_1
             output2 = out_tensor_2
     else:
-        xs_output2 = ttnn.experimental.tensor.interleaved_to_sharded(xs, sharded_mem_config=memconfig)
+        xs_output2 = ttnn.interleaved_to_sharded(xs, sharded_mem_config=memconfig)
         xs_output2 = ttnn.layer_norm(
             xs_output2,
             epsilon=ln_eps,

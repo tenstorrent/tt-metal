@@ -224,7 +224,7 @@ def test_run_max_pool(
             pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
 
         ttact = ttact.to(device, interleaved_mem_config)
-        ttact = ttnn.experimental.tensor.interleaved_to_sharded(
+        ttact = ttnn.interleaved_to_sharded(
             ttact,
             grid_size,
             [in_height // ncores, act_padded.shape[-1]],

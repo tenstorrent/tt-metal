@@ -296,7 +296,7 @@ def reshard_to(tensor, grid_size, layout, col_major=False, shape=None):
             output_mem_config,
         )
     else:
-        tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+        tensor = ttnn.interleaved_to_sharded(
             tensor,
             grid_size,
             shard_spec,

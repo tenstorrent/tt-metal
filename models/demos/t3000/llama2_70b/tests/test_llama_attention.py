@@ -182,8 +182,8 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
             device=llama_attention_model.device_mesh,
         )
         xs = ttnn.to_device(xs, llama_attention_model.device_mesh)
-        xs = ttnn.experimental.tensor.interleaved_to_sharded(
-            xs, sharded_mem_config=llama_attention_model.model_config["LN_ATTN_OUTPUT_MEMCFG"]
+        xs = ttnn.interleaved_to_sharded(
+            xs, llama_attention_model.model_config["LN_ATTN_OUTPUT_MEMCFG"]
         )
 
         rot_emb = generate_rot_emb(llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2)
@@ -200,8 +200,8 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
         )
         rot_mats = ttnn.to_device(rot_mats, llama_attention_model.device_mesh)
 
-        rot_mats = ttnn.experimental.tensor.interleaved_to_sharded(
-            rot_mats, sharded_mem_config=llama_attention_model.model_config["ROT_MAT_MM_IN1_MEMCFG"]
+        rot_mats = ttnn.interleaved_to_sharded(
+            rot_mats, llama_attention_model.model_config["ROT_MAT_MM_IN1_MEMCFG"]
         )
 
         attn_masks = None

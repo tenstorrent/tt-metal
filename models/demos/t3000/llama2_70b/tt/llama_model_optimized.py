@@ -258,8 +258,8 @@ class TtLlamaModel_optimized:
                 self.hidden_size // self.num_devices,
             )
 
-            xs = ttnn.experimental.tensor.interleaved_to_sharded(
-                xs, sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+            xs = ttnn.interleaved_to_sharded(
+                xs, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
             )
 
             rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=batch)
@@ -276,8 +276,8 @@ class TtLlamaModel_optimized:
             )
             rot_mats = ttnn.to_device(rot_mats, self.device_mesh)
 
-            rot_mats = ttnn.experimental.tensor.interleaved_to_sharded(
-                rot_mats, sharded_mem_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"]
+            rot_mats = ttnn.interleaved_to_sharded(
+                rot_mats, self.model_config["ROT_MAT_MM_IN1_MEMCFG"]
             )
 
             attn_masks = None

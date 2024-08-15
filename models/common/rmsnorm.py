@@ -101,7 +101,7 @@ class RMSNorm(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, out_sharded=False) -> ttnn.Tensor:
         if self.is_sharded:  # sharded version converts from interleaved inputs and optionally back
-            x = ttnn.experimental.tensor.interleaved_to_sharded(
+            x = ttnn.interleaved_to_sharded(
                 x,
                 sharded_mem_config=self.input_config,
             )

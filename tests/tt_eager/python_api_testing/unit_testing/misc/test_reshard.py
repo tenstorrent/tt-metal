@@ -58,7 +58,7 @@ def run_reshard_test(
     torch_tensor = torch.randn(input_shape).bfloat16()
     tt_tensor_sharded = ttnn.Tensor(torch_tensor, tt_dtype).to(input_layout)
     tt_tensor_sharded = tt_tensor_sharded.to(device, dram_memory_config)
-    tt_tensor_sharded = ttnn.experimental.tensor.interleaved_to_sharded(
+    tt_tensor_sharded = ttnn.interleaved_to_sharded(
         tt_tensor_sharded,
         input_shard_grid,
         input_shard_shape,

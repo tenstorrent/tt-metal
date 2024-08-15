@@ -223,7 +223,7 @@ def test_group_attn_matmul(
         )
 
         if in0_sharded:
-            tt_input_tensor_a = ttnn.experimental.tensor.interleaved_to_sharded(
+            tt_input_tensor_a = ttnn.interleaved_to_sharded(
                 tt_input_tensor_a,
                 compute_grid_size,
                 [q_len * batch, K],
@@ -232,7 +232,7 @@ def test_group_attn_matmul(
             )
 
         if in1_sharded:
-            tt_input_tensor_b = ttnn.experimental.tensor.interleaved_to_sharded(
+            tt_input_tensor_b = ttnn.interleaved_to_sharded(
                 tt_input_tensor_b,
                 compute_grid_size,
                 [kv_heads * K, seq_len],
@@ -318,7 +318,7 @@ def test_group_attn_matmul_with_program_cache(
             )
 
             if sharded:
-                tt_input_tensor_a = ttnn.experimental.tensor.interleaved_to_sharded(
+                tt_input_tensor_a = ttnn.interleaved_to_sharded(
                     tt_input_tensor_a,
                     compute_grid_size,
                     [q_len * batch, K],
@@ -326,7 +326,7 @@ def test_group_attn_matmul_with_program_cache(
                     shard_orientation,
                 )
 
-                tt_input_tensor_b = ttnn.experimental.tensor.interleaved_to_sharded(
+                tt_input_tensor_b = ttnn.interleaved_to_sharded(
                     tt_input_tensor_b,
                     compute_grid_size,
                     [kv_heads * K, seq_len],
@@ -443,7 +443,7 @@ def test_group_attn_matmul_fp32(
         )
 
         if in0_sharded:
-            tt_input_tensor_a = ttnn.experimental.tensor.interleaved_to_sharded(
+            tt_input_tensor_a = ttnn.interleaved_to_sharded(
                 tt_input_tensor_a,
                 compute_grid_size,
                 [q_len * batch, K],
@@ -452,7 +452,7 @@ def test_group_attn_matmul_fp32(
             )
 
         if in1_sharded:
-            tt_input_tensor_b = ttnn.experimental.tensor.interleaved_to_sharded(
+            tt_input_tensor_b = ttnn.interleaved_to_sharded(
                 tt_input_tensor_b,
                 compute_grid_size,
                 [kv_heads * K, seq_len],

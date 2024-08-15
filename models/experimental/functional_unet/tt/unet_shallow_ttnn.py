@@ -23,7 +23,7 @@ def unet_reshard(
     else:
         ttl_tensor = ttnn_tensor
         ttl_tensor = ttnn.experimental.tensor.sharded_to_interleaved(ttl_tensor, interleaved_memory_config, dtype)
-        ttl_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+        ttl_tensor = ttnn.interleaved_to_sharded(
             ttl_tensor,
             sharded_memory_config,
             dtype,

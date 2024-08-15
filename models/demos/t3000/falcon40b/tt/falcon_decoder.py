@@ -313,7 +313,7 @@ class TtFalconDecoderLayer:
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        replicated_hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+        replicated_hidden_states = ttnn.interleaved_to_sharded(
             replicated_hidden_states,
             sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
         )

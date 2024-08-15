@@ -144,7 +144,7 @@ def test_ttnn_linear(
             dtype=input_b_dtype,
         )
         if input_a_is_sharded:
-            input_tensor_a = ttnn.experimental.tensor.interleaved_to_sharded(
+            input_tensor_a = ttnn.interleaved_to_sharded(
                 input_tensor_a,
                 grid_size,
                 [m_size // num_cores, k_size],

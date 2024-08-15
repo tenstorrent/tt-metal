@@ -98,7 +98,7 @@ def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     in1_t = torch2tt_tensor(input_tensor, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-    in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
+    in1_t_shard = ttnn.interleaved_to_sharded(
         in1_t,
         grid_size,
         [M // grid_size[1], K // grid_size[0]],

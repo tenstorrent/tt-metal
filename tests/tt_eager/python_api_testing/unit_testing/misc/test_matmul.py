@@ -68,7 +68,7 @@ def test_matmul_1d_in0_batched(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [M, K // num_cores],
@@ -172,7 +172,7 @@ def test_linear_fp32_acc_l1(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [M, K // num_cores],
@@ -277,7 +277,7 @@ def test_matmul_no_mcast_fp32_acc_l1(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [B * H * M // num_cores, K],
@@ -285,7 +285,7 @@ def test_matmul_no_mcast_fp32_acc_l1(
                 ttnn.ShardOrientation.COL_MAJOR,
             )
         if in1_sharded:
-            in1_t = ttnn.experimental.tensor.interleaved_to_sharded(
+            in1_t = ttnn.interleaved_to_sharded(
                 in1_t,
                 grid_size,
                 [B * H * K // num_cores, N],
@@ -395,7 +395,7 @@ def test_matmul_1d_fp32_input_output(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [M, K // num_cores],
@@ -506,7 +506,7 @@ def test_matmul_no_mcast_fp32_input_output(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [B * H * M // num_cores, K],
@@ -514,7 +514,7 @@ def test_matmul_no_mcast_fp32_input_output(
                 ttnn.ShardOrientation.COL_MAJOR,
             )
         if in1_sharded:
-            in1_t = ttnn.experimental.tensor.interleaved_to_sharded(
+            in1_t = ttnn.interleaved_to_sharded(
                 in1_t,
                 grid_size,
                 [B * H * K // num_cores, N],
@@ -624,7 +624,7 @@ def test_matmul_no_untilize_output_param(
         output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
         if in0_sharded:
-            in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+            in0_t = ttnn.interleaved_to_sharded(
                 in0_t,
                 grid_size,
                 [B * H * M // num_cores, K],
@@ -632,7 +632,7 @@ def test_matmul_no_untilize_output_param(
                 ttnn.ShardOrientation.COL_MAJOR,
             )
         if in1_sharded:
-            in1_t = ttnn.experimental.tensor.interleaved_to_sharded(
+            in1_t = ttnn.interleaved_to_sharded(
                 in1_t,
                 grid_size,
                 [B * H * K // num_cores, N],

@@ -58,7 +58,7 @@ def run_bert_encoder_inference(
     ).to(ttnn.TILE_LAYOUT)
     if "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG" in model_config:
         tt_bert_encoder_input = tt_bert_encoder_input.to(device)
-        tt_bert_encoder_input = ttnn.experimental.tensor.interleaved_to_sharded(
+        tt_bert_encoder_input = ttnn.interleaved_to_sharded(
             tt_bert_encoder_input,
             model_config["GRID_SIZE"],
             model_config["SHARD_SIZE"],

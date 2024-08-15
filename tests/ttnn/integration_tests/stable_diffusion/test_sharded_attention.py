@@ -505,7 +505,7 @@ def test_cross_attnention(
     passing = True
     output = None
 
-    q_sharded = ttl.tensor.interleaved_to_sharded(
+    q_sharded = ttnn.interleaved_to_sharded(
         reference_query_layer,
         grid_size,
         [num_heads * seq_len // num_cores, 64],

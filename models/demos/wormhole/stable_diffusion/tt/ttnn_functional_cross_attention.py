@@ -433,7 +433,7 @@ class cross_attention:
                     j * self.num_slices // 2 + i,
                     memory_config=self.dram_interleaved_memory_config,
                 )
-        output = ttnn.experimental.tensor.interleaved_to_sharded(
+        output = ttnn.interleaved_to_sharded(
             self.output_tensor,
             (8, 2),
             self.tsa_output_shard_shape,
@@ -457,7 +457,7 @@ class cross_attention:
         ]
 
         if not query.is_sharded():
-            q_sharded = ttnn.experimental.tensor.interleaved_to_sharded(
+            q_sharded = ttnn.interleaved_to_sharded(
                 query,
                 grid_size,
                 [num_heads * seq_len // num_cores, inner],
@@ -550,7 +550,7 @@ class cross_attention:
         attention_scores = dealloc_input(ttnn.experimental.tensor.reshard, attention_scores, orig_mem_config)
 
         if not value.is_sharded():
-            v_sharded = ttnn.experimental.tensor.interleaved_to_sharded(
+            v_sharded = ttnn.interleaved_to_sharded(
                 value,
                 grid_size,
                 [num_heads * key_len // num_cores, inner],
@@ -673,7 +673,7 @@ class cross_attention:
 
         if not hidden_states.is_sharded():
             grid_size = self.grid_sizes[self.seq_len]
-            hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+            hidden_states = ttnn.interleaved_to_sharded(
                 hidden_states,
                 grid_size,
                 [self.hidden_states_shape[-2] // grid_size[1], self.hidden_states_shape[-1] // grid_size[0]],

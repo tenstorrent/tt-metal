@@ -119,7 +119,7 @@ def test_run_downsample(
     logger.debug(f"shard_memory_layout={sharded_memory_layout}")
     logger.debug(f"input_shard_height={input_shard_height}, input_shard_width={input_shard_width}")
 
-    A_sharded = ttnn.experimental.tensor.interleaved_to_sharded(
+    A_sharded = ttnn.interleaved_to_sharded(
         A_interleaved,
         grid_size,
         [input_shard_height, input_shard_width],

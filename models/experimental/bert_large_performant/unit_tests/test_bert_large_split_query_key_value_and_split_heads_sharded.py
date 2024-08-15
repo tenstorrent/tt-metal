@@ -54,7 +54,7 @@ def test_split_query_key_value_and_split_heads_with_program_cache(device, dtype,
 
     in0 = torch.randn(input_shape)
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=dtype)
-    in0_t_shard = ttl.tensor.interleaved_to_sharded(
+    in0_t_shard = ttnn.interleaved_to_sharded(
         in0_t,
         grid_size,
         [M // grid_size[0], K // grid_size[1]],

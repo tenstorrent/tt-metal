@@ -426,7 +426,7 @@ class TtFalconAttention:
                 hidden_states,
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
-            hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+            hidden_states = ttnn.interleaved_to_sharded(
                 hidden_states,
                 sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"],
             )
@@ -451,7 +451,7 @@ class TtFalconAttention:
                 fused_query_key_value,
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
-            fused_query_key_value = ttnn.experimental.tensor.interleaved_to_sharded(
+            fused_query_key_value = ttnn.interleaved_to_sharded(
                 fused_query_key_value,
                 sharded_mem_config=self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"],
             )
@@ -499,7 +499,7 @@ class TtFalconAttention:
             ],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        key_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+        key_layer = ttnn.interleaved_to_sharded(
             key_layer,
             sharded_mem_config=kv_cache_memcfg,
         )
@@ -563,7 +563,7 @@ class TtFalconAttention:
             ],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        value_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+        value_layer = ttnn.interleaved_to_sharded(
             value_layer,
             sharded_mem_config=kv_cache_memcfg,
         )
@@ -598,7 +598,7 @@ class TtFalconAttention:
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        attn_output = ttnn.experimental.tensor.interleaved_to_sharded(
+        attn_output = ttnn.interleaved_to_sharded(
             attn_output,
             sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
         )

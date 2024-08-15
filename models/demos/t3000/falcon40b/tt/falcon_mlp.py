@@ -137,7 +137,7 @@ class TtFalconMLP:
 
         hidden_states = ttnn.aggregate_as_tensor(hidden_states)  # Workaround reverse
 
-        hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+        hidden_states = ttnn.interleaved_to_sharded(
             hidden_states, sharded_mem_config=self.model_config["MLP_REDUCE_SCATTER_OUTPUT_MEMCFG"]
         )
 

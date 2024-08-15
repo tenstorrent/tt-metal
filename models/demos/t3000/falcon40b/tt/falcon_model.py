@@ -375,7 +375,7 @@ class TtFalconModelShared:
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        layer_output = ttnn.experimental.tensor.interleaved_to_sharded(
+        layer_output = ttnn.interleaved_to_sharded(
             layer_output,
             sharded_mem_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
         )
