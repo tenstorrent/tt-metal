@@ -35,11 +35,9 @@ class TtModelArgs:
     sliding_window = 8192 * 4
 
     # Default folder location for weights and cached files
-    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/")
-    DEFAULT_TOKENIZER_PATH = os.getenv(
-        "LLAMA_TOKENIZER_PATH", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/"
-    )
-    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/proj_sw/user_dev/hf_data/llama/Meta-Llama-3.1-8B-Instruct/")
+    DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
+    DEFAULT_TOKENIZER_PATH = os.getenv("LLAMA_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
+    DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
 
     OP_KEYS = (
         # Embedding
@@ -63,19 +61,20 @@ class TtModelArgs:
         "ATTN_W_LAYOUT",
         # Decoder
         "DEC_SKIP_OUTPUT",
+        "OUTPUT_MM",
     )
 
     def __init__(self, device, instruct=False):
         # Assert if all folders and files exist
         assert os.path.exists(
             self.DEFAULT_CKPT_DIR
-        ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export MISTRAL_CKPT_DIR=..."
+        ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please use export LLAMA_CKPT_DIR=..."
         assert os.path.isfile(
             self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-        ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export MISTRAL_TOKENIZER_PATH=..."
+        ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please use export LLAMA_TOKENIZER_PATH=..."
         assert os.path.exists(
             self.DEFAULT_CACHE_PATH
-        ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export MISTRAL_CACHE_PATH=..."
+        ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export LLAMA_CACHE_PATH=..."
         # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
         assert os.path.isfile(
             self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
@@ -175,38 +174,45 @@ class TtModelArgs:
                 fused_activation=None,
                 fuse_batch=False,
             )
-            self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
+            self.model_config[
+                "PREFILL_MLP_W1_PRG_CONFIG_128"
+            ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=1,  # 32, #16,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=56,  # N / TILE_WIDTH / Grid_Size
-                transpose_mcast=False,
+                per_core_M=seq_len // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=7,  # 14336/32/64cores = 7: N / TILE_WIDTH / Grid_Size
+                mcast_in0=True,
                 fused_activation=ttnn.UnaryOpType.SILU,
                 fuse_batch=False,
             )
-
-            self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
+            self.model_config[
+                "PREFILL_MLP_W3_PRG_CONFIG_128"
+            ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=56,  # N / TILE_WIDTH / Grid_Size
-                transpose_mcast=False,
+                per_core_M=seq_len // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=7,  # 14336/32/64cores = 7: N / TILE_WIDTH / Grid_Size
+                mcast_in0=True,
                 fused_activation=None,
                 fuse_batch=False,
             )
-
-            self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
+            self.model_config[
+                "PREFILL_MLP_W2_PRG_CONFIG_128"
+            ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=1,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=16,  # N / TILE_WIDTH / Grid_Size
-                transpose_mcast=False,
+                per_core_M=seq_len // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=2,  # 4096 / 32 / 64 cores = 2.86 -> 4 (32 cores) # N / TILE_WIDTH / Grid_Size
+                mcast_in0=True,
                 fused_activation=None,
                 fuse_batch=False,
             )
@@ -236,6 +242,19 @@ class TtModelArgs:
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=seq_len <= 2048,
+            )
+
+            # FIXME: This configuration avoids di/dt non-deterministic hangs. Issue #11354
+            self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(7, 8),
+                in0_block_w=1,
+                per_core_M=1,
+                per_core_N=72,  # vocab size = 128k = 4008 tiles. 4008/56cores = 72
+                out_subblock_h=1,
+                out_subblock_w=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
             )
 
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(

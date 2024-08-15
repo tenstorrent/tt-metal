@@ -14,7 +14,7 @@ def test_llama_torch_inference():
     iterations = 20
 
     model_args = TtModelArgs(device=None)
-    state_dict = torch.load(model_args.consolidated_weights_path)
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     prompts = ["1 2 3 4 "] * model_args.max_batch_size

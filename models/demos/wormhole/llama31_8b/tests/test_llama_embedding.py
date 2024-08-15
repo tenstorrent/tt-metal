@@ -22,7 +22,7 @@ def test_llama_embedding(device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(device)
-    state_dict = torch.load(model_args.consolidated_weights_path)
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     reference_emb = HostEmbedding(model_args)
