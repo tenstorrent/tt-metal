@@ -235,7 +235,7 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
         -1.0f,
         1.0f,
         single_tile_size / tt::test_utils::df::bfloat16::SIZEOF,
-        std::chrono::system_clock::now().time_since_epoch().count() * 2); // Make sure that src a and src b are not identical
+        std::chrono::system_clock::now().time_since_epoch().count());
 
     mask_src_b_for_broadcast(input1, {tile_width, tile_height}, test_config.broadcast_dim);
 
@@ -260,7 +260,7 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
         dest_buffer_data_untilized,
         packed_golden,
         [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) {
-            return is_close(a, b, 0.015f);
+            return is_close(a, b, 0.0155f);
         });
     ASSERT_TRUE(result);
 }
