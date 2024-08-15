@@ -253,9 +253,7 @@ Tensor moreh_matmul_(
     TT_FATAL(input.storage_type() == StorageType::DEVICE);
     auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input, other}, {bias}))};
-
-    operation::launch_op(
+    auto output_tensors = operation::launch_op(
         [output_mem_config, transpose_input, transpose_other, kernel_config_val](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -271,7 +269,6 @@ Tensor moreh_matmul_(
                 optional_output_tensors);
         },
         {input, other},
-        output_tensors,
         {bias},
         {output});
 

@@ -23,7 +23,7 @@ void ExampleDeviceOperation::validate_on_program_cache_hit(
 
 ExampleDeviceOperation::shape_return_value_t ExampleDeviceOperation::compute_output_shapes(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return tensor_args.input_tensor.tensor_attributes->shape;
+    return tensor_args.input_tensor.shape;
 }
 
 ExampleDeviceOperation::tensor_return_value_t ExampleDeviceOperation::create_output_tensors(
@@ -32,8 +32,8 @@ ExampleDeviceOperation::tensor_return_value_t ExampleDeviceOperation::create_out
     const auto& input_tensor = tensor_args.input_tensor;
     return create_device_tensor(
         output_shape,
-        input_tensor.tensor_attributes->dtype,
-        input_tensor.tensor_attributes->layout,
+        input_tensor.dtype,
+        input_tensor.layout,
         input_tensor.device());
 }
 

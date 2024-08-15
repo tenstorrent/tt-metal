@@ -365,7 +365,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
             32);
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard};
     } else {
-        return {input_tensor.shape(), input_tensor.memory_config(), needs_shard_or_reshard};
+        return {input_tensor.shape, input_tensor.memory_config(), needs_shard_or_reshard};
     }
 }
 

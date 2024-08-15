@@ -307,8 +307,7 @@ Tensor _log1p(const Tensor& x, const std::optional<MemoryConfig>& output_mem_con
 // use transformation y = x*tanh[softplus[x]] by broadcast
 // Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/
 Tensor _mish(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({x}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [output_mem_config](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -320,8 +319,7 @@ Tensor _mish(const Tensor& x, const std::optional<MemoryConfig>& output_mem_conf
             Tensor mish_x = ttnn::multiply(x, tanh_x, std::nullopt, output_mem_config);
             return {mish_x};
         },
-        {x},
-        output_tensors);
+        {x});
     return output_tensors.at(0);
 }
 

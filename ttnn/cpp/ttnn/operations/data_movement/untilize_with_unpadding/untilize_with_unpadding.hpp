@@ -28,7 +28,7 @@ struct ExecuteUntilizeWithUnpadding {
 
 }  // namespace operations::data_movement
 
-constexpr auto untilize_with_unpadding = ttnn::register_operation_with_auto_launch_op<
+constexpr auto untilize_with_unpadding = ttnn::register_operation<
     "ttnn::untilize_with_unpadding",
     ttnn::operations::data_movement::ExecuteUntilizeWithUnpadding>();
 

@@ -97,7 +97,7 @@ bool test_tensor_move_semantics(Device *device) {
     Tensor dev_a = Tensor(OwnedStorage{bfloat_data}, single_tile_shape, DataType::BFLOAT16, Layout::TILE).to(device);
     auto og_buffer_a = dev_a.buffer();
     Tensor dev_a_copy = std::move(dev_a);
-    pass &= (dev_a.tensor_attributes == nullptr and dev_a_copy.buffer() == og_buffer_a);
+    pass &= (dev_a_copy.buffer() == og_buffer_a);
     auto dev_a_copy_on_host = dev_a_copy.cpu();
     auto dev_a_copy_data = owned_buffer::get_as<bfloat16>(dev_a_copy_on_host);
     pass &= dev_a_copy_data == bfloat_data;

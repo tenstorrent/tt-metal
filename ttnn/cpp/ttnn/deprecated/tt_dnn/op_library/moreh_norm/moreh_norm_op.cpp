@@ -257,8 +257,7 @@ Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim,
     auto kernel_config_val =
         init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [p, dim, keepdim, memory_config, kernel_config_val](
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -275,7 +274,6 @@ Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim,
                     optional_output_tensors);
         },
         {input},
-        output_tensors,
         {},
         {output});
 

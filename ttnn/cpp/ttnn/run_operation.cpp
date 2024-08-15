@@ -33,14 +33,14 @@ inline bool any_tensor_on_multi_device(const Tensors& tensors) {
 
 Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
     for (auto& input_tensor : input_tensors) {
-        if (std::holds_alternative<DeviceStorage>(input_tensor.tensor_attributes->storage)) {
-            return input_tensor.workers.at(0);
+        if (std::holds_alternative<DeviceStorage>(input_tensor.storage)) {
+            return input_tensor.get_workers().at(0);
         }
     }
     for (auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value() and
-            std::holds_alternative<DeviceStorage>(optional_input_tensor.value().tensor_attributes->storage)) {
-            return optional_input_tensor.value().workers.at(0);
+            std::holds_alternative<DeviceStorage>(optional_input_tensor.value().storage)) {
+            return optional_input_tensor.value().get_workers().at(0);
         }
     }
     auto device = AutoFormat::GetDefaultDevice();
@@ -423,106 +423,4 @@ Tensors run_with_autoformat(
     return output_tensors;
 }
 
-void launch_with_autoformat(
-    std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
-    const Tensors input_tensors,
-    Tensors& output_tensors,
-    const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors) {
-    // Mark each output tensor as having dynamic storage (can be on host or device, depending
-    // on autoformat behaviour). Multi device tensors do not support dynamic storage.
-    for (auto& output_tensor : output_tensors) {
-        output_tensor.tensor_attributes->dynamic_storage = (output_tensor.workers.size() <= 1);
-    }
-    launch_op(std::move(op_func), input_tensors, output_tensors, optional_input_tensors, optional_output_tensors);
-}
-
-
-void validate_workers_and_storage(
-    const std::vector<Tensor>& inputs,
-    const std::vector<std::optional<const Tensor>>& optional_inputs,
-    const std::vector<Device*>& workers) {
-    bool single_device_storage = false;
-    bool multi_device_storage = false;
-    // Verify that storage types are consistent - cannot mix single and multi-device storage. For multi-device tensors,
-    // ensure that workers are specified, since they cannot be inferred. This means that
-    // launch_op/launch_with_autoformat cannot be called with MultiDeviceHostStorage.
-    for (const auto& input : inputs) {
-        if (std::holds_alternative<DeviceStorage>(input.tensor_attributes->storage) or
-            std::holds_alternative<OwnedStorage>(input.tensor_attributes->storage)) {
-            single_device_storage |= true;
-        } else if (
-            std::holds_alternative<MultiDeviceStorage>(input.tensor_attributes->storage) or
-            std::holds_alternative<MultiDeviceHostStorage>(input.tensor_attributes->storage)) {
-            multi_device_storage |= true;
-        }
-    }
-
-    for (auto& input : optional_inputs) {
-        if (input.has_value()) {
-            if (std::holds_alternative<DeviceStorage>(input.value().tensor_attributes->storage) or
-                std::holds_alternative<OwnedStorage>(input.value().tensor_attributes->storage)) {
-                single_device_storage |= true;
-            } else if (
-                std::holds_alternative<MultiDeviceStorage>(input.value().tensor_attributes->storage) or
-                std::holds_alternative<MultiDeviceHostStorage>(input.value().tensor_attributes->storage)) {
-                multi_device_storage |= true;
-            }
-        }
-    }
-
-    TT_FATAL(
-        not(single_device_storage and multi_device_storage),
-        "Cannot mix single and multi-device tensors when calling launch op!");
-    if (multi_device_storage) {
-        TT_FATAL(
-            workers.size(),
-            "Workers must be specified when calling launch_op with with multi-device tensors. Workers cannot be "
-            "inferred in this case.");
-    }
-}
-
-std::vector<Device*> get_workers_for_op_output(
-    const std::vector<Tensor>& inputs,
-    const std::vector<std::optional<const Tensor>>& optional_inputs,
-    bool enable_autoformat_device) {
-    std::vector<Device*> workers_for_op = {};
-    // Infer output workers from inputs. For multi-device tensors the number
-    // of workers used for the op (and assigned to the ouput) is the minimum
-    // number of workers across all inputs. Additionally, in this case, at least
-    // 1 worker must be specified across all inputs, i.e. host inputs are not allowed.
-    size_t min_workers_size = std::numeric_limits<uint32_t>::max();
-    for (auto& input : inputs) {
-        auto workers = input.get_workers();
-        min_workers_size = std::min(min_workers_size, workers.size());
-        if (workers.size() == min_workers_size) {
-            workers_for_op = workers;
-        }
-    }
-
-    if (not workers_for_op.size()) {
-        for (auto& input : optional_inputs) {
-            if (input.has_value()) {
-                auto workers = input.value().get_workers();
-                min_workers_size = std::min(min_workers_size, workers.size());
-                if (workers.size() == min_workers_size) {
-                    workers_for_op = workers;
-                }
-            }
-        }
-    }
-    if (enable_autoformat_device) {
-        validate_workers_and_storage(inputs, optional_inputs, workers_for_op);
-        // Workers not specified - inputs are on host and not multi-device.
-        // Use the default device from autoformat.
-        if (not workers_for_op.size()) {
-            TT_FATAL(
-                AutoFormat::GetDefaultDevice(),
-                "Default device must be specified using AutoFormat::SetDefaultDevice, if workers are not specified for "
-                "inputs to op.");
-            workers_for_op = {AutoFormat::GetDefaultDevice()};
-        }
-    }
-    return workers_for_op;
-}
 }  // namespace tt::tt_metal::operation

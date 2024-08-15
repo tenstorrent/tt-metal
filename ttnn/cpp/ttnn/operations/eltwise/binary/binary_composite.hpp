@@ -188,70 +188,70 @@ struct ExecuteBinaryRemainder
 }  // namespace binary
 }  // namespace operations
 
-constexpr auto hypot = ttnn::register_operation_with_auto_launch_op<
+constexpr auto hypot = ttnn::register_operation<
     "ttnn::hypot",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::HYPOT>>();
-constexpr auto xlogy = ttnn::register_operation_with_auto_launch_op<
+constexpr auto xlogy = ttnn::register_operation<
     "ttnn::xlogy",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::XLOGY>>();
-constexpr auto minimum = ttnn::register_operation_with_auto_launch_op<
+constexpr auto minimum = ttnn::register_operation<
     "ttnn::minimum",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::MINIMUM>>();
-constexpr auto maximum = ttnn::register_operation_with_auto_launch_op<
+constexpr auto maximum = ttnn::register_operation<
     "ttnn::maximum",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::MAXIMUM>>();
-constexpr auto atan2 = ttnn::register_operation_with_auto_launch_op<
+constexpr auto atan2 = ttnn::register_operation<
     "ttnn::atan2",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::ATAN2>>();
-constexpr auto logical_xor = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_xor = ttnn::register_operation<
     "ttnn::logical_xor",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR>>();
-constexpr auto nextafter = ttnn::register_operation_with_auto_launch_op<
+constexpr auto nextafter = ttnn::register_operation<
     "ttnn::nextafter",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::NEXTAFTER>>();
-constexpr auto addalpha = ttnn::register_operation_with_auto_launch_op<
+constexpr auto addalpha = ttnn::register_operation<
     "ttnn::addalpha",
     operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::ADDALPHA>>();
-constexpr auto subalpha = ttnn::register_operation_with_auto_launch_op<
+constexpr auto subalpha = ttnn::register_operation<
     "ttnn::subalpha",
     operations::binary::ExecuteBinaryCompositeOpsFloat<operations::binary::BinaryCompositeOpType::SUBALPHA>>();
-constexpr auto isclose = ttnn::register_operation_with_auto_launch_op<
+constexpr auto isclose = ttnn::register_operation<
     "ttnn::isclose",
     operations::binary::ExecuteBinaryCompositeOpsIsClose<operations::binary::BinaryCompositeOpType::ISCLOSE>>();
-constexpr auto remainder = ttnn::register_operation_with_auto_launch_op<
+constexpr auto remainder = ttnn::register_operation<
     "ttnn::remainder",
     operations::binary::ExecuteBinaryRemainder>();
-constexpr auto fmod = ttnn::register_operation_with_auto_launch_op<
+constexpr auto fmod = ttnn::register_operation<
     "ttnn::fmod",
     operations::binary::ExecuteBinaryFmod>();
-constexpr auto div = ttnn::register_operation_with_auto_launch_op<
+constexpr auto div = ttnn::register_operation<
     "ttnn::div",
     operations::binary::ExecuteBinaryCompositeOpsDiv<operations::binary::BinaryCompositeOpType::DIV>>();
-constexpr auto div_no_nan = ttnn::register_operation_with_auto_launch_op<
+constexpr auto div_no_nan = ttnn::register_operation<
     "ttnn::div_no_nan",
     operations::binary::ExecuteDivLikeOps<operations::binary::BinaryCompositeOpType::DIV_NO_NAN>>();
-constexpr auto floor_div = ttnn::register_operation_with_auto_launch_op<
+constexpr auto floor_div = ttnn::register_operation<
     "ttnn::floor_div",
     operations::binary::ExecuteDivLikeOps<operations::binary::BinaryCompositeOpType::FLOOR_DIV>>();
-constexpr auto logical_and_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_and_ = ttnn::register_operation<
     "ttnn::logical_and_",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_AND_>>();
-constexpr auto logical_or_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_or_ = ttnn::register_operation<
     "ttnn::logical_or_",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_OR_>>();
-constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_xor_ = ttnn::register_operation<
     "ttnn::logical_xor_",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR_>>();
-constexpr auto bias_gelu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto bias_gelu = ttnn::register_operation<
     "ttnn::bias_gelu",
     operations::binary::ExecuteBiasGelu<operations::binary::BinaryOpType::BIAS_GELU, false>>();
-constexpr auto scatter = ttnn::register_operation_with_auto_launch_op<
+constexpr auto scatter = ttnn::register_operation<
     "ttnn::scatter",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::SCATTER>>();
-constexpr auto outer = ttnn::register_operation_with_auto_launch_op<
+constexpr auto outer = ttnn::register_operation<
     "ttnn::outer",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::OUTER>>();
-constexpr auto polyval = ttnn::register_operation_with_auto_launch_op<
+constexpr auto polyval = ttnn::register_operation<
     "ttnn::polyval",
     operations::binary::ExecuteBinaryCompositeOpsPolyval<operations::binary::BinaryCompositeOpType::POLYVAL>>();
 

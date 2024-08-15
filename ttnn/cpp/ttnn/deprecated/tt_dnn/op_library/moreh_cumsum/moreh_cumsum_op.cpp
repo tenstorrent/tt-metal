@@ -54,7 +54,6 @@ operation::ProgramWithCallbacks MorehCumSum::create_program(
 }
 
 Tensor moreh_cumsum_(const Tensor& input, const Tensor& output, const int64_t& dim, const bool flip = false) {
-    std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({input, output}))};
 
     operation::launch_op(
         [dim, flip](
@@ -64,8 +63,7 @@ Tensor moreh_cumsum_(const Tensor& input, const Tensor& output, const int64_t& d
             return operation::run(
                 MorehCumSum{.dim = dim, .flip = flip}, input_tensors, optional_input_tensors, optional_output_tensors);
         },
-        {input, output},
-        dummy_output_tensors);
+        {input, output});
     return output;
 }
 

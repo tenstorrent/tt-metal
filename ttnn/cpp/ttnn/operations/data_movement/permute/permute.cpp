@@ -118,8 +118,7 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& di
 }
 
 ttnn::Tensor permute_launch(const ttnn::Tensor &a, const std::vector<std::int64_t>& dims, const MemoryConfig& output_mem_config) {
-    std::vector<ttnn::Tensor> output_tensors = {ttnn::Tensor(operation::get_workers_for_op_output({a}))};
-    operation::launch_with_autoformat(
+    std::vector<ttnn::Tensor> output_tensors = operation::launch_op(
         [dims, output_mem_config]  (const std::vector<ttnn::Tensor>& input_tensors, const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors, const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) mutable -> std::vector<ttnn::Tensor> {
             auto& a = input_tensors.at(0);
             std::vector<uint32_t> normalized_dims(dims.size());
@@ -130,7 +129,7 @@ ttnn::Tensor permute_launch(const ttnn::Tensor &a, const std::vector<std::int64_
                 return {AutoFormat::move_tensor_to_mem_config(a, output_mem_config)};
             }
             return {permute_impl(a, normalized_dims, output_mem_config)};
-        }, {a}, output_tensors);
+        }, {a});
     return output_tensors.at(0);
 }
 

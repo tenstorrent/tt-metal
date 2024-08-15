@@ -23,6 +23,6 @@ struct MaxPoolNewOp {
 
 }  // namespace operations::pool
 
-constexpr auto max_pool2d_new = ttnn::register_operation_with_auto_launch_op<"ttnn::max_pool2d_new", operations::pool::MaxPoolNewOp>();
+constexpr auto max_pool2d_new = ttnn::register_operation<"ttnn::max_pool2d_new", operations::pool::MaxPoolNewOp>();
 
 }  // namespace ttnn

@@ -75,8 +75,7 @@ Tensor optimized_conv(const Tensor& a,
             bool enable_split_reader,
             bool enable_subblock_padding
 ) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, transpose_mcast, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 auto& a = input_tensors.at(0);
@@ -104,7 +103,7 @@ Tensor optimized_conv(const Tensor& a,
                     ),
                     input_tensors,
                     optional_input_tensors);
-            }, {a, b}, output_tensors, {bias, conv_reader_indices});
+            }, {a, b}, {bias, conv_reader_indices});
     return output_tensors.at(0);
 }
 
@@ -285,8 +284,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool enable_split_reader,
     bool enable_subblock_padding
 ) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [conv_params, output_channels, untilize_out, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 auto& a = input_tensors.at(0);
@@ -311,7 +309,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                     ),
                     input_tensors,
                     optional_input_tensors);
-            }, {a, b}, output_tensors, {bias});
+            }, {a, b}, {bias});
     return output_tensors.at(0);
 
 }

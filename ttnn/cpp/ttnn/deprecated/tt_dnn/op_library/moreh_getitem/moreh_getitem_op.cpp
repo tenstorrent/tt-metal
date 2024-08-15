@@ -197,25 +197,9 @@ Tensor moreh_getitem(
     new_input_tensors.push_back(input_tensor);
     new_input_tensors.insert(new_input_tensors.end(), index_tensors.begin(), index_tensors.end());
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output(new_input_tensors))};
-
-    operation::launch_op(
-        [index_dims, all_cores, output_mem_config](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            return operation::run(
+    return operation::run(
                 MorehGetitem{.index_dims = index_dims, .core_range = all_cores, .output_mem_config = output_mem_config},
-                input_tensors,
-                optional_input_tensors,
-                optional_output_tensors);
-        },
-        new_input_tensors,
-        output_tensors,
-        {},
-        {output_tensor});
-
-    return output_tensors.at(0);
+                new_input_tensors).at(0);
 }
 
 }  // namespace primary

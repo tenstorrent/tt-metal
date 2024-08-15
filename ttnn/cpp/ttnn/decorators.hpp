@@ -17,117 +17,8 @@
 namespace ttnn {
 namespace decorators {
 
-using Tensors = tt::tt_metal::operation::Tensors;
-using OptionalTensors = tt::tt_metal::operation::OptionalTensors;
-using OptionalConstTensors = tt::tt_metal::operation::OptionalConstTensors;
-
 namespace detail {
 
-template <typename Tuple, typename T>
-constexpr bool is_homogenous_tuple() {
-    return []<std::size_t... Ns>(std::index_sequence<Ns...>) {
-        return (std::is_same_v<T, std::tuple_element_t<Ns, Tuple>> && ...);
-    }(std::make_index_sequence<std::tuple_size_v<Tuple>>{});
-}
-
-template <typename Tuple, typename T>
-constexpr Tuple make_tuple_from_vector(const std::vector<T>& vector) {
-    return ([&vector]<std::size_t... Ns>(std::index_sequence<Ns...>) {
-        return std::forward_as_tuple(vector.at(Ns)...);
-    }(std::make_index_sequence<std::tuple_size_v<Tuple>>{}));
-}
-
-template <typename Include, typename... args_t>
-auto extract_args_to_vector(args_t&&... args) {
-    std::vector<Include> result;
-    auto process_arg = [&](auto&& arg) {
-        using ArgType = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<ArgType, Include>) {
-            result.push_back(arg);
-        }
-    };
-    (process_arg(std::forward<args_t>(args)), ...);
-    return result;
-}
-
-template <typename operation_t, typename execute_on_worker_thread_return_t>
-inline Tensors create_async_output_tensors(const Tensors& inputs, const OptionalConstTensors& optional_inputs) {
-    bool enable_autoformat_device = false;
-
-    constexpr bool custom_create_async_outputs =
-        requires(const operation_t& t) { t.create_async_output_tensors(inputs, optional_inputs); };
-
-    if constexpr (custom_create_async_outputs) {
-        return operation_t::create_async_output_tensors(inputs, optional_inputs);
-    } else if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
-        return {Tensor(operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device))};
-    } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
-        Tensors output_tensors;
-        output_tensors.reserve(std::tuple_size_v<execute_on_worker_thread_return_t>);
-        for (auto index = 0; index < std::tuple_size_v<execute_on_worker_thread_return_t>; index++) {
-            output_tensors.emplace_back(
-                Tensor(operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device)));
-        }
-        return output_tensors;
-    } else {
-        static_assert(
-            tt::stl::concepts::always_false_v<operation_t>,
-            "Operation is expecting the operator() method to return either a single Tensor or a tuple "
-            "of "
-            "Tensor(s). If the operation returns a vector of Tensors, it must implement create_async_output_tensors.");
-    }
-}
-
-template <typename... args_t>
-auto map_launch_op_args_to_execute_on_worker_thread_args(
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors,
-    args_t&&... args) {
-    auto input_tensor_index = 0;
-    auto optional_input_tensor_index = 0;
-    auto optional_output_tensor_index = 0;
-    return std::tuple{[&input_tensor_index,
-                       &input_tensors,
-                       &optional_input_tensor_index,
-                       &optional_input_tensors,
-                       &optional_output_tensor_index,
-                       &optional_output_tensors](auto&& arg) {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, Tensor>) {
-            return input_tensors.at(input_tensor_index++);
-        } else if constexpr (std::is_same_v<T, std::optional<const Tensor>>) {
-            return optional_input_tensors.at(optional_input_tensor_index++);
-        } else if constexpr (std::is_same_v<T, std::optional<Tensor>>) {
-            return optional_output_tensors.at(optional_output_tensor_index++);
-        } else {
-            return arg;
-        }
-    }(std::forward<args_t>(args))...};
-}
-
-template <typename operation_t, typename T>
-auto map_execute_on_worker_thread_return_to_launch_op_return(const T&& value) -> Tensors {
-    if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Tensors>) {
-        return value;
-    } else if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Tensor>) {
-        return {value};
-    } else if constexpr (is_homogenous_tuple<T, Tensor>()) {
-        Tensors output_tensors;
-        output_tensors.reserve(std::tuple_size_v<T>);
-        std::apply(
-            [&output_tensors](auto&&... args) {
-                (output_tensors.emplace_back(std::forward<decltype(args)>(args)), ...);
-            },
-            value);
-        return output_tensors;
-    } else {
-        static_assert(
-            tt::stl::concepts::always_false_v<operation_t>,
-            "Operation must return either a single Tensor or a vector of Tensors or implement "
-            "map_execute_on_worker_thread_return_to_launch_op_return.");
-    }
-}
 
 template <typename... args_t>
 void log(const std::string& prefix, args_t&&... args) {
@@ -187,7 +78,7 @@ concept PrimitiveOperationConcept = device_operation::DeviceOperationConcept<ope
 template<typename operation_t>
 concept CompositeOperationConcept = !PrimitiveOperationConcept<operation_t>;
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
+template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
     static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
 
@@ -219,79 +110,12 @@ struct registered_operation_t {
         return invoke(DefaultQueueId, std::forward<args_t>(args)...);
     }
 
-
-    template <typename... args_t>
-        requires(not auto_launch_op)
-    auto invoke_composite(args_t&&... args) const {
-        ZoneScopedN("Run composite ttnn operation ");
-        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
-        return operation_t::invoke(std::forward<decltype(args)>(args)...);
-    }
-
-    template <typename... args_t>
-        requires(auto_launch_op)
-    auto invoke_composite(args_t&&... args) const {
-        ZoneScopedN("Run composite ttnn operation (using auto async)");
-        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
-
-        // #8479: Fix and re-enable logging in cpp operation decorator
-        // detail::log("Arguments: ", std::forward<args_t>(args)...);
-
-        using execute_on_worker_thread_return_t =
-            decltype(operation_t::invoke(std::forward<decltype(args)>(args)...));
-
-        const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(std::forward<args_t>(args)...);
-        const OptionalConstTensors optional_input_tensors =
-            detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(std::forward<args_t>(args)...);
-
-        auto output_tensors =
-            detail::create_async_output_tensors<operation_t, execute_on_worker_thread_return_t>(
-                input_tensors, optional_input_tensors);
-
-        const OptionalTensors optional_output_tensors =
-            detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(std::forward<args_t>(args)...);
-
-        bool enable_autoformat = false;
-        operation::launch_op(
-            [args...](
-                const Tensors& input_tensors,
-                const OptionalConstTensors& optional_input_tensors,
-                const OptionalTensors& optional_output_tensors) mutable -> Tensors {
-                auto execute_on_worker_thread_args = detail::map_launch_op_args_to_execute_on_worker_thread_args(
-                    input_tensors, optional_input_tensors, optional_output_tensors, std::forward<args_t>(args)...);
-                return std::apply(
-                    [](auto&&... args) -> Tensors {
-                        return detail::map_execute_on_worker_thread_return_to_launch_op_return<operation_t>(
-                            operation_t::invoke(std::forward<decltype(args)>(args)...));
-                    },
-                    execute_on_worker_thread_args);
-            },
-            input_tensors,
-            output_tensors,
-            optional_input_tensors,
-            optional_output_tensors,
-            enable_autoformat);
-
-
-        if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
-            return output_tensors.at(0);
-        } else if constexpr (std::is_same_v<execute_on_worker_thread_return_t, Tensors>) {
-            return output_tensors;
-        } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
-            return detail::make_tuple_from_vector<execute_on_worker_thread_return_t>(output_tensors);
-        } else {
-            static_assert(
-                tt::stl::concepts::always_false_v<operation_t>,
-                "Operation is expecting the operator() method to return either a single Tensor or a "
-                "vector of "
-                "Tensor(s).");
-        }
-    }
-
     template <typename... args_t>
     requires(CompositeOperationConcept<operation_t>)
     auto invoke(args_t&&... args) const {
-        return invoke_composite(std::forward<args_t>(args)...);
+        ZoneScopedN("Run composite ttnn operation ");
+        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
+        return operation_t::invoke(std::forward<decltype(args)>(args)...);
     }
 
     template <typename... args_t>
@@ -345,10 +169,10 @@ consteval void assert_operation_in_correct_namespace() {
     }
 }
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
+template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation_impl() {
     assert_operation_in_correct_namespace<cpp_fully_qualified_name, operation_t>();
-    constexpr auto operation = registered_operation_t<cpp_fully_qualified_name, operation_t, auto_launch_op>{};
+    constexpr auto operation = registered_operation_t<cpp_fully_qualified_name, operation_t>{};
     static_assert(not requires(operation_name_key_t<cpp_fully_qualified_name> key) { get(key); }, "Operation with this `cpp_fully_qualified_name` was already registered. Please use a different name.");
     static_assert(not requires(operation_key_t<operation_t> key) { get(key); }, "Operation with this `operation_t` was already registered. Please use a different type.");
     static_assert(set_operation_t<cpp_fully_qualified_name, operation_t, operation>::value);
@@ -358,12 +182,7 @@ constexpr auto register_operation_impl() {
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation() {
-    return register_operation_impl<cpp_fully_qualified_name, operation_t, false>();
-}
-
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
-constexpr auto register_operation_with_auto_launch_op() {
-    return register_operation_impl<cpp_fully_qualified_name, operation_t, true>();
+    return register_operation_impl<cpp_fully_qualified_name, operation_t>();
 }
 
 namespace detail {
@@ -376,6 +195,6 @@ struct lambda_operation_t {
 }  // namespace decorators
 
 using ttnn::decorators::register_operation;
-using ttnn::decorators::register_operation_with_auto_launch_op;
+using ttnn::decorators::register_operation;
 
 }  // namespace ttnn

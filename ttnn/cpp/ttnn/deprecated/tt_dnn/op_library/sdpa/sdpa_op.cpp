@@ -480,9 +480,7 @@ Tensor scaled_dot_product_attention(
     const SDPAProgramConfig& program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<const uint32_t> valid_seq_len) {
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input_tensor_q, input_tensor_k, input_tensor_v}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [scale, output_mem_config, program_config, is_causal, compute_kernel_config, valid_seq_len](
             std::vector<Tensor> input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -507,7 +505,6 @@ Tensor scaled_dot_product_attention(
                 {causal_mask});
         },
         {input_tensor_q, input_tensor_k, input_tensor_v},
-        output_tensors,
         {causal_mask});
     return output_tensors.at(0);
 }
@@ -531,9 +528,7 @@ Tensor scaled_dot_product_attention_decode(
     const MemoryConfig& output_mem_config,
     const SDPAProgramConfig& program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input_tensor_q, input_tensor_k, input_tensor_v}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [cur_pos, scale, output_mem_config, program_config, compute_kernel_config](
             std::vector<Tensor> input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -559,9 +554,8 @@ Tensor scaled_dot_product_attention_decode(
                 {input_tensor_q, input_tensor_k, input_tensor_v}
             );
         },
-        {input_tensor_q, input_tensor_k, input_tensor_v},
-        output_tensors
-        );
+        {input_tensor_q, input_tensor_k, input_tensor_v}
+    );
     return output_tensors.at(0);
 }
 
@@ -574,9 +568,7 @@ Tensor scaled_dot_product_attention_decode_gqa(
     const MemoryConfig& output_mem_config,
     const SDPAProgramConfig& program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input_tensor_q, input_tensor_k, input_tensor_v}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [cur_pos, scale, output_mem_config, program_config, compute_kernel_config](
             std::vector<Tensor> input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -620,9 +612,8 @@ Tensor scaled_dot_product_attention_decode_gqa(
                 {input_tensor_q, input_tensor_k, input_tensor_v}
             );
         },
-        {input_tensor_q, input_tensor_k, input_tensor_v},
-        output_tensors
-        );
+        {input_tensor_q, input_tensor_k, input_tensor_v}
+    );
 
     // formatting output tensor
     auto q_shape = input_tensor_q.get_legacy_shape();

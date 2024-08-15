@@ -19,13 +19,12 @@ Tensor _fast_reduce_nc(
     const std::optional<const ttnn::Tensor>& output,
     const MemoryConfig& output_mem_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE);
     auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
-    operation::launch_op(
-        [dim, output_mem_config, kernel_config_val, queue_id](
+    auto output_tensors = operation::launch_op(
+        [=](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -37,7 +36,6 @@ Tensor _fast_reduce_nc(
                 queue_id);
         },
         {input},
-        output_tensors,
         {},
         {output});
 

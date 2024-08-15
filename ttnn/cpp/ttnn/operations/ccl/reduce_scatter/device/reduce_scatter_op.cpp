@@ -75,8 +75,7 @@ Tensor reduce_scatter(
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
     auto devices = input_tensor.get_workers();
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = operation::launch_op(
         [binary_op_type, scatter_dim, num_links, output_mem_config, topology, devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -114,8 +113,7 @@ Tensor reduce_scatter(
                     topology},
                 {input_tensor});
         },
-     {input_tensor},
-     output_tensors);
+     {input_tensor});
     return output_tensors.at(0);
 }
 
