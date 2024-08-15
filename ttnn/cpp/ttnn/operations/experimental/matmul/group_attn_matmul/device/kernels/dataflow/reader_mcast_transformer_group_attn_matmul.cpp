@@ -218,13 +218,13 @@ void kernel_main() {
                                 if (mcast_in1_to_local_cb) { // directly mcast data in in1 sharded cb
                                     if (in1_sender_in_receiver_grid) {
                                         // if sender is in receiver grid, num_dests will include source, since we are copying to a different local CB as well
-                                        noc_async_write_multicast_loopback_src(in1_sharded_cb_addr, in1_multicast_data_addr, in1_mcast_sender_size_bytes, in1_mcast_num_cores + 1, true, true);
+                                        noc_async_write_multicast_loopback_src(in1_sharded_cb_addr, in1_multicast_data_addr, in1_mcast_sender_size_bytes, in1_mcast_num_cores + 1);
                                     } else {
                                         // if sender is not in receiver grid, do a regular multicast but from in1_sharded_cb_addr
-                                        noc_async_write_multicast(in1_sharded_cb_addr, in1_multicast_data_addr, in1_mcast_sender_size_bytes, in1_mcast_num_cores, true, true);
+                                        noc_async_write_multicast(in1_sharded_cb_addr, in1_multicast_data_addr, in1_mcast_sender_size_bytes, in1_mcast_num_cores);
                                     }
                                 } else { // mcast from l1_write_addr_in1 which is populated locally by copying from in1 sharded or interleaved
-                                    noc_async_write_multicast(l1_write_addr_in1, in1_multicast_data_addr, in1_mcast_sender_size_bytes, in1_mcast_num_cores, true, true);
+                                    noc_async_write_multicast(l1_write_addr_in1, in1_multicast_data_addr, in1_mcast_sender_size_bytes, in1_mcast_num_cores);
                                 }
 
                                 // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
