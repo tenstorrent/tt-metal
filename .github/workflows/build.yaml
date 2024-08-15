@@ -40,10 +40,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build C++ libraries and tests
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -DCMAKE_CXX_COMPILER=${{ matrix.build.cxx_compiler }} -DCMAKE_C_COMPILER=${{ matrix.build.c_compiler }} -G Ninja
-          cmake --build build
-      - name: Build tt-metal C++ tests
-        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -G Ninja
           cmake --build build --target tests
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
