@@ -2,18 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include "hc_sum_reduce_program_factory.hpp"
+
+#include "ttnn/common/constants.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+
+namespace ttnn::operations::experimental::ssm::detail {
 
 using namespace tt::constants;
-using namespace tt;
-
-namespace tt {
-namespace operations {
-namespace primary {
-namespace transformers {
 
 operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     const Tensor& a, Tensor& output, MathFidelity math_fidelity, CoreCoord compute_with_storage_grid_size) {
@@ -21,14 +17,14 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto* input_buffer = a.buffer();
-    const bool input_is_dram = input_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    const bool input_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    tt_metal::Buffer* out_buffer = output.buffer();
+    tt::tt_metal::Buffer* out_buffer = output.buffer();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
-    const bool output_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    const bool output_is_dram = out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     auto ashape = a.get_legacy_shape();
     auto num_output_blocks_total = a.get_legacy_shape()[-1] / (TILE_WIDTH * TILE_WIDTH);
@@ -42,19 +38,20 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
                                             uint32_t index,
                                             uint32_t num_tiles,
                                             uint32_t tile_size,
-                                            const tt::DataFormat& format) -> tt_metal::CBHandle {
-        const tt_metal::CircularBufferConfig config =
-            tt_metal::CircularBufferConfig(num_tiles * tile_size, {{index, format}}).set_page_size(index, tile_size);
-        return tt_metal::CreateCircularBuffer(program, cores, config);
+                                            const tt::DataFormat& format) -> tt::tt_metal::CBHandle {
+        const tt::tt_metal::CircularBufferConfig config =
+            tt::tt_metal::CircularBufferConfig(num_tiles * tile_size, {{index, format}})
+                .set_page_size(index, tile_size);
+        return tt::tt_metal::CreateCircularBuffer(program, cores, config);
     };
 
     TT_ASSERT(a.get_dtype() == output.get_dtype(), "Input and output tensors must be of same type");
 
-    const tt::DataFormat input_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    const uint32_t input_tile_size = tt_metal::detail::TileSize(input_format);
+    const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    const uint32_t input_tile_size = tt::tt_metal::detail::TileSize(input_format);
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
-    const uint32_t intermediary_tile_size = tt_metal::detail::TileSize(intermediary_format);
+    const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
 
     const uint32_t cb_size = 2;
 
@@ -104,23 +101,23 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     };
 
     // Reuse the reader from reduce since we want the same behavior
-    auto reader_kernel_id = tt_metal::CreateKernel(
+    auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_ssm_1d_sum_reduce.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/reader_ssm_1d_sum_reduce.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    auto writer_kernel_id = tt_metal::CreateKernel(
+    auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/writer_ssm_1d_sum_reduce.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/writer_ssm_1d_sum_reduce.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    auto compute_kernel_id = tt_metal::CreateKernel(
+    auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/compute/ssm_1d_sum_reduce.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/ssm_1d_sum_reduce.cpp",
         all_cores,
-        tt_metal::ComputeConfig{
+        tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
@@ -141,8 +138,8 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
                              num_blocks_per_core_group_1 = num_blocks_per_core_group_1,
                              num_blocks_per_core_group_2 = num_blocks_per_core_group_2,
                              ashape = ashape](Program& program, const Tensor& a, const Tensor& output) {
-        tt_metal::Buffer* input_buffer = a.buffer();
-        tt_metal::Buffer* output_buffer = output.buffer();
+        tt::tt_metal::Buffer* input_buffer = a.buffer();
+        tt::tt_metal::Buffer* output_buffer = output.buffer();
 
         uint32_t num_blocks_per_core = 0;
 
@@ -201,7 +198,4 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace transformers
-}  // namespace primary
-}  // namespace operations
-}  // namespace tt
+}  // namespace ttnn::operations::experimental::ssm::detail

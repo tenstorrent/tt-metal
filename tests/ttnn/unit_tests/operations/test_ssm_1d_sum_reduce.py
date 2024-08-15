@@ -6,6 +6,7 @@
 import torch
 
 import tt_lib as ttl
+import ttnn
 import pytest
 from loguru import logger
 
@@ -20,9 +21,7 @@ def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config
     expected = torch.sum(x.reshape((1, 1, H, W // latent_size, latent_size)), dim=-1)
 
     x = ttl.tensor.Tensor(x, dtype).to(ttl.tensor.Layout.TILE).to(device, in_mem_config)
-    actual = ttl.operations.primary.transformers.ssm_1d_sum_reduce(
-        x, output_mem_config=out_mem_config, output_dtype=dtype
-    )
+    actual = ttnn.experimental.hc_sum_reduce(x, memory_config=out_mem_config, dtype=dtype)
 
     assert list(actual.get_legacy_shape()) == [1, 1, H, W // latent_size]
     assert actual.dtype == dtype
