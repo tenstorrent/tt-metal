@@ -182,7 +182,7 @@ The `yield` statement in the generator should yield all of the devices at once, 
 #### Example
 
 ```
-def device_fixture():
+def device_fixture() -> (device, device_config_name):
     # SETUP (called before test suite is executed)
     import tt_lib as ttl
 
@@ -199,7 +199,7 @@ def device_fixture():
     # YIELD to test infrastructure
     # IMPORTANT: Whatever device object(s) you want to pass to your run function need to be ONE object here, as this generator will only be referenced once before executing the tests.
     # i.e. If you have four seperate devices to use in your test, use 'yield [device1, device2, device3, device4]' inside of a list here.
-    yield device_mesh
+    yield (device_mesh, "T3000")
 
     # TEARDOWN (called after test suite is finished executing)
     print("ADD: Closing device mesh")
