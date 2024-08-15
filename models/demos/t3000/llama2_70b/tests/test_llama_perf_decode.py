@@ -105,6 +105,7 @@ def run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total
 
         tt_inp_emb, prev_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tokens[:, prev_pos:cur_pos], prev_pos)
 
+        logger.info("Compiling model")
         tt_logits = tt_model(
             tt_inp_emb,
             rot_mat,
@@ -112,16 +113,55 @@ def run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total
             attn_mask,
         )
 
-        del tt_inp_emb
-        del rot_mat
-        del attn_mask
-        logits = ttnn.to_torch(tt_logits, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-        logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]
-        del tt_logits
+        # del tt_inp_emb
+        # del rot_mat
+        # del attn_mask
+        tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # logits = ttnn.to_torch(tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
+        tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
+        logits = ttnn.to_torch(tt_logits_tensors[0])
+
+        # logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]
+        # del tt_logits
+
+        logger.info("Capturing trace")
+        trace_id = ttnn.begin_trace_capture(device_mesh, cq_id=0)
+        tt_logits = tt_model(
+            tt_inp_emb,
+            rot_mat,
+            prev_pos,
+            attn_mask,
+        )
+        tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.end_trace_capture(device_mesh, trace_id, cq_id=0)
+
+        logger.info("Starting Trace perf test...")
+
+        import time
+
+        num_iters = 100
+        times = []
+        for i in range(num_iters):
+            x1 = time.time()
+            ttnn.execute_trace(device_mesh, trace_id, blocking=False)
+            # logits = ttnn.to_torch(
+            # tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3)
+            # )
+            logits = ttnn.to_torch(tt_logits_tensors[0])
+
+            x2 = time.time()
+
+            times.append(x2 - x1)
+        logger.info(
+            f"Ran Trace for {num_iters} iterations. Avg Trace execution time: {sum(times[1:]) / len(times[1:])} seconds."
+        )
+        print(times)
+        ttnn.release_trace(device_mesh, trace_id)
+        breakpoint()
 
         next_token = torch.argmax(logits, dim=-1)
         next_token = next_token.reshape(-1)
-
+        break
         tokens, eos_reached, prev_pos = prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token)
 
 
@@ -241,6 +281,7 @@ def run_test_LlamaModel_end_to_end(
         ("llama3"),
     ),
 )
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 17068032}], indirect=True)
 @pytest.mark.parametrize(
     "generation_length, expected_compile_time, expected_inference_time",
     (
