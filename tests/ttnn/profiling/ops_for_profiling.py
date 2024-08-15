@@ -2583,10 +2583,10 @@ all_ternary_ops = [
         "op": addcdiv_bw,
         "name": "ttnn.addcdiv_bw",
     },
-    {
-        "op": ttnn.eq_bw,
-        "name": "ttnn.eq_bw",
-    },
+    # {
+    #     "op": ttnn.eq_bw,
+    #     "name": "ttnn.eq_bw",
+    # },
     {
         "op": div_bw,
         "name": "ttnn.div_bw",
@@ -2701,26 +2701,26 @@ all_ternary_ops = [
         "name": "ttnn.linear",
         "shape_func": linear_shape_func,
     },
-    {
-        "op": ttnn.ge_bw,
-        "name": "ttnn.ge_bw",
-    },
-    {
-        "op": ttnn.gt_bw,
-        "name": "ttnn.gt_bw",
-    },
-    {
-        "op": ttnn.le_bw,
-        "name": "ttnn.le_bw",
-    },
-    {
-        "op": ttnn.lt_bw,
-        "name": "ttnn.lt_bw",
-    },
-    {
-        "op": ttnn.ne_bw,
-        "name": "ttnn.ne_bw",
-    },
+    # {
+    #     "op": ttnn.ge_bw,
+    #     "name": "ttnn.ge_bw",
+    # },
+    # {
+    #     "op": ttnn.gt_bw,
+    #     "name": "ttnn.gt_bw",
+    # },
+    # {
+    #     "op": ttnn.le_bw,
+    #     "name": "ttnn.le_bw",
+    # },
+    # {
+    #     "op": ttnn.lt_bw,
+    #     "name": "ttnn.lt_bw",
+    # },
+    # {
+    #     "op": ttnn.ne_bw,
+    #     "name": "ttnn.ne_bw",
+    # },
 ]
 
 # Crashes
