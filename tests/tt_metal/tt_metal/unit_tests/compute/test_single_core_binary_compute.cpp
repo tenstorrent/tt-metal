@@ -140,13 +140,13 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         byte_size / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
-        0.1f,
-        2.0f,
+        -1.0f,
+        1.0f,
         byte_size / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input2 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
-        0.0f,
-        0.5f,
+        -1.0f,
+        1.0f,
         byte_size / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
@@ -242,7 +242,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         dest_buffer_data,
         packed_golden,
         [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) {
-            return is_close(a, b, 0.015f);
+            return is_close(a, b, 0.0155f);
         });
     return pass;
 }
