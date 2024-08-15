@@ -61,11 +61,10 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    if "input_tale_of_two_cities_32k" in user_input:
+    if "input_tale_of_two_cities_32k" in user_input:  # Special case for very large input (not in json format)
         with open(user_input, "r") as file:
             tale_cities = file.read()
-        # tale of two cities has around 193k tokens. Divide by 5 to get a bit over 32k tokens and extend to all 4 users
-        input_prompts = [tale_cities[: len(tale_cities) // 5]] * batch_size
+        input_prompts = [tale_cities] * batch_size
     else:
         if len(user_input) == 1:
             input_prompts = user_input * batch_size  # Always process 32 users
@@ -79,7 +78,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     )
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 1  # Full model
+    model_args.n_layers = 32  # Full model
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -104,7 +103,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     (
         input_tokens_prefill_tt,
         input_tokens_decode_tt,
-        max_prompt_len,
+        prefill_as_decode_len,
         input_mask,
         input_tokens_prefill_pt,
         input_tokens_decode_pt,
@@ -160,7 +159,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     profiler.end("prepare_rot_mat_for_decode")
 
     generation_start_pos = prefill_seq_len
-    max_generated_tokens = 50
+    max_generated_tokens = 120
 
     profiler.start("cache_attention")
     cache_attention(
@@ -222,7 +221,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
             ttnn.device.synchronize_device(dev)
 
         profiler.end(f"inference_prefill")
-        logger.info(f"Prefill finished [{prefill_seq_len} tokens]!")
+        logger.info(f"Prefill finished [{prefill_seq_len} tokens]")
 
     logger.info("Starting decode...")
 
@@ -276,7 +275,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
             # Argmax on host to get the new generated tokens
             tt_token_batch = sample(tt_output_torch, temperature=0, top_p=0.8)
             # Update the users that are still in prefill and the ones generating new tokens
-            if iteration < max_prompt_len:
+            if iteration < prefill_as_decode_len:
                 tt_token_batch = torch.where(
                     input_mask_pt[:, iteration], input_tokens_decode_pt[:, iteration], tt_token_batch[:, 0]
                 ).unsqueeze(1)
@@ -287,7 +286,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
             tt_out_B11B = ttnn.argmax(tt_out_11BH, dim=-1)
             tt_out_1B = ttnn.reshape(tt_out_B11B[:1, :, :, :], ttnn.Shape([1, batch_size]))  # [1, 32] Bfloat16
             # Update the users that are still in prefill and the ones generating new tokens
-            if iteration < max_prompt_len:
+            if iteration < prefill_as_decode_len:
                 decode_input_1B = ttnn.where(input_mask[iteration], input_tokens_decode_tt[iteration], tt_out_1B)
             else:
                 decode_input_1B = tt_out_1B
@@ -316,12 +315,13 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
                 all_outputs[user].append(user_tok)
 
         # Print out generated outputs for each user at the end of every iteration
-        # if not is_ci_env:  # Avoid printing every iteration in CI
-        #     if len(user_input) == 1:
-        #         logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-        #     else:
-        #         for user in range(batch_size):
-        #             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
+        if not is_ci_env:  # Avoid printing every iteration in CI
+            if len(user_input) == 1:
+                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+            else:
+                # for user in range(batch_size):
+                for user in range(1):  # TODO Miguel: Remove this
+                    logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
         # Always print iteration perf
         logger.info(
