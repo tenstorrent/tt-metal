@@ -11,7 +11,7 @@ namespace operations {
 namespace downsample {
 
 struct ExecuteDownsample {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a, std::array<uint32_t, 5> downsample_params, std::optional<DataType> dtype);
 };
 }  // namespace downsample

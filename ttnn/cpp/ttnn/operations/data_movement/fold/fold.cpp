@@ -96,7 +96,7 @@ std::vector<Tensor> fold_with_transpose_(
     return output_tensors;
 }
 
-Tensor FoldOperation::operator()(uint8_t queue_id,
+Tensor FoldOperation::invoke(uint8_t queue_id,
                                  const ttnn::Tensor &input_tensor,
                                  uint8_t stride_h,
                                  uint8_t stride_w,
@@ -111,7 +111,7 @@ Tensor FoldOperation::operator()(uint8_t queue_id,
     return ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }
 
-Tensor FoldOperation::operator()(const ttnn::Tensor &input_tensor,
+Tensor FoldOperation::invoke(const ttnn::Tensor &input_tensor,
                                  uint8_t stride_h,
                                  uint8_t stride_w,
                                  bool use_transpose_as_fold,
@@ -120,6 +120,6 @@ Tensor FoldOperation::operator()(const ttnn::Tensor &input_tensor,
                                  uint8_t pad_h,
                                  uint8_t pad_w) {
     uint8_t queue_id = 0;
-    return operator()(queue_id, input_tensor, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w);
+    return invoke(queue_id, input_tensor, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w);
 }
 } // namespace ttnn::operations::data_movement

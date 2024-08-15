@@ -204,7 +204,7 @@ struct OldInfraDeviceOperation {
         return attributes.get_type_name();
     }
 
-    static std::tuple<operation_attributes_t, tensor_args_t> operator()(
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         operation_attributes_t&& operation_attributes,
         const operation::Tensors& input_tensors,
         const operation::OptionalConstTensors& optional_input_tensors,

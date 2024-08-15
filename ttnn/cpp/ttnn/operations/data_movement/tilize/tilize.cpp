@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor ExecuteTilize::operator()(
+ttnn::Tensor ExecuteTilize::invoke(
     uint8_t queue_id,
     const ttnn::Tensor &input_tensor,
     const std::optional<MemoryConfig> &memory_config,
@@ -28,12 +28,12 @@ ttnn::Tensor ExecuteTilize::operator()(
         .at(0);
 }
 
-ttnn::Tensor ExecuteTilize::operator()(
+ttnn::Tensor ExecuteTilize::invoke(
     const ttnn::Tensor &input_tensor,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
-    return operator()(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
+    return invoke(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
 }
 
 }  // namespace ttnn::operations::data_movement

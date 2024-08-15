@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-ttnn::Tensor RotaryEmbeddingOperation::operator()(
+ttnn::Tensor RotaryEmbeddingOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& cos_cache,
     const Tensor& sin_cache,

@@ -101,7 +101,7 @@ inline Tensor binary_impl(
 }  // namespace detail
 
 template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperation<binary_op_type, in_place>::operator()(
+Tensor BinaryOperation<binary_op_type, in_place>::invoke(
     uint8_t queue_id,
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg,
@@ -154,7 +154,7 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperation<binary_op_type, in_place>::operator()(
+Tensor BinaryOperation<binary_op_type, in_place>::invoke(
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg,
     const std::optional<const DataType> &output_dtype,
@@ -162,7 +162,7 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
     std::optional<Tensor> optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-    return operator()(
+    return invoke(
         DefaultQueueId,
         input_tensor_a_arg,
         input_tensor_b_arg,
@@ -176,7 +176,7 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
 // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
 // Currently, this is exactly how tt::tt_metal::add_unary works
 template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperation<binary_op_type, in_place>::operator()(
+Tensor BinaryOperation<binary_op_type, in_place>::invoke(
     const ttnn::Tensor &input_tensor_a,
     const float scalar,
     const std::optional<const DataType> &dtype,
@@ -184,7 +184,7 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
     const std::optional<Tensor> &optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-    return BinaryOperation::operator()(
+    return BinaryOperation::invoke(
         DefaultQueueId,
         input_tensor_a,
         scalar,
@@ -196,7 +196,7 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperation<binary_op_type, in_place>::operator()(
+Tensor BinaryOperation<binary_op_type, in_place>::invoke(
     uint8_t queue_id,
     const ttnn::Tensor &input_tensor_a,
     const float scalar,
@@ -215,7 +215,7 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
         Layout::TILE);
     Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
     // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-    return BinaryOperation::operator()(
+    return BinaryOperation::invoke(
         input_tensor_a,
         scalar_tensor_device,
         dtype,
@@ -227,7 +227,7 @@ Tensor BinaryOperation<binary_op_type, in_place>::operator()(
 
 
 template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
+Tensor BinaryOperationOverload<binary_op_type, in_place>::invoke(
     uint8_t queue_id,
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg,
@@ -295,7 +295,7 @@ Tensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
+Tensor BinaryOperationOverload<binary_op_type, in_place>::invoke(
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg,
     const std::optional<const DataType> &output_dtype,
@@ -303,7 +303,7 @@ Tensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
     std::optional<Tensor> optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-    return operator()(
+    return invoke(
         DefaultQueueId,
         input_tensor_a_arg,
         input_tensor_b_arg,
@@ -317,7 +317,7 @@ Tensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
 // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
 // Currently, this is exactly how tt::tt_metal::add_unary works
 template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
+Tensor BinaryOperationOverload<binary_op_type, in_place>::invoke(
     const ttnn::Tensor &input_tensor_a,
     const float scalar,
     const std::optional<const DataType> &dtype,
@@ -325,7 +325,7 @@ Tensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
     const std::optional<Tensor> &optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-    return BinaryOperationOverload::operator()(
+    return BinaryOperationOverload::invoke(
         DefaultQueueId,
         input_tensor_a,
         scalar,
@@ -337,7 +337,7 @@ Tensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
+Tensor BinaryOperationOverload<binary_op_type, in_place>::invoke(
     uint8_t queue_id,
     const ttnn::Tensor &input_tensor_a,
     const float scalar,
@@ -356,7 +356,7 @@ Tensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
         Layout::TILE);
     Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
     // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-    return BinaryOperationOverload::operator()(
+    return BinaryOperationOverload::invoke(
         input_tensor_a,
         scalar_tensor_device,
         dtype,
@@ -367,7 +367,7 @@ Tensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
 }
 
 template <BinaryOpType binary_op_type, bool in_place>
-ComplexTensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
+ComplexTensor BinaryOperationOverload<binary_op_type, in_place>::invoke(
     const ComplexTensor &input_a,
     const ComplexTensor &input_b,
     const ttnn::MemoryConfig &output_mem_config) {
@@ -383,7 +383,7 @@ ComplexTensor BinaryOperationOverload<binary_op_type, in_place>::operator()(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor RelationalBinary<binary_op_type>::operator()(
+Tensor RelationalBinary<binary_op_type>::invoke(
     uint8_t queue_id,
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg,
@@ -448,7 +448,7 @@ Tensor RelationalBinary<binary_op_type>::operator()(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor RelationalBinary<binary_op_type>::operator()(
+Tensor RelationalBinary<binary_op_type>::invoke(
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg,
     const std::optional<const DataType> &output_dtype,
@@ -456,7 +456,7 @@ Tensor RelationalBinary<binary_op_type>::operator()(
     std::optional<Tensor> optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-    return operator()(
+    return invoke(
         DefaultQueueId,
         input_tensor_a_arg,
         input_tensor_b_arg,
@@ -468,7 +468,7 @@ Tensor RelationalBinary<binary_op_type>::operator()(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor RelationalBinary<binary_op_type>::operator()(
+Tensor RelationalBinary<binary_op_type>::invoke(
     const ttnn::Tensor &input_tensor_a,
     const float scalar,
     const std::optional<const DataType> &dtype,
@@ -481,7 +481,7 @@ Tensor RelationalBinary<binary_op_type>::operator()(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor RelationalBinary<binary_op_type>::operator()(
+Tensor RelationalBinary<binary_op_type>::invoke(
     uint8_t queue_id,
     const ttnn::Tensor &input_tensor_a,
     const float scalar,
@@ -495,7 +495,7 @@ Tensor RelationalBinary<binary_op_type>::operator()(
 }
 // scalar - tensor combination not available on Pytorch for this op
 template <BinaryOpType binary_op_type>
-Tensor RelationalBinary<binary_op_type>::operator()(
+Tensor RelationalBinary<binary_op_type>::invoke(
     uint8_t queue_id,
     const float scalar,
     const ttnn::Tensor &input_tensor_a,
@@ -507,18 +507,18 @@ Tensor RelationalBinary<binary_op_type>::operator()(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor InplaceRelationalBinary<binary_op_type>::operator()(
+Tensor InplaceRelationalBinary<binary_op_type>::invoke(
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg) {
 
-    return RelationalBinary<binary_op_type>::operator()(input_tensor_a_arg, input_tensor_b_arg, std::nullopt, std::nullopt, input_tensor_a_arg, std::nullopt, std::nullopt);
+    return RelationalBinary<binary_op_type>::invoke(input_tensor_a_arg, input_tensor_b_arg, std::nullopt, std::nullopt, input_tensor_a_arg, std::nullopt, std::nullopt);
 }
 
 template <BinaryOpType binary_op_type>
-Tensor InplaceRelationalBinary<binary_op_type>::operator()(
+Tensor InplaceRelationalBinary<binary_op_type>::invoke(
     const ttnn::Tensor &input_tensor_a,
     const float scalar) {
-    return RelationalBinary<binary_op_type>::operator()(input_tensor_a, scalar, std::nullopt, std::nullopt, input_tensor_a, std::nullopt, std::nullopt);
+    return RelationalBinary<binary_op_type>::invoke(input_tensor_a, scalar, std::nullopt, std::nullopt, input_tensor_a, std::nullopt, std::nullopt);
 }
 
 template struct BinaryOperationOverload<BinaryOpType::ADD, false>;

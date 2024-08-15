@@ -196,7 +196,7 @@ Tensor to_layout_impl(
 }
 }  // namespace detail
 
-/* static */ Tensor ToLayout::operator()(
+/* static */ Tensor ToLayout::invoke(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
@@ -205,7 +205,7 @@ Tensor to_layout_impl(
     return detail::to_layout_impl(tensor_arg, layout, dtype, memory_config, device);
 }
 
-/* static */ Tensor ToLayout::operator()(
+/* static */ Tensor ToLayout::invoke(
     const ttnn::Tensor& tensor_arg,
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,

@@ -10,7 +10,7 @@ namespace ttnn {
 namespace operations::transformer {
 
 struct SplitQueryKeyValueAndSplitHeadsOperation {
-    static std::tuple<Tensor, Tensor, Tensor> operator()(
+    static std::tuple<Tensor, Tensor, Tensor> invoke(
         const Tensor& input_tensor,
         const std::optional<Tensor>& input_tensor_kv,
         const uint32_t num_heads,
