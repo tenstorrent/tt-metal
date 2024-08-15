@@ -377,7 +377,7 @@ def test_galaxy_eltwise_add(M, N, device_mesh):
 
 
 @pytest.mark.parametrize(
-    "mesh_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
+    "mesh_shape, device_mesh", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, N, head_dim, num_heads",
