@@ -1240,7 +1240,7 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core;
         if (row_major) {
-            core = {i / num_cores_x, i % num_cores_x};
+            core = {i % num_cores_x, i / num_cores_x};
         } else {
             core = {i / num_cores_y, i % num_cores_y};
         }
