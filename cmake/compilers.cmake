@@ -40,6 +40,7 @@ function(ADJUST_COMPILER_WARNINGS)
     else() # GCC-12 or higher
         target_compile_options(compiler_warnings INTERFACE
             -Wno-deprecated -Wno-attributes -Wno-stringop-overread -Wno-stringop-overflow -Wno-maybe-uninitialized -Wno-missing-requires
+            -Wno-narrowing -Wno-non-template-friend -Wno-error=non-template-friend
         )
     endif()
 endfunction()

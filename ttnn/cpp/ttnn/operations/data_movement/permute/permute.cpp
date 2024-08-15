@@ -145,7 +145,7 @@ Tensor composite_invoke(
 
 } // detail namespace
 
-ttnn::Tensor ExecutePermute::operator()(
+ttnn::Tensor ExecutePermute::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const std::vector<int64_t>& dims,
@@ -209,15 +209,15 @@ ttnn::Tensor ExecutePermute::operator()(
     return output_tensor;
 }
 
-ttnn::Tensor ExecutePermute::operator()(
+ttnn::Tensor ExecutePermute::invoke(
     const ttnn::Tensor& input_tensor,
     const std::vector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
-    return operator()(DefaultQueueId, input_tensor, dims, memory_config);
+    return invoke(DefaultQueueId, input_tensor, dims, memory_config);
 }
 
-ttnn::Tensor ExecutePermute::operator()(const ttnn::Tensor& input_tensor, const std::vector<int64_t>& dims) {
-    return operator()(input_tensor, dims, std::nullopt);
+ttnn::Tensor ExecutePermute::invoke(const ttnn::Tensor& input_tensor, const std::vector<int64_t>& dims) {
+    return invoke(input_tensor, dims, std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace

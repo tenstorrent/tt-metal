@@ -17,7 +17,7 @@ template <ComplexBinaryOpType complex_binary_op_type>
 struct ExecuteComplexBinaryType1 {
 
     //Type 1: 1 input tensor
-    static ComplexTensor operator()(
+    static ComplexTensor invoke(
         const ComplexTensor &input_tensor_a_arg,
         const ComplexTensor &input_tensor_b_arg,
         const MemoryConfig &memory_config) {

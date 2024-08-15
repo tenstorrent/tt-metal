@@ -10,7 +10,7 @@
 namespace ttnn::operations::experimental::ssm {
 
 struct ExecutePrefixScan {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         uint8_t queue_id,
         const Tensor& a,
         const Tensor& bx,
@@ -19,7 +19,7 @@ struct ExecutePrefixScan {
         const std::optional<DataType> dtype = std::nullopt,
         const std::optional<MathFidelity> math_fidelity = std::nullopt);
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const Tensor& a,
         const Tensor& bx,
         const Tensor& h_prev,

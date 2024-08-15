@@ -40,7 +40,7 @@ inline Tensor copy_impl(
 }  // namespace detail
 
 struct Typecast {
-    static Tensor operator()(
+    static Tensor invoke(
         const uint8_t queue_id,
         const Tensor& input,
         const DataType& output_dtype,
@@ -62,12 +62,12 @@ struct Typecast {
             optional_output_tensor);
     }
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input,
         const DataType& output_dtype,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return operator()(DefaultQueueId, input, output_dtype, memory_config_arg, optional_output_tensor);
+        return invoke(DefaultQueueId, input, output_dtype, memory_config_arg, optional_output_tensor);
     }
 
     // eltwise_typecast implementation in tt_eager :
@@ -78,7 +78,7 @@ struct Typecast {
     //     uint32_t tt_output_dtype,
     //     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG)
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const uint8_t queue_id,
         const Tensor& input_tensor,
         const DataType& tt_input_dtype,

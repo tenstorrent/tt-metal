@@ -98,7 +98,7 @@ std::vector<OptionalTensor> _where_bw(
 }
 
 // lerp(input, end, weight) = self: grad * (1 - weight), end: grad * weight
-std::vector<Tensor> ExecuteTernaryBackwardLerp::operator()(
+std::vector<Tensor> ExecuteTernaryBackwardLerp::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& end, const Tensor& weight, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result_1 = ttnn::multiply(grad, ttnn::subtract(ttnn::operations::creation::full_like(weight, 1.0), weight, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
@@ -110,7 +110,7 @@ std::vector<Tensor> ExecuteTernaryBackwardLerp::operator()(
     return grad_tensor;
 }
 
-std::vector<Tensor> ExecuteTernaryBackwardLerp::operator()(
+std::vector<Tensor> ExecuteTernaryBackwardLerp::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& end, float weight, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     float sub_scalar = 1.0f - weight;

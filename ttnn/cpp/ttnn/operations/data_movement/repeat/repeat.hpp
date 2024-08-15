@@ -12,18 +12,18 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct RepeatOperation {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const Shape & repeat_dims,
         const std::optional<MemoryConfig>& memory_config_arg);
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const Shape & repeat_dims,
         const std::optional<MemoryConfig>& memory_config);
 
-    static ttnn::Tensor operator()(const ttnn::Tensor& input_tensor, const Shape & repeat_dims);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const Shape & repeat_dims);
 };
 
 

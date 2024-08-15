@@ -10,7 +10,7 @@
 namespace ttnn::operations::transformer {
 
 template <bool in_place>
-ttnn::Tensor ExecuteAttentionSoftmax<in_place>::operator()(
+ttnn::Tensor ExecuteAttentionSoftmax<in_place>::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<int>& head_size_arg,
     const std::optional<const ttnn::Tensor>& attention_mask,

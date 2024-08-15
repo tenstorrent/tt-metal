@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-Tensor RotateHalfOperation::operator()(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config)
+Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config)
 {
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE,
             fmt::format("Input tensor must be on device. Current storage type: {}.",

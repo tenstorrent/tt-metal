@@ -13,7 +13,7 @@ namespace data_movement {
 
 
 // repeat interleave supports repeats as 1 to inf, dim between 0 to 2
-ttnn::Tensor ExecuteRepeatInterleave::operator()(const ttnn::Tensor& input_a, uint32_t repeat, int32_t dim, std::optional<MemoryConfig> output_mem_config) {
+ttnn::Tensor ExecuteRepeatInterleave::invoke(const ttnn::Tensor& input_a, uint32_t repeat, int32_t dim, std::optional<MemoryConfig> output_mem_config) {
     std::vector<Tensor> combined_tensors;
     combined_tensors.reserve(repeat);
     auto shape_wh = input_a.get_legacy_shape();
@@ -26,7 +26,7 @@ ttnn::Tensor ExecuteRepeatInterleave::operator()(const ttnn::Tensor& input_a, ui
         std::vector<int64_t> dims = {0, 1, 2, 3};
         std::swap(dims[dim], dims[tmp_dim]);
         Tensor transpose_input = ttnn::permute(input_a, dims);
-        Tensor ril_result = ExecuteRepeatInterleave::operator()(transpose_input, repeat, tmp_dim, mem_config);
+        Tensor ril_result = ExecuteRepeatInterleave::invoke(transpose_input, repeat, tmp_dim, mem_config);
         return ttnn::permute(ril_result, dims);
     }
     if (normalized_dim <= 1) {

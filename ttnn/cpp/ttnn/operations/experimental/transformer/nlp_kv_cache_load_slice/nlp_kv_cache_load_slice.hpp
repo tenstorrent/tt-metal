@@ -10,7 +10,7 @@ namespace ttnn {
 namespace operations::experimental::transformer {
 
 struct NLPKVCacheLoadSliceOperation {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
         const uint32_t seq_len_start,
@@ -18,7 +18,7 @@ struct NLPKVCacheLoadSliceOperation {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const Tensor& input_tensor,
         const uint32_t seq_len_start,
         const uint32_t seq_len_end,

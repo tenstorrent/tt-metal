@@ -291,7 +291,7 @@ operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model
 
 
 
-std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t> BinaryDeviceOperation::operator()(
+std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t> BinaryDeviceOperation::invoke(
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg,
     BinaryOpType binary_op_type,

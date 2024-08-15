@@ -69,7 +69,7 @@ struct MaxPoolNew {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static operation::OpPerformanceModel create_op_performance_model(const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> operator()(
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         DataType output_dtype,

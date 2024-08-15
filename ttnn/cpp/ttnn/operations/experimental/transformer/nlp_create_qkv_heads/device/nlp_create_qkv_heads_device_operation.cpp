@@ -138,7 +138,7 @@ NlpCreateHeadsDeviceOperation::program_factory_t NlpCreateHeadsDeviceOperation::
 
 
 std::tuple<NlpCreateHeadsDeviceOperation::operation_attributes_t, NlpCreateHeadsDeviceOperation::tensor_args_t>
-NlpCreateHeadsDeviceOperation::operator()(
+NlpCreateHeadsDeviceOperation::invoke(
         const Tensor& input_tensor_q,
         const std::optional<Tensor>& input_tensor_kv,
         const uint32_t num_q_heads,

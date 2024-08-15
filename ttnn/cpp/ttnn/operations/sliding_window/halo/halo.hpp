@@ -11,7 +11,7 @@ namespace ttnn::operations::sliding_window::halo {
 // This is the main operation that will be called by the user
 struct HaloOperation {
     // This how the user can call the operation
-    static Tensor operator()(
+    static Tensor invoke(
                 uint8_t queue_id,
                 const Tensor& input_tensor,
                 const SlidingWindowConfig& config,
@@ -22,7 +22,7 @@ struct HaloOperation {
                 MemoryConfig output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
                 bool is_out_tiled = true);
 
-    // operator() can be overloaded as many times as needed to provide all desired APIs
+    // invoke can be overloaded as many times as needed to provide all desired APIs
 };
 
 }  // namespace ttnn::operations::examples

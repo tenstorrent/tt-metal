@@ -17,7 +17,7 @@ namespace operations {
 namespace embedding {
 
 struct EmbeddingOperation {
-    static inline Tensor operator()(
+    static inline Tensor invoke(
         uint8_t queue_id,
         const Tensor& input_tensor_arg,
         const Tensor& weight_arg,
@@ -55,7 +55,7 @@ struct EmbeddingOperation {
         return embeddings;
     }
 
-    static inline auto operator()(
+    static inline auto invoke(
         const Tensor& input_tensor_arg,
         const Tensor& weight_arg,
         const std::optional<int>& pad_token = std::nullopt,
@@ -65,7 +65,7 @@ struct EmbeddingOperation {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt
         ) {
-            return operator()(DefaultQueueId, input_tensor_arg, weight_arg, pad_token, layout, embeddings_type, dtype, memory_config, optional_output_tensor);
+            return invoke(DefaultQueueId, input_tensor_arg, weight_arg, pad_token, layout, embeddings_type, dtype, memory_config, optional_output_tensor);
         }
 };
 

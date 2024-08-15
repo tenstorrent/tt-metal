@@ -21,7 +21,7 @@ namespace binary {
 template <BinaryCompositeOpType binary_comp_op_type>
 struct ExecuteBinaryCompositeOps
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
@@ -32,7 +32,7 @@ struct ExecuteBinaryCompositeOps
 template <BinaryCompositeOpType binary_comp_op_type>
 struct ExecuteBinaryCompositeOpsFloat
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         float alpha,
@@ -44,7 +44,7 @@ struct ExecuteBinaryCompositeOpsFloat
 template <BinaryCompositeOpType binary_comp_op_type>
 struct ExecuteBinaryCompositeOpsIsClose
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         float rtol,
@@ -58,13 +58,13 @@ struct ExecuteBinaryCompositeOpsIsClose
 template <BinaryCompositeOpType binary_comp_op_type>
 struct ExecuteDivLikeOps
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, memory_config);
     }
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         float value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
@@ -75,7 +75,7 @@ struct ExecuteDivLikeOps
 template <BinaryCompositeOpType binary_comp_op_type>
 struct ExecuteBinaryCompositeOpsDiv
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         bool accurate_mode = false,
@@ -83,7 +83,7 @@ struct ExecuteBinaryCompositeOpsDiv
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config);
     }
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         float value,
         bool accurate_mode = false,
@@ -95,7 +95,7 @@ struct ExecuteBinaryCompositeOpsDiv
 
 template <BinaryOpType binary_op_type, bool in_place>
 struct ExecuteBiasGelu {
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -105,11 +105,11 @@ struct ExecuteBiasGelu {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
 
-            return BinaryOperation<binary_op_type, in_place>::operator()(
+            return BinaryOperation<binary_op_type, in_place>::invoke(
                 queue_id, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
     }
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         const std::optional<const DataType> &output_dtype = std::nullopt,
@@ -118,11 +118,11 @@ struct ExecuteBiasGelu {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
 
-            return BinaryOperation<binary_op_type, in_place>::operator()(
+            return BinaryOperation<binary_op_type, in_place>::invoke(
                 DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
     }
 
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor_a,
         const float bias,
@@ -135,7 +135,7 @@ struct ExecuteBiasGelu {
             return ttnn::gelu(queue_id, ttnn::add(queue_id, input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor), true, memory_config, optional_output_tensor);
     }
 
-    static Tensor operator()(
+    static Tensor invoke(
         const ttnn::Tensor &input_tensor_a,
         const float bias,
         const std::optional<const DataType> &dtype = std::nullopt,
@@ -144,14 +144,14 @@ struct ExecuteBiasGelu {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
 
-            return operator()(DefaultQueueId, input_tensor_a, bias, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
+            return invoke(DefaultQueueId, input_tensor_a, bias, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
     }
 };
 
 template <BinaryCompositeOpType binary_comp_op_type>
 struct ExecuteBinaryCompositeOpsPolyval
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const std::vector<float>& coeffs,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
@@ -161,12 +161,12 @@ struct ExecuteBinaryCompositeOpsPolyval
 
 struct ExecuteBinaryFmod
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor,
         float scalar,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
@@ -174,12 +174,12 @@ struct ExecuteBinaryFmod
 
 struct ExecuteBinaryRemainder
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor,
         float scalar,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);

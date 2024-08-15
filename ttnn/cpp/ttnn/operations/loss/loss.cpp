@@ -57,7 +57,7 @@ Tensor loss_function(
 
 } // loss_utils
 
-Tensor MseLossOperation::operator() (
+Tensor MseLossOperation::invoke (
     uint8_t queue_id,
     const Tensor& ref,
     const Tensor& prediction,
@@ -68,7 +68,7 @@ Tensor MseLossOperation::operator() (
     return loss_utils::loss_function(queue_id, ref, prediction, LossFunction::MSE, mode, memory_config, optional_output_tensor);
 }
 
-Tensor MaeLossOperation::operator() (
+Tensor MaeLossOperation::invoke (
     uint8_t queue_id,
     const Tensor& ref,
     const Tensor& prediction,

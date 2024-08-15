@@ -10,11 +10,11 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct DataTransferToHostOperation {
-    static Tensor operator()(const Tensor &input_tensor);
+    static Tensor invoke(const Tensor &input_tensor);
 };
 
 struct DataTransferToDeviceOperation {
-    static Tensor operator()(const Tensor &input_tensor, Device* device, const MemoryConfig& memory_config);
+    static Tensor invoke(const Tensor &input_tensor, Device* device, const MemoryConfig& memory_config);
 };
 
 } // operations::data_movement

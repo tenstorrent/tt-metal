@@ -17,7 +17,7 @@ namespace ternary {
 template <TernaryCompositeOpType ternary_comp_op_type>
 struct ExecuteTernaryCompositeOps
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const Tensor& input_tensor_c,
@@ -30,7 +30,7 @@ struct ExecuteTernaryCompositeOps
 template <TernaryCompositeOpType ternary_comp_op_type>
 struct ExecuteTernaryCompositeLerp
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const Tensor& input_tensor_c,
@@ -39,7 +39,7 @@ struct ExecuteTernaryCompositeLerp
             return OpHandler<ternary_comp_op_type>::handle(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
         }
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         float value,
@@ -52,7 +52,7 @@ struct ExecuteTernaryCompositeLerp
 template <TernaryCompositeOpType ternary_comp_op_type>
 struct ExecuteTernaryCompositeMac
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const Tensor& input_tensor_c,
@@ -61,7 +61,7 @@ struct ExecuteTernaryCompositeMac
             return OpHandler<ternary_comp_op_type>::handle(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
         }
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor_a,
         float value1,
         float value2,

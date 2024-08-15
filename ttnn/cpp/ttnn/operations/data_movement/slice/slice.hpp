@@ -11,40 +11,40 @@ namespace operations {
 namespace data_movement {
 
 struct SliceOperation {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Shape output_tensor_start,
         tt::tt_metal::Shape output_tensor_end,
         const std::optional<MemoryConfig>& memory_config_arg); 
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Shape output_tensor_start,
         tt::tt_metal::Shape output_tensor_end,
         const std::optional<MemoryConfig>& memory_config_arg); 
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array1D output_tensor_start,
         tt::tt_metal::Array1D output_tensor_end,
         const std::optional<MemoryConfig>& memory_config_arg); 
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array4D output_tensor_start,
         tt::tt_metal::Array4D output_tensor_end,
         const std::optional<MemoryConfig>& memory_config_arg); 
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array4D output_tensor_start,
         tt::tt_metal::Array4D output_tensor_end,
         const std::optional<MemoryConfig>& memory_config_arg); 
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         tt::tt_metal::Array4D output_tensor_start,
         tt::tt_metal::Array4D output_tensor_end); 

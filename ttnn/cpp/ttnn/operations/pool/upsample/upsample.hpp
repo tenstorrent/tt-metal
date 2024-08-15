@@ -13,7 +13,7 @@ namespace operations {
 namespace upsample {
 
 struct ExecuteUpSample {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         std::variant<int, tt::tt_metal::Array2D, tt::tt_metal::Array3D, tt::tt_metal::Array4D> scale_factor,
         std::optional<MemoryConfig> output_mem_config = std::nullopt);

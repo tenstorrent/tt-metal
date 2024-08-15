@@ -13,7 +13,7 @@ namespace operations {
 namespace ccl {
 
 struct ExecuteReduceScatter {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const uint32_t scatter_dim,
         ttnn::operations::reduction::ReduceType math_op,

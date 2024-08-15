@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::ccl {
 
-ttnn::Tensor ExecuteAllGather::operator()(const ttnn::Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<ttnn::MemoryConfig>& memory_config) {
+ttnn::Tensor ExecuteAllGather::invoke(const ttnn::Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<ttnn::MemoryConfig>& memory_config) {
     return ttnn::operations::ccl::all_gather(input_tensor, dim, num_links, memory_config);
 }
 

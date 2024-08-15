@@ -73,7 +73,7 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
 };
 
 
-ttnn::Tensor ExecuteConcatenateHeads::operator()(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+ttnn::Tensor ExecuteConcatenateHeads::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
     return operation::run(
         ConcatenateHeads{memory_config.value_or(input_tensor.memory_config())},
         {input_tensor}).at(0);

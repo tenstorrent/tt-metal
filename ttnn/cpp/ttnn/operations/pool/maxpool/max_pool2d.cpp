@@ -13,7 +13,7 @@ namespace ttnn {
 namespace operations::pool {
 
 template<typename T>
-Tensor MaxPoolNewOp::operator()(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, T* device) {
+Tensor MaxPoolNewOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, T* device) {
 
     sliding_window::SlidingWindowConfig sliding_window_config = sliding_window::SlidingWindowConfig(
                                                                     batch_size,
@@ -107,8 +107,8 @@ Tensor MaxPoolNewOp::operator()(uint8_t queue_id, const Tensor& input_tensor, ui
 }
 
 // device template specializations
-template Tensor MaxPoolNewOp::operator()<Device>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device* device);
-template Tensor MaxPoolNewOp::operator()<DeviceMesh>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, DeviceMesh* device);
+template Tensor MaxPoolNewOp::invoke<Device>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device* device);
+template Tensor MaxPoolNewOp::invoke<DeviceMesh>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, DeviceMesh* device);
 
 }  // namespace operations::pool
 }  // namespace ttnn

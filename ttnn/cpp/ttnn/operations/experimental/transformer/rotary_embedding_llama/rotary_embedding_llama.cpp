@@ -8,7 +8,7 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-Tensor RotaryEmbeddingLlamaOperation::operator()(
+Tensor RotaryEmbeddingLlamaOperation::invoke(
     const Tensor &input_tensor,
     const Tensor &cos_cache,
     const Tensor &sin_cache,

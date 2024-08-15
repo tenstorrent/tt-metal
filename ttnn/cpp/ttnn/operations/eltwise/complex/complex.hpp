@@ -27,7 +27,7 @@ class ComplexTensor {
 
 struct CreateComplexTensor {
 
-    static ComplexTensor operator()(
+    static ComplexTensor invoke(
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg);
 };

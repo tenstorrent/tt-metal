@@ -13,7 +13,7 @@
 
 namespace ttnn::operations::reduction {
 
-ttnn::Tensor MoeOperation::operator()(
+ttnn::Tensor MoeOperation::invoke(
     uint8_t queue_id,
     const Tensor& input_tensor,
     const Tensor& expert_mask_tensor,
@@ -28,7 +28,7 @@ ttnn::Tensor MoeOperation::operator()(
     queue_id).at(0);
 }
 
-auto MoeOperation::operator()(
+auto MoeOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& expert_mask_tensor,
     const Tensor& topk_mask_tensor,
@@ -36,7 +36,7 @@ auto MoeOperation::operator()(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     constexpr uint8_t DefaultQueueId = 0;
-    return operator()(DefaultQueueId, input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, optional_output_tensor);
+    return invoke(DefaultQueueId, input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, optional_output_tensor);
 }
 
 std::vector<Tensor> MoeOperation::create_async_output_tensors(

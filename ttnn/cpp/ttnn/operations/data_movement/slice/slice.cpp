@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor SliceOperation::operator()(
+ttnn::Tensor SliceOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     tt::tt_metal::Shape output_tensor_start,
@@ -69,21 +69,21 @@ ttnn::Tensor SliceOperation::operator()(
     }
 }
 
-ttnn::Tensor SliceOperation::operator()(
+ttnn::Tensor SliceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     tt::tt_metal::Shape output_tensor_start,
     tt::tt_metal::Shape output_tensor_end,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return operator()(0, input_tensor, output_tensor_start, output_tensor_end, memory_config_arg);
+    return invoke(0, input_tensor, output_tensor_start, output_tensor_end, memory_config_arg);
 }
 
-ttnn::Tensor SliceOperation::operator()(
+ttnn::Tensor SliceOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     tt::tt_metal::Array1D output_tensor_start,
     tt::tt_metal::Array1D output_tensor_end,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return operator()(
+    return invoke(
         queue_id,
         input_tensor,
         tt::tt_metal::Shape(output_tensor_start),
@@ -91,13 +91,13 @@ ttnn::Tensor SliceOperation::operator()(
         memory_config_arg);
 }
 
-ttnn::Tensor SliceOperation::operator()(
+ttnn::Tensor SliceOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     tt::tt_metal::Array4D output_tensor_start,
     tt::tt_metal::Array4D output_tensor_end,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return operator()(
+    return invoke(
         queue_id,
         input_tensor,
         tt::tt_metal::Shape(output_tensor_start),
@@ -105,19 +105,19 @@ ttnn::Tensor SliceOperation::operator()(
         memory_config_arg);
 }
 
-ttnn::Tensor SliceOperation::operator()(
+ttnn::Tensor SliceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     tt::tt_metal::Array4D output_tensor_start,
     tt::tt_metal::Array4D output_tensor_end,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return operator()(DefaultQueueId, input_tensor, output_tensor_start, output_tensor_end, memory_config_arg);
+    return invoke(DefaultQueueId, input_tensor, output_tensor_start, output_tensor_end, memory_config_arg);
 }
 
-ttnn::Tensor SliceOperation::operator()(
+ttnn::Tensor SliceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     tt::tt_metal::Array4D output_tensor_start,
     tt::tt_metal::Array4D output_tensor_end) {
-    return operator()(DefaultQueueId, input_tensor, output_tensor_start, output_tensor_end, std::nullopt);
+    return invoke(DefaultQueueId, input_tensor, output_tensor_start, output_tensor_end, std::nullopt);
 }
 
 }  // namespace operations

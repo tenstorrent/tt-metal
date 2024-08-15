@@ -72,7 +72,7 @@ void def_call_operator(py_operation_t& py_operation, const pybind_arguments_t<py
         [&py_operation](auto... args) {
             py_operation.def(
                 "__call__",
-                resolve_call_method<registered_operation_t>(&operation_t::operator()),
+                resolve_call_method<registered_operation_t>(&operation_t::invoke),
                 args...);
         },
         overload.value);

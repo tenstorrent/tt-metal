@@ -250,8 +250,8 @@ TEST_F(DeviceFixture, ComputeDropout) {
         unit_tests::compute::sfpu::dropout::DropoutConfig test_config = {
 		.probability = probability,
 		.fill_constant = fill_constant,
-		.seed_0 = rand(),
-		.seed_1 = rand()
+		.seed_0 = static_cast<uint32_t>(rand()),
+		.seed_1 = static_cast<uint32_t>(rand())
         };
         unit_tests::compute::sfpu::dropout::test_dropout(this->devices_.at(0), test_config);
     }

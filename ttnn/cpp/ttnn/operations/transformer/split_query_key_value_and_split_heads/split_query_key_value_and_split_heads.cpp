@@ -56,7 +56,7 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
 }
 }  // namespace detail
 
-std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::operator()(
+std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::invoke(
     const Tensor& input_tensor,
     const std::optional<Tensor>& input_tensor_kv,
     const uint32_t num_heads,

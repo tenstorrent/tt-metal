@@ -78,7 +78,7 @@ Fold::tensor_return_value_t Fold::create_output_tensors(const operation_attribut
 }
 
 std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t>
- Fold::operator()(
+ Fold::invoke(
             const ttnn::Tensor &input_tensor,
             uint8_t stride_h,
             uint8_t stride_w,

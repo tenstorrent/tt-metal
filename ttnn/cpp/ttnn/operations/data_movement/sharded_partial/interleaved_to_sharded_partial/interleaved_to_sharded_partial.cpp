@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::data_movement{
 
-ttnn::Tensor InterleavedToShardedPartialOperation::operator()(
+ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const std::variant<CoreCoord, CoreRangeSet> & grid,

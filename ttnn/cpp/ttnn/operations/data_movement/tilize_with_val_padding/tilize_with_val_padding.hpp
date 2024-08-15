@@ -13,7 +13,7 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct ExecuteTilizeWithValPadding {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor,
         const tt::tt_metal::Shape &output_tensor_shape,
@@ -22,7 +22,7 @@ struct ExecuteTilizeWithValPadding {
         std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = false);
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor &input_tensor,
         const tt::tt_metal::Shape &output_tensor_shape,
         float pad_value,
@@ -33,14 +33,14 @@ struct ExecuteTilizeWithValPadding {
 
 struct ExecuteTilizeWithZeroPadding {
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = false);
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor &input_tensor,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,

@@ -14,13 +14,13 @@ namespace ttnn {
 namespace operations::reduction {
 
     struct ProdOperation {
-        static Tensor operator()(
+        static Tensor invoke(
             const Tensor& input,
             bool all_dimensions = false,
             int64_t dim = 0,
             const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
-        static Tensor operator()(
+        static Tensor invoke(
             const Tensor& input,
             const Tensor& output,
             std::vector<int64_t> &dims,

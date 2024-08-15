@@ -11,20 +11,20 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct SplitOperation {
-    static std::vector<ttnn::Tensor> operator()(
+    static std::vector<ttnn::Tensor> invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         int64_t& num_splits,
         int64_t& dim,
         const std::optional<MemoryConfig>& memory_config_arg);
 
-    static std::vector<ttnn::Tensor> operator()(
+    static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         int64_t& num_splits,
         int64_t& dim,
         const std::optional<MemoryConfig>& memory_config);
 
-    static std::vector<ttnn::Tensor> operator()(const ttnn::Tensor& input_tensor, int64_t& num_splits, int64_t& dim);
+    static std::vector<ttnn::Tensor> invoke(const ttnn::Tensor& input_tensor, int64_t& num_splits, int64_t& dim);
 };
 
 

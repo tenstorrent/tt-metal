@@ -11,7 +11,7 @@ namespace operations {
 namespace normalization {
 
 struct ExecuteGroupNorm {
-    static inline ttnn::Tensor operator()(
+    static inline ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const int num_groups,
         const float epsilon,

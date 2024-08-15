@@ -25,7 +25,7 @@ namespace ttnn {
 namespace operations::reduction {
 
 struct ExecuteTopK {
-    static inline std::vector<Tensor> operator()(
+    static inline std::vector<Tensor> invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
         const uint16_t k,
@@ -41,7 +41,7 @@ struct ExecuteTopK {
         queue_id);
     }
 
-    static inline auto operator()(
+    static inline auto invoke(
         const Tensor& input_tensor,
         const uint16_t k,
         const int8_t dim,
@@ -49,7 +49,7 @@ struct ExecuteTopK {
         const bool sorted,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
-        return operator()(
+        return invoke(
             DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
     }
 

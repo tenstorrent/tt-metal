@@ -63,7 +63,7 @@ std::vector<Tensor> split_dim_two_chunks_tiled(
 }
 
 
-std::vector<ttnn::Tensor> SplitOperation::operator()(
+std::vector<ttnn::Tensor> SplitOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     int64_t& num_splits,
@@ -76,16 +76,16 @@ std::vector<ttnn::Tensor> SplitOperation::operator()(
 
 }
 
-std::vector<ttnn::Tensor> SplitOperation::operator()(
+std::vector<ttnn::Tensor> SplitOperation::invoke(
     const ttnn::Tensor& input_tensor,
     int64_t& num_splits,
     int64_t& dim,
     const std::optional<MemoryConfig>& memory_config) {
-    return operator()(DefaultQueueId, input_tensor, num_splits, dim, memory_config);
+    return invoke(DefaultQueueId, input_tensor, num_splits, dim, memory_config);
 }
 
-std::vector<ttnn::Tensor> SplitOperation::operator()(const ttnn::Tensor& input_tensor, int64_t& num_splits,  int64_t& dim) {
-    return operator()(DefaultQueueId, input_tensor, num_splits, dim, std::nullopt);
+std::vector<ttnn::Tensor> SplitOperation::invoke(const ttnn::Tensor& input_tensor, int64_t& num_splits,  int64_t& dim) {
+    return invoke(DefaultQueueId, input_tensor, num_splits, dim, std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace

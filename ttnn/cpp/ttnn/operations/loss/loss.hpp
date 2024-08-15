@@ -17,7 +17,7 @@ namespace operations::loss {
 
 struct MseLossOperation {
 
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor& ref,
         const Tensor& prediction,
@@ -25,19 +25,19 @@ struct MseLossOperation {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& ref,
         const Tensor& prediction,
         const LossReductionMode mode = LossReductionMode::NONE,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
-            return MseLossOperation::operator() (DefaultQueueId, ref, prediction, mode, memory_config, optional_output_tensor);
+            return MseLossOperation::invoke (DefaultQueueId, ref, prediction, mode, memory_config, optional_output_tensor);
     }
 };
 
 struct MaeLossOperation {
 
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor& ref,
         const Tensor& prediction,
@@ -45,13 +45,13 @@ struct MaeLossOperation {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& ref,
         const Tensor& prediction,
         const LossReductionMode mode = LossReductionMode::NONE,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
-            return MaeLossOperation::operator() (DefaultQueueId, ref, prediction, mode, memory_config, optional_output_tensor);
+            return MaeLossOperation::invoke (DefaultQueueId, ref, prediction, mode, memory_config, optional_output_tensor);
     }
 };
 

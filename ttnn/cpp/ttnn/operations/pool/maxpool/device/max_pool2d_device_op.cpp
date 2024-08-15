@@ -141,7 +141,7 @@ operation::OpPerformanceModel MaxPoolNew::create_op_performance_model(const oper
 }
 
 
-std::tuple<MaxPoolNew::operation_attributes_t, MaxPoolNew::tensor_args_t> MaxPoolNew::operator()(
+std::tuple<MaxPoolNew::operation_attributes_t, MaxPoolNew::tensor_args_t> MaxPoolNew::invoke(
     const Tensor& input_tensor,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     DataType output_dtype,

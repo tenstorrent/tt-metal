@@ -10,7 +10,7 @@
 
 namespace ttnn:: operations::experimental::transformer {
 
-    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTensorsOperation::operator()(
+    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTensorsOperation::invoke(
         uint8_t queue_id,
         const Tensor &input_tensor_q,
         const Tensor &input_tensor_kv,
@@ -34,7 +34,7 @@ namespace ttnn:: operations::experimental::transformer {
         return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
     }
 
-    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTensorsOperation::operator()(
+    std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTensorsOperation::invoke(
         const Tensor &input_tensor_q,
         const Tensor &input_tensor_kv,
         const uint32_t num_q_heads,
@@ -42,7 +42,7 @@ namespace ttnn:: operations::experimental::transformer {
         const bool transpose_k_heads,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<std::array<Tensor, 3>> optional_output_tensors) {
-        return operator()(
+        return invoke(
             ttnn::DefaultQueueId, input_tensor_q, input_tensor_kv, num_q_heads, num_kv_heads, transpose_k_heads, memory_config, optional_output_tensors);
     }
 

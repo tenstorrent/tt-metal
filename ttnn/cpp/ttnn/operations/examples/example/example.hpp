@@ -11,11 +11,11 @@
 namespace ttnn::operations::examples {
 
 // A composite operation is an operation that calls multiple operations in sequence
-// It is written using operator() and can be used to call multiple primitive and/or composite operations
+// It is written using invoke and can be used to call multiple primitive and/or composite operations
 struct CompositeExampleOperation {
 
     // The user will be able to call this method as `Tensor output = ttnn::composite_example(input_tensor)` after the op is registered
-    static Tensor operator()(const Tensor& input_tensor) {
+    static Tensor invoke(const Tensor& input_tensor) {
         auto copy = prim::example(input_tensor);
         auto another_copy = prim::example(copy);
         return another_copy;
