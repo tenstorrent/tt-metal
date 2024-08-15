@@ -91,7 +91,11 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instr
             "Clipping prompts to 16k tokens to avoid prefill-as-decode for the entire demo and instead generate new tokens"
         )
         if instruct:
-            encoded_prompts = [encod[: (1024 * 16) + 1] + tokenizer.encode(" [/INST]") for encod in encoded_prompts]
+            # encoded_prompts = [encod[: (1024 * 16) + 1] + tokenizer.encode(" [/INST]") for encod in encoded_prompts]
+            # Miguel - Change the line below to slice the prompt to the required length (1k,2k,4k,8k,16k)
+            encoded_prompts = [encod[: (1024 * 8)] for encod in encoded_prompts]
+            dec_prompts = [tokenizer.decode(encod) + " [/INST]" for encod in encoded_prompts]
+            encoded_prompts = [tokenizer.encode(prompt) for prompt in dec_prompts]
         else:
             encoded_prompts = [encod[: (1024 * 16) + 1] for encod in encoded_prompts]
         # Update prompt lengths

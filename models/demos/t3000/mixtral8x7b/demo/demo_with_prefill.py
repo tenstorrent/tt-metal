@@ -315,13 +315,13 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
                 all_outputs[user].append(user_tok)
 
         # Print out generated outputs for each user at the end of every iteration
-        if not is_ci_env:  # Avoid printing every iteration in CI
-            if len(user_input) == 1:
-                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-            else:
-                # for user in range(batch_size):
-                for user in range(1):  # TODO Miguel: Remove this
-                    logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
+        # if not is_ci_env:  # Avoid printing every iteration in CI
+        #     if len(user_input) == 1:
+        #         logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+        #     else:
+        #         # for user in range(batch_size):
+        #         for user in range(1):  # TODO Miguel: Remove this
+        #             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
         # Always print iteration perf
         logger.info(
@@ -335,14 +335,15 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     profiler.end("inference_decode")
     profiler.end("run")
 
-    # In CI only print the final generated output to avoid spamming the logs
+    # Given the large number of tokens prefilled, just print the user outputs at the final iteration
+    if len(user_input) == 1:
+        logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+    else:
+        # Miguel Redo this for all users
+        for user in range(1):
+            logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
+            logger.info("all_outputs[0]: {}".format(all_outputs[0]))
     if is_ci_env:
-        if len(user_input) == 1:
-            logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-        else:
-            for user in range(batch_size):
-                logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
-
         # When running in CI, check the output against the expected output to avoid accuracy regressions
         expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
         with open(expected_output, "r") as f:
@@ -360,6 +361,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     compile_decode_time = profiler.get_duration("compile_decode")
     inference_prefill_time = profiler.get_duration("inference_prefill")
     inference_decode_time = profiler.get_duration("inference_decode")
+    # TODO Miguel: Sometimes all users might finish before max_generated tokens. This will fail in that case
     log_printing_time = sum(profiler.get_duration(f"log_printing_{i}") for i in range(max_generated_tokens))
 
     # Correct the inference decode time to remove the time spent on compile (1st iteration) and log_printing (at the end of every iteration)
@@ -441,8 +443,9 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", False),
         ("models/demos/t3000/mixtral8x7b/demo/input_data_questions_prefill_128.json", True),
         ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", True),
     ],
-    ids=["general_weights", "instruct_weights", "tale_of_two_cities"],
+    ids=["general_weights", "instruct_weights", "tale_of_two_cities", "tale_of_two_cities_instruct"],
 )
 def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights, is_ci_env):
     if is_ci_env and instruct_weights == True:
