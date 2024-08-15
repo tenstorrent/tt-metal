@@ -20,7 +20,6 @@ from models.utility_functions import (
     is_e75,
     skip_for_grayskull,
     skip_for_wormhole_b0,
-    get_devices_for_t3000,
 )
 
 
@@ -98,7 +97,7 @@ class TestParametrized:
             ][model_config_str][kv_cache_len]
 
         run_test_FalconCausalLM_end_to_end(
-            [device],
+            device,
             model_version,
             llm_mode,
             batch,
@@ -117,7 +116,6 @@ class TestParametrized:
     def run_perf_wh_bare_metal(
         self,
         model_version,
-        num_devices,
         llm_mode,
         batch,
         seq_len,
@@ -128,18 +126,12 @@ class TestParametrized:
         model_config_str,
         model_location_generator,
         get_tt_cache_path,
-        all_devices,
+        device_mesh,
         async_mode,
     ):
         if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
             pytest.skip(f"prefill does not support L1_SHARDED")
-        if num_devices > 1:
-            devices = get_devices_for_t3000(all_devices, num_devices)
-        else:
-            devices = [all_devices]
-        # Enable Async Mode
-        for device in devices:
-            device.enable_async(async_mode)
+
         model_config = get_model_config(model_config_str, seq_len, batch)
         tt_cache_path = get_tt_cache_path(
             model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
@@ -149,7 +141,7 @@ class TestParametrized:
         disable_compilation_reports()
 
         run_test_FalconCausalLM_end_to_end(
-            devices,
+            device_mesh,
             model_version,
             llm_mode,
             batch,
@@ -198,7 +190,8 @@ class TestParametrized:
             "decode_batch32_2047_bf16_l1_sharded",
         ],
     )
-    @pytest.mark.parametrize("async_mode", (False, True))
+    @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True, ids=["noasync", "async"])
+    @pytest.mark.parametrize("device_mesh", (1,), indirect=True)
     @skip_for_grayskull()
     def test_perf_wh_bare_metal(
         self,
@@ -212,11 +205,11 @@ class TestParametrized:
         model_config_str,
         model_location_generator,
         get_tt_cache_path,
-        device,
+        device_mesh,
         use_program_cache,
-        async_mode,
+        enable_async_mode,
     ):
-        if async_mode:
+        if enable_async_mode:
             if llm_mode == "decode" and not (kv_cache_len == 2047):
                 pytest.skip(
                     f"Skipping {llm_mode} with {kv_cache_len} in async mode. Config is supported but provides redundant testing."
@@ -233,7 +226,6 @@ class TestParametrized:
 
         self.run_perf_wh_bare_metal(
             model_version,
-            1,
             llm_mode,
             batch,
             seq_len,
@@ -244,13 +236,13 @@ class TestParametrized:
             model_config_str,
             model_location_generator,
             get_tt_cache_path,
-            device,
-            async_mode,
+            device_mesh,
+            enable_async_mode,
         )
 
     @pytest.mark.model_perf_t3000
     @pytest.mark.parametrize(
-        "llm_mode, num_devices, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_inference_time, async_mode",
+        "llm_mode, device_mesh, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_inference_time, enable_async_mode",
         (
             ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.1, False),
             ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.18, False),
@@ -283,24 +275,24 @@ class TestParametrized:
             "decode_batch32_1024_async",
             "decode_batch32_2047_async",
         ],
+        indirect=["device_mesh", "enable_async_mode"],
     )
     @skip_for_grayskull()
     def test_perf_t3000_bare_metal(
         self,
         use_program_cache,
         model_version,
-        num_devices,
         llm_mode,
         batch,
         seq_len,
         kv_cache_len,
         expected_inference_time,
-        async_mode,
+        enable_async_mode,
         num_layers,
         model_config_str,
         model_location_generator,
         get_tt_cache_path,
-        all_devices,
+        device_mesh,
     ):
         if llm_mode == "prefill":
             expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[DeviceSetup.T3000][
@@ -313,7 +305,6 @@ class TestParametrized:
 
         self.run_perf_wh_bare_metal(
             model_version,
-            num_devices,
             llm_mode,
             batch,
             seq_len,
@@ -324,6 +315,6 @@ class TestParametrized:
             model_config_str,
             model_location_generator,
             get_tt_cache_path,
-            all_devices,
-            async_mode,
+            device_mesh,
+            enable_async_mode,
         )
