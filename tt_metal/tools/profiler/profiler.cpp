@@ -27,23 +27,27 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 void DeviceProfiler::readRiscProfilerResults(
-    int device_id, const std::vector<std::uint32_t>& profile_buffer, const CoreCoord& worker_core) {
+    IDevice* device, const std::vector<std::uint32_t>& profile_buffer, CoreCoord& worker_core) {
     ZoneScoped;
+    auto device_id = device->id();
 
     HalProgrammableCoreType CoreType;
     int riscCount;
-    profiler_msg_t* profiler_msg;
 
     if (tt::Cluster::instance().is_worker_core(worker_core, device_id)) {
-        profiler_msg = hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
         CoreType = HalProgrammableCoreType::TENSIX;
         riscCount = 5;
     } else {
-        profiler_msg =
-            hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
-        CoreType = HalProgrammableCoreType::ACTIVE_ETH;
+        auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
+        bool is_active_eth_core = active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
+                                      device_id, worker_core)) != active_eth_cores.end();
+
+        CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+                                      : tt_metal::HalProgrammableCoreType::IDLE_ETH;
+
         riscCount = 1;
     }
+    profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
     uint32_t coreFlatID = tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id).at(worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
@@ -214,7 +218,6 @@ void DeviceProfiler::readRiscProfilerResults(
     std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer->address();
 
-    profiler_msg = hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     tt::llrt::write_hex_vec_to_core(
         device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
 }
@@ -411,8 +414,8 @@ void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& 
             }
         }
 
-        for (const auto& worker_core : worker_cores) {
-            readRiscProfilerResults(device_id, profile_buffer, worker_core);
+        for (auto worker_core : worker_cores) {
+            readRiscProfilerResults(device, profile_buffer, worker_core);
         }
     } else {
         log_warning("DRAM profiler buffer is not initialized");

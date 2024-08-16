@@ -76,7 +76,7 @@ private:
 
     // Helper function for reading risc profile results
     void readRiscProfilerResults(
-        int device_id, const std::vector<std::uint32_t>& profile_buffer, const CoreCoord& worker_core);
+        IDevice* device, const std::vector<std::uint32_t>& profile_buffer, CoreCoord& worker_core);
 
     // Push device results to tracy
     void pushTracyDeviceResults();
