@@ -3,15 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Union, Optional
-from tt_lib import tensor
 from ttnn import matmul
 import ttnn
+
 
 def Linear(
     in_features: int,
     out_features: int,
-    weight: tensor.Tensor,
-    bias: Optional[tensor.Tensor],
+    weight: ttnn.Tensor,
+    bias: Optional[ttnn.Tensor],
     device,
 ):
     """
@@ -31,7 +31,9 @@ def Linear(
         output = ttnn.matmul(activation, weight_T)
 
         if bias is not None:
-            output_plus_bias = tensor.bcast(output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
+            output_plus_bias = ttnn.experimental.tensor.bcast(
+                output, bias, ttnn.experimental.tensor.BcastOpMath.ADD, ttnn.experimental.tensor.BcastOpDim.H
+            )
             return output_plus_bias
 
         return output

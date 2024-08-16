@@ -10,7 +10,6 @@ import torch
 from transformers import BertForQuestionAnswering
 import numpy as np
 
-import tt_lib as ttl
 import ttnn
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from models.experimental.bert.fused_ops.linear import Linear as TtLinear
@@ -30,11 +29,11 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     VProjection = TtLinear(hidden_dim, hidden_dim, vw, vb, device)
 
     # Used to scale down the input to the softmax
-    reciprocal_of_sqrt_hidden_dim_tensor = ttl.tensor.Tensor(
+    reciprocal_of_sqrt_hidden_dim_tensor = ttnn.Tensor(
         [1 / math.sqrt(hidden_dim // num_heads)] + [0 for _ in range(32 * 32 - 1)],
         [1, 1, 32, 32],
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
@@ -49,7 +48,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             #        return x.permute(0, 2, 1, 3)
 
             untilized_x = ttnn.untilize(x)
-            reshaped_unt = ttl.tensor.reshape(
+            reshaped_unt = ttnn.experimental.tensor.reshape(
                 untilized_x,
                 x.get_legacy_shape()[0],
                 x.get_legacy_shape()[2],
@@ -77,16 +76,16 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             """
             ctx = ttnn.transpose(x, 1, -2)
             ushape = ctx.get_legacy_shape()
-            reshaped = ttl.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
+            reshaped = ttnn.experimental.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
             retval = ttnn.tilize(reshaped)
             return retval
 
     def multiply_by_sqrt_hidden_dim(x):
-        return ttl.tensor.bcast(
+        return ttnn.experimental.tensor.bcast(
             x,
             reciprocal_of_sqrt_hidden_dim_tensor,
-            ttl.tensor.BcastOpMath.MUL,
-            ttl.tensor.BcastOpDim.HW,
+            ttnn.experimental.tensor.BcastOpMath.MUL,
+            ttnn.experimental.tensor.BcastOpDim.HW,
         )
 
     def mha_(activation, attention_mask):
@@ -109,17 +108,17 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             W,
         ) = qkt.get_legacy_shape()  # Need to reshape right now since multi-C not supported for broadcast yet
         new_shape = [N, 1, C * H, W]
-        ttl.tensor.reshape(qkt, *new_shape)
+        ttnn.experimental.tensor.reshape(qkt, *new_shape)
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
         if attention_mask is not None:
-            attention_score_input = ttl.tensor.bcast(
+            attention_score_input = ttnn.experimental.tensor.bcast(
                 attention_score_input,
                 attention_mask,
-                ttl.tensor.BcastOpMath.ADD,
-                ttl.tensor.BcastOpDim.H,
+                ttnn.experimental.tensor.BcastOpMath.ADD,
+                ttnn.experimental.tensor.BcastOpDim.H,
             )
         attention_scores = softmax(attention_score_input)
-        ttl.tensor.reshape(attention_scores, N, C, H, W)  # Reshape back to original shape
+        ttnn.experimental.tensor.reshape(attention_scores, N, C, H, W)  # Reshape back to original shape
 
         # Apply attention to value matrix
         weighted_activation = ttnn.matmul(attention_scores, V_heads)
@@ -145,53 +144,53 @@ class TtMultiHeadAttentionModel(torch.nn.Module):
 
         # Tilized
         parameters = [
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 qw.reshape(-1).tolist(),
                 qw.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 qb.reshape(-1).tolist(),
                 qb.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 kw.reshape(-1).tolist(),
                 kw.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 kb.reshape(-1).tolist(),
                 kb.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 vw.reshape(-1).tolist(),
                 vw.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 vb.reshape(-1).tolist(),
                 vb.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
         ]
 
@@ -234,16 +233,16 @@ def run_mha_inference(device, model_version, batch, seq_len, pcc, model_location
     pytorch_out = pytorch_mha_model(mha_input.squeeze(1)).unsqueeze(1)
 
     pad_mha_input = pad_activation(mha_input)
-    tt_mha_input = ttl.tensor.Tensor(
+    tt_mha_input = ttnn.Tensor(
         pad_mha_input.reshape(-1).tolist(),
         pad_mha_input.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ).to(ttnn.TILE_LAYOUT)
     tt_mha_input = tt_mha_input.to(device)
 
     tt_out = tt_mha_model(tt_mha_input).cpu()
-    tt_out1 = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_out1 = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out1, pcc)
     logger.info(f"Output {output}")
