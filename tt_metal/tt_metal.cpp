@@ -738,7 +738,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
                         device_id, physical_core, circular_buffer_config_vec);
                 }
             }
-            program.init_semaphores(*device, logical_core, hal.get_core_type(index));
+            program.init_semaphores(*device, logical_core, index);
         }
     }
 
@@ -753,7 +753,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program, bool force_slow_
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         for (auto& kg : program.get_kernel_groups(index)) {
-            uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base;
+            uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange &core_range : kg.core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -957,7 +957,7 @@ uint32_t CreateSemaphore(
                 if (!semaphore_id.has_value()) {
                     semaphore_id = semaphore_id_candidate;
                 } else {
-                    semaphore_id = std::max(semaphore_id.value(), semaphore_id.value());
+                    semaphore_id = std::max(semaphore_id.value(), semaphore_id_candidate.value());
                 }
             }
             TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
