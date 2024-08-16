@@ -36,7 +36,7 @@ void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
     else {
         // Fill 2 uint16 datums in each writes to optimize for performance
         volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
-        constexpr int num_uint32_datums_tile = 512;  // (32 * 32) / 2
+        constexpr int num_uint32_datums_tile = (32 * 32) / 2;
         for (int k = 0; k < num_uint32_datums_tile; k++) {
             ptr[k] = val;
         }
@@ -65,7 +65,7 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
     if (face_start == 0) {
         // DPRINT << "Fill second and fourth face" << ENDL();
         // Fill 2 datums in each writes to optimize for performance
-        constexpr int num_uint32_datums_tile_face = 128;  // (16 * 16) / 2
+        constexpr int num_uint32_datums_tile_face = (16 * 16) / 2;
         for (int k = 1; k < 4; k+=2) {
             uint32_t uint32_face_idx = k << 7;
             for (int j = 0; j < num_uint32_datums_tile_face; j++) {
