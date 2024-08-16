@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib
 import ttnn
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama

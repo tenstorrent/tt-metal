@@ -7,7 +7,6 @@ import pytest
 
 import ttnn
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
-import tt_lib
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     preprocess_inputs_prefill,

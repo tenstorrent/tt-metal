@@ -6,8 +6,6 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
-import tt_lib as ttl
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.model_config import (
@@ -48,13 +46,13 @@ class TT_bmm:
 
         # # Tilize with zero padding plus shard to L1 by batch
         # # output_mem_config leads to `bad optional access` error
-        # q = tt_lib.tensor.tilize_with_zero_padding(
+        # q = ttnn.tilize_with_zero_padding(
         #     q,
         #     # output_mem_config=q_mem_config,
-        #     # output_dtype=ttl.tensor.DataType.BFLOAT16,
+        #     # output_dtype=ttnn.bfloat16,
         # )
 
-        # q = tt_lib.tensor.interleaved_to_sharded(
+        # q = ttnn.experimental.tensor.interleaved_to_sharded(
         #     q,
         #     sharded_mem_config=q_mem_config,
         # )
@@ -65,12 +63,12 @@ class TT_bmm:
 
         q = ttnn.transpose(q, -2, -3)
 
-        q = tt_lib.tensor.interleaved_to_sharded(
+        q = ttnn.experimental.tensor.interleaved_to_sharded(
             q,
             sharded_mem_config=q_mem_config,
         )
 
-        q = tt_lib.tensor.interleaved_to_sharded(
+        q = ttnn.experimental.tensor.interleaved_to_sharded(
             q,
             sharded_mem_config=q_mem_config,
         )
@@ -80,7 +78,7 @@ class TT_bmm:
             k,
             program_config=prog_config,
             memory_config=output_config,
-            dtype=ttl.tensor.DataType.BFLOAT16,
+            dtype=ttnn.bfloat16,
         )
 
         return out
@@ -97,56 +95,56 @@ def run_test(
     # tt_cache_path,
     # model_location_generator,
 ):
-    inp_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    inp_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
             [N_HEADS_PADDED, HEAD_DIM],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
 
-    k_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    k_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
             [HEAD_DIM, SEQ_LEN],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
 
-    output_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    output_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
             [N_HEADS_PADDED, SEQ_LEN],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
@@ -166,9 +164,7 @@ def run_test(
         per_core_N=SEQ_LEN // TILE_SIZE,
     )
 
-    DRAM_MEMCFG = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-    )
+    DRAM_MEMCFG = ttnn.BufferType.DRAM
 
     # TT hardware execution -------------------------------------------------------------
     tt_model = TT_bmm(model_config)

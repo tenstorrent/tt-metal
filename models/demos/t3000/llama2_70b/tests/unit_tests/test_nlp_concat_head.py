@@ -7,7 +7,6 @@ import pytest
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib as ttl
 import ttnn
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
@@ -51,31 +50,29 @@ def run_test_concat_head1(
     # Prepare input
     concat_head_input = torch.rand(1, n_local_heads, batch, head_dim)
 
-    shard_spec_8_cores_grid = ttl.tensor.CoreRangeSet(
+    shard_spec_8_cores_grid = ttnn.CoreRangeSet(
         {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(7, 0),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 0),
             ),
         }
     )
 
-    SCORES_TRANSPOSED_OUTPUT_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
+    SCORES_TRANSPOSED_OUTPUT_MEMCFG = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
             shard_spec_8_cores_grid,  # Volume must match # of attn heads
             [
                 32,  # Each core has 32 users
                 head_dim,  # head dim
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    WIDTH_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1
-    )
+    WIDTH_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
     # Prepare tt input
     concat_head_input_tt = torch2tt_tensor(concat_head_input, tt_device=None).to(
@@ -130,30 +127,28 @@ def run_test_concat_head2(
     # Prepare input
     concat_head_input = torch.rand(1, batch, padded_local_heads, head_dim)
 
-    shard_spec_32_cores_grid = ttl.tensor.CoreRangeSet(
+    shard_spec_32_cores_grid = ttnn.CoreRangeSet(
         {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(7, 3),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 3),
             ),
         }
     )
-    SCORES_BATCHED_MM_OUTPUT_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
+    SCORES_BATCHED_MM_OUTPUT_MEMCFG = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
             shard_spec_32_cores_grid,
             [
                 batch,  # Each core has 32 users
                 head_dim,  # head dim
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    WIDTH_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1
-    )
+    WIDTH_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
 
     # Prepare tt input
     concat_head_input_tt = torch2tt_tensor(concat_head_input, tt_device=None).to(
