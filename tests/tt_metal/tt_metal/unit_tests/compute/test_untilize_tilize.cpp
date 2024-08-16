@@ -294,6 +294,41 @@ TEST_F(DeviceFixture, ComputeUnpackTilizeA_B) {
     unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
 }
 
+TEST_F(DeviceFixture, ComputeUnpackTilizeShortInit1x4) {
+    unit_tests::compute::tilize::TestConfig test_config = {
+        .short_init = true,
+        .single_tile_size = 2 * 1024,
+        .num_tiles_r = 1,
+        .num_tiles_c = 4,
+        .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+        .golden_function = unit_tests::compute::gold_standard_tilize
+    };
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, ComputeUnpackTilizeShortInit2x2) {
+    unit_tests::compute::tilize::TestConfig test_config = {
+        .short_init = true,
+        .single_tile_size = 2 * 1024,
+        .num_tiles_r = 2,
+        .num_tiles_c = 2,
+        .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+        .golden_function = unit_tests::compute::gold_standard_tilize
+    };
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
+
+TEST_F(DeviceFixture, ComputeUnpackTilizeShortInit4x1) {
+    unit_tests::compute::tilize::TestConfig test_config = {
+        .short_init = true,
+        .single_tile_size = 2 * 1024,
+        .num_tiles_r = 4,
+        .num_tiles_c = 1,
+        .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+        .golden_function = unit_tests::compute::gold_standard_tilize
+    };
+    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+}
 
 TEST_F(DeviceFixture, ComputeUnpackUntilize1x4) {
     unit_tests::compute::tilize::TestConfig test_config = {
