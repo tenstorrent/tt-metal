@@ -55,7 +55,7 @@ def cache_weights_in_weka(device, dtype, reset_seeds):
                 weights_dtype,
                 ttnn.ROW_MAJOR_LAYOUT,
             ).to(ttnn.TILE_LAYOUT)
-        ttnn.experimental.tensor.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)
+        ttnn.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)
 
 
 """This function will load weights from the state_dict and check if the needed weights are available in given path.
@@ -97,7 +97,7 @@ def store_weights(model_version, file_name, base_address, dtype):
                 weights_dtype,
                 ttnn.ROW_MAJOR_LAYOUT,
             ).to(ttnn.TILE_LAYOUT)
-        ttnn.experimental.tensor.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)
+        ttnn.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)
 
 
 def get_tt_cache_path(model_version):

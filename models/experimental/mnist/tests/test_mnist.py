@@ -7,7 +7,6 @@ from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 from loguru import logger
 from numpy import argmax
-import tt_lib
 
 from models.utility_functions import (
     torch2tt_tensor,
@@ -30,7 +29,7 @@ def test_mnist_inference(device, model_location_generator):
 
     with torch.no_grad():
         test_input, _ = next(iter(dataloader))
-        tt_input = torch2tt_tensor(test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        tt_input = torch2tt_tensor(test_input, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
         pt_output = pt_model(test_input)
         tt_output = tt_model(tt_input)
