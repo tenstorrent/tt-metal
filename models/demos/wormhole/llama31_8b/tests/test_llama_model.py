@@ -95,6 +95,7 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
         rot_mat=None,
         start_pos=generation_start_pos,
     )
+    logger.info("Model and caches loaded.")
 
     if run_ref_pt:
         all_tests_pass = True
