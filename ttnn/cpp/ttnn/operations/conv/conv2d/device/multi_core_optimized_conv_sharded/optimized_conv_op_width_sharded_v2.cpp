@@ -4,7 +4,7 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
-#include "ttnn/operations/conv2d/device/optimized_conv_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
@@ -17,9 +17,11 @@
 
 using namespace tt::constants;
 
-namespace tt {
+namespace ttnn::operations::conv  {
 
-namespace tt_metal {
+namespace conv2d {
+
+using namespace tt;
 
 const uint32_t act_cb = CB::c_in0;
 const uint32_t weight_cb = CB::c_in1;
@@ -252,12 +254,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     // out_subblock_h_ntiles = 8;
 
-    DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    DataFormat bias_df =
-        has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype()) : DataFormat::Float16_b;
-    DataFormat tilized_act_df = out_df;
+    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat bias_df =
+        has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat tilized_act_df = out_df;
 
     log_debug(LogOp, "act_df: {}", act_df);
     log_debug(LogOp, "weight_df: {}", weight_df);
@@ -389,7 +391,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
             block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0,
             "Out_block_h must be divisible by out_subblock_h!");
     }
-    Shape ashape_with_channels_padded = {ashape[0], ashape[1], ashape[2], input_channels_padded};
+
+    Shape ashape_with_channels_padded(std::vector<uint32_t>{ashape[0], ashape[1], ashape[2], input_channels_padded});
+
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
@@ -406,7 +410,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
+            ashape_with_channels_padded.value, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
@@ -553,7 +557,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t weight_dram_addr = src1_dram_buffer->address();
 
     // bias
-    Buffer* bias_buffer = nullptr;
+    tt_metal::Buffer* bias_buffer = nullptr;
     uint32_t bias_dram_addr = 0;
     uint32_t bias_ntiles = 0;
     bool bias_in_dram = true;

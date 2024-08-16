@@ -388,7 +388,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             mem_config.shard_spec = shard_spec;
             return {create_device_tensor(output_shape, this->dtype, output_layout, input_tensor.device(), mem_config)};
         } else if(this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-            uint32_t total_height_tiles = tt_metal::compute_volume(output_shape) / output_shape[-1] / TILE_HEIGHT;
+            uint32_t total_height_tiles = tt::tt_metal::compute_volume(output_shape) / output_shape[-1] / TILE_HEIGHT;
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH};
             auto shard_grid = input_tensor.memory_config().shard_spec.value().grid;
             auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation};
