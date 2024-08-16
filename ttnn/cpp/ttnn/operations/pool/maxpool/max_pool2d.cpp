@@ -13,7 +13,7 @@ namespace ttnn {
 namespace operations::pool {
 
 template<typename T>
-Tensor MaxPoolNewOp::operator()(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, T* device) {
+Tensor MaxPoolNewOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, T* device) {
 
     sliding_window::SlidingWindowConfig sliding_window_config = sliding_window::SlidingWindowConfig(
                                                                     batch_size,
@@ -98,21 +98,17 @@ Tensor MaxPoolNewOp::operator()(uint8_t queue_id, const Tensor& input_tensor, ui
         input_tensor_sharded.memory_config(),
         is_out_tiled);
 
-    MaxPoolNew::operation_attributes_t op_attr{
-        .sliding_window_config_ = sliding_window_config,
-        .output_dtype_ = DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
-        .memory_config_ = memory_config};
-
-    // and then call the maxpool uop
-    return ttnn::device_operation::run<MaxPoolNew>(
+    return ttnn::prim::max_pool_new(
         queue_id,
-        op_attr,
-        MaxPoolNew::tensor_args_t{.input_tensor_ = haloed_tensor});
+        haloed_tensor,
+        sliding_window_config,
+        DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
+        memory_config);
 }
 
 // device template specializations
-template Tensor MaxPoolNewOp::operator()<Device>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device* device);
-template Tensor MaxPoolNewOp::operator()<DeviceMesh>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, DeviceMesh* device);
+template Tensor MaxPoolNewOp::invoke<Device>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device* device);
+template Tensor MaxPoolNewOp::invoke<DeviceMesh>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, DeviceMesh* device);
 
 }  // namespace operations::pool
 }  // namespace ttnn

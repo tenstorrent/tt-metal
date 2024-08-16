@@ -3,17 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/common/tt_backend_api_types.hpp"
+#include "tt_metal/llrt/rtoptions.hpp"
 
-using namespace tt::tt_metal;
 class CommandQueueFixture : public ::testing::Test {
    protected:
     tt::ARCH arch_;
-    Device* device_;
+    tt::tt_metal::Device* device_;
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
@@ -24,7 +23,8 @@ class CommandQueueFixture : public ::testing::Test {
 
         const int device_id = 0;
 
-        this->device_ = tt::tt_metal::CreateDevice(device_id);
+        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+        this->device_ = tt::tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     }
 
     void TearDown() override {
@@ -54,7 +54,8 @@ class CommandQueueMultiDeviceFixture : public ::testing::Test {
             chip_ids.push_back(id);
         }
 
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
+        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+        reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
         for (const auto &[id, device] : reserved_devices_) {
             devices_.push_back(device);
         }
@@ -79,8 +80,9 @@ class CommandQueueSingleCardFixture : public ::testing::Test {
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
 
+        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
         const chip_id_t mmio_device_id = 0;
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
+        reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
         if (enable_remote_chip) {
             for (const auto &[id, device] : reserved_devices_) {
                 devices_.push_back(device);
@@ -102,7 +104,7 @@ class CommandQueueSingleCardFixture : public ::testing::Test {
 
 class SingleDeviceTraceFixture: public ::testing::Test {
 protected:
-    Device* device_;
+    tt::tt_metal::Device* device_;
     tt::ARCH arch_;
 
     void Setup(const size_t buffer_size, const uint8_t num_hw_cqs = 1) {

@@ -14,7 +14,7 @@ namespace unary {
 
 struct ExecutePower{
 
-     static Tensor operator()(
+     static Tensor invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
         uint32_t exponent,
@@ -24,7 +24,7 @@ struct ExecutePower{
         return OpHandler<UnaryCompositeOpType::POW>::handle(queue_id, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
         }
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor,
         uint32_t exponent,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -33,7 +33,7 @@ struct ExecutePower{
         return OpHandler<UnaryCompositeOpType::POW>::handle(DefaultQueueId, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
         }
 
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
         float exponent,
@@ -43,7 +43,7 @@ struct ExecutePower{
         return OpHandler<UnaryCompositeOpType::POW>::handle(queue_id, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
         }
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor,
         float exponent,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -55,7 +55,7 @@ struct ExecutePower{
 
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOp {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
         return OpHandler<unary_comp_op_type>::handle(input_tensor, output_memory_config);
@@ -67,7 +67,7 @@ template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithFloat {
 
     //Type : 1 inputs, 1 float
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const Tensor &input_tensor,
         float param1,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
@@ -78,7 +78,7 @@ struct ExecuteUnaryCompositeOpWithFloat {
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithDim
 {
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor& input_tensor,
         int32_t dim,
         const std::optional<MemoryConfig>& memory_config = std::nullopt)
@@ -91,7 +91,7 @@ struct ExecuteUnaryCompositeOpWithDim
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithFloats {
     //Type 1: 1 inputs, 2 float
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor &input_tensor,
         float param1,
         float param2,
@@ -105,7 +105,7 @@ struct ExecuteUnaryCompositeOpWithFloats {
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithInt {
 
-    static Tensor operator()(
+    static Tensor invoke(
         const Tensor &input_tensor,
         int32_t param1,
         const std::optional<MemoryConfig> &memory_config = std::nullopt) {
@@ -115,7 +115,7 @@ struct ExecuteUnaryCompositeOpWithInt {
 };
 
 struct ExecuteRdiv {
-    static Tensor operator()(
+    static Tensor invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
         float value,

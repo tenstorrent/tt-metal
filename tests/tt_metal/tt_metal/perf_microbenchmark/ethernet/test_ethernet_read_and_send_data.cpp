@@ -13,6 +13,8 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -72,8 +74,8 @@ struct BankedConfig {
     size_t num_pages;
     size_t size_bytes;
     size_t page_size_bytes;
-    BufferType input_buffer_type;// = BufferType::L1;
-    BufferType output_buffer_type;// = BufferType::L1;
+    tt_metal::BufferType input_buffer_type;// = tt_metal::BufferType::L1;
+    tt_metal::BufferType output_buffer_type;// = tt_metal::BufferType::L1;
     tt::DataFormat l1_data_format;// = tt::DataFormat::Float16_b;
 };
 
@@ -137,14 +139,14 @@ bool RunWriteBWTest(
             .num_pages = num_pages,
             .size_bytes = input_buffer_size_bytes,
             .page_size_bytes = input_buffer_page_size,
-            .input_buffer_type = source_is_dram ? BufferType::DRAM : BufferType::L1,
-            .output_buffer_type = dest_is_dram ? BufferType::DRAM : BufferType::L1,
+            .input_buffer_type = source_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
+            .output_buffer_type = dest_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
             .l1_data_format = tt::DataFormat::Float16_b};
     auto input_buffer =
             CreateBuffer(
                 InterleavedBufferConfig{sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
 
-    bool input_is_dram = test_config.input_buffer_type == BufferType::DRAM;
+    bool input_is_dram = test_config.input_buffer_type == tt_metal::BufferType::DRAM;
     tt_metal::detail::WriteToBuffer(input_buffer, inputs);
     const uint32_t dram_input_buf_base_addr = input_buffer->address();
 
@@ -159,7 +161,7 @@ bool RunWriteBWTest(
             CreateBuffer(
                 InterleavedBufferConfig{receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
-    bool output_is_dram = test_config.output_buffer_type == BufferType::DRAM;
+    bool output_is_dram = test_config.output_buffer_type == tt_metal::BufferType::DRAM;
     tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
     const uint32_t dram_output_buffer_base_addr = output_buffer->address();
 

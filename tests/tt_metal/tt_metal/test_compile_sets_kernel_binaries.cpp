@@ -12,7 +12,8 @@
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/program.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -51,7 +52,7 @@ int main(int argc, char **argv) {
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
         std::vector<Device*> devices = tt::DevicePool::instance().get_all_active_devices();
         std::vector<Program> programs;
         std::set<uint32_t> build_keys;

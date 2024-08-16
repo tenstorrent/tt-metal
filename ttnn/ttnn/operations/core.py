@@ -291,6 +291,7 @@ def to_torch(
     torch_rank: Optional[int] = None,
     mesh_composer: Optional[ttnn.MeshToTensor] = None,
     device: Optional[ttnn.Device] = None,
+    cq_id: Optional[int] = 0,
 ) -> "torch.Tensor":
     """
     to_torch(tensor: ttnn.Tensor, torch_rank: Optional[int] = None) -> torch.Tensor
@@ -309,7 +310,7 @@ def to_torch(
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
     if ttnn.is_tensor_storage_on_device(tensor):
-        tensor = ttnn.from_device(tensor)
+        tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
     if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
         tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
@@ -451,28 +452,7 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-@ttnn.register_python_operation(name="ttnn.clone", golden_function=_golden_function)
-def clone(tensor, memory_config: ttnn.MemoryConfig, dtype: ttnn.DataType):
-    """
-    clone(tensor: ttnn.Tensor, memory_config: MemoryConfig, dtype: DataType) -> ttnn.Tensor
-
-    Clones the tensor by copying it with the given `memory config`. Also, converts the dataype to `dtype`.
-    Note: clone does not change the layout of the tensor.
-    Organizes the `ttnn.Tensor` :attr:`tensor` into either ROW_MAJOR_LAYOUT or TILE_LAYOUT.  When requesting ROW_MAJOR_LAYOUT
-    the tensor will be returned unpadded in the last two dimensions.   When requesting TILE_LAYOUT the tensor will be automatically
-    padded where the width and height become multiples of 32.
-    In the case where the layout is the same, the operation simply pad or unpad the last two dimensions depending on layout requested.
-
-    Args:
-        * :attr:`tensor`: the ttnn.Tensor
-        * :attr:`memory_config`: the `ttnn` memory config, DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG.
-        * :attr:`dtype`: the `ttnn` data type.
-
-    Example::
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16, layout=ttnn.TILE_LAYOUT)), device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        >>> output = ttnn.clone(tensor, tnn.DRAM_MEMORY_CONFIG, tnn.bfloat8_b)
-    """
-    return ttl.tensor.clone(tensor, output_mem_config=memory_config, output_dtype=dtype)
+ttnn.attach_golden_function(ttnn.clone, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor):

@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -10,6 +9,7 @@
 #include "ttnn/operations/experimental/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
@@ -24,7 +24,7 @@ Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& out
     return masked_input;
 }
 // Argmax returns the index of maximum element in the tensor
-Tensor ArgmaxOperation::operator()(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
 
     auto output_memory_config = output_mem_config.value_or(input_t.memory_config());
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_t}))};
@@ -45,7 +45,7 @@ Tensor ArgmaxOperation::operator()(const Tensor& input_t, int64_t _dim, bool all
             if (!all) {
                 if ((dim == (input_shape.rank() - 1)) || (dim == (input_shape.rank() - 2))) {
                     bool is_width = (dim == (input_shape.rank() - 1));
-                    Tensor max_val = max(input_a, dim, output_memory_config);
+                    Tensor max_val = ttnn::max(input_a, (int)dim, true, output_memory_config);
                     Tensor max_tensor = ttnn::zeros_like(input_a);
                     Tensor tindex = tt::numpy::index_width<::bfloat16>(
                         input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
@@ -63,7 +63,7 @@ Tensor ArgmaxOperation::operator()(const Tensor& input_t, int64_t _dim, bool all
                     cmp_results.deallocate();
                     Tensor result = ttnn::where(ttnn::eqz(max_indices), size, max_indices, output_memory_config);
                     max_indices.deallocate();
-                    result = min(result, dim, output_memory_config);
+                    result = ttnn::min(result, (int)dim, true, output_memory_config);
                     Tensor res_index = ttnn::zeros_like(result);
                     result = ttnn::where(ttnn::eq(result, size), res_index, result, output_memory_config);
                     std::vector<int64_t> permute_dims = {3, 0, 1, 2};
@@ -79,7 +79,7 @@ Tensor ArgmaxOperation::operator()(const Tensor& input_t, int64_t _dim, bool all
                     return {transpose_res};
                 } else if ((dim == (input_shape.rank() - 3)) || (dim == (input_shape.rank() - 4))) {
                     bool is_channel = (dim == (input_shape.rank() - 3));
-                    Tensor max_val = max(input_a, dim, output_memory_config);
+                    Tensor max_val = ttnn::max(input_a, (int)dim, true, output_memory_config);
                     int repeat = input.get_shape()[dim];
                     std::vector<Tensor> combined_tensors;
                     for (int cid = 0; cid < repeat; cid++) combined_tensors.emplace_back(max_val);
@@ -100,7 +100,7 @@ Tensor ArgmaxOperation::operator()(const Tensor& input_t, int64_t _dim, bool all
                     cmp_results.deallocate();
                     Tensor midx = full_like(max_indices, size);
                     Tensor result = ttnn::where(ttnn::eqz(max_indices), midx, max_indices, output_memory_config);
-                    result = min(result, dim, output_memory_config);
+                    result = ttnn::min(result, (int)dim, true, output_memory_config);
                     Tensor res_index = ttnn::zeros_like(result);
                     result = ttnn::where(ttnn::eq(result, full_like(result, size)), res_index, result, output_memory_config);
                     if (is_channel) {
@@ -116,7 +116,7 @@ Tensor ArgmaxOperation::operator()(const Tensor& input_t, int64_t _dim, bool all
             // maximum value index
             Tensor tindex = tt::numpy::index_all<::bfloat16>(
                 input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
-            Tensor max_val = global_max(input_a, output_memory_config);
+            Tensor max_val = ttnn::max(input_a, std::nullopt, true, output_memory_config);
             Tensor max_tensor = ttnn::zeros_like(input_a);
             max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);
             max_val.deallocate();
@@ -125,7 +125,7 @@ Tensor ArgmaxOperation::operator()(const Tensor& input_t, int64_t _dim, bool all
             cmp_results.deallocate();
             Tensor result = ttnn::where(ttnn::eqz(max_indices), size, max_indices, output_memory_config);
             max_indices.deallocate();
-            result = global_min(result, output_memory_config);
+            result = ttnn::min(result, std::nullopt, true, output_memory_config);
             return {result};
         },
         {input_t},
@@ -134,7 +134,7 @@ Tensor ArgmaxOperation::operator()(const Tensor& input_t, int64_t _dim, bool all
 
 }
 
-Tensor ArgminOperation::operator()(const Tensor& input_a, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ArgminOperation::invoke(const Tensor& input_a, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor neg_input = ttnn::neg(input_a, output_memory_config);
     return ttnn::experimental::argmax(neg_input, _dim, all, output_memory_config);

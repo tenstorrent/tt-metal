@@ -61,7 +61,7 @@ import itertools
         ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("math_op", [ttl.tensor.ReduceOpMath.SUM])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_reduce_scatter_nightly(
     t3k_device_mesh,

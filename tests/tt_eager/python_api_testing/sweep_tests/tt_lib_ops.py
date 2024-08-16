@@ -6,6 +6,11 @@ import torch
 import ttnn
 import tt_lib as ttl
 from functools import partial
+
+import ttnn._ttnn
+import ttnn.operations
+import ttnn.operations.matmul
+import ttnn.operations.reduction
 from models.helper_funcs import Linear as tt_Linear
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
@@ -78,7 +83,7 @@ def copy(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.tensor.copy(t0, t1)
+    t2 = ttnn.copy(t0, t1)
 
     return tt2torch_tensor(t2)
 
@@ -95,7 +100,7 @@ def clone(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.clone(t0, output_mem_config=output_mem_config)
+    t1 = ttnn.clone(t0, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -115,7 +120,7 @@ def typecast(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], tt_input_dtype[0])
 
     # Copy op kernel typecast - yet to migrate to TTNN
-    t1 = ttl.tensor.typecast(t0, tt_output_dtype[0], output_mem_config=output_mem_config)
+    t1 = ttnn.experimental.typecast(t0, tt_output_dtype[0], memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -361,8 +366,7 @@ def var_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config,
 @setup_host_and_device
 def mean_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.mean_hw(t0, output_mem_config=output_mem_config)
-
+    t1 = ttnn.mean(t0, [2, 3], memory_config=output_mem_config)
     output = tt2torch_tensor(t1)
     output = output[:, :, 0, 0]
 
@@ -1620,14 +1624,7 @@ def bcast_mul_hw(x, y, *args, device, dtype, layout, input_mem_config, output_me
 @setup_host_and_device
 def reduce_sum_h(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.SUM,
-        ttl.tensor.ReduceOpDim.H,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
-
+    t1 = ttnn.sum(t0, 2, memory_config=output_mem_config)
     output = tt2torch_tensor(t1)
 
     # Slice out the 0 values from reduction
@@ -1637,13 +1634,7 @@ def reduce_sum_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_sum_w(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.SUM,
-        ttl.tensor.ReduceOpDim.W,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.sum(t0, 3, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1654,13 +1645,7 @@ def reduce_sum_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_sum_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.SUM,
-        ttl.tensor.ReduceOpDim.HW,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.sum(t0, [2, 3], memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1671,13 +1656,7 @@ def reduce_sum_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 @setup_host_and_device
 def reduce_max_h(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MAX,
-        ttl.tensor.ReduceOpDim.H,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.max(t0, 2, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1688,13 +1667,7 @@ def reduce_max_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_max_w(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MAX,
-        ttl.tensor.ReduceOpDim.W,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.max(t0, 3, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1705,13 +1678,7 @@ def reduce_max_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_max_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MAX,
-        ttl.tensor.ReduceOpDim.HW,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.max(t0, [2, 3], memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1722,13 +1689,7 @@ def reduce_max_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 @setup_host_and_device
 def reduce_min_h(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MIN,
-        ttl.tensor.ReduceOpDim.H,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.min(t0, 2, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1739,13 +1700,7 @@ def reduce_min_h(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_min_w(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MIN,
-        ttl.tensor.ReduceOpDim.W,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.min(t0, 3, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1756,13 +1711,7 @@ def reduce_min_w(x, *args, device, dtype, layout, input_mem_config, output_mem_c
 @setup_host_and_device
 def reduce_min_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.reduce(
-        t0,
-        ttl.tensor.ReduceOpMath.MIN,
-        ttl.tensor.ReduceOpDim.HW,
-        1.0,
-        output_mem_config=output_mem_config,
-    )
+    t1 = ttnn.min(t0, [2, 3], memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 
@@ -1774,7 +1723,7 @@ def reduce_min_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 def sum(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     assert dim >= 0 and dim <= 3
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.sum(t0, dim, output_mem_config=output_mem_config)
+    t1 = ttnn.sum(t0, dim, memory_config=output_mem_config)
 
     output = tt2torch_tensor(t1)
 

@@ -26,6 +26,7 @@
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "dataflow_api.h"
+#include "dev_mem_map.h"
 #include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 
 #include "debug/status.h"
@@ -411,7 +412,7 @@ int main() {
                 uint64_t dispatch_addr =
                     NOC_XY_ADDR(NOC_X(mailboxes->launch.kernel_config.dispatch_core_x),
                         NOC_Y(mailboxes->launch.kernel_config.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
-                DEBUG_SANITIZE_NOC_ADDR(dispatch_addr, 4);
+                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 noc_fast_atomic_increment(
                     noc_index,
                     NCRISC_AT_CMD_BUF,

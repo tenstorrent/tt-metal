@@ -16,9 +16,12 @@
 #include "impl/debug/dprint_server.hpp"
 #include "impl/dispatch/command_queue.hpp"
 #include "tools/profiler/profiler.hpp"
-#include "tt_metal/detail/program.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace tt {
@@ -26,6 +29,67 @@ namespace tt {
 namespace tt_metal {
 
 namespace {
+
+CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {
+    ZoneScoped;
+    return std::visit(
+        [](auto&& core_spec) -> CoreRangeSet
+        {
+            using T = std::decay_t<decltype(core_spec)>;
+            if constexpr (std::is_same_v<T, CoreCoord>) {
+                return CoreRangeSet({CoreRange(core_spec, core_spec)});
+            }
+            else if constexpr (std::is_same_v<T, CoreRange>) {
+                return CoreRangeSet({core_spec});
+            }
+            else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                return core_spec;
+            }
+        },
+        specified_core_spec
+    );
+}
+
+void CheckDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges) {
+    bool riscv0_in_use = false; bool riscv1_in_use = false;
+    bool noc0_in_use = false; bool noc1_in_use = false;
+
+    auto set_global_and_local_noc_usage = [&](KernelHandle kernel_id, bool &local_noc0_usage, bool &local_noc1_usage) {
+        const auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel_config = std::get<DataMovementConfig>(kernel->config());
+        auto noc_value = magic_enum::enum_integer(kernel_config.noc);
+        local_noc0_usage = noc_value == 0;
+        local_noc1_usage = noc_value == 1;
+        noc0_in_use = local_noc0_usage;
+        noc1_in_use = local_noc1_usage;
+    };
+
+    for (const auto &core_range : core_ranges.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y), CoreType::WORKER);
+                if (kernel_group != nullptr) {
+                    bool local_noc0_in_use = false; bool local_noc1_in_use = false;
+                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value()) {
+                        riscv0_in_use = true;
+                        set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value(), local_noc0_in_use, local_noc1_in_use);
+                    }
+                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
+                        riscv1_in_use = true;
+                        set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value(), local_noc0_in_use, local_noc1_in_use);
+                    }
+                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
+                        kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
+                        TT_FATAL(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!", CoreCoord(x, y).str());
+                    }
+                }
+            }
+        }
+    }
+
+    TT_FATAL(not (riscv0_in_use and riscv1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because both data movement processors are in use!", file_name);
+    TT_FATAL(not (noc0_in_use and noc1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernels for {} across specified cores because both NOCs are in use!", file_name);
+}
 
 void ConfigureKernelGroup(
     const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
@@ -161,18 +225,66 @@ inline void SetRuntimeArgs(
 
 namespace detail {
 
+bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer)
+{
+    bool pass = true;
+    TT_FATAL(address >= DRAM_UNRESERVED_BASE, "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", DRAM_UNRESERVED_BASE);
+    tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
+    return pass;
+}
+
+bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
+{
+    bool pass = true;
+    tt::Cluster::instance().dram_barrier(device->id());
+    tt::Cluster::instance().read_dram_vec(host_buffer, size, tt_target_dram{device->id(), dram_channel, 0}, address);
+    return pass;
+}
+
+bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer, CoreType core_type)
+{
+    ZoneScoped;
+    auto worker_core = device->physical_core_from_logical_core(logical_core, core_type);
+    llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
+    return true;
+}
+
+bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval)
+{
+    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    tt::Cluster::instance().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+    return true;
+}
+
+bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
+{
+    tt::Cluster::instance().l1_barrier(device->id());
+    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    host_buffer = llrt::read_hex_vec_from_core(device->id(), worker_core, address, size);
+    return true;
+}
+
+bool ReadRegFromDevice(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t &regval)
+{
+    tt::Cluster::instance().l1_barrier(device->id());
+    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    tt::Cluster::instance().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+    return true;
+}
+
 std::map<chip_id_t, Device *> CreateDevices(
-    std::vector<chip_id_t> device_ids,
+    const std::vector<chip_id_t>& device_ids,
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
+    DispatchCoreType dispatch_core_type,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
     if (is_galaxy) {
         TT_FATAL(num_hw_cqs < 2, "Multiple Command Queues are not Currently Supported on Galaxy Systems");
     }
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size);
+    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
     std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, Device *> ret_devices;
     //Only include the mmio device in the active devices set returned to the caller if we are not running
@@ -698,13 +810,7 @@ void DeallocateBuffer(Buffer *buffer) {
         false);
 }
 
-void GetBufferAddress(const Buffer *buffer, uint32_t *address_on_host) {
-    EnqueueGetBufferAddr(buffer->device()->command_queue(), address_on_host, buffer, false);
-}
 
-void DisableAllocs(Device *device) { tt::tt_metal::allocator::disable_allocs(*(device->allocator_)); }
-
-void EnableAllocs(Device *device) { tt::tt_metal::allocator::enable_allocs(*(device->allocator_)); }
 
 }  // namespace detail
 
@@ -725,17 +831,18 @@ Device *CreateDevice(
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
+    DispatchCoreType dispatch_core_type,
     const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
 
-    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap);
+    tt::DevicePool::initialize({device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type, l1_bank_remap);
     auto dev = tt::DevicePool::instance().get_active_device(device_id);
     return dev;
 }
 
-Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs) {
+Device *CreateDeviceMinimal(chip_id_t device_id, const uint8_t num_hw_cqs, DispatchCoreType dispatch_core_type) {
     ZoneScoped;
-    tt::tt_metal::dispatch_core_manager::initialize();
+    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type);
     Device *dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
@@ -756,11 +863,11 @@ KernelHandle CreateKernel(
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config) {
     return std::visit(
         [&](auto &&cfg) -> KernelHandle {
-            CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
+            CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
             std::shared_ptr<Kernel> kernel;
             using T = std::decay_t<decltype(cfg)>;
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
-                detail::CheckDataMovementConfig(program, file_name, core_ranges);
+                CheckDataMovementConfig(program, file_name, core_ranges);
                 kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
                 return detail::AddKernel(program, kernel, CoreType::WORKER);
             } else if constexpr (std::is_same_v<T, ComputeConfig>) {
@@ -778,7 +885,7 @@ CBHandle CreateCircularBuffer(
     Program &program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const CircularBufferConfig &config) {
-    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     return program.add_circular_buffer(core_ranges, config);
 }
 

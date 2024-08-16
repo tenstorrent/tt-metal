@@ -36,4 +36,4 @@ target_include_directories(umd_device PRIVATE
     ${UMD_HOME}
     ${UMD_HOME}/device
     ${UMD_HOME}/third_party/fmt/include)
-target_link_libraries(umd_device PRIVATE yaml-cpp::yaml-cpp Boost::interprocess rt simulation)
+target_link_libraries(umd_device PRIVATE yaml-cpp::yaml-cpp Boost::interprocess rt simulation hwloc)

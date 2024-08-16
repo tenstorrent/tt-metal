@@ -13,6 +13,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/types.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/device/device_mesh.hpp"
 
@@ -25,12 +26,11 @@ class TTNNFixture : public ::testing::Test {
 
     void SetUp() override {
         std::srand(0);
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
     }
 
-    void TearDown() override { tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false); }
+    void TearDown() override {}
 };
 
 class TTNNFixtureWithDevice : public TTNNFixture {
@@ -72,7 +72,8 @@ class T3kMultiDeviceFixture : public ::testing::Test {
             T3K_DEVICE_IDS,
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
-            DEFAULT_NUM_COMMAND_QUEUES);
+            DEFAULT_NUM_COMMAND_QUEUES,
+            DispatchCoreType::WORKER);
     }
 
     void TearDown() override { device_mesh_.reset(); }

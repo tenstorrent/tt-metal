@@ -249,10 +249,6 @@ Enums
 
 .. autoclass:: tt_lib.tensor.BcastOpDim
 
-.. autoclass:: tt_lib.tensor.ReduceOpMath
-
-.. autoclass:: tt_lib.tensor.ReduceOpDim
-
 Tensor manipulation operations
 -=============================
 
@@ -261,12 +257,6 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.reshape
 
-.. autofunction:: tt_lib.tensor.clone
-
-.. autofunction:: tt_lib.tensor.typecast
-
-.. autofunction:: tt_lib.tensor.copy
-
 
 
 Broadcast and Reduce
@@ -274,15 +264,6 @@ Broadcast and Reduce
 
 .. autofunction:: tt_lib.tensor.bcast
 
-.. autofunction:: tt_lib.tensor.reduce
-
-.. autofunction:: tt_lib.tensor.global_min
-
-.. autofunction:: tt_lib.tensor.global_max
-
-.. autofunction:: tt_lib.tensor.global_sum
-
-.. autofunction:: tt_lib.tensor.global_mean
 
 
 Fallback Operations
@@ -393,8 +374,4 @@ the Type 1 contiguous representations.
 Other Operations
 ================
 
-.. autofunction:: tt_lib.tensor.sum
-
 .. autofunction:: tt_lib.tensor.convert_conv_weight_tensor_to_tiled_layout
-
-.. autofunction:: tt_lib.tensor.mean_hw

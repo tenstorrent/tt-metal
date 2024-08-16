@@ -147,7 +147,7 @@ class TestBertOpsTrace:
                     ttl.tensor.ShardOrientation.COL_MAJOR,
                 )
             else:
-                in0_t = ttl.tensor.clone(in0_t_res, interleaved_mem_config_L1)
+                in0_t = ttnn.clone(in0_t_res, memory_config=interleaved_mem_config_L1)
 
             if has_bias:
                 output_t = ttnn.linear(

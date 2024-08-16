@@ -48,7 +48,7 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
 
 } //detail namespace
 
-ttnn::Tensor ExecuteTranspose::operator()(
+ttnn::Tensor ExecuteTranspose::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const int64_t& dim1,
@@ -99,16 +99,16 @@ ttnn::Tensor ExecuteTranspose::operator()(
 
 }
 
-ttnn::Tensor ExecuteTranspose::operator()(
+ttnn::Tensor ExecuteTranspose::invoke(
     const ttnn::Tensor& input_tensor,
     const int64_t& dim1,
     const int64_t& dim2,
     const std::optional<MemoryConfig>& memory_config) {
-    return operator()(DefaultQueueId, input_tensor, dim1, dim2, memory_config);
+    return invoke(DefaultQueueId, input_tensor, dim1, dim2, memory_config);
 }
 
-ttnn::Tensor ExecuteTranspose::operator()(const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2) {
-    return operator()(DefaultQueueId, input_tensor, dim1, dim2, std::nullopt);
+ttnn::Tensor ExecuteTranspose::invoke(const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2) {
+    return invoke(DefaultQueueId, input_tensor, dim1, dim2, std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace

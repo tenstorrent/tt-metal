@@ -6,10 +6,6 @@ import torch
 import ttnn
 
 import tt_lib as ttl
-import tt_lib.fallback_ops
-from tt_lib import profiler
-
-from loguru import logger
 from ttnn.model_preprocessing import preprocess_model, preprocess_conv2d, fold_batch_norm2d_into_conv2d
 
 from models.experimental.functional_unet.tt import unet_shallow_torch
@@ -17,6 +13,12 @@ from models.experimental.functional_unet.tt import unet_shallow_ttnn
 
 
 def create_unet_models(device, groups, torch_input_tensor):
+    assert device.arch() == ttnn.device.Arch.WORMHOLE_B0, "Expected device architecture to be WORMHOLE_B0"
+    assert (device.core_grid.x, device.core_grid.y) == (
+        8,
+        8,
+    ), "Expected 8x8 core grid initialize UNet. If using N300 - make sure to enable ethernet dispatch cores"
+
     torch_model = unet_shallow_torch.UNet(groups=groups)
     torch_model.eval()
 

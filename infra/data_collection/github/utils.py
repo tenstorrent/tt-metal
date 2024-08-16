@@ -171,13 +171,40 @@ def get_job_row_from_github_job(github_job):
 
     assert github_job["status"] == "completed", f"{github_job_id} is not completed"
 
-    logger.warning(
-        "Using labels to heuristically look for card type, but we should be using future arch- label instead"
-    )
-    if "grayskull" in labels:
-        card_type = "grayskull"
-    elif "wormhole_b0" in labels:
-        card_type = "wormhole_b0"
+    # Best effort card type getting
+
+    get_overlap = lambda labels_a, labels_b: set(labels_a) & set(labels_b)
+    labels_have_overlap = lambda labels_a, labels_b: bool(get_overlap(labels_a, labels_b))
+
+    try:
+        detected_config = return_first_string_starts_with("config-", labels).replace("config-", "")
+    except Exception as e:
+        logger.error(e)
+        logger.info("Seems to have no config- label, so assuming no special config requested")
+        detected_config = None
+
+    if labels_have_overlap(["grayskull", "arch-grayskull"], labels):
+        detected_arch = "grayskull"
+    elif labels_have_overlap(["wormhole_b0", "arch-wormhole_b0"], labels):
+        detected_arch = "wormhole_b0"
+    elif labels_have_overlap(["arch-blackhole"], labels):
+        detected_arch = "blackhole"
+    else:
+        detected_arch = None
+
+    single_cards_list = ("E150", "N150", "N300", "BH")
+    single_cards_overlap = get_overlap(single_cards_list, labels)
+
+    # In order of preference
+    if detected_config:
+        if not detected_arch:
+            raise Exception(f"There must be an arch detected for config {detected_config}")
+        card_type = f"{detected_config}-{detected_arch}"
+    elif single_cards_overlap:
+        logger.info(f"Detected overlap in single cards: {single_cards_overlap}")
+        card_type = list(single_cards_overlap)[0]
+    elif detected_arch:
+        card_type = detected_arch
     else:
         card_type = None
 
@@ -321,7 +348,7 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
 
     assert "ARCH_NAME" in os.environ
     device_type = os.environ["ARCH_NAME"]
-    assert device_type in ("grayskull", "wormhole_b0")
+    assert device_type in ("grayskull", "wormhole_b0", "blackhole")
 
     logger.warning("Hardcoded null for device_memory_size")
     device_memory_size = ""

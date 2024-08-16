@@ -28,7 +28,11 @@ void kernel_main()
         uint32_t cb_out0_addr = get_read_ptr(cb_out0);
         // write the tile to DRAM
         noc_async_write_tile(i, c, cb_out0_addr);
-        noc_async_write_barrier();
+        noc_async_write_barrier(); // This will wait until the write is done. As an alternative,
+                                   // noc_async_write_flushed() can be faster because it waits
+                                   // until the write request is sent. In that case, you have to
+                                   // use noc_async_write_barrier() at least once at the end of
+                                   // data move kernel to make sure all write is done.
         // Mark the tile as consumed
         cb_pop_front(cb_out0, 1);
     }

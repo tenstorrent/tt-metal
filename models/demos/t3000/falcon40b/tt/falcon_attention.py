@@ -338,12 +338,16 @@ class TtFalconAttention:
         # K Cache update
         ttnn.experimental.tensor.fill_cache(
             layer_past[0],
-            ttnn.experimental.tensor.typecast(key_layer, self.model_config["KV_CACHE_DTYPE"]),
+            ttnn.experimental.typecast(
+                key_layer, self.model_config["KV_CACHE_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            ),
             user_id,
         )
         ttnn.experimental.tensor.fill_cache(
             layer_past[1],
-            ttnn.experimental.tensor.typecast(value_layer, self.model_config["KV_CACHE_DTYPE"]),
+            ttnn.experimental.typecast(
+                value_layer, self.model_config["KV_CACHE_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            ),
             user_id,
         )
         attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
