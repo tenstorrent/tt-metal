@@ -9,7 +9,7 @@ import math
 
 import ttnn
 
-import tt_lib as ttl
+import ttnn
 from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
@@ -51,8 +51,8 @@ seq_lens = [32, 64, 256, 384, 512]
 @pytest.mark.parametrize(
     "in_dtype",
     (
-        ttl.tensor.DataType.BFLOAT8_B,
-        ttl.tensor.DataType.BFLOAT16,
+        ttnn.bfloat8_b,
+        ttnn.bfloat16,
     ),
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
@@ -77,33 +77,33 @@ def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
         attention_mask = torch.rand(batch, 1, 1, seq_len)
         attention_mask = (attention_mask > 0.5).float()
         attention_mask = attention_mask.reshape(batch, 1, -1, 32)
-        attention_mask_t = ttl.tensor.Tensor(
+        attention_mask_t = ttnn.Tensor(
             attention_mask,
-            ttl.tensor.DataType.BFLOAT16,
-        ).to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1))
+            ttnn.bfloat16,
+        ).to(device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1))
     else:
         # attention_mask = torch.zeros(batch, 1, seq_len, seq_len)
         attention_mask = torch.rand(batch, 1, seq_len, seq_len)
         attention_mask = (attention_mask > 0.5).float()
         attention_mask32 = tilize_to_list(pad_weight(attention_mask))
-        attention_mask_t = ttl.tensor.Tensor(
+        attention_mask_t = ttnn.Tensor(
             attention_mask32,
             [batch, 1, seq_len, seq_len],
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.TILE,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
             device,
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         )
 
     input_tensor = torch.randn(input_shape).bfloat16().float()
-    in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     in1_t = torch2tt_tensor(input_tensor, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-    in1_t_shard = ttl.tensor.interleaved_to_sharded(
+    in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
         in1_t,
         grid_size,
         [M // grid_size[1], K // grid_size[0]],
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.ShardOrientation.COL_MAJOR,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
     )
 
     block_w = seq_len // 32
@@ -130,7 +130,7 @@ def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
     else:
         tt_output_sharded = ttnn.softmax_in_place(in1_t_shard, program_config=program_config)
 
-    tt_output = ttl.tensor.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
+    tt_output = ttnn.experimental.tensor.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
     tt_output_tensor = tt_output.cpu().to_torch().float()
     tt_output_tensor = torch.Tensor(tt_output_tensor).reshape(input_shape)
     tt_output_tensor = untilize(tt_output_tensor)
