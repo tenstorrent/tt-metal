@@ -202,11 +202,9 @@ void debug_sanitize_noc_and_worker_addr(
         noc_id,                                                                                  \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) |   \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID) << 32) | \
-            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO)), \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO)),       \
         NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO),                        \
-        NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));                      \
-    debug_insert_delay((uint8_t)TransactionRead);
-
+        NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc_id)                               \
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(                                                     \
         noc_id,                                                                               \
@@ -214,8 +212,14 @@ void debug_sanitize_noc_and_worker_addr(
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID) << 32) | \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_LO)),     \
         NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_LO),                    \
-        NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));                      \
-    debug_insert_delay((uint8_t)TransactionWrite);
+        NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
+#define DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_id, cmd_buf)                                   \
+    DEBUG_SANITIZE_NOC_ADDR(                                                                  \
+        noc_id,                                                                               \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_MID) << 32) |      \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_LO)),              \
+        4);
 #define DEBUG_SANITIZE_NOC_ADDR(noc_id, a, l)                                                      \
     debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ); \
     LOG_LEN(l)
@@ -299,6 +303,7 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc_id, noc_a_lower, worker_a) \
     LOG_WRITE_LEN_FROM_STATE(noc_id)
 #define DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc_id)
+#define DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_id, cmd_buf)
 #define DEBUG_INSERT_DELAY(transaction_type)
 
 #endif  // WATCHER_ENABLED
