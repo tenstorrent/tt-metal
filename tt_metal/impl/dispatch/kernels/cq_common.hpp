@@ -55,6 +55,10 @@ constexpr uint32_t CQ_NOC_FLAG_SRC = 0x01;
 constexpr uint32_t CQ_NOC_FLAG_NOC = 0x02;
 constexpr uint32_t CQ_NOC_FLAG_DST = 0x04;
 constexpr uint32_t CQ_NOC_FLAG_LEN = 0x08;
+
+constexpr uint32_t CQ_NOC_INLINE_FLAG_VAL = 0x10;
+constexpr uint32_t CQ_NOC_INLINE_FLAG_BE = 0x20;
+
 enum CQNocFlags {
     CQ_NOC_sndl = 0,
     CQ_NOC_sndL =                                                       CQ_NOC_FLAG_LEN,
@@ -73,6 +77,26 @@ enum CQNocFlags {
     CQ_NOC_SNDl = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
     CQ_NOC_SNDL = CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_FLAG_LEN,
 };
+
+enum CQNocInlineFlags {
+    CQ_NOC_INLINE_ndvb = 0,
+    CQ_NOC_INLINE_ndvB =                                                              CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_ndVb =                                     CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_ndVB =                                     CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_nDvb =                   CQ_NOC_FLAG_DST,
+    CQ_NOC_INLINE_nDvB =                   CQ_NOC_FLAG_DST                          | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_nDVb =                   CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_nDVB =                   CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_Ndvb = CQ_NOC_FLAG_NOC,
+    CQ_NOC_INLINE_NdvB = CQ_NOC_FLAG_NOC                                            | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_NdVb = CQ_NOC_FLAG_NOC                   | CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_NdVB = CQ_NOC_FLAG_NOC                   | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_NDvb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST,
+    CQ_NOC_INLINE_NDvB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST                          | CQ_NOC_INLINE_FLAG_BE,
+    CQ_NOC_INLINE_NDVb = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL,
+    CQ_NOC_INLINE_NDVB = CQ_NOC_FLAG_NOC | CQ_NOC_FLAG_DST | CQ_NOC_INLINE_FLAG_VAL | CQ_NOC_INLINE_FLAG_BE,
+};
+
 enum CQNocWait {
     CQ_NOC_wait = 0,
     CQ_NOC_WAIT = 1,
@@ -166,6 +190,68 @@ void cq_noc_async_write_init_state(uint32_t src_addr, uint64_t dst_addr, uint32_
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CTRL, noc_cmd_field);
 
     cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send>(src_addr, dst_addr, size);
+}
+
+template<enum CQNocInlineFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
+FORCE_INLINE
+void cq_noc_inline_dw_write_with_state(uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF) {
+
+    if constexpr (wait) {
+        DEBUG_STATUS("NISW");
+        while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_REG_CMD_BUF));
+        DEBUG_STATUS("NISD");
+    }
+
+    if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_AT_DATA, val);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_LO, (uint32_t)(dst_addr));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+#ifdef ARCH_BLACKHOLE
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_MID, (uint32_t)(dest_addr >> 32) & 0x1000000F);
+#endif
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    }
+    if constexpr (flags & CQ_NOC_INLINE_FLAG_BE) {
+        uint32_t be32 = be;
+        uint32_t be_shift = (dst_addr & (NOC_WORD_BYTES - 1));
+        be32 = (be32 << be_shift);
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_AT_LEN_BE, be32);
+    }
+    if constexpr (send) {
+        DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_index, NCRISC_WR_REG_CMD_BUF);
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    }
+}
+
+// TODO: noc_inline_dw_write currently hardcodes most of these parameters, which we copied here
+// If needed, add templates for setting these
+template<enum CQNocInlineFlags flags>
+FORCE_INLINE
+void cq_noc_inline_dw_write_init_state(uint64_t dst_addr, uint32_t val = 0, uint8_t be = 0xF) {
+
+    DEBUG_STATUS("NIIW");
+    uint32_t heartbeat = 0;
+    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_REG_CMD_BUF)) {
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+    }
+    DEBUG_STATUS("NIID");
+
+    constexpr bool static_vc_alloc = true;
+    constexpr bool mcast = false;
+    constexpr bool posted = false;
+    constexpr uint32_t static_vc = NOC_UNICAST_WRITE_VC;
+
+    constexpr uint32_t noc_cmd_field = (static_vc_alloc ? NOC_CMD_VC_STATIC : 0x0) | NOC_CMD_STATIC_VC(static_vc) | NOC_CMD_CPY |
+                                       NOC_CMD_WR | NOC_CMD_WR_INLINE |
+                                       (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0) |
+                                       (posted ? 0x0 : NOC_CMD_RESP_MARKED);
+
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_CTRL, noc_cmd_field);
+
+    cq_noc_inline_dw_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send>(dst_addr, val, be);
 }
 
 template<uint32_t sem_id>

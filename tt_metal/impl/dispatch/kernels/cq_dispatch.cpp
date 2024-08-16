@@ -266,6 +266,13 @@ void relay_to_next_cb(uint32_t data_ptr, uint32_t length) {
     ASSERT(data_ptr <= dispatch_cb_end - dispatch_cb_page_size);
     ASSERT(data_ptr <= cb_fence - dispatch_cb_page_size);
 
+    // regular write, inline writes, and atomic writes use different cmd bufs, so we can init state for each
+    // TODO: Add support for stateful atomics. We can preserve state once cb_acquire_pages is changed to a free running counter
+    // so we would only need to inc atomics downstream
+    uint64_t dst = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
+    cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, dst, 0);
+    cq_noc_inline_dw_write_init_state<CQ_NOC_INLINE_Ndvb>(dst);
+
     while (length > 0) {
         ASSERT(downstream_cb_end > downstream_cb_data_ptr);
 
@@ -281,14 +288,13 @@ void relay_to_next_cb(uint32_t data_ptr, uint32_t length) {
             not_end_of_cmd = false;
         }
 
-        uint64_t dst = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
-
-        if (preamble_size > 0) {
+        if constexpr (preamble_size > 0) {
             uint32_t flag;
-            noc_inline_dw_write(dst, xfer_size + preamble_size + not_end_of_cmd);
+            cq_noc_inline_dw_write_with_state<CQ_NOC_INLINE_nDVB>(downstream_cb_data_ptr, xfer_size + preamble_size + not_end_of_cmd);
+            noc_nonposted_writes_num_issued[noc_index] += 1;
+            noc_nonposted_writes_acked[noc_index] += 1;
             block_noc_writes_to_clear[rd_block_idx]++;
             downstream_cb_data_ptr += preamble_size;
-            dst = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
             ASSERT(downstream_cb_data_ptr < downstream_cb_end);
         }
         // "Reserve" pages for the next write from this block
@@ -305,14 +311,15 @@ void relay_to_next_cb(uint32_t data_ptr, uint32_t length) {
                 if (rd_block_idx == dispatch_cb_blocks - 1) {
                     ASSERT(cb_fence == dispatch_cb_end);
                     if (orphan_size != 0) {
-                        noc_async_write<dispatch_cb_page_size>(data_ptr, dst, orphan_size);
+                        cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, downstream_cb_data_ptr, orphan_size);
+                        noc_nonposted_writes_num_issued[noc_index] += 1;
+                        noc_nonposted_writes_acked[noc_index] += 1;
                         length -= orphan_size;
                         xfer_size -= orphan_size;
                         downstream_cb_data_ptr += orphan_size;
                         if (downstream_cb_data_ptr == downstream_cb_end) {
                             downstream_cb_data_ptr = downstream_cb_base;
                         }
-                        dst = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
                         // All writes from this block have completed.
                         orphan_size = 0;
                     }
@@ -340,7 +347,9 @@ void relay_to_next_cb(uint32_t data_ptr, uint32_t length) {
                 dispatch_cb_pages_per_block>(block_noc_writes_to_clear, wr_block_idx);
         }
 
-        noc_async_write<dispatch_cb_page_size>(data_ptr, dst, xfer_size);
+        cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, downstream_cb_data_ptr, xfer_size);
+        noc_nonposted_writes_num_issued[noc_index] += 1;
+        noc_nonposted_writes_acked[noc_index] += 1;
         cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(1);
 
         length -= xfer_size;
@@ -1036,6 +1045,7 @@ static inline bool process_cmd_h(uint32_t &cmd_ptr) {
 void kernel_main() {
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
     // Initialize local state of any additional nocs used instead of the default
+    static_assert(my_noc_index != upstream_noc_index);
     if constexpr (my_noc_index != upstream_noc_index) {
         noc_local_state_init(upstream_noc_index);
     }
