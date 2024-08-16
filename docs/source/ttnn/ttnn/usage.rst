@@ -154,7 +154,7 @@ Please refer to :doc:`Profiling ttnn Operations </ttnn/profiling_ttnn_operations
 .. note::
    This basic snippet is under construction, and may not work on all hardware architectures.
 
-.. literalinclude:: ../../../../ttnn/examples/usage/string_repr.py
+.. literalinclude:: ../../../../ttnn/ttnn/examples/usage/string_repr.py
    :language: python
 
 
