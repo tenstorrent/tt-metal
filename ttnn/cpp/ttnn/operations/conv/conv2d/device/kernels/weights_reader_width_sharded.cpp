@@ -20,8 +20,8 @@ void kernel_main() {
     constexpr uint32_t weight_next_channel_stride_h = get_compile_time_arg_val(6);
     constexpr uint32_t weight_next_block_this_core_stride_h = get_compile_time_arg_val(7);
     constexpr uint32_t weight_next_block_other_core_stride_h = get_compile_time_arg_val(8);
-    constexpr uint32_t other_core_weight_height_blocks = get_compile_time_arg_val(9);
-    constexpr uint32_t this_core_weight_height_blocks = get_compile_time_arg_val(10);
+    constexpr uint32_t remote_weight_height_blocks = get_compile_time_arg_val(9);
+    constexpr uint32_t local_weight_height_blocks = get_compile_time_arg_val(10);
 
 
     #ifdef FUSE_BIAS
@@ -36,7 +36,7 @@ void kernel_main() {
 
     // DPRINT<<"Weights  "<<cb_id_weight<<" "<<core_in_channels_ntiles<<" "<<window_size_hw<<" "<<weight_block_width_ntiles<<" "<<
     // weight_block_num_tiles<<" "<<weight_matrix_width_ntiles<<" "<<weight_next_channel_stride_h<<" "<<weight_next_block_this_core_stride_h<<" "<<
-    // weight_next_block_other_core_stride_h<<"  "<<other_core_weight_height_blocks<<" "<<this_core_weight_height_blocks<<ENDL();
+    // weight_next_block_other_core_stride_h<<"  "<<remote_weight_height_blocks<<" "<<this_core_weight_height_blocks<<ENDL();
 
     uint32_t i = 0;
     const uint32_t init_weight_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
@@ -72,12 +72,12 @@ void kernel_main() {
     //This interleaves reader/tilization with compute. Hopefully better perf.
     //Activation reader first sends data from the same block of all cores. Then iterates to the next block and repeats for all cores.
     //Stride = act_block_w*out_channels*sizeof(elem)
-    for(uint32_t this_core_weight_block_index = 0; this_core_weight_block_index < this_core_weight_height_blocks; this_core_weight_block_index++) {
+    for(uint32_t local_weight_block_index = 0; local_weight_block_index < local_weight_height_blocks; local_weight_block_index++) {
         uint32_t weight_block_start_tile_id = weight_start_tile_id;
 
          //Iterates over all the cores.
          //Stride = in_channels*out_channels*sizeof(elem)/num_cores.
-        for(uint32_t other_core_weight_block_index = 0; other_core_weight_block_index < other_core_weight_height_blocks; other_core_weight_block_index++) {
+        for(uint32_t remote_weight_block_index = 0; remote_weight_block_index < remote_weight_height_blocks; remote_weight_block_index++) {
             cb_reserve_back(cb_id_weight, weight_block_num_tiles);
             uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
             uint32_t weights_start_address = weight_write_l1_addr;

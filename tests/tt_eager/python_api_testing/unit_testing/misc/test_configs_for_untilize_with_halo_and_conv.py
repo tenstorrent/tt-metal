@@ -25,7 +25,6 @@ from ttnn.operations.conv.sliding_window_op_config_generation_and_validation imp
 from ttnn.operations.conv.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc, comp_pcc
 from tt_lib.utils import _nearest_y
-import tt_lib as ttl
 
 
 # conv params - output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups

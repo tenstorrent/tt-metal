@@ -65,22 +65,15 @@ void kernel_main() {
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(18);
     constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(19);
 
-    // constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(17);
-    // constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(18);
-    // constexpr uint32_t act_mcast_sender_semaphore_addr = get_compile_time_arg_val(19);
-    // constexpr uint32_t act_mcast_receiver_semaphore_addr = get_compile_time_arg_val(20);
-    // constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(21);
 
-    constexpr uint32_t act_num_blocks_h = 1 ; //get_compile_time_arg_val(14);
-
-    uint32_t i = 0;
-
+    uint32_t i = 0; //Runtime arg index
 
     uint32_t this_core_x = get_arg_val<uint32_t>(i); i+=1;
     uint32_t this_core_y = get_arg_val<uint32_t>(i); i+=1;
 
     //Num of cols of compute cores. (Total Cores, not active cores.)
     uint32_t num_cores_x = get_arg_val<uint32_t>(i); i+=1;
+
     //X and Y lookup are independant.
     //X Lookup table for translating logical to physical cores.
     tt_l1_ptr uint32_t *act_mcast_x_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
@@ -94,7 +87,7 @@ void kernel_main() {
     // "L3  "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<act_mcast_num_cores<<ENDL();
 
     //Equivalent to Core Index.
-    uint32_t act_mcast_sender_id = this_core_x+(num_cores_x*this_core_y) ;
+    uint32_t act_mcast_sender_id = this_core_x + (num_cores_x * this_core_y) ;
 
     constexpr uint32_t cb_id_act = tt::CB::c_in0;
     constexpr uint32_t cb_id_weight = tt::CB::c_in1;
@@ -108,12 +101,12 @@ void kernel_main() {
 
     // L1 array
     constexpr uint32_t cb_l1_array = tt::CB::c_in5;
-    volatile tt_l1_ptr uint32_t* l1_array = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_l1_array));
+    volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_valid_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_l1_array));
 
     // Set up local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_valid_addr_ptr = &l1_array[0];
     act_mcast_sender_semaphore_valid_addr_ptr[0] = 1; // Load const 1 to be used as semaphore valid value sent from sender to receivers
-    uint32_t act_mcast_sender_semaphore_valid_addr = reinterpret_cast<uint32_t>(&l1_array[0]);
+
+    uint32_t act_mcast_sender_semaphore_valid_addr = reinterpret_cast<uint32_t>(act_mcast_sender_semaphore_valid_addr_ptr);
 
     // Set up remote VALID value
     volatile tt_l1_ptr uint32_t* act_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_semaphore_addr);
@@ -176,6 +169,10 @@ void kernel_main() {
         // Compute should function like regular mm
 
         uint32_t act_w_outer_i = 0;
+
+        uint32_t sender_noc_x = 0;
+        uint32_t sender_noc_y = 0;
+
         for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             if (act_w_outer_i == act_mcast_sender_id) {
@@ -214,8 +211,8 @@ void kernel_main() {
                 // Set act semaphore value to INVALID
                 noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                uint32_t sender_x = act_mcast_x_lookup[act_w_outer_i%num_cores_x];
-                uint32_t sender_y = act_mcast_y_lookup[act_w_outer_i/num_cores_x];
+                uint32_t sender_x = act_mcast_x_lookup[sender_noc_x];
+                uint32_t sender_y = act_mcast_y_lookup[sender_noc_y];
 
                 // Atomic increment source core counter
                 uint64_t act_mcast_sender_semaphore_noc_addr = get_noc_addr(sender_x, sender_y, act_mcast_sender_semaphore_addr);
@@ -226,6 +223,13 @@ void kernel_main() {
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
             }
             cb_push_back(cb_id_act, act_block_num_tiles);
+
+            sender_noc_x++;
+            if(sender_noc_x >= num_cores_x) {
+                sender_noc_x = 0;
+                sender_noc_y++;
+            }
+
         } // act_w_num_outer
         cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
     }

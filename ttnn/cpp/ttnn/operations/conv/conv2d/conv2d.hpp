@@ -15,15 +15,15 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/common/math.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/conv2d/device/optimized_conv_op.hpp"
-#include "ttnn/operations/conv2d/device/conv_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 
 namespace ttnn {
 
-namespace operations {
+namespace operations::conv {
 namespace conv2d {
 
 struct Conv2dConfig {
@@ -120,11 +120,11 @@ uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::Paral
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(const Shape& tensor_shape, sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
-tt::tt_metal::OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw);
+OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw);
 
 std::pair<uint32_t, uint32_t> determine_largest_subblock_size(uint32_t block_height, uint32_t block_width, bool fp32_accum);
 
-tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(const sliding_window::ParallelConfig& parallel_config, const tt::tt_metal::OptimizedConvParallelizationConfig& conv_op_parallel_config, uint32_t padded_in_channels, uint32_t act_block_h_override, uint32_t window_w, bool fp32_accum, bool use_shallow_conv_variant);
+OptimizedConvBlockConfig determine_per_core_conv_block_config(const sliding_window::ParallelConfig& parallel_config, const OptimizedConvParallelizationConfig& conv_op_parallel_config, uint32_t padded_in_channels, uint32_t act_block_h_override, uint32_t window_w, bool fp32_accum, bool use_shallow_conv_variant);
 
 template<typename T>
 std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
@@ -172,6 +172,52 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     std::optional<const Conv2dConfig> conv_config_ = std::nullopt);
 
 
+struct Conv2dOperation{
+    static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
+        uint8_t queue_id,
+        const ttnn::Tensor& input_tensor,
+        const ttnn::Tensor& weight_tensor,
+        Device * device,
+        uint32_t in_channels,
+        uint32_t out_channels,
+        uint32_t batch_size,
+        uint32_t input_height,
+        uint32_t input_width,
+        std::array<uint32_t, 2> kernel_size,
+        std::array<uint32_t, 2> stride,
+        std::array<uint32_t, 2> padding,
+        std::array<uint32_t, 2> dilation,
+        uint32_t groups,
+        std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
+        std::optional<const Conv2dConfig> conv_config_ = std::nullopt){
+        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_);
+    }
+
+    static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
+        uint8_t queue_id,
+        const ttnn::Tensor& input_tensor,
+        const ttnn::Tensor& weight_tensor,
+        DeviceMesh * device,
+        uint32_t in_channels,
+        uint32_t out_channels,
+        uint32_t batch_size,
+        uint32_t input_height,
+        uint32_t input_width,
+        std::array<uint32_t, 2> kernel_size,
+        std::array<uint32_t, 2> stride,
+        std::array<uint32_t, 2> padding,
+        std::array<uint32_t, 2> dilation,
+        uint32_t groups,
+        std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
+        std::optional<const Conv2dConfig> conv_config_ = std::nullopt){
+        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_);
+    }
+};
+
 }  // namespace conv2d
-}  // namespace operations
+}  // namespace operations::conv
 }  // namespace ttnn
+
+namespace ttnn{
+    constexpr auto conv2d = ttnn::register_operation<"ttnn::conv2d", operations::conv::conv2d::Conv2dOperation>();
+}

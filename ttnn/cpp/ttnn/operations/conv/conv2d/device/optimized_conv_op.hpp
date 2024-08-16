@@ -8,9 +8,10 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 
-namespace tt {
+namespace ttnn {
 
-namespace tt_metal {
+namespace operations::conv {
+namespace conv2d {
 
 // TODO: Accept parallelization
 enum class OptimizedConvOpParallelizationStrategy {
@@ -83,7 +84,7 @@ struct OptimizedConv {
         MathFidelity mfidelity, const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
         uint32_t e_padding_for_32B_alignment,
-        MemoryConfig memory_config, DataType dtype, Shape input_tensor_shape, bool use_shallow_conv_variant, bool transpose_mcast, const DeviceComputeKernelConfig compute_kernel_config, bool enable_act_double_buffer, bool enable_split_reader, bool enable_subblock_padding) :
+        MemoryConfig memory_config, DataType dtype, const Shape& input_tensor_shape, bool use_shallow_conv_variant, bool transpose_mcast, const DeviceComputeKernelConfig compute_kernel_config, bool enable_act_double_buffer, bool enable_split_reader, bool enable_subblock_padding) :
             output_channels(output_channels),
             conv_params(c_params),
             untilize_out(untile_out),
@@ -102,7 +103,7 @@ struct OptimizedConv {
             enable_subblock_padding(enable_subblock_padding) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const;
 
@@ -206,7 +207,7 @@ struct OptimizedConvNew {
             enable_subblock_padding(enable_subblock_padding) {}
 
     void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const;
 
@@ -264,10 +265,11 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool enable_subblock_padding = false
 );
 
-}  // namespace tt_metal
+}  // namespace conv2d
 
-}  // namespace tt
+}  // namespace operations::conv
 
+}  // namespace ttnn
 
 namespace optimized_conv_op_utils {
 using namespace tt;
@@ -275,6 +277,6 @@ using namespace tt::tt_metal;
 
 pair<uint32_t, uint32_t> compute_opt_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t padding_for_32B_alignment=0);
 
-pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment);
+pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const Shape& conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment);
 
 } // optimized_conv_op_utils

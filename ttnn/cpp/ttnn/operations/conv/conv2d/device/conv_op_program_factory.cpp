@@ -46,9 +46,10 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_conv_activation_as_mm_shape(Sha
 
 }
 
-namespace tt {
+namespace ttnn::operations::conv {
+namespace conv2d {
 
-namespace tt_metal {
+using namespace tt;
 
 const uint32_t act_cb                                 = CB::c_in0;
 const uint32_t weight_cb                              = CB::c_in1;
@@ -399,21 +400,21 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         TT_ASSERT(!(out_row_size_bytes & (out_row_size_bytes - 1))); // output channels power of 2 is supported only
         if (pad_h == 0 && pad_w == 0) {
             if(rn50_first_conv) {
-                reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
-                compute_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
+                reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
+                compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
             } else {
-                reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_fast_without_conv_padding.cpp";
+                reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_fast_without_conv_padding.cpp";
                 compute_kernel = "tt_eager/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
             }
         } else {
-            reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_fast.cpp";
+            reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_fast.cpp";
             compute_kernel = "tt_eager/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
         }
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
                 (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
                 (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df)};
     } else {
-        reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations.cpp";
+        reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations.cpp";
         reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
         compute_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/bmm_tilize_untilize.cpp";
     }
@@ -473,11 +474,11 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     std::vector<uint32_t> writer_compile_time_args;
     if (untilize_out) {
         if (rn50_first_conv) {
-            writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_and_reader_weights_resnet50_first_conv_untilize_out.cpp";
+            writer_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_and_reader_weights_resnet50_first_conv_untilize_out.cpp";
         } else if (use_fast_reader) {
-            writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_unary_stick_8bank_blocks_reader_weight_tile_with_pow2_addr_gen_fast.cpp";
+            writer_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_unary_stick_8bank_blocks_reader_weight_tile_with_pow2_addr_gen_fast.cpp";
         } else {
-            writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_unary_stick_layout_8bank_blocks_reader_weight_tile_layout.cpp";
+            writer_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_unary_stick_layout_8bank_blocks_reader_weight_tile_layout.cpp";
         }
         writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb, (uint32_t) std::log2(out_row_size_bytes)};
         writer_rt_args = {
@@ -505,9 +506,9 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     } else {
         assert(use_fast_reader); // tiled out not tested for generic conv
         if (rn50_first_conv) {
-            writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
+            writer_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
         } else {
-            writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
+            writer_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
         }
         writer_compile_time_args = {
             (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
@@ -998,10 +999,10 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     assert(num_blocks_output_w == num_blocks_weight_w);
 
     // DTX conv activation transform data access pattern
-    auto [act_address_map, act_address_map_metadata] = generate_conv_activation_address_map(a.get_legacy_shape(), conv_params, act_block_h_datums, act_block_w_datums, weight_block_w_datums,
+    auto [act_address_map, act_address_map_metadata] = generate_conv_activation_address_map(ttnn::Shape(a.get_legacy_shape()), conv_params, act_block_h_datums, act_block_w_datums, weight_block_w_datums,
                                                             num_blocks_act_h, num_blocks_act_w, num_blocks_weight_w, num_bytes_of_df);
 
-    auto [weight_address_map, weight_address_map_metadata] = generate_conv_weight_address_map(b.get_legacy_shape(), act_block_w_datums, weight_block_w_datums,
+    auto [weight_address_map, weight_address_map_metadata] = generate_conv_weight_address_map(ttnn::Shape(b.get_legacy_shape()), act_block_w_datums, weight_block_w_datums,
                                                                 num_blocks_act_h, num_blocks_act_w, num_blocks_weight_w, num_bytes_of_df);
 
     // sanity check
@@ -1224,7 +1225,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
     string reader_kernel;
     vector<uint32_t> reader_rt_args;
-    reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_binary_dtx.cpp";
+    reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_binary_dtx.cpp";
     reader_rt_args = {
         // arguments for act
         act_dram_addr,
@@ -1268,7 +1269,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         };
     } else {
         assert(false && "Tiled output unsupported");
-        writer_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_matmul_tile_layout.cpp";
+        writer_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_matmul_tile_layout.cpp";
         writer_rt_args = {
             out_dram_addr,
             0,
@@ -1380,8 +1381,8 @@ inline Tensor conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor
                     uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels,
                     bool use_address_map, bool use_fast_reader, bool untilize_out, bool has_bias = false, bool fuse_relu = false, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     TT_ASSERT(b.get_layout() == Layout::TILE); // Weights should already be formatted
-    auto padded_a_shape = Shape({a.get_legacy_shape()[0], a.get_legacy_shape()[1], a.get_legacy_shape()[2], round_up(a.get_legacy_shape()[3], 16)});
-    FormatParams input_a_format_params = {.pad_shape=padded_a_shape, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
+    auto padded_a_shape = Shape(std::vector<uint32_t>{a.get_legacy_shape()[0], a.get_legacy_shape()[1], a.get_legacy_shape()[2], round_up(a.get_legacy_shape()[3], 16)});
+    FormatParams input_a_format_params = {.pad_shape=padded_a_shape.value, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
     FormatParams input_b_format_params = {.pad_shape=b.get_legacy_shape(), .pad_value=0.0, .target_layout=Layout::TILE};
     FormatParams input_bias_format_params = {};
     if (has_bias) {
@@ -1416,7 +1417,7 @@ void Conv::validate(const std::vector<Tensor>& input_tensors, const std::vector<
     // TODO: ...
 }
 
-std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt_metal::Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     uint32_t conv_activation_h = input_tensor_a.get_legacy_shape()[1];
     uint32_t conv_activation_w = input_tensor_a.get_legacy_shape()[2];
@@ -1435,8 +1436,8 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_
         // pad the output channels to TILE_WIDTH as conv writer kernel does not remove padding for tile
         // TODO (nshanker): specify padding explicitly here with "Padding" object and add unit test
         auto output_channels = round_up(this->output_channels, TILE_WIDTH);
-        Shape output_tensor_shape = {1, conv_output_h, conv_output_w, output_channels};
-        return {output_tensor_shape};
+        Shape output_tensor_shape = Shape(std::vector<uint32_t>{1, conv_output_h, conv_output_w, output_channels});
+        return {output_tensor_shape.value};
     } else {
         // Tiled output shape is padded shape. Padded to tile shape.
         auto shape_w = conv_output_h*conv_output_w;
@@ -1444,8 +1445,8 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_
         auto padded_shape_w = round_up(shape_w, TILE_HEIGHT);
         auto padded_shape_c = round_up(this->output_channels, TILE_WIDTH);
         auto output_padding = Padding({{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Any);
-        auto output_tensor_shape = Shape({1, 1, padded_shape_w, padded_shape_c}, output_padding);
-        return {output_tensor_shape};
+        auto output_tensor_shape = Shape(tt::tt_metal::Shape({1, 1, padded_shape_w, padded_shape_c}, output_padding));
+        return {output_tensor_shape.value};
     }
 }
 
