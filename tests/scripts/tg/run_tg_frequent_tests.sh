@@ -9,6 +9,7 @@ run_tg_tests() {
   pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_attention_galaxy.py --timeout=480 ; fail+=$?
   pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_decoder_galaxy.py --timeout=600 ; fail+=$?
   pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_model_galaxy_ci.py --timeout=800 ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/test_all_gather_TG_post_commit.py --timeout=300 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_frequent_tests failed"
