@@ -340,27 +340,27 @@ void build_and_run_autonomous_stream_test(
     program.allocate_circular_buffers();
 
     uint32_t sender_stream_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, sender_stream_buffer_cb)->address();
+        program.get_circular_buffer(sender_stream_buffer_cb)->address();
     uint32_t first_relay_stream_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, first_relay_stream_buffer_cb)->address();
+        program.get_circular_buffer(first_relay_stream_buffer_cb)->address();
     uint32_t second_relay_stream_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, second_relay_stream_buffer_cb)->address();
+        program.get_circular_buffer(second_relay_stream_buffer_cb)->address();
     uint32_t receiver_stream_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, receiver_stream_buffer_cb)->address();
+        program.get_circular_buffer(receiver_stream_buffer_cb)->address();
     uint32_t sender_stream_tile_header_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, sender_stream_tile_header_buffer_cb)->address();
+        program.get_circular_buffer(sender_stream_tile_header_buffer_cb)->address();
     uint32_t first_relay_stream_tile_header_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, first_relay_stream_tile_header_buffer_cb)->address();
+        program.get_circular_buffer(first_relay_stream_tile_header_buffer_cb)->address();
     uint32_t second_relay_stream_tile_header_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, second_relay_stream_tile_header_buffer_cb)->address();
+        program.get_circular_buffer(second_relay_stream_tile_header_buffer_cb)->address();
     uint32_t receiver_stream_tile_header_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, receiver_stream_tile_header_buffer_cb)->address();
+        program.get_circular_buffer(receiver_stream_tile_header_buffer_cb)->address();
     uint32_t first_relay_stream_overlay_blob_addr =
-        tt_metal::detail::GetCircularBuffer(program, first_relay_stream_overlay_blob_cb)->address();
+        program.get_circular_buffer(first_relay_stream_overlay_blob_cb)->address();
     uint32_t second_relay_stream_overlay_blob_addr =
-        tt_metal::detail::GetCircularBuffer(program, second_relay_stream_overlay_blob_cb)->address();
+        program.get_circular_buffer(second_relay_stream_overlay_blob_cb)->address();
 
-    uint32_t receiver_cb_address = tt_metal::detail::GetCircularBuffer(program, receiver_cb)->address();
+    uint32_t receiver_cb_address = program.get_circular_buffer(receiver_cb)->address();
     log_trace(tt::LogTest, "receiver_cb_address: {}", receiver_cb_address);
 
     TT_ASSERT(sender_stream_buffer_size_bytes % page_size_plus_header == 0);

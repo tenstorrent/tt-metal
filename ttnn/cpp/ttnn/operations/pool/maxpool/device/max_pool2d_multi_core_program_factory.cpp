@@ -348,7 +348,7 @@ MaxPoolNew::MultiCore::cached_program_t MaxPoolNew::MultiCore::create(const oper
     auto reader_indices_on_device =
         sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, is_block_sharded, input.device());
 
-    tt::tt_metal::detail::AddConfigBuffer(program, reader_indices_on_device.device_buffer());
+    program.add_config_buffer(reader_indices_on_device.device_buffer());
 
     auto in_n = sliding_window_config.batch_size_;
     auto in_h = sliding_window_config.input_hw_.first;

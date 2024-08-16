@@ -134,7 +134,7 @@ bool verify_results(
     uint32_t common_arg_incr_val = are_args_incremented ? 100 : 0;
 
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        const auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
+        const auto kernel = program.get_kernel(kernel_id);
         auto rt_args_base_addr = get_runtime_arg_addr(kernel->processor(), false);
 
         // Verify Unique RT Args (per core)

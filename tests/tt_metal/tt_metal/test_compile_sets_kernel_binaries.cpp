@@ -10,11 +10,11 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/llrt/tt_memory.h"
 #include "tt_metal/llrt/llrt.hpp"
-#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "llrt/hal.hpp"
+#include "tt_metal/impl/program/kernel_cache.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -141,9 +141,9 @@ int main(int argc, char **argv) {
             TT_FATAL(
                 kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
                 kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value());
-            auto compute_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-            auto riscv0_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-            auto riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+            auto compute_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
+            auto riscv0_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
+            auto riscv1_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
 
             // Run iteration to get golden
             uint32_t mask = device->build_key();
@@ -164,7 +164,7 @@ int main(int argc, char **argv) {
                     std::filesystem::remove_all(jit_build_get_kernel_compile_outpath(build_key) + kernel_name);
                 }
             }
-            tt_metal::detail::ClearKernelCache();
+            tt_metal::ClearKernelCache();
             for (auto& program : programs) {
                 program.invalidate_compile();
             }
@@ -179,9 +179,9 @@ int main(int argc, char **argv) {
                         tt_metal::detail::CompileProgram(device, program);
                         uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
                         const KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
-                        auto compute_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-                        auto riscv0_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-                        auto riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+                        auto compute_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
+                        auto riscv0_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
+                        auto riscv1_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
                         TT_FATAL(compute_kernel->binaries(mask) == compute_binaries.at(mask));
                         TT_FATAL(riscv0_kernel->binaries(mask) == brisc_binaries.at(mask));
                         TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask));

@@ -26,13 +26,6 @@ class Device;
 class Program;
 class JitBuildOptions;
 class CircularBufferConfig;
-namespace detail{
-    void ValidateCircularBufferRegion(const Program &program, const Device *device);
-    KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
-    std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
-    std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
-    void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
-}
 
 typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
 
@@ -102,6 +95,7 @@ class Program {
     KernelGroup * kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index);
     std::vector<KernelGroup>& get_kernel_groups(uint32_t programmable_core_type_index);
     inline void add_buffer(std::shared_ptr<Buffer> buf) { owned_buffer_pool.push_back(buf); }
+    void add_config_buffer(std::shared_ptr<Buffer> config_buffer);
     inline void release_buffers() { owned_buffer_pool = {}; }
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
 
@@ -132,13 +126,16 @@ class Program {
 
     void invalidate_compile();
 
+    // Ensures that statically allocated circular buffers do not grow into L1 buffer space
+    void validate_circular_buffer_region(const Device *device) const;
     void invalidate_circular_buffer_allocation();
-
     void allocate_circular_buffers();
 
     bool is_finalized() const { return this->finalized_; }
     void finalize();
+    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType &core_type);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
+    std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void capture_multi_device_dependencies() { capture_multi_device_dependencies_ = true; }
     bool has_multi_device_dependencies() { return capture_multi_device_dependencies_; }
@@ -217,25 +214,12 @@ class Program {
     std::vector<uint32_t> program_config_sizes_;
     bool capture_multi_device_dependencies_ = false;
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
-    friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
-    friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
-
-    friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
-    friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
-    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType &core_type);
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
-    std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
-
-    friend void detail::AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
-    void add_config_buffer(std::shared_ptr<Buffer> config_buffer);
-
-    // Ensures that statically allocated circular buffers do not grow into L1 buffer space
-    void validate_circular_buffer_region(const Device *device) const;
 
     void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 

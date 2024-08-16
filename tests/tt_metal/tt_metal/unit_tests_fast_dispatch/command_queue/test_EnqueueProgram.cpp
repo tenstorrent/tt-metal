@@ -601,7 +601,7 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
         default: TT_THROW("Unsupported {} processor in test.", riscv);
     }
 
-    const auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id);
+    const auto kernel = program.get_kernel(kernel_id);
 
     // Unique Runtime Args.
     std::vector<uint32_t> unique_runtime_args;

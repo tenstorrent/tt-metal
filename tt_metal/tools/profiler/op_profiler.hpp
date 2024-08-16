@@ -154,7 +154,7 @@ static inline json get_kernels_json(const Program& program) {
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id).get();
+        auto kernel = program.get_kernel(kernel_id).get();
         if (kernel->processor() == RISCV::COMPUTE) {
             ComputeKernel* computeKernel = static_cast<ComputeKernel*>(kernel);
             MathFidelity mathFidelity = std::get<ComputeConfig>(computeKernel->config()).math_fidelity;

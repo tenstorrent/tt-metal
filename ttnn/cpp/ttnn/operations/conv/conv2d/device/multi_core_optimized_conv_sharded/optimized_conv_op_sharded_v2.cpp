@@ -1775,7 +1775,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         conv_reader_indices_tensor, parallel_config, is_block_sharded, a.device());
 
     // add config tensor to program
-    tt::tt_metal::detail::AddConfigBuffer(program, conv_reader_indices_tensor.device_buffer());
+    program.add_config_buffer(conv_reader_indices_tensor.device_buffer());
     return multi_core_optimized_conv_sharded_v2_impl(
         program,
         a,

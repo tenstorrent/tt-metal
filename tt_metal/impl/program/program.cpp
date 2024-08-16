@@ -6,7 +6,7 @@
 
 #include "common/executor.hpp"
 #include "tools/profiler/profiler.hpp"
-#include "tt_metal/detail/kernel_cache.hpp"
+#include "tt_metal/impl/program/kernel_cache.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
@@ -77,27 +77,6 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &
 }
 }  // namespace
 namespace detail {
-
-KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type) {
-    return program.add_kernel(kernel, core_type);
-}
-
-std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id) {
-    return program.get_kernel(kernel_id);
-}
-
-std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id) {
-    return program.get_circular_buffer(id);
-}
-
-// Checks that circular buffers do not grow into L1 buffer space
-void ValidateCircularBufferRegion(const Program &program, const Device *device) {
-    program.validate_circular_buffer_region(device);
-}
-
-void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer) {
-    program.add_config_buffer(config_buffer);
-}
 
 void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
 
@@ -489,6 +468,7 @@ void Program::allocate_circular_buffers() {
     this->local_circular_buffer_allocation_needed_ = false;
 }
 
+// Checks that circular buffers do not grow into L1 buffer space
 void Program::validate_circular_buffer_region(const Device *device) const {
     ZoneScoped;
 
@@ -784,7 +764,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
             max_rtas[dispatch_class] = 0;
             auto& optional_id = kg.kernel_ids[dispatch_class];
             if (optional_id) {
-                auto kernel = detail::GetKernel(*this, optional_id.value());
+                auto kernel = this->get_kernel(optional_id.value());
                 for (const CoreRange &core_range : kg.core_ranges.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -802,7 +782,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
             auto& optional_id = kg.kernel_ids[dispatch_class];
             kg.rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
             if (optional_id) {
-                auto kernel = detail::GetKernel(*this, optional_id.value());
+                auto kernel = this->get_kernel(optional_id.value());
                 kernel->set_runtime_args_count(kg.core_ranges, max_rtas[dispatch_class]);
                 kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset = base_offset + offset;
                 offset += max_rtas[dispatch_class] * sizeof(uint32_t);
@@ -821,7 +801,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
     }
     // Find the max # common RTAs across all kernels for each dispatch class
     for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(*this, kernel_id);
+        auto kernel = this->get_kernel(kernel_id);
         // TODO: kernels should be stored by programmable core type
         if (core_type == kernel->get_kernel_core_type() &&
             (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) == kernel->is_idle_eth()) {
@@ -844,7 +824,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
 
     // Set the runtime_args_data sizing info based on the shared max
     for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(*this, kernel_id);
+        auto kernel = this->get_kernel(kernel_id);
         // TODO: as above, fix when kernels are stored by programmable core type
         if (core_type == kernel->get_kernel_core_type() &&
             (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) == kernel->is_idle_eth()) {
@@ -1002,16 +982,16 @@ void Program::compile(Device *device, bool fd_bootloader_mode) {
                     bool cache_hit = true;
                     bool path_exists = std::filesystem::exists(build_options.path);
                     if (enable_persistent_kernel_cache && path_exists) {
-                        if (not detail::HashLookup::inst().exists(kernel_hash)) {
-                            detail::HashLookup::inst().add(kernel_hash);
-                            detail::HashLookup::inst().add_generated_bin(kernel_hash);
+                        if (not HashLookup::inst().exists(kernel_hash)) {
+                            HashLookup::inst().add(kernel_hash);
+                            HashLookup::inst().add_generated_bin(kernel_hash);
                         }
-                    } else if (detail::HashLookup::inst().add(kernel_hash)) {
+                    } else if (HashLookup::inst().add(kernel_hash)) {
                         GenerateBinaries(device, build_options, kernel);
                         cache_hit = false;
-                        detail::HashLookup::inst().add_generated_bin(kernel_hash);
+                        HashLookup::inst().add_generated_bin(kernel_hash);
                     }
-                    while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
+                    while (not HashLookup::inst().is_bin_generated(kernel_hash)) {
                     }
                     if (detail::CompilationReporter::enabled()) {
                         detail::CompilationReporter::inst().add_kernel_compile_stats(

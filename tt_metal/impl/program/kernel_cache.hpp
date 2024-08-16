@@ -4,7 +4,7 @@
 
 #pragma once
 
-namespace tt::tt_metal::detail
+namespace tt::tt_metal
 {
     struct HashLookup {
     static HashLookup& inst() {
@@ -56,6 +56,6 @@ namespace tt::tt_metal::detail
      */
     inline void ClearKernelCache()
     {
-        detail::HashLookup::inst().clear();
+        tt_metal::HashLookup::inst().clear();
     }
 }

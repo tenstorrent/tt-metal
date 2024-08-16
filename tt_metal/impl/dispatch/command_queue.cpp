@@ -566,7 +566,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                             for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
                                 auto& optional_id = kg.kernel_ids[dispatch_class];
                                 if (optional_id) {
-                                    auto kernel = detail::GetKernel(program, optional_id.value());
+                                    auto kernel = program.get_kernel(optional_id.value());
                                     if (!kernel->cores_with_runtime_args().empty()) {
                                         const auto& runtime_args_data = kernel->runtime_args(core_coord);
                                         unique_rt_args_data.back().emplace_back(kernel->runtime_args_data(core_coord));
@@ -614,7 +614,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
             uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
             for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-                auto kernel = detail::GetKernel(program, kernel_id);
+                auto kernel = program.get_kernel(kernel_id);
                 if (kernel->get_kernel_core_type() != core_type)
                     continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
                 if (kernel->dispatch_class() != dispatch_class)
@@ -2765,7 +2765,7 @@ void EnqueueProgramImpl(
             if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
                 detail::CompileProgram(device, program);
                 program.get().allocate_circular_buffers();
-                detail::ValidateCircularBufferRegion(program, device);
+                program.get().validate_circular_buffer_region(device);
                 cq.hw_command_queue().enqueue_program(program, blocking);
                 // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
                 // leaks on device.
@@ -2773,7 +2773,7 @@ void EnqueueProgramImpl(
             } else if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
                 detail::CompileProgram(device, *program);
                 program->allocate_circular_buffers();
-                detail::ValidateCircularBufferRegion(*program, device);
+                program->validate_circular_buffer_region(device);
                 cq.hw_command_queue().enqueue_program(*program, blocking);
                 // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
                 // leaks on device.
