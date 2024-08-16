@@ -32,7 +32,7 @@ void kernel_main()
                                    // noc_async_write_flushed() can be faster because it waits
                                    // until the write request is sent. In that case, you have to
                                    // use noc_async_write_barrier() at least once at the end of
-                                   // data move kernel to make sure all write is done.
+                                   // data movement kernel to make sure all writes are done.
         // Mark the tile as consumed
         cb_pop_front(cb_out0, 1);
     }
