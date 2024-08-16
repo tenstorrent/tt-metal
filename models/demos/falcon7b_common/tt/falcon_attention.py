@@ -800,12 +800,12 @@ class TtFalconAttentionDecode(nn.Module):
         elif is_wormhole_b0():
             for i, device in enumerate(self.devices):
                 attn_weights.append(
-                    ttnn.experimental.operations.primary.transformers.attn_matmul(
+                    ttnn.experimental.attn_matmul(
                         query_layer[i],
                         key_layer_transposed[i],
                         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                        output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                        output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                        memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                        dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                     )
                 )
                 query_layer[i].deallocate()
@@ -813,12 +813,12 @@ class TtFalconAttentionDecode(nn.Module):
         else:
             for i, device in enumerate(self.devices):
                 attn_weights.append(
-                    ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+                    ttnn.experimental.group_attn_matmul(
                         query_layer[i],
                         key_layer_transposed[i],
                         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                        output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                        output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                        memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                        dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                     )
                 )
                 query_layer[i].deallocate()
@@ -952,22 +952,22 @@ class TtFalconAttentionDecode(nn.Module):
                 # TODO: switch to group_attn_matmul once multiple q heads is supported (issue #5318)
                 if is_wormhole_b0():
                     attn_output.append(
-                        ttnn.experimental.operations.primary.transformers.attn_matmul(
+                        ttnn.experimental.attn_matmul(
                             attn_weights[i],
                             value_layer[i],
                             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                            output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                            output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                            memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                            dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                         )
                     )
                 else:
                     attn_output.append(
-                        ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+                        ttnn.experimental.group_attn_matmul(
                             attn_weights[i],
                             value_layer[i],
                             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                            output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                            output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+                            memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+                            dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                         )
                     )
                 attn_weights[i].deallocate(True)
