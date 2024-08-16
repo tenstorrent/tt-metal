@@ -133,17 +133,17 @@ def run_all_gather_matmul_on_t3000_impl(
             logger.error(f"output mismatch for tensor {i}")
         assert eq, f"{i} FAILED: {output}"
 
-    print("Checking outputs for All Gather Matmul (Datacopy)")
-    for i, t in enumerate(ttnn.get_device_tensors(tt_datacopy_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-        if input_dtype == ttl.tensor.DataType.BFLOAT16:
-            eq, output = comp_equal(tt_output_tensor, input_tensor)
-        else:
-            eq, output = comp_pcc(tt_output_tensor, input_tensor)
-        logger.info(f"Output {i}: {output}")
-        if not eq:
-            logger.error(f"output mismatch for tensor {i}")
-        assert eq, f"{i} FAILED: {output}"
+    # print("Checking outputs for All Gather Matmul (Datacopy)")
+    # for i, t in enumerate(ttnn.get_device_tensors(tt_datacopy_out_tensor)):
+    #     tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    #     if input_dtype == ttl.tensor.DataType.BFLOAT16:
+    #         eq, output = comp_equal(tt_output_tensor, input_tensor)
+    #     else:
+    #         eq, output = comp_pcc(tt_output_tensor, input_tensor)
+    #     logger.info(f"Output {i}: {output}")
+    #     if not eq:
+    #         logger.error(f"output mismatch for tensor {i}")
+    #     assert eq, f"{i} FAILED: {output}"
 
     print("Checking outputs for Matmul")
     for i, t in enumerate(ttnn.get_device_tensors(tt_matmul_output)):
