@@ -1,0 +1,69 @@
+name: "[post-commit] Python wheel build and test"
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+# TODO: RK - need to change this to every push later once
+# we go public
+jobs:
+  build-eager-package:
+    strategy:
+      matrix:
+        os: [ubuntu-20.04, ubuntu-22.04]
+        arch: [grayskull, wormhole_b0]
+    uses: ./.github/workflows/eager-package.yaml
+    with:
+      environment: dev
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
+  test-eager-package-host:
+    needs: build-eager-package
+    strategy:
+      matrix:
+        os: [ubuntu-20.04, ubuntu-22.04]
+        arch: [grayskull, wormhole_b0]
+    runs-on: ${{ matrix.os }}
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/install-metal-deps
+        with:
+          os: ${{ matrix.os }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+      - name: Set up end-to-end tests environment
+        run: ./tests/scripts/set_up_end_to_end_tests_env.sh
+      - name: Activate env and run release tests - host
+        shell: bash
+        run: |
+          source tests/end_to_end_tests/env/bin/activate
+          cd tests/end_to_end_tests
+          pytest -c conftest.py . -m eager_host_side
+  test-eager-package-silicon:
+    needs: build-eager-package
+    strategy:
+      matrix:
+        os: [ubuntu-20.04]
+        runner-hw-info: [
+          {arch: grayskull},
+          {arch: wormhole_b0},
+        ]
+    runs-on: ["Linux", "${{ matrix.runner-hw-info.arch }}"]
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: eager-dist-${{ matrix.os }}-${{ matrix.runner-hw-info.arch }}
+      - name: Set up end-to-end tests environment
+        run: ./tests/scripts/set_up_end_to_end_tests_env.sh
+      - name: Activate env and run release tests - silicon
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          source tests/end_to_end_tests/env/bin/activate
+          python3 -m ttnn.examples.usage.run_op_on_device
+          cd tests/end_to_end_tests
+          pytest -c conftest.py . -m eager_package_silicon
