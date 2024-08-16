@@ -12,7 +12,7 @@
 
 using namespace tt;
 namespace ttnn {
-namespace operations {
+namespace operations::conv {
 using sliding_window::SlidingWindowConfig;
 using sliding_window::ParallelConfig;
 
@@ -169,7 +169,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
 
-tt::tt_metal::OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
+OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
     const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw) {
     TT_ASSERT(conv_output_mem_config.shard_spec.has_value());
     const auto& shard_spec = conv_output_mem_config.shard_spec.value();
@@ -209,9 +209,9 @@ std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
     return {subblock_h, subblock_w};
 }
 
-tt::tt_metal::OptimizedConvBlockConfig determine_per_core_conv_block_config(
+OptimizedConvBlockConfig determine_per_core_conv_block_config(
     const ParallelConfig& parallel_config,
-    const tt::tt_metal::OptimizedConvParallelizationConfig& conv_op_parallel_config,
+    const OptimizedConvParallelizationConfig& conv_op_parallel_config,
     uint32_t padded_in_channels,
     uint32_t act_block_h_override,
     uint32_t window_w,
@@ -542,8 +542,8 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 }
 
 ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
-    tt::tt_metal::OptimizedConvParallelizationConfig conv_parallelization_config,
-    tt::tt_metal::OptimizedConvBlockConfig conv_blocking_config,
+    OptimizedConvParallelizationConfig conv_parallelization_config,
+    OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
     string activation,
     bool transpose_mcast,
@@ -709,7 +709,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         // call conv micro op
         std::vector<int> conv_params = {
             (int)kernel_size[0], (int)kernel_size[1], (int)stride[0], (int)stride[1], (int)padding[0], (int)padding[1], (int)groups};
-        auto conv_output = tt::tt_metal::optimized_conv_new(
+        auto conv_output = optimized_conv_new(
             halo_output,
             weight_tensor_on_device,
             bias_tensor_on_device,

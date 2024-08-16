@@ -11,7 +11,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/decorators.hpp"
 
