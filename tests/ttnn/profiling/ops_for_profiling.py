@@ -1567,10 +1567,6 @@ def primary_moreh_norm_3(x):
     tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=3)
 
 
-def clone(x):
-    ttnn.clone(x, ttnn.get_memory_config(x), dtype=x.dtype)
-
-
 def split_dim_3(x):
     ttnn.split(x, 2, 3)
 
@@ -1936,7 +1932,7 @@ all_unary_ops = [
         "name": "ttnn.slice",
     },
     {
-        "op": clone,
+        "op": ttnn.clone,
         "name": "ttnn.clone",
     },
     {
