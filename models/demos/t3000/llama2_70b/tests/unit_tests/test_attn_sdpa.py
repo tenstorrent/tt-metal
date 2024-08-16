@@ -84,10 +84,11 @@ class TtLlamaSDPA(torch.nn.Module):
         # attn_mask = [seq_len, n_heads, batch,cache_len + seqlen]
 
         keys = ttnn.transpose(keys, -1, -2)  #  [batch, num_kv_heads, dhead, cache_len + seqlen]
-        attn = tt_lib.operations.primary.transformers.group_attn_matmul(
+        attn = ttnn.experimental.group_attn_matmul(
             xq,
             keys,
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
             # output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
         )  # seqlen, n_heads, batch, cache_len + seqlen
@@ -105,10 +106,11 @@ class TtLlamaSDPA(torch.nn.Module):
         scale = 1 / math.sqrt(self.head_dim)
         attn = self.scale_mask_softmax_decomposed(attn, scale, attn_mask)
 
-        attn_output = tt_lib.operations.primary.transformers.group_attn_matmul(
+        attn_output = ttnn.experimental.group_attn_matmul(
             attn,
             values,
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
             # output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
         )  # seqlen, n_heads, batch, dhead

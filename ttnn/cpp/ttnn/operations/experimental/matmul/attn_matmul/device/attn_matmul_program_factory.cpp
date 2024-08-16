@@ -1,30 +1,27 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
+#include "attn_matmul_device_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+
+namespace ttnn::operations::experimental::matmul {
 
 using namespace tt::constants;
 using namespace tt;
 
-namespace tt {
-namespace operations {
-namespace primary {
-namespace transformers {
-
-
 operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config) {
 
-    tt_metal::Program program{};
+    tt::tt_metal::Program program{};
 
     const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    tt::tt_metal::Device *device = a.device();
 
     MathFidelity math_fidelity;
     bool math_approx_mode;
@@ -51,14 +48,14 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
     }, compute_kernel_config);
 
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.get_dtype());
     tt::DataFormat interm_data_format = fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    uint32_t interm_single_tile_size = tt_metal::detail::TileSize(interm_data_format);
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
+    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    uint32_t in0_single_tile_size = tt::tt_metal::detail::TileSize(in0_data_format);
+    uint32_t in1_single_tile_size = tt::tt_metal::detail::TileSize(in1_data_format);
+    uint32_t interm_single_tile_size = tt::tt_metal::detail::TileSize(interm_data_format);
+    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
 
     if (in0_data_format == tt::DataFormat::Float32 or in1_data_format == tt::DataFormat::Float32 or output_data_format == tt::DataFormat::Float32) {
         TT_ASSERT(fp32_dest_acc_en == true, "when inputs/output are in fp32 format, fp32_dest_acc_en must be set");
@@ -73,10 +70,10 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     log_debug("interm_data_format: {}", interm_data_format);
     log_debug("output_data_format: {}", output_data_format);
 
-    tt_metal::Buffer *src0_buffer = a.buffer();
-    tt_metal::Buffer *src1_buffer = b.buffer();
+    tt::tt_metal::Buffer *src0_buffer = a.buffer();
+    tt::tt_metal::Buffer *src1_buffer = b.buffer();
 
-    Shape cshape = output.get_legacy_shape();
+    auto cshape = output.get_legacy_shape();
 
     // A block of work is one MtNt
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -86,7 +83,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     auto all_device_cores = CoreRange({0, 0}, {a.device()->compute_with_storage_grid_size().x - 1, a.device()->compute_with_storage_grid_size().y - 1});
     auto total_num_cores = a.device()->compute_with_storage_grid_size().x * a.device()->compute_with_storage_grid_size().y;
 
-    tt_metal::Buffer *dst_buffer = output.buffer();
+    tt::tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // C = torch.matmul(A.transpose(0, 2) * B).transpose(0, 2)
@@ -114,41 +111,41 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     uint32_t src1_addr = src1_buffer->address();
     uint32_t dst_addr = dst_buffer->address();
 
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = tt::CB::c_in0;
     uint32_t cb0_num_input_tiles = Kt * 2;
-    tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(cb0_num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
+    tt::tt_metal::CircularBufferConfig src0_cb_config = tt::tt_metal::CircularBufferConfig(cb0_num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
 		.set_page_size(src0_cb_index, in0_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
 
-    uint32_t src1_cb_index = CB::c_in1;
+    uint32_t src1_cb_index = tt::CB::c_in1;
     uint32_t cb1_num_input_tiles = 2;
-    tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(cb1_num_input_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
+    tt::tt_metal::CircularBufferConfig cb_src1_config = tt::tt_metal::CircularBufferConfig(cb1_num_input_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
 		.set_page_size(src1_cb_index, in1_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
-    uint32_t cb_intermed0_index = CB::c_intermed0;
-    tt_metal::CircularBufferConfig cb_interm0_config = tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed0_index, interm_data_format}})
+    uint32_t cb_intermed0_index = tt::CB::c_intermed0;
+    tt::tt_metal::CircularBufferConfig cb_interm0_config = tt::tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed0_index, interm_data_format}})
 		.set_page_size(cb_intermed0_index, interm_single_tile_size);
-    auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
+    auto cb_interm0 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
 
-    uint32_t cb_intermed1_index = CB::c_intermed1;
-    tt_metal::CircularBufferConfig cb_interm1_config = tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed1_index, interm_data_format}})
+    uint32_t cb_intermed1_index = tt::CB::c_intermed1;
+    tt::tt_metal::CircularBufferConfig cb_interm1_config = tt::tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed1_index, interm_data_format}})
 		.set_page_size(cb_intermed1_index, interm_single_tile_size);
-    auto cb_interm1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm1_config);
+    auto cb_interm1 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm1_config);
 
-    uint32_t cb_intermed2_index = CB::c_intermed2;
-    tt_metal::CircularBufferConfig cb_interm2_config = tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed2_index, interm_data_format}})
+    uint32_t cb_intermed2_index = tt::CB::c_intermed2;
+    tt::tt_metal::CircularBufferConfig cb_interm2_config = tt::tt_metal::CircularBufferConfig(1 * interm_single_tile_size, {{cb_intermed2_index, interm_data_format}})
 		.set_page_size(cb_intermed2_index, interm_single_tile_size);
-    auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
+    auto cb_interm2 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
 
-    uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
+    uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
     uint32_t num_output_tiles = 2;
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
+    tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
 		.set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
+    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
 
-    const bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    const bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    const bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    const bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t) src0_is_dram,
         (uint32_t) src1_is_dram,
@@ -156,33 +153,33 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         (uint32_t) (fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32)
     };
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         (std::uint32_t) dst_is_dram
     };
 
-    auto reader_id = tt_metal::CreateKernel(
+    auto reader_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/dataflow/reader_transformer_attn_matmul.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/kernels/dataflow/reader_transformer_attn_matmul.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    auto writer_id = tt_metal::CreateKernel(
+    auto writer_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_args = {
         (uint32_t) transpose_hw_bool, // transpose_hw for matmul_init
     }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
-    auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
+    auto eltwise_binary_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/compute/transformer_attn_matmul.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/kernels/compute/transformer_attn_matmul.cpp",
         all_device_cores,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args}
+        tt::tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args}
     );
 
     uint32_t num_output_blocks_per_core;
@@ -194,13 +191,13 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_output_blocks_per_core = num_output_blocks_per_core_group_2;
         } else {
-            tt_metal::SetRuntimeArgs(program, reader_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
-            tt_metal::SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {0, 0, 0, 0});
-            tt_metal::SetRuntimeArgs(program, writer_id, core, {0, 0, 0});
+            tt::tt_metal::SetRuntimeArgs(program, reader_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+            tt::tt_metal::SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {0, 0, 0, 0});
+            tt::tt_metal::SetRuntimeArgs(program, writer_id, core, {0, 0, 0});
             continue;
         }
 
-        tt_metal::SetRuntimeArgs(
+        tt::tt_metal::SetRuntimeArgs(
             program, reader_id, core,
             {
                 src0_addr,
@@ -218,7 +215,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         );
 
 
-        tt_metal::SetRuntimeArgs(
+        tt::tt_metal::SetRuntimeArgs(
             program,
             eltwise_binary_kernel_id,
             core,
@@ -230,7 +227,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
             }
         );
 
-        tt_metal::SetRuntimeArgs(
+        tt::tt_metal::SetRuntimeArgs(
             program,
             writer_id,
             core,
@@ -259,9 +256,9 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
     ) {
-        auto transpose_hw = static_cast<const AttnMatmul*>(operation)->transpose_hw;
-        auto num_tokens = static_cast<const AttnMatmul*>(operation)->num_tokens;
-        auto compute_with_storage_grid_size = static_cast<const AttnMatmul*>(operation)->compute_with_storage_grid_size;
+        auto transpose_hw = static_cast<const AttnMatmulDeviceOperation *>(operation)->transpose_hw;
+        auto num_tokens = static_cast<const AttnMatmulDeviceOperation *>(operation)->num_tokens;
+        auto compute_with_storage_grid_size = static_cast<const AttnMatmulDeviceOperation *>(operation)->compute_with_storage_grid_size;
 
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -309,13 +306,13 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
             } else if (core_group_2.core_coord_in_core_ranges(core)) {
                 num_output_blocks_per_core = num_output_blocks_per_core_group_2;
             } else {
-                tt_metal::SetRuntimeArgs(program, reader_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
-                tt_metal::SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {0, 0, 0, 0});
-                tt_metal::SetRuntimeArgs(program, writer_id, core, {0, 0, 0});
+                tt::tt_metal::SetRuntimeArgs(program, reader_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+                tt::tt_metal::SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {0, 0, 0, 0});
+                tt::tt_metal::SetRuntimeArgs(program, writer_id, core, {0, 0, 0});
                 continue;
             }
 
-            tt_metal::SetRuntimeArgs(
+            tt::tt_metal::SetRuntimeArgs(
                 program, reader_id, core,
                 {
                     src_dram_buffer_a->address(),
@@ -333,7 +330,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
             );
 
 
-            tt_metal::SetRuntimeArgs(
+            tt::tt_metal::SetRuntimeArgs(
                 program,
                 eltwise_binary_kernel_id,
                 core,
@@ -345,7 +342,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
                 }
             );
 
-            tt_metal::SetRuntimeArgs(
+            tt::tt_metal::SetRuntimeArgs(
                 program,
                 writer_id,
                 core,
@@ -362,7 +359,4 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace transformers
-}  // namespace primary
-}  // namespace operations
-}  // namespace tt
+}  // ttnn::operations::experimental::transformer
