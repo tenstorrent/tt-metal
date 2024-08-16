@@ -5,6 +5,7 @@
 import pytest
 import torch
 import numpy
+import ttnn
 from ttnn.operations.conv.untilize_with_halo_config_generation_and_validation import (
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
     validate_input_padded_tensor_and_data_top_left_indices_and_pad_metadata,
@@ -25,7 +26,6 @@ from ttnn.operations.conv.tt_py_untilize_with_halo import (
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc, comp_pcc
 from tt_lib.utils import _nearest_y
-import tt_lib as ttl
 
 from loguru import logger
 
@@ -392,12 +392,12 @@ def test_generate_all_configs_and_references(
         ## for input_c < 32, always need to pad when not skipping untilize, so skip
         pytest.skip("Skipping first conv tests when untilize is skipped.")
 
-    memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
-    untilize_with_halp_input_tt_tensor = ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.BFLOAT16)
+    untilize_with_halp_input_tt_tensor = ttnn.Tensor(input_pyt_tensor, ttnn.bfloat16)
     if skip_untilize:
         ## no need to pad, just construct the tensor in RM
-        untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.to(ttl.tensor.Layout.ROW_MAJOR)
+        untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.to(ttnn.ROW_MAJOR_LAYOUT)
     else:
         ## pad to tile size first, then convert to TILE
         input_padded_to_tile_shape = [
@@ -408,7 +408,7 @@ def test_generate_all_configs_and_references(
         ]
         untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.pad(
             input_padded_to_tile_shape, (0, 0, 0, 0), 0
-        ).to(ttl.tensor.Layout.TILE)
+        ).to(ttnn.TILE_LAYOUT)
     ## move input to device
     untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.to(device, memory_config)
 
@@ -421,20 +421,20 @@ def test_generate_all_configs_and_references(
     if is_block_sharded:
         num_cores_c = num_cores_h
         assert input_padded_c % num_cores_c == 0
-        untilize_with_halp_input_tt_tensor = ttl.tensor.interleaved_to_sharded(
+        untilize_with_halp_input_tt_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
             untilize_with_halp_input_tt_tensor,
             grid_size,  ## need to pass in actual grid size for block sharded
             [input_size_to_shard_evenly // num_cores_nhw, input_padded_c // num_cores_c],
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttl.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.ShardOrientation.COL_MAJOR,
         )
     else:
-        untilize_with_halp_input_tt_tensor = ttl.tensor.interleaved_to_sharded(
+        untilize_with_halp_input_tt_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
             untilize_with_halp_input_tt_tensor,
             grid_size_binary,
             [input_size_to_shard_evenly // num_cores_nhw, input_padded_c],
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
 
     # Run forward
@@ -483,7 +483,7 @@ def test_generate_all_configs_and_references(
         for i in range(num_cores_nhw):
             for j in range(num_cores_c):
                 output_shard = torch.reshape(
-                    untilize_with_halo_output_tt_tensor.extract_shard(ttl.tensor.CoreCoord(i, j)).to_torch(),
+                    untilize_with_halo_output_tt_tensor.extract_shard(ttnn.CoreCoord(i, j)).to_torch(),
                     [max_out_shard_nsticks, shard_size_c],
                 )
                 golden_shard = golden_untilize_with_halo_output_pyt_tensor[

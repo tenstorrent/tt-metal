@@ -9,7 +9,7 @@ from loguru import logger
 
 import torch
 
-
+import ttnn
 from ttnn.operations.pool import (
     TTPyMaxPool,
     SlidingWindowOpParamsWithParallelConfig,
@@ -17,7 +17,6 @@ from ttnn.operations.pool import (
 from ttnn.operations.pool import max_pool2d_legacy as ttnn_max_pool2d_legacy
 
 
-import tt_lib as ttl
 from tt_lib.utils import _nearest_32
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0, skip_for_grayskull
@@ -67,7 +66,7 @@ def volume(shape):
     "nblocks",
     (1,),
 )
-@pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_run_max_pool(
     act_shape,
     kernel_size,
@@ -78,12 +77,12 @@ def test_run_max_pool(
     device,
     dtype,
 ):
-    # ttl.device.EnableMemoryReports()
-    if act_shape[0] >= 16 and dtype == ttl.tensor.DataType.BFLOAT16:
+    # ttnn.experimental.device.EnableMemoryReports()
+    if act_shape[0] >= 16 and dtype == ttnn.bfloat16:
         pytest.skip("Configuration does not fit in L1")
 
-    in_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
-    out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
+    in_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
 
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -105,9 +104,9 @@ def test_run_max_pool(
         logger.info("Current maxpool writer needs nchannels to be 64!")
         pytest.skip()
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        ttl.tensor.BufferType.DRAM if act_shape[0] > 8 else ttl.tensor.BufferType.L1,
+    interleaved_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.BufferType.DRAM if act_shape[0] > 8 else ttnn.BufferType.L1,
     )
     assert out_mem_config.is_sharded() and in_mem_config.is_sharded()
 
@@ -164,12 +163,12 @@ def test_run_max_pool(
     )
     pad_val = 0xF7FF
 
-    ttact = ttl.tensor.Tensor(
+    ttact = ttnn.Tensor(
         act_reshaped.flatten().tolist(),
         act_metal_shape,
         dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
+        ttnn.ROW_MAJOR_LAYOUT,
+    ).to(ttnn.TILE_LAYOUT)
     assert kernel_w == kernel_h and stride_w == stride_h and pad_w == pad_h and dilation_w == dilation_h
 
     max_pool_reader_patterns_cache = {}
@@ -182,7 +181,7 @@ def test_run_max_pool(
     ttact_sharded = max_pool.copy_input_to_device(ttact)
 
     out_padded = max_pool(ttact_sharded)
-    out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    out_padded = out_padded.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
 
     # Clear the cache maps
     # halo_reader_patterns_cache.clear()
@@ -213,7 +212,7 @@ def test_run_max_pool(
     # torch.save(golden_pytorch, "golden.pt")
 
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if dtype == ttnn.bfloat8_b:
         atol = 0.35
 
     allclose = torch.allclose(out_pytorch, golden_pytorch, atol=atol)
@@ -223,5 +222,5 @@ def test_run_max_pool(
     assert passing_pcc
     assert allclose
     assert isclose
-    if dtype == ttl.tensor.DataType.BFLOAT16:
+    if dtype == ttnn.bfloat16:
         assert isequal

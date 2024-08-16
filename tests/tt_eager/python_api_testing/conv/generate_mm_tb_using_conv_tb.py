@@ -5,7 +5,6 @@
 import os
 import yaml
 from tests.tt_eager.python_api_testing.conv.pytorch_conv_tb import ConvTestParameters, generate_conv_tb
-import tt_lib as ttl
 from tt_lib.utils import _nearest_32
 
 

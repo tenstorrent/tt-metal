@@ -6,7 +6,6 @@ import pytest
 import torch
 from loguru import logger
 
-import tt_lib as ttl
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc
 
@@ -16,15 +15,15 @@ TILE_WIDTH = 32
 
 def get_tensors(input_shape, output_shape, device):
     torch.manual_seed(2023)
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
+    npu_dtype = ttnn.bfloat16
     cpu_dtype = torch.bfloat16
-    npu_layout = ttl.tensor.Layout.TILE
+    npu_layout = ttnn.TILE_LAYOUT
 
     torch_input = torch.randint(-100, 100, input_shape, dtype=cpu_dtype)
     torch_output = torch.randint(-100, 100, output_shape, dtype=cpu_dtype)
 
-    tt_input = ttl.tensor.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-    tt_output = ttl.tensor.Tensor(torch_output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    tt_input = ttnn.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    tt_output = ttnn.Tensor(torch_output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
     return tt_input, tt_output, torch_input
 
@@ -73,7 +72,7 @@ def test_prod_dims(input_shape, dims, device):
 
     torch_output = torch.prod(torch_input, dims[0], True)
 
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_output_cpu = (
         ttnn.prod(tt_input, tt_output, dims=dims).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
     )
