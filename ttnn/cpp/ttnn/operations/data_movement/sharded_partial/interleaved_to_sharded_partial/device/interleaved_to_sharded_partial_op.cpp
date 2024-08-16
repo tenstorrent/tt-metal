@@ -6,7 +6,6 @@
 
 #include "tt_metal/host_api.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.hpp"
 
 namespace ttnn::operations::data_movement {

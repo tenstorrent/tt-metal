@@ -26,7 +26,6 @@ from ttnn.operations.conv.tt_py_untilize_with_halo import (
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc, comp_pcc
 from tt_lib.utils import _nearest_y
-
 from loguru import logger
 
 

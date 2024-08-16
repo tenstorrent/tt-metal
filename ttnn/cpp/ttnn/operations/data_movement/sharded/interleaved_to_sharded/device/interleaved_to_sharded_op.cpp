@@ -22,6 +22,9 @@ void InterleavedToShardedDeviceOperation::validate(const std::vector<Tensor>& in
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         TT_FATAL((*this->output_mem_config.shard_spec).shape[1] * input_tensor.element_size() % L1_ALIGNMENT == 0, "Shard page size must currently have L1 aligned page size");
     }
+    if (input_tensor.get_dtype() != this->output_dtype) {
+        TT_FATAL(input_tensor.get_layout() == Layout::TILE);
+    }
 }
 
 
@@ -34,7 +37,7 @@ std::vector<tt::tt_metal::Shape> InterleavedToShardedDeviceOperation::compute_ou
 std::vector<Tensor> InterleavedToShardedDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
+        *this, input_tensors, this->output_dtype, input_tensor.get_layout(), this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks InterleavedToShardedDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {

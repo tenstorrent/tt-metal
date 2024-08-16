@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::data_movement::detail {

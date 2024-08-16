@@ -28,14 +28,16 @@ void bind_interleaved_to_sharded(pybind11::module& module, const data_movement_s
                const std::array<uint32_t,2> & shard_shape,
                tt::tt_metal::TensorMemoryLayout shard_scheme,
                tt::tt_metal::ShardOrientation shard_orientation,
+               const std::optional<ttnn::DataType> & output_dtype,
                uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, grid, shard_shape, shard_scheme, shard_orientation);
+                return self(queue_id, input_tensor, grid, shard_shape, shard_scheme, shard_orientation, output_dtype);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("grid"),
             py::arg("shard_shape"),
             py::arg("shard_scheme"),
             py::arg("shard_orientation"),
+            py::arg("output_dtype") = std::nullopt,
             py::kw_only(),
             py::arg("queue_id") = 0,
 
@@ -44,11 +46,13 @@ void bind_interleaved_to_sharded(pybind11::module& module, const data_movement_s
             [](const data_movement_sharded_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const MemoryConfig & sharded_memory_config,
+               const std::optional<ttnn::DataType> & output_dtype,
                uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, sharded_memory_config);
+                return self(queue_id, input_tensor, sharded_memory_config, output_dtype);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("sharded_memory_config"),
+            py::arg("output_dtype") = std::nullopt,
             py::kw_only(),
             py::arg("queue_id") = 0,
 

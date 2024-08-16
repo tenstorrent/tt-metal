@@ -14,13 +14,15 @@ namespace ttnn::operations::data_movement{
 ttnn::Tensor InterleavedToShardedOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    const MemoryConfig& sharded_memory_config
+    const MemoryConfig& sharded_memory_config,
+    const std::optional<DataType> & data_type_arg
     ) {
 
 
     return operation::run(
             InterleavedToShardedDeviceOperation{
                 .output_mem_config = sharded_memory_config,
+                .output_dtype = data_type_arg.value_or(input_tensor.get_dtype())
                 },
             {input_tensor}).at(0);
 
@@ -33,7 +35,8 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
     const std::variant<CoreCoord, CoreRangeSet> grid,
     const std::array<uint32_t, 2> shard_shape,
     const TensorMemoryLayout shard_scheme,
-    const ShardOrientation shard_orientation
+    const ShardOrientation shard_orientation,
+    const std::optional<DataType> & data_type_arg
     ) {
 
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
@@ -70,6 +73,7 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
     return operation::run(
             InterleavedToShardedDeviceOperation{
                 .output_mem_config = sharded_mem_config,
+                .output_dtype = data_type_arg.value_or(input_tensor.get_dtype())
                 },
             {input_tensor}).at(0);
 
