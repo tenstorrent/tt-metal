@@ -10,7 +10,6 @@ from typing import Tuple
 import numpy as np
 import torch
 from torch import nn
-from ttnn import experimental as tt_lib
 import ttnn
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 from loguru import logger
@@ -228,7 +227,9 @@ def rms_decomp(x, norm_weight, eps):
     mean_squared_eps = ttnn.add(mean_squared, eps)
     rms = ttnn.pow(mean_squared_eps, 0.5)
     rms_recip = ttnn.reciprocal(rms)
-    normed_x = tt_lib.tensor.bcast(x, rms_recip, math_op=tt_lib.tensor.BcastOpMath.MUL, dim=tt_lib.tensor.BcastOpDim.W)
+    normed_x = ttnn.experimental.tensor.bcast(
+        x, rms_recip, math_op=ttnn.experimental.tensor.BcastOpMath.MUL, dim=ttnn.experimental.tensor.BcastOpDim.W
+    )
     norm_out = ttnn.mul(normed_x, norm_weight)
     return norm_out
 

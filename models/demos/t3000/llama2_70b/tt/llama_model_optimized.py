@@ -6,7 +6,6 @@ from loguru import logger
 from typing import List
 from tqdm import tqdm
 import torch
-from ttnn import experimental as tt_lib
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 
@@ -259,7 +258,7 @@ class TtLlamaModel_optimized:
                 self.hidden_size // self.num_devices,
             )
 
-            xs = tt_lib.tensor.interleaved_to_sharded(
+            xs = ttnn.experimental.tensor.interleaved_to_sharded(
                 xs, sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
             )
 
@@ -277,7 +276,7 @@ class TtLlamaModel_optimized:
             )
             rot_mats = ttnn.to_device(rot_mats, self.device_mesh)
 
-            rot_mats = tt_lib.tensor.interleaved_to_sharded(
+            rot_mats = ttnn.experimental.tensor.interleaved_to_sharded(
                 rot_mats, sharded_mem_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"]
             )
 
@@ -292,12 +291,12 @@ class TtLlamaModel_optimized:
 
     def __call__(
         self,
-        xs: List[tt_lib.tensor.Tensor],
-        rot_mats: List[tt_lib.tensor.Tensor],
+        xs: List[ttnn.Tensor],
+        rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[tt_lib.tensor.Tensor],
+        attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
         elif self.model_config["LLM_MODE"] == "decode":
@@ -307,11 +306,11 @@ class TtLlamaModel_optimized:
 
     def decode_forward(
         self,
-        xs: List[tt_lib.tensor.Tensor],
-        rot_mats: List[tt_lib.tensor.Tensor],
+        xs: List[ttnn.Tensor],
+        rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[tt_lib.tensor.Tensor],
-    ) -> tt_lib.tensor.Tensor:
+        attn_masks: List[ttnn.Tensor],
+    ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
             xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
@@ -375,12 +374,12 @@ class TtLlamaModel_optimized:
 
     def prefill_forward(
         self,
-        xs: List[tt_lib.tensor.Tensor],
-        rot_mats: List[tt_lib.tensor.Tensor],
+        xs: List[ttnn.Tensor],
+        rot_mats: List[ttnn.Tensor],
         start_pos: int,
-        attn_masks: List[tt_lib.tensor.Tensor],
+        attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
             xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)  # xs is sharded

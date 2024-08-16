@@ -9,7 +9,6 @@ import math
 import torch.nn.functional as F
 
 import ttnn
-import tt_lib
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import repeat_kv
 from models.demos.t3000.llama2_70b.tt.model_config import (
@@ -238,7 +237,7 @@ def run_test_LlamaSDPA(
     # attn_mask_shard_shape[-1] = max_seq_len
     # attn_mask_mem_config.shard_spec.shape = attn_mask_shard_shape
 
-    # attn_mask = tt_lib.tensor.interleaved_to_sharded(attn_mask, attn_mask_mem_config)
+    # attn_mask = ttnn.experimental.tensor.interleaved_to_sharded(attn_mask, attn_mask_mem_config)
     # tt_inp[3] = attn_mask
 
     tt_out = tt_model(*tt_inp)
