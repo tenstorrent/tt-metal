@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import tt_lib
+import ttnn
 
 from models.demos.resnet.tests.test_metal_resnet50 import (
     run_resnet50_inference,
@@ -20,17 +20,17 @@ from models.utility_functions import skip_for_wormhole_b0
 @pytest.mark.parametrize("batch_size", [20], ids=["batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.bfloat8_b],
     ids=["weights_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.bfloat8_b],
     ids=["activations_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "math_fidelity",
-    [tt_lib.tensor.MathFidelity.LoFi],
+    [ttnn.MathFidelity.LoFi],
     ids=["LoFi"],
 )
 @pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
@@ -62,17 +62,17 @@ def test_run_resnet50_inference(
 @pytest.mark.parametrize("batch_size", [20], ids=["batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.bfloat8_b],
     ids=["weights_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.bfloat8_b],
     ids=["activations_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "math_fidelity",
-    [tt_lib.tensor.MathFidelity.LoFi],
+    [ttnn.MathFidelity.LoFi],
     ids=["LoFi"],
 )
 @pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
@@ -104,17 +104,17 @@ def test_run_resnet50_trace_inference(
 @pytest.mark.parametrize("batch_size", [20], ids=["batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.bfloat8_b],
     ids=["weights_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.bfloat8_b],
     ids=["activations_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "math_fidelity",
-    [tt_lib.tensor.MathFidelity.LoFi],
+    [ttnn.MathFidelity.LoFi],
     ids=["LoFi"],
 )
 @pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
@@ -148,17 +148,17 @@ def test_run_resnet50_2cqs_inference(
 @pytest.mark.parametrize("batch_size", [20], ids=["batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.bfloat8_b],
     ids=["weights_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.bfloat8_b],
     ids=["activations_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "math_fidelity",
-    [tt_lib.tensor.MathFidelity.LoFi],
+    [ttnn.MathFidelity.LoFi],
     ids=["LoFi"],
 )
 @pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
