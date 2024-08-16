@@ -28,6 +28,22 @@ def test_example(device, height, width):
 
 @pytest.mark.parametrize("height", [64])
 @pytest.mark.parametrize("width", [128])
+def test_example_compute_output_shapes(height, width):
+    input_tensor = ttnn.zeros((height, width), layout=ttnn.TILE_LAYOUT)
+    output_shape = ttnn.prim.example.compute_output_shapes(input_tensor)
+    assert output_shape == input_tensor.shape
+
+
+@pytest.mark.parametrize("height", [64])
+@pytest.mark.parametrize("width", [128])
+def test_example_create_output_tensors(device, height, width):
+    input_tensor = ttnn.zeros((height, width), layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.prim.example.create_output_tensors(input_tensor)
+    assert output_tensor.shape == input_tensor.shape
+
+
+@pytest.mark.parametrize("height", [64])
+@pytest.mark.parametrize("width", [128])
 def test_composite_example(device, height, width):
     torch.manual_seed(0)
 

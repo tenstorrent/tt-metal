@@ -9,6 +9,8 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/common/constants.hpp"
@@ -300,6 +302,42 @@ struct registered_operation_t {
         auto output = invoke(std::forward<args_t>(args)...);
         tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
+    }
+
+    // Methods for querying properties of the primitive operation
+    template <typename... args_t>
+    requires(PrimitiveOperationConcept<operation_t>)
+    auto select_program_factory(args_t&&... args) const {
+        auto [operation_attributes, tensors_args] = operation_t::operator()(std::forward<decltype(args)>(args)...);
+        return operation_t::select_program_factory(operation_attributes, tensors_args);
+    }
+
+    template <typename... args_t>
+    requires(PrimitiveOperationConcept<operation_t>)
+    void validate_on_program_cache_miss(args_t&&... args) const {
+        auto [operation_attributes, tensors_args] = operation_t::operator()(std::forward<decltype(args)>(args)...);
+        operation_t::validate_on_program_cache_miss(operation_attributes, tensors_args);
+    }
+
+    template <typename... args_t>
+    requires(PrimitiveOperationConcept<operation_t>)
+    void validate_on_program_cache_hit(args_t&&... args) const {
+        auto [operation_attributes, tensors_args] = operation_t::operator()(std::forward<decltype(args)>(args)...);
+        operation_t::validate_on_program_cache_hit(operation_attributes, tensors_args);
+    }
+
+    template <typename... args_t>
+    requires(PrimitiveOperationConcept<operation_t>)
+    auto compute_output_shapes(args_t&&... args) const {
+        auto [operation_attributes, tensors_args] = operation_t::operator()(std::forward<decltype(args)>(args)...);
+        return operation_t::compute_output_shapes(operation_attributes, tensors_args);
+    }
+
+    template <typename... args_t>
+    requires(PrimitiveOperationConcept<operation_t>)
+    auto create_output_tensors(args_t&&... args) const {
+        auto [operation_attributes, tensors_args] = operation_t::operator()(std::forward<decltype(args)>(args)...);
+        return operation_t::create_output_tensors(operation_attributes, tensors_args);
     }
 
 };
