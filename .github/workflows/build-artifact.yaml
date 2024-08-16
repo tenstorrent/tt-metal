@@ -57,7 +57,14 @@ jobs:
       - name: Update submodules
         run: |
           git submodule update --init --recursive
+      - name: Cache build artifacts
+        id: cache-build-artifacts
+        uses: actions/cache@v4
+        with:
+          path: build/
+          key: build-${{ github.sha }}-${{ matrix.arch }}-${{ inputs.build-type }}-${{ inputs.tracy && 'tracy' }}
       - name: Build tt-metal and libs
+        if: ${{ steps.cache-build-artifacts.outputs.cache-hit != 'true' }}
         run: |
           nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
           nice -n 19 cmake --build build --target tests
