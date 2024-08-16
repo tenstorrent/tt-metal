@@ -24,7 +24,6 @@ def run_all_gather_matmul_on_t3000_impl(
     layout,
     matmul_output_dim,
     mem_config,
-    use_program_cache,
     function_level_defaults,
     num_iters=1,
 ):
@@ -204,7 +203,7 @@ def run_all_gather_matmul_on_t3000_impl(
     ],
 )
 @pytest.mark.parametrize("enable_async", [True, False])
-def test_all_gather_on_t3000_post_commit(
+def test_all_gather_matmul_on_t3000_post_commit(
     t3k_device_mesh,
     num_devices,
     input_shape,
@@ -228,6 +227,5 @@ def test_all_gather_on_t3000_post_commit(
         layout,
         matmul_output_dim,
         mem_config,
-        use_program_cache,
         function_level_defaults,
     )
