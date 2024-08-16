@@ -204,8 +204,10 @@ def tt_tensors_to_torch_tensors(tt_tensors_device):
         # Convert to bfloat16 to ensure untilize works
         if tt_tensors_device[0].dtype != tt_lib.tensor.DataType.BFLOAT16:
             for i in range(len(tt_tensors_device)):
-                tt_tensors_device[i] = tt_lib.tensor.clone(
-                    tt_tensors_device[i], output_dtype=tt_lib.tensor.DataType.BFLOAT16
+                tt_tensors_device[i] = ttnn.clone(
+                    tt_tensors_device[i],
+                    dtype=tt_lib.tensor.DataType.BFLOAT16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
         # Untilize using singlecore since multicore version runs out of l1 memory (TODO: change when multicore untilize is fixed)
         for i in range(len(tt_tensors_device)):

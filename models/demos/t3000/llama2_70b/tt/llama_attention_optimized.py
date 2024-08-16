@@ -393,7 +393,9 @@ class TtLlamaAttention_optimized:
         # Fill cache expects batch in dim0
         keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
         ttnn.experimental.tensor.fill_cache(
-            keys_reshaped, ttnn.experimental.tensor.typecast(key_layer, ttnn.bfloat8_b), user_id
+            keys_reshaped,
+            ttnn.experimental.typecast(key_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            user_id,
         )
 
         # FILL V CACHE
@@ -401,7 +403,9 @@ class TtLlamaAttention_optimized:
         # Fill cache expects batch in dim0
         values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
         ttnn.experimental.tensor.fill_cache(
-            values_reshaped, ttnn.experimental.tensor.typecast(value_layer, ttnn.bfloat8_b), user_id
+            values_reshaped,
+            ttnn.experimental.typecast(value_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            user_id,
         )
 
         # SPDA

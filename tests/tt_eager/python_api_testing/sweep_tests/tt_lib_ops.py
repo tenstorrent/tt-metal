@@ -83,7 +83,7 @@ def copy(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.tensor.copy(t0, t1)
+    t2 = ttnn.copy(t0, t1)
 
     return tt2torch_tensor(t2)
 
@@ -100,7 +100,7 @@ def clone(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.clone(t0, output_mem_config=output_mem_config)
+    t1 = ttnn.clone(t0, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -120,7 +120,7 @@ def typecast(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], tt_input_dtype[0])
 
     # Copy op kernel typecast - yet to migrate to TTNN
-    t1 = ttl.tensor.typecast(t0, tt_output_dtype[0], output_mem_config=output_mem_config)
+    t1 = ttnn.experimental.typecast(t0, tt_output_dtype[0], memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

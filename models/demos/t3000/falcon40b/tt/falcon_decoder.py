@@ -199,15 +199,14 @@ class TtFalconDecoderLayer:
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
         else:
-            replicated_hidden_states = ttnn.experimental.tensor.clone(
+            replicated_hidden_states = ttnn.clone(
                 hidden_states,
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
             )
 
         if replicated_hidden_states.dtype != self.model_config["BFP8_DTYPE"]:
-            replicated_hidden_states = ttnn.experimental.tensor.typecast(
-                replicated_hidden_states,
-                self.model_config["BFP8_DTYPE"],
+            replicated_hidden_states = ttnn.experimental.typecast(
+                replicated_hidden_states, self.model_config["BFP8_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
         replicated_hidden_states = ttnn.all_gather(
@@ -218,9 +217,8 @@ class TtFalconDecoderLayer:
         )
 
         if self.model_config["LN_INPUT_DTYPE"] != self.model_config["BFP8_DTYPE"]:
-            replicated_hidden_states = ttnn.experimental.tensor.typecast(
-                replicated_hidden_states,
-                self.model_config["LN_INPUT_DTYPE"],
+            replicated_hidden_states = ttnn.experimental.typecast(
+                replicated_hidden_states, self.model_config["LN_INPUT_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
         attn_ln_output, mlp_ln_output = fused_partial_layernorm(
