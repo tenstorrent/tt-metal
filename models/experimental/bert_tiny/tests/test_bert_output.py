@@ -5,7 +5,6 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-import tt_lib
 
 from models.experimental.bert_tiny.tt.bert_output import TtBertoutput
 from transformers import BertForQuestionAnswering
@@ -30,9 +29,7 @@ def test_bert_output_inference(
 
     state_dict = hugging_face_reference_model.state_dict()
     encoder_idx = 0
-    output_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-    )
+    output_mem_config = ttnn.DRAM_MEMORY_CONFIG
     tt_ouptut_model = TtBertoutput(
         hugging_face_reference_model.config,
         encoder_idx,

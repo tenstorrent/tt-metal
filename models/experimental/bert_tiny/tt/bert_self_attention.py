@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import tt_lib
 import ttnn
 import math
 import torch
@@ -94,11 +93,11 @@ def mha(
         reciprocal_of_sqrt_hidden_dim_tensor = ttnn.to_torch(ttnn.from_device(reciprocal_of_sqrt_hidden_dim_tensor))
         reciprocal_of_sqrt_hidden_dim_tensor = torch_to_tt_tensor(reciprocal_of_sqrt_hidden_dim_tensor, device)
 
-        return tt_lib.tensor.bcast(
+        return ttnn.experimental.tensor.bcast(
             x,
             reciprocal_of_sqrt_hidden_dim_tensor,
-            tt_lib.tensor.BcastOpMath.MUL,
-            tt_lib.tensor.BcastOpDim.HW,
+            ttnn.experimental.tensor.BcastOpMath.MUL,
+            ttnn.experimental.tensor.BcastOpDim.HW,
             output_mem_config=out_mem_config,
         )
 

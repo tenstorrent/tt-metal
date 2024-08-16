@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
 import torch.nn as nn
 import ttnn
 from typing import Optional

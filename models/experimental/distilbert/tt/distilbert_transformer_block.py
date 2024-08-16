@@ -10,7 +10,6 @@ from models.utility_functions import (
 )
 
 import ttnn
-import tt_lib
 from models.experimental.distilbert.tt.distilbert_multihead_self_attention import (
     TtMultiHeadSelfAttention,
 )
@@ -54,11 +53,11 @@ class TtTransformerBlock(nn.Module):
 
     def forward(
         self,
-        input: tt_lib.tensor.Tensor,
-        attn_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        input: ttnn.Tensor,
+        attn_mask: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, ...]:
+    ) -> Tuple[ttnn.Tensor, ...]:
         sa_output = self.attention(
             query=input,
             key=input,
