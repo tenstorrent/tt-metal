@@ -5,7 +5,6 @@
 import torch
 
 import ttnn
-import tt_lib as ttl
 from typing import Callable
 
 from models.demos.wormhole.mamba.reference.args import ModelArgs, ModelMode
@@ -116,12 +115,12 @@ class TtMambaSSM(torch.nn.Module):
         )
         self.hidden_state_cache = TensorCache(self.configs["num_users"], 1, self.hidden_size * self.n, device)
 
-        self.compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi2,
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-        self.eltwise_math_fidelity = ttl.tensor.MathFidelity.HiFi2
+        self.eltwise_math_fidelity = ttnn.MathFidelity.HiFi2
         self.core_grid_row = self.configs["core_grid_row"]
         self.core_grid_col = self.configs["core_grid_col"]
 
@@ -185,7 +184,7 @@ class TtMambaSSM(torch.nn.Module):
         abar2 = ttnn.exp(
             abar1,
             fast_and_approximate_mode=True,
-            memory_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(abar1)
 
@@ -297,7 +296,7 @@ class TtMambaSSM(torch.nn.Module):
         # Reduction matmul
         C2 = ttnn.experimental.hc_sum_reduce(
             C1,
-            memory_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=self.configs["dtype"]["activations"],
             math_fidelity=self.eltwise_math_fidelity,
         )
