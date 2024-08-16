@@ -10,11 +10,6 @@ import ttnn
 def register_ttnn_cpp_unary_function(unary_function):
     import torch
 
-    def torch_heaviside(x, *args, **kwargs):
-        value = kwargs.pop("scalar")
-        result = torch.heaviside(x, torch.tensor(value, dtype=x.dtype))
-        return result
-
     def torch_cbrt(x, *args, **kwargs):
         return torch.sgn(x) * torch.pow(torch.abs(x), 1.0 / 3)
 
@@ -25,17 +20,6 @@ def register_ttnn_cpp_unary_function(unary_function):
         result += torch.lgamma(x - 1.5)
         result += 3.434189657547
         return result
-
-    def torch_prelu(x, *args, **kwargs):
-        weight = kwargs.pop("scalar")
-        result = torch.nn.functional.prelu(x, torch.tensor(weight, dtype=x.dtype))
-        return result
-
-    def relu_max(x, *args, upper_limit, **kwargs):
-        return torch.relu(torch.min(x, torch.tensor(upper_limit)))
-
-    def relu_min(x, *args, lower_limit, **kwargs):
-        return torch.max(x, torch.tensor(lower_limit))
 
     def _golden_function(input_tensor: ttnn.Tensor, **_):
         name_to_golden_function = {
@@ -49,6 +33,7 @@ def register_ttnn_cpp_unary_function(unary_function):
             "expm1": torch.expm1,
             "eqz": lambda x: torch.eq(x, 0),
             "floor": torch.floor,
+            "ceil": torch.ceil,
             "gez": lambda x: torch.ge(x, 0),
             "gtz": lambda x: torch.gt(x, 0),
             "i0": torch.i0,
@@ -69,8 +54,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "nez": lambda x: torch.ne(x, 0),
             "reciprocal": torch.reciprocal,
             "relu": torch.relu,
-            "relu_max": relu_max,
-            "relu_min": relu_min,
             "relu6": torch.nn.functional.relu6,
             "sigmoid": torch.sigmoid,
             "sign": torch.sign,
@@ -89,7 +72,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "rsqrt": torch.rsqrt,
             # Unaries with float parameter
             "elu": torch.nn.functional.elu,
-            "heaviside": torch_heaviside,
             "leaky_relu": torch.nn.functional.leaky_relu,
             # "prelu": torch_prelu, # Alias for leaky_relu. TODO(#8544): implement PReLU properly
             # Other unaries (composite operations)
@@ -141,6 +123,7 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.expm1,
     ttnn.eqz,
     ttnn.floor,
+    ttnn.ceil,
     ttnn.gez,
     ttnn.gtz,
     ttnn.i0,
@@ -160,8 +143,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.nez,
     ttnn.reciprocal,
     ttnn.relu,
-    ttnn.relu_max,
-    ttnn.relu_min,
     ttnn.relu6,
     ttnn.sigmoid,
     ttnn.sign,
@@ -180,7 +161,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.rsqrt,
     # Unaries with float parameter
     ttnn.elu,
-    ttnn.heaviside,
     ttnn.leaky_relu,
     # ttnn.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
     # Unaries using op_chain
@@ -220,6 +200,33 @@ def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn._ttnn.operations.unary.pow, golden_function=_golden_function_pow)
+
+
+def _golden_function_relu_min(input_tensor_a, *args, lower_limit, **kwargs):
+    import torch
+
+    return torch.max(input_tensor_a, torch.tensor(lower_limit))
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.relu_min, golden_function=_golden_function_relu_min)
+
+
+def _golden_function_relu_max(input_tensor_a, *args, upper_limit, **kwargs):
+    import torch
+
+    return torch.relu(torch.min(input_tensor_a, torch.tensor(upper_limit)))
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.relu_max, golden_function=_golden_function_relu_max)
+
+
+def _golden_function_heaviside(input_tensor_a, *args, value, **kwargs):
+    import torch
+
+    return torch.heaviside(input_tensor_a, torch.tensor(value, dtype=input_tensor_a.dtype))
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.unary.heaviside, golden_function=_golden_function_heaviside)
 
 
 def _golden_function_polygamma(input_tensor_a, k, *args, **kwargs):
