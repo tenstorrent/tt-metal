@@ -1002,6 +1002,14 @@ void bind_unary_composite_float_with_default(py::module& module, const unary_ope
             * :attr:`{2}` (float): {3} , Default value = {4}
             * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
 
+        Supported dtypes and layouts:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+
+
         Example:
 
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
