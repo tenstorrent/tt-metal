@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/conv2d/device/optimized_conv_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -18,10 +18,10 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
+namespace ttnn::operations::conv {
+namespace conv2d {
 
-namespace tt {
-
-namespace tt_metal {
+using namespace tt;
 
 const uint32_t act_cb                                 = CB::c_in0;
 const uint32_t weight_cb                              = CB::c_in1;
@@ -46,11 +46,11 @@ std::tuple<CBHandle, CBHandle> create_CBs(tt_metal::Program &program,
                                 uint32_t num_reblock_cb_tiles,
                                 uint32_t num_writer_output_tiles,
                                 bool untilize_out,
-                                DataFormat act_df,
-                                DataFormat weight_df,
-                                DataFormat tilized_act_df,
-                                DataFormat out_df,
-                                DataFormat bias_df,
+                                tt::DataFormat act_df,
+                                tt::DataFormat weight_df,
+                                tt::DataFormat tilized_act_df,
+                                tt::DataFormat out_df,
+                                tt::DataFormat bias_df,
                                 bool weight_width_sliced,
                                 const Tensor& output,
                                 uint32_t bias_ntiles = 0,
@@ -176,7 +176,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
                         weight_size_h == 7 && weight_size_w == 8 &&
                         stride_h == 2 && stride_w == 2);
     // Compute the 2d matrix shape
-    auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(ashape, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
+    auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(ashape.value, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
@@ -271,11 +271,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     //CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     //CoreRange core = {{0, 0}, {0, 0}};
 
-    DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    DataFormat bias_df = has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype()) : DataFormat::Float16_b;
-    DataFormat tilized_act_df = out_df;
+    tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat bias_df = has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat tilized_act_df = out_df;
 
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
@@ -309,7 +309,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     uint32_t weight_noc_y = weight_dram_noc_xy.y;
 
     // bias
-    Buffer *bias_buffer = nullptr;
+    tt_metal::Buffer *bias_buffer = nullptr;
     uint32_t bias_dram_addr = 0;
     uint32_t bias_ntiles = 0;
     if (has_bias) {
@@ -581,17 +581,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     string writer_mcast_receiver_kernel;
     bool reader_with_indices = false;
     if (rn50_first_conv) {
-        reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
-        compute_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
-        writer_mcast_sender_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_and_mcast_sender_weights_resnet50_first_conv_tiled_out.cpp";
-        writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_and_mcast_receiver_weights_resnet50_first_conv_tiled_out.cpp";
+        reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
+        compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
+        writer_mcast_sender_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_and_mcast_sender_weights_resnet50_first_conv_tiled_out.cpp";
+        writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_and_mcast_receiver_weights_resnet50_first_conv_tiled_out.cpp";
     } else {
-        compute_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
-        writer_mcast_sender_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_tiled_out_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-        writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_tiled_out_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
+        compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
+        writer_mcast_sender_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+        writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
         if (weight_size_h == 1 && weight_size_w == 1) {
             // use custom 1x1 conv kernels
-            reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv1x1_activations_fast_for_col_major_conv_out_blocks.cpp";
+            reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv1x1_activations_fast_for_col_major_conv_out_blocks.cpp";
             assert(conv_act_size_c % act_block_w_datums == 0);
             assert(num_blocks_act_w == (conv_act_size_c / act_block_w_datums));
         }
@@ -601,9 +601,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
                 reader_with_indices = true;
                 if (weight_width_sliced) {
                     assert(read_3x3_window_in_inner_loop == true);
-                    reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights.cpp";
-                    writer_mcast_sender_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-                    writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
+                    reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights.cpp";
+                    writer_mcast_sender_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+                    writer_mcast_receiver_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
                     act_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
                     act_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
@@ -612,7 +612,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
                         act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
                     }
                 } else {
-                    reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_padded_with_halo_3x3_weights.cpp";
+                    reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_padded_with_halo_3x3_weights.cpp";
                 }
 
                 // Local L1 to store array for reader indices
@@ -627,11 +627,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
             } else {
                 // non 1x1 conv
                 if (act_block_w_equals_input_channels_x_filter_width) {
-                    reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_act_block_w_equals_channels_X_filter_width.cpp";
+                    reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_act_block_w_equals_channels_X_filter_width.cpp";
                 } else {
                     assert(act_block_w_datums == conv_act_size_c);
                     assert(num_blocks_act_w == weight_size_w * weight_size_h);
-                    reader_kernel = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/reader_conv_activations_fast_for_col_major_conv_out_blocks.cpp";
+                    reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_fast_for_col_major_conv_out_blocks.cpp";
                 }
             }
         }
@@ -724,8 +724,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
         bias_ntiles_per_core
     };
 
-    auto writer_mcast_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    auto reader_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    auto writer_mcast_noc = tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    auto reader_noc = tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     auto writer_mcast_sender_id = CreateKernel(
     program,
     writer_mcast_sender_kernel,
