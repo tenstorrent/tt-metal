@@ -91,7 +91,7 @@ void kernel_main() {
 
 
                 // read the channels in one block.
-                for(uint32_t weight_tile_h_i = 0; weight_tile_h_i < core_in_channels_ntiles; ++weight_tile_h_i) { // TODO: 2
+                for(uint32_t weight_tile_h_i = 0; weight_tile_h_i < core_in_channels_ntiles; ++weight_tile_h_i) {
                     uint32_t weight_tile_id = weight_row_start_tile_id;
 
                     // loop over output channels, width of the output/weights.
