@@ -559,7 +559,8 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 // auto tensor = detail::convert_torch_tensor_to_tt_tensor(value);
                 // input_tensors.push_back(tensor);
             } else {
-                attributes.push_back({name, fmt::format("{}", value)});
+                // TODO(MO): Exclude tensor data as it is not an attribute
+                //attributes.push_back({name, fmt::format("{}", value)});
             }
         };
 
