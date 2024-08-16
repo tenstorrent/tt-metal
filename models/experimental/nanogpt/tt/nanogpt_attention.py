@@ -3,10 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import tt_lib
 import ttnn
 import math
-from tt_lib.fallback_ops import fallback_ops
 from models.helper_funcs import Linear
 
 from models.utility_functions import (
@@ -25,25 +23,17 @@ class TtCausalSelfAttention(nn.Module):
 
         self.device = device
         # Get the weights
-        self.tt_weight_c_attn = tt_lib.tensor.load_tensor(
-            tt_cache_path + base_address + ".c_attn.weight" + str(dtype) + ".bin"
-        )
+        self.tt_weight_c_attn = ttnn.load_tensor(tt_cache_path + base_address + ".c_attn.weight" + str(dtype) + ".bin")
 
-        self.tt_weight_c_proj = tt_lib.tensor.load_tensor(
-            tt_cache_path + base_address + ".c_proj.weight" + str(dtype) + ".bin"
-        )
+        self.tt_weight_c_proj = ttnn.load_tensor(tt_cache_path + base_address + ".c_proj.weight" + str(dtype) + ".bin")
 
         self.tt_weight_c_attn = ttnn.transpose(self.tt_weight_c_attn, -2, -1)
         self.tt_weight_c_proj = ttnn.transpose(self.tt_weight_c_proj, -2, -1)
 
         # Load biases
-        self.tt_bias_c_attn = tt_lib.tensor.load_tensor(
-            tt_cache_path + base_address + ".c_attn.bias" + str(dtype) + ".bin"
-        )
+        self.tt_bias_c_attn = ttnn.load_tensor(tt_cache_path + base_address + ".c_attn.bias" + str(dtype) + ".bin")
 
-        self.tt_bias_c_proj = tt_lib.tensor.load_tensor(
-            tt_cache_path + base_address + ".c_proj.bias" + str(dtype) + ".bin"
-        )
+        self.tt_bias_c_proj = ttnn.load_tensor(tt_cache_path + base_address + ".c_proj.bias" + str(dtype) + ".bin")
 
         self.n_head = self.config.n_head
         self.n_embd = self.config.n_embd
@@ -71,7 +61,7 @@ class TtCausalSelfAttention(nn.Module):
     def const_tensor(self, shape, value):
         return ttnn.full(shape, value)
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         (
             _,
             B,
