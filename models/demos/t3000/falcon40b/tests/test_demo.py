@@ -40,17 +40,29 @@ def test_demo_generate_reference_output(
 
 
 @pytest.mark.parametrize("max_seq_len", (128,))
+@pytest.mark.parametrize("perf_mode", (True, False))
 def test_demo(
     max_seq_len,
     model_location_generator,
     get_tt_cache_path,
     t3k_device_mesh,
     use_program_cache,
+    perf_mode,
 ):
     input_file = "models/demos/t3000/falcon40b/demo/input_data.json"
     # Enable async mode
     for device in t3k_device_mesh.get_devices():
         device.enable_async(True)
+
+    if perf_mode:
+        csv_perf_targets = {}  # TODO: Add targets here
+        # csv_perf_targets = {
+        #     "prefill_t/s": {128: 3531, 2048: None}[max_seq_len],
+        #     "decode_t/s": 26 * 32,
+        #     "decode_t/s/u": 26,
+        # }  # performance targets that we aim for (t3000)
+    else:
+        csv_perf_targets = {}
 
     generated_text, measurements = run_falcon_demo_kv(
         user_input=input_file,
@@ -64,11 +76,13 @@ def test_demo(
         get_tt_cache_path=get_tt_cache_path,
         device_mesh=t3k_device_mesh,
         prefill_on_host=False,
-        perf_mode=False,
+        perf_mode=perf_mode,
         greedy_sampling=True,
+        csv_perf_targets=csv_perf_targets,
     )
 
-    # Validate generated_text against expected output
-    with open("models/demos/t3000/falcon40b/demo/expected_output_data.json", "r") as f:
-        expected_output_data = json.load(f)
-        assert expected_output_data == generated_text
+    if not perf_mode:
+        # Validate generated_text against expected output
+        with open("models/demos/t3000/falcon40b/demo/expected_output_data.json", "r") as f:
+            expected_output_data = json.load(f)
+            assert expected_output_data == generated_text
