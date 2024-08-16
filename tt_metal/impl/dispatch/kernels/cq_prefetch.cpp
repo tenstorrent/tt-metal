@@ -406,19 +406,18 @@ static uint32_t write_pages_to_dispatcher(uint32_t& downstream_data_ptr,
         cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages);
     }
 
-    if (downstream_data_ptr + amt_to_write >= downstream_cb_end) {  // wrap
-        if (downstream_data_ptr == downstream_cb_end) {
-            downstream_data_ptr = downstream_cb_base;
-        } else {
-            uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
-            uint64_t noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-            noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
-            downstream_data_ptr = downstream_cb_base;
-            scratch_write_addr += last_chunk_size;
-            amt_to_write -= last_chunk_size;
-        }
+    uint64_t noc_addr;
+    if (downstream_data_ptr == downstream_cb_end) {
+        downstream_data_ptr = downstream_cb_base;
+    } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
+        uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
+        noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
+        noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
+        downstream_data_ptr = downstream_cb_base;
+        scratch_write_addr += last_chunk_size;
+        amt_to_write -= last_chunk_size;
     }
-    uint64_t noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
+    noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
     noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
     downstream_data_ptr += amt_to_write;
 
