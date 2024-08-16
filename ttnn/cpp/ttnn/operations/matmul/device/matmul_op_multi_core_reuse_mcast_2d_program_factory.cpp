@@ -497,6 +497,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     if (fuse_op) {
         mm_kernel_in0_sender_interleaved_defines["MATMUL_SIGNAL"] = "1";
+        mm_kernel_in1_sender_writer_defines["MATMUL_SIGNAL"] = "1";
     }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
@@ -538,6 +539,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // Create semaphores
             fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
             fused_op_signaler->emit_matmul_fused_op_ct_args(in0_sender_compile_time_args);
+
+            // Switch the offesets for the weights
+            fused_op_signaler->output_page_offset = fused_op_signaler->tensor_slice_shape_width * fused_op_signaler->weight_tensor_width;
+            fused_op_signaler->last_output_page_offset = (fused_op_signaler->ring_size - 1) * fused_op_signaler->output_page_offset;
+
+            fused_op_signaler->emit_matmul_fused_op_ct_args(in1_sender_writer_compile_time_args);
         }
 
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(

@@ -121,6 +121,8 @@ struct MatmulFusedOpSignaler {
     uint32_t last_output_page_offset;
     bool is_clockwise_dir;
 
+    uint32_t weight_tensor_width;
+
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
 
@@ -132,15 +134,19 @@ struct MatmulFusedOpSignaler {
         uint32_t start_ring_index,
         uint32_t tensor_slice_shape_width,
         uint32_t output_page_offset,
-        bool is_clockwise_direction
+        bool is_clockwise_direction,
+
+        uint32_t weight_tensor_width
     ) {
         this->num_transfers = num_transfers;
         this->ring_size = ring_size;
         this->start_ring_index = start_ring_index;
         this->tensor_slice_shape_width = tensor_slice_shape_width;
         this->output_page_offset = output_page_offset;
-        this->last_output_page_offset = ring_size - 1 * output_page_offset;
+        this->last_output_page_offset = (ring_size - 1) * output_page_offset;
         this->is_clockwise_dir = is_clockwise_direction;
+
+        this->weight_tensor_width = weight_tensor_width;
 
         initialized_all_gather = true;
     }

@@ -251,13 +251,14 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         ring_index,
         tensor_slicer.num_cols,
         tensor_slicer.output_page_offset,
-        is_clockwise_direction
+        is_clockwise_direction,
+        weight_tensor.get_legacy_shape()[3] / 32 // weight tensor width
     );
 
     // Matmul
     auto matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
         program,
-        datacopy_output_tensor,
+        all_gather_output_tensor,
         weight_tensor,
         bias,
         matmul_output_tensor,
