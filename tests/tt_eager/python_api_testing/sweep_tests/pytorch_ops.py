@@ -1735,7 +1735,7 @@ def addcmul_bw(x, y, z, w, scalar, *args, **kwargs):
     return [in_data.grad, other_data1.grad, other_data2.grad]
 
 
-def addalpha_bw(x, y, z, scalar, *args, **kwargs):
+def addalpha_bw(x, y, z, alpha, *args, **kwargs):
     grad_data = x
     in_data = y
     other_data1 = z
@@ -1746,7 +1746,7 @@ def addalpha_bw(x, y, z, scalar, *args, **kwargs):
     in_data.retain_grad()
     other_data1.retain_grad()
     other_data1.retain_grad()
-    pyt_y = torch.add(in_data, other_data1, alpha=scalar)
+    pyt_y = torch.add(in_data, other_data1, alpha=alpha)
     pyt_y.backward(gradient=grad_data)
 
     return [in_data.grad, other_data1.grad]

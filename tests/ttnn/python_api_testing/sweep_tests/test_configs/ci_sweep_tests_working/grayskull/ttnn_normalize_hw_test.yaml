@@ -18,11 +18,11 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
-      output-file: stats_normalize_hw_sweep.csv
       args:
         inputs:
           - input-1:
             data-layout: ["TILE"]
             data-type: ["BFLOAT16"]
             buffer-type: ["DRAM", "L1"]
-        out-buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        out-buffer-type: ["DRAM", "L1"]
+      output-file: stats_normalize_hw_sweep.csv
