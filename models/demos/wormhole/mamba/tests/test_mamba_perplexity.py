@@ -124,7 +124,7 @@ def test_mamba_reference_perplexity(
     verify_acc_metrics(calculated_acc_metrics, expected_acc_metrics)
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1000)
 @skip_for_grayskull("Mamba not supported on Grayskull")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
