@@ -8,13 +8,8 @@ import pathlib
 
 import torch
 
-<<<<<<< HEAD
 import ttnn
 
-=======
-import tt_lib as ttl
-import ttnn
->>>>>>> 7295728705... #10131: migrate sharded to interleaved
 from models.utility_functions import get_debug_tensor
 from enum import Enum
 

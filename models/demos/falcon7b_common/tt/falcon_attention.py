@@ -644,9 +644,7 @@ class TtFalconAttentionDecode(nn.Module):
             )
             query_layer = ttnn.interleaved_to_sharded(
                 query_layer,
-                self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
-                    self.padded_local_heads, self.head_dim
-                ),
+                self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](self.padded_local_heads, self.head_dim),
             )
 
         ######################
@@ -750,7 +748,7 @@ class TtFalconAttentionDecode(nn.Module):
         if self.model_config["l1_sharded"]:
             value_layer = ttnn.interleaved_to_sharded(
                 value_layer,
-                sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](padded_layer_past_len, self.head_dim),
+                self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](padded_layer_past_len, self.head_dim),
             )
 
         layer_present = layer_past if use_cache else None

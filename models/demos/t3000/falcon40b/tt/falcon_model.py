@@ -367,7 +367,7 @@ class TtFalconModelShared:
 
         layer_output = ttnn.sharded_to_interleaved(
             layer_output,
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
         layer_output = ttnn.all_gather(
             layer_output,
@@ -377,7 +377,7 @@ class TtFalconModelShared:
         )
         layer_output = ttnn.interleaved_to_sharded(
             layer_output,
-            sharded_mem_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
+            self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
         # apply final norm layer

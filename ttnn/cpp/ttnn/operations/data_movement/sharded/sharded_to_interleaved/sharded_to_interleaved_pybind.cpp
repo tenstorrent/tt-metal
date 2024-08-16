@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,15 +23,15 @@ void bind_sharded_to_interleaved(pybind11::module& module, const data_movement_s
         ttnn::pybind_overload_t{
             [](const data_movement_sharded_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config_arg,
-               const std::optional<DataType> & data_type_arg,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<DataType> & output_dtype,
                uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, memory_config_arg.value_or(types::DRAM_MEMORY_CONFIG), data_type_arg);
+                return self(queue_id, input_tensor, memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG), output_dtype);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("memory_config") = std::nullopt,
-            py::kw_only(),
             py::arg("output_dtype") = std::nullopt,
+            py::kw_only(),
             py::arg("queue_id") = 0,
             });
 }

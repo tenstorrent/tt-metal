@@ -8,14 +8,13 @@
 #include "device/sharded_to_interleaved_op.hpp"
 #include "sharded_to_interleaved.hpp"
 
-
 namespace ttnn::operations::data_movement{
 
 ttnn::Tensor ShardedToInterleavedOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const MemoryConfig & memory_config,
-    const std::optional<DataType> & data_type_arg
+    const std::optional<DataType> & output_dtype
     ) {
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
@@ -25,9 +24,10 @@ ttnn::Tensor ShardedToInterleavedOperation::invoke(
     return operation::run(
             ShardedToInterleavedDeviceOperation{
                 .output_mem_config = memory_config,
-                .output_dtype = data_type_arg.value_or(input_tensor.get_dtype())
+                .output_dtype = output_dtype.value_or(input_tensor.get_dtype())
                 },
             {input_tensor}).at(0);
+
 }
 
 } // ttnn::operations::data_movement namespace

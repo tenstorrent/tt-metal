@@ -260,9 +260,7 @@ def test_group_attn_matmul(
         tt_input_tensor_b.deallocate()
 
         if output_sharded:
-            tt_output_tensor_on_device = ttnn.sharded_to_interleaved(
-                tt_output_tensor_on_device, interleaved_mem_config
-            )
+            tt_output_tensor_on_device = ttnn.sharded_to_interleaved(tt_output_tensor_on_device, interleaved_mem_config)
 
         tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         tt_output_tensor_on_device.deallocate()
@@ -484,9 +482,7 @@ def test_group_attn_matmul_fp32(
             compute_kernel_config=compute_kernel_config,
         )
         if output_sharded:
-            tt_output_tensor_on_device = ttnn.sharded_to_interleaved(
-                tt_output_tensor_on_device, interleaved_mem_config
-            )
+            tt_output_tensor_on_device = ttnn.sharded_to_interleaved(tt_output_tensor_on_device, interleaved_mem_config)
 
         tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 

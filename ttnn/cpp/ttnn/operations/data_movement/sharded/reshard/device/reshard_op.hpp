@@ -1,16 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
-#include <optional>
-
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-
 
 namespace ttnn::operations::data_movement {
 

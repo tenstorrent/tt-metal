@@ -196,7 +196,7 @@ class TtFalconDecoderLayer:
         if self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"].is_sharded():
             replicated_hidden_states = ttnn.sharded_to_interleaved(
                 hidden_states,
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
             )
         else:
             replicated_hidden_states = ttnn.clone(
@@ -304,7 +304,7 @@ class TtFalconDecoderLayer:
 
         replicated_hidden_states = ttnn.sharded_to_interleaved(
             hidden_states,
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
 
         replicated_hidden_states = ttnn.all_gather(
@@ -315,7 +315,7 @@ class TtFalconDecoderLayer:
         )
         replicated_hidden_states = ttnn.interleaved_to_sharded(
             replicated_hidden_states,
-            sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
+            self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],
         )
 
         attn_ln_output = ttnn.layer_norm(

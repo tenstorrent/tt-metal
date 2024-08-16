@@ -92,7 +92,7 @@ class TtRMSNormSharded(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor, out_sharded=False) -> ttnn.Tensor:
-        x = ttnn.interleaved_to_sharded(x, sharded_mem_config=self.model_config["SHARDED_NORM_INPUT_MEMCFG"])
+        x = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_NORM_INPUT_MEMCFG"])
         x = ttnn.rms_norm(
             x,
             epsilon=self.eps,

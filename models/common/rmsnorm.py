@@ -103,7 +103,7 @@ class RMSNorm(LightweightModule):
         if self.is_sharded:  # sharded version converts from interleaved inputs and optionally back
             x = ttnn.interleaved_to_sharded(
                 x,
-                sharded_mem_config=self.input_config,
+                self.input_config,
             )
             x = ttnn.rms_norm(
                 x,

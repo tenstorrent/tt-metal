@@ -1,14 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
 
-#include "tt_metal/common/core_coord.h"
-#include "tt_metal/impl/buffers/buffer.hpp"
 namespace ttnn::operations::data_movement {
 
 struct InterleavedToShardedDeviceOperation {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@
 #include "tt_metal/host_api.hpp"
 
 #include "sharded_to_interleaved_program_factory.hpp"
-
 
 namespace ttnn::operations::data_movement {
 
@@ -44,7 +43,6 @@ std::vector<Tensor> ShardedToInterleavedDeviceOperation::create_output_tensors(c
 operation::ProgramWithCallbacks ShardedToInterleavedDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    //Will move with sharded ops
     return detail::sharded_to_interleaved_multi_core(input_tensor, output_tensor);
 }
 
