@@ -7,7 +7,6 @@ from loguru import logger
 import pytest
 import torch
 
-import tt_lib as ttl
 
 import ttnn
 
@@ -70,15 +69,13 @@ per_core_ks = [32, 64, 128]
 def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k, tt_lib_fn, ref_fn):
     torch.manual_seed(1234)
 
-    out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1)
-    gamma_beta_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-    )
-    in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    in_dtype = ttl.tensor.DataType.BFLOAT16
-    cb_dtype = ttl.tensor.DataType.BFLOAT16
-    out_dtype = ttl.tensor.DataType.BFLOAT16
-    fidelity = ttl.tensor.MathFidelity.HiFi4
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    gamma_beta_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    in_dtype = ttnn.bfloat16
+    cb_dtype = ttnn.bfloat16
+    out_dtype = ttnn.bfloat16
+    fidelity = ttnn.MathFidelity.HiFi4
 
     epsf = 1e-2
     batch = grid_size[0]
@@ -89,22 +86,22 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k, t
 
     in0 = torch.rand(in0_shape) * 2 - 0.95
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-    in0_t_shard = ttl.tensor.interleaved_to_sharded(
+    in0_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
         in0_t,
         grid_size,
         [M // grid_size[0], K // grid_size[1]],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ttl.tensor.ShardOrientation.COL_MAJOR,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
     )
 
     in1 = torch.zeros(in0_shape)
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-    in1_t_shard = ttl.tensor.interleaved_to_sharded(
+    in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
         in1_t,
         grid_size,
         [M // grid_size[0], K // grid_size[1]],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ttl.tensor.ShardOrientation.COL_MAJOR,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
     )
 
     if test_id == 0:
@@ -118,19 +115,19 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k, t
         beta = torch.rand(in0_shape[3]) * 2.0 - 1.1
 
     gamma = gamma.reshape(1, 1, -1, 32)
-    gamma_t = ttl.tensor.Tensor(
+    gamma_t = ttnn.Tensor(
         gamma.reshape(-1).tolist(),
         gamma.shape,
         cb_dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
     ).to(device, gamma_beta_mem_config)
 
     beta = beta.reshape(1, 1, -1, 32)
-    beta_t = ttl.tensor.Tensor(
+    beta_t = ttnn.Tensor(
         beta.reshape(-1).tolist(),
         beta.shape,
         cb_dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
     ).to(device, gamma_beta_mem_config)
 
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -171,7 +168,7 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k, t
 
     logger.info("Done")
 
-    ttz = ttl.tensor.sharded_to_interleaved(ttz, in0_mem_config)
+    ttz = ttnn.experimental.tensor.sharded_to_interleaved(ttz, in0_mem_config)
     t2_data = ttz.cpu().to_torch().float()
     tt_got_back = torch.Tensor(t2_data).reshape(in0_shape)
     tt_got_back = untilize(tt_got_back)
@@ -225,15 +222,13 @@ per_core_ks = [32, 64, 128]
 def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len, per_core_k, tt_lib_fn, ref_fn):
     torch.manual_seed(1234)
 
-    out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1)
-    gamma_beta_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-    )
-    in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    in_dtype = ttl.tensor.DataType.BFLOAT16
-    cb_dtype = ttl.tensor.DataType.BFLOAT16
-    out_dtype = ttl.tensor.DataType.BFLOAT16
-    fidelity = ttl.tensor.MathFidelity.HiFi4
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    gamma_beta_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    in_dtype = ttnn.bfloat16
+    cb_dtype = ttnn.bfloat16
+    out_dtype = ttnn.bfloat16
+    fidelity = ttnn.MathFidelity.HiFi4
 
     epsf = 1e-2
     batch = grid_size[0]
@@ -244,22 +239,22 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
 
     in0 = torch.rand(in0_shape) * 2 - 0.95
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-    in0_t_shard = ttl.tensor.interleaved_to_sharded(
+    in0_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
         in0_t,
         grid_size,
         [M // grid_size[0], K // grid_size[1]],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ttl.tensor.ShardOrientation.COL_MAJOR,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
     )
 
     in1 = torch.rand(in0_shape) * 2 - 0.8
     in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-    in1_t_shard = ttl.tensor.interleaved_to_sharded(
+    in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
         in1_t,
         grid_size,
         [M // grid_size[0], K // grid_size[1]],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ttl.tensor.ShardOrientation.COL_MAJOR,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
     )
 
     if test_id == 0:
@@ -273,19 +268,19 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
         beta = torch.rand(in0_shape[3]) * 2.0 - 1.1
 
     gamma = gamma.reshape(1, 1, -1, 32)
-    gamma_t = ttl.tensor.Tensor(
+    gamma_t = ttnn.Tensor(
         gamma.reshape(-1).tolist(),
         gamma.shape,
         cb_dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
     ).to(device, gamma_beta_mem_config)
 
     beta = beta.reshape(1, 1, -1, 32)
-    beta_t = ttl.tensor.Tensor(
+    beta_t = ttnn.Tensor(
         beta.reshape(-1).tolist(),
         beta.shape,
         cb_dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
     ).to(device, gamma_beta_mem_config)
 
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -329,7 +324,7 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
 
     logger.info("Done")
 
-    ttz = ttl.tensor.sharded_to_interleaved(ttz, in0_mem_config)
+    ttz = ttnn.experimental.tensor.sharded_to_interleaved(ttz, in0_mem_config)
     t2_data = ttz.cpu().to_torch().float()
     tt_got_back = torch.Tensor(t2_data).reshape(in0_shape)
     tt_got_back = untilize(tt_got_back)

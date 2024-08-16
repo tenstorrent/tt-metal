@@ -4,7 +4,6 @@
 
 import torch
 import pytest
-import tt_lib
 import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 from models.utility_functions import is_grayskull
@@ -17,11 +16,11 @@ from models.utility_functions import is_grayskull
 @pytest.mark.parametrize(
     "mem_configs",
     (
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     ),
 )
-@pytest.mark.parametrize("out_dtype", (tt_lib.tensor.DataType.UINT32, tt_lib.tensor.DataType.UINT16))
+@pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16))
 def test_binary_eq(input_shapes, out_dtype, mem_configs, device):
     if is_grayskull():
         pytest.skip("GS does not support fp32/uint32/uint16 data types")
@@ -48,11 +47,11 @@ def test_binary_eq(input_shapes, out_dtype, mem_configs, device):
 @pytest.mark.parametrize(
     "mem_configs",
     (
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     ),
 )
-@pytest.mark.parametrize("out_dtype", (tt_lib.tensor.DataType.UINT32, tt_lib.tensor.DataType.UINT16))
+@pytest.mark.parametrize("out_dtype", (ttnn.uint32, ttnn.uint16))
 def test_bw_binary_eq_opt_output(input_shapes, device, mem_configs, out_dtype):
     if is_grayskull():
         pytest.skip("GS does not support fp32/uint32/uint16 data types")

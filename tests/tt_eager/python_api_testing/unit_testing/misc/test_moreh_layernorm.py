@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 import copy
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_allclose
 from loguru import logger
 
@@ -21,7 +21,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
 from models.utility_functions import skip_for_grayskull
 
 
-def to_cpu(npu_tensor, shape, *, cpu_layout=ttl.tensor.Layout.ROW_MAJOR):
+def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.ROW_MAJOR_LAYOUT):
     if npu_tensor is None:
         return None
     if not isinstance(shape, (list, tuple)):
@@ -42,8 +42,8 @@ def to_npu(
     cpu_tensor,
     device,
     *,
-    npu_layout=ttl.tensor.Layout.TILE,
-    npu_dtype=ttl.tensor.DataType.BFLOAT16,
+    npu_layout=ttnn.TILE_LAYOUT,
+    npu_dtype=ttnn.bfloat16,
     shape=None,
 ):
     if cpu_tensor is None:
@@ -57,7 +57,7 @@ def to_npu(
     if len(cpu_tensor.shape) == 0:
         cpu_tensor = cpu_tensor.reshape([1, 1])
 
-    npu_tensor = ttl.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    npu_tensor = ttnn.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     return npu_tensor
 
 
@@ -141,7 +141,7 @@ def tt_layernorm(
     npu_rstd = to_npu(cpu_rstd, device)
 
     # Forward
-    npu_output, npu_mean, npu_rstd = ttl.operations.primary.moreh_layernorm(
+    npu_output, npu_mean, npu_rstd = ttnn.experimental.operations.primary.moreh_layernorm(
         npu_input,
         normalized_dims,
         eps,
@@ -214,7 +214,7 @@ def tt_layernorm_backward(
         npu_beta_grad = to_npu(cpu_beta_grad, device)
 
     # Backward
-    _, npu_gamma_grad, _ = ttl.operations.primary.moreh_layernorm_backward(
+    _, npu_gamma_grad, _ = ttnn.experimental.operations.primary.moreh_layernorm_backward(
         npu_output_grad,
         npu_input,
         npu_mean,

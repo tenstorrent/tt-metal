@@ -53,10 +53,10 @@ while x < 10:
     test_sweep_args.append(
         (
             (3, 11, 92, 100),
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             x,
             y,
             5147678,

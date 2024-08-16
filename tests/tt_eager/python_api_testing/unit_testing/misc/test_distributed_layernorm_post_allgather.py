@@ -6,7 +6,7 @@
 import pytest
 import torch
 
-import tt_lib as ttl
+import ttnn
 
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor, skip_for_grayskull
 
@@ -22,8 +22,8 @@ def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
 
 
 def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device, fp32_enabled=False):
-    kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,  # Highest fidelity
+    kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_enabled,
         packer_l1_acc=False,
@@ -56,7 +56,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device, fp32_e
     ref_out = reference_layernorm(canon_inp, gamma, beta, epsilon, is_rmsnorm)
     ref_chunks = ref_out.chunk(n_devices, dim=-1)
 
-    dram_memcfg = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     all_pass = True
     # layernorm post all gather
@@ -65,37 +65,37 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device, fp32_e
             inp_chunked[d],
             tt_dtype=dtype,
             tt_device=device,
-            tt_layout=ttl.tensor.Layout.TILE,
+            tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
         tt_gamma = torch2tt_tensor(
             gamma_chunked[d].reshape(1, 1, -1, 32),
-            tt_dtype=ttl.tensor.DataType.BFLOAT16,
+            tt_dtype=ttnn.bfloat16,
             tt_device=device,
-            tt_layout=ttl.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
         tt_beta = torch2tt_tensor(
             beta_chunked[d].reshape(1, 1, -1, 32),
-            tt_dtype=ttl.tensor.DataType.BFLOAT16,
+            tt_dtype=ttnn.bfloat16,
             tt_device=device,
-            tt_layout=ttl.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
         tt_stats = torch2tt_tensor(
             stats_tiles,
-            tt_dtype=ttl.tensor.DataType.BFLOAT16,
+            tt_dtype=ttnn.bfloat16,
             tt_device=device,
-            tt_layout=ttl.tensor.Layout.TILE,
+            tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
 
         if is_rmsnorm:
-            tt_lnp2_out = ttl.operations.primary.rmsnorm_post_allgather(
+            tt_lnp2_out = ttnn.experimental.operations.primary.rmsnorm_post_allgather(
                 tt_inp, tt_stats, epsilon, tt_gamma, compute_kernel_config=kernel_config
             )
         else:
-            tt_lnp2_out = ttl.operations.primary.layernorm_post_allgather(
+            tt_lnp2_out = ttnn.experimental.operations.primary.layernorm_post_allgather(
                 tt_inp, tt_stats, epsilon, tt_gamma, tt_beta, compute_kernel_config=kernel_config
             )
 
@@ -110,7 +110,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device, fp32_e
 @skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
+    (ttnn.bfloat16, ttnn.bfloat8_b),
     ids=["BFLOAT16", "BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
@@ -144,7 +144,7 @@ def test_layernorm_part_2_with_program_cache(
 @skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "dtype",
-    [ttl.tensor.DataType.BFLOAT16],
+    [ttnn.bfloat16],
     ids=["BFLOAT16"],
 )
 @pytest.mark.parametrize(
@@ -165,7 +165,7 @@ def test_layernorm_part_2_with_program_cache(
 def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, dtype, device, use_program_cache):
     dummy_tensors = []
 
-    dram_memcfg = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     for i in range(2):
         if i > 0:
@@ -174,7 +174,7 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
                     torch.randn(inp_shape),
                     tt_dtype=dtype,
                     tt_device=device,
-                    tt_layout=ttl.tensor.Layout.TILE,
+                    tt_layout=ttnn.TILE_LAYOUT,
                     tt_memory_config=dram_memcfg,
                 )
             )

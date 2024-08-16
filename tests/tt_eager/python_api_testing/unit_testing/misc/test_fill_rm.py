@@ -5,7 +5,6 @@
 import torch
 
 import ttnn
-import tt_lib
 from models.utility_functions import print_diff_argmax
 from models.utility_functions import is_wormhole_b0
 
@@ -29,13 +28,13 @@ def test_fill_rm(device):
     xp[:, :, :fillH, :fillW] = 1.0
 
     xt = (
-        tt_lib.tensor.Tensor(
+        ttnn.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
-        .to(tt_lib.tensor.Layout.TILE)
+        .to(ttnn.TILE_LAYOUT)
         .to(device)
     )
     xtt = ttnn.fill_ones_rm(N, C, H, W, fillH, fillW, xt)

@@ -43,18 +43,18 @@ def run_reduce_max_h_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_c
 test_sweep_args = [
     (
         (4, 10, 72, 116),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
         "SYSTEM_MEMORY",
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         2763978,
     ),
     (
         (1, 4, 20, 166),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
         "SYSTEM_MEMORY",
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         16899236,
     ),
 ]

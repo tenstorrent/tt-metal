@@ -5,7 +5,7 @@
 import pytest
 import torch
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_allclose, is_wormhole_b0
 from loguru import logger
 
@@ -90,7 +90,7 @@ def tt_norm(
         npu_y = to_npu(torch.norm(cpu_x, p=p, dim=dim, keepdim=keepdim).bfloat16().reshape(tt_output_shape), device)
     else:
         npu_y = to_npu(torch.empty(tt_output_shape), device)
-        ttl.operations.primary.moreh_norm(
+        ttnn.experimental.operations.primary.moreh_norm(
             npu_x, p=p, dim=dim, keepdim=keepdim, output=npu_y, compute_kernel_config=compute_kernel_config
         )
 
@@ -98,7 +98,7 @@ def tt_norm(
     if do_backward:
         npu_dx = to_npu(torch.empty_like(cpu_x), device)
 
-        ttl.operations.primary.moreh_norm_backward(
+        ttnn.experimental.operations.primary.moreh_norm_backward(
             npu_x,
             npu_y,
             npu_dy,

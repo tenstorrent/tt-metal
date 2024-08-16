@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib as ttl
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -33,30 +32,28 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
     )
     # Use ttnn shape to get padding of batch
     padded_batch = proj_output_tt.shape.with_tile_padding()[2]
-    shard_spec_1_cores_grid = ttl.tensor.CoreRangeSet(
+    shard_spec_1_cores_grid = ttnn.CoreRangeSet(
         {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(0, 0),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(0, 0),
             ),
         }
     )
-    CREATE_HEAD_INPUT_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
+    CREATE_HEAD_INPUT_MEMCFG = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
             shard_spec_1_cores_grid,
             [
                 padded_batch,
                 head_dim * total_heads,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    HEIGHT_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
-    )
+    HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
 
     proj_output_tt = proj_output_tt.to(device=device, mem_config=CREATE_HEAD_INPUT_MEMCFG)
 
@@ -138,30 +135,28 @@ def run_test_create_min_width_shard(
     proj_output = torch.rand(1, seq_len, batch, head_dim * total_heads)
 
     # TT configs
-    shard_spec_n_cores_grid = ttl.tensor.CoreRangeSet(
+    shard_spec_n_cores_grid = ttnn.CoreRangeSet(
         {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(core_x - 1, core_y - 1),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(core_x - 1, core_y - 1),
             ),
         }
     )
-    CREATE_HEAD_INPUT_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
+    CREATE_HEAD_INPUT_MEMCFG = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
             shard_spec_n_cores_grid,
             [
                 32,
                 32,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    HEIGHT_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
-    )
+    HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
 
     # Prepare tt input
     proj_output_tt = torch2tt_tensor(proj_output, tt_device=None).to(device=device, mem_config=CREATE_HEAD_INPUT_MEMCFG)

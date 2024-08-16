@@ -44,7 +44,7 @@ def gen_shapes(start_shape, end_shape, interval, num_shapes):
 
 
 def run_transpose_nh_tests(dtype, dlayout, in_mem_config, out_mem_config, device):
-    if dlayout == ttl.tensor.Layout.ROW_MAJOR:
+    if dlayout == ttnn.ROW_MAJOR_LAYOUT:
         shapes = gen_shapes([1, 1, 2, 2], [12, 24, 512, 512], [1, 1, 2, 2], 256)
     else:
         shapes = gen_shapes([1, 1, 32, 32], [12, 24, 512, 512], [1, 1, 32, 32], 256)
@@ -84,22 +84,22 @@ def run_transpose_nh_tests(dtype, dlayout, in_mem_config, out_mem_config, device
 
 test_sweep_args = [
     (
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     ),
     (
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     ),
     (
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         None,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     ),
 ]
 

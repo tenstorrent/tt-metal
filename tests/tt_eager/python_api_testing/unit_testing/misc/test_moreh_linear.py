@@ -4,7 +4,7 @@
 
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_allclose_and_pcc
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_moreh_matmul import get_tensors
 from loguru import logger
@@ -17,18 +17,18 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
 
 # TODO: add this feature in get_tensors method
 def get_bias_tensors(bias_shape, require_bias_grad, device):
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
+    npu_dtype = ttnn.bfloat16
     cpu_dtype = torch.bfloat16
-    npu_layout = ttl.tensor.Layout.TILE
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    npu_layout = ttnn.TILE_LAYOUT
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
 
     bias = torch.randint(-10, 10, bias_shape, dtype=cpu_dtype)
-    tt_bias = ttl.tensor.Tensor(bias, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    tt_bias = ttnn.Tensor(bias, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
     tt_bias_grad = None
     if require_bias_grad:
         bias_grad = torch.full(bias_shape, float("nan"), dtype=cpu_dtype)
-        tt_bias_grad = ttl.tensor.Tensor(bias_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+        tt_bias_grad = ttnn.Tensor(bias_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
     return tt_bias, bias, tt_bias_grad
 
@@ -40,13 +40,11 @@ def moreh_linear(shapes, has_bias, has_output, compute_kernel_config, device):
         input_shape, weight_shape, output_shape, False, False, False, device
     )
 
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
-    npu_layout = ttl.tensor.Layout.TILE
+    npu_dtype = ttnn.bfloat16
+    npu_layout = ttnn.TILE_LAYOUT
     cpu_dtype = torch.bfloat16
     torch_output = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
-    tt_output = (
-        ttl.tensor.Tensor(torch_output, npu_dtype).pad_to_tile(1).to(npu_layout).to(device) if has_output else None
-    )
+    tt_output = ttnn.Tensor(torch_output, npu_dtype).pad_to_tile(1).to(npu_layout).to(device) if has_output else None
 
     if has_bias:
         tt_bias, torch_bias, _ = get_bias_tensors(bias_shape, False, device)
@@ -54,7 +52,7 @@ def moreh_linear(shapes, has_bias, has_output, compute_kernel_config, device):
         tt_bias, torch_bias = None, None
 
     ## TT Op
-    tt_output = ttl.operations.primary.moreh_linear(
+    tt_output = ttnn.experimental.operations.primary.moreh_linear(
         tt_input, tt_weight, bias=tt_bias, output=tt_output, compute_kernel_config=compute_kernel_config
     )
 
@@ -63,7 +61,7 @@ def moreh_linear(shapes, has_bias, has_output, compute_kernel_config, device):
 
     ## test for equivalance
     rtol = atol = 0.1
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     ttcpu_output = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
     passing, output_pcc = comp_allclose_and_pcc(torch_output, ttcpu_output, pcc=0.999, rtol=rtol, atol=atol)
     logger.debug(f"Passing = {passing}")
@@ -156,7 +154,7 @@ def moreh_linear_backward(
     tt_bias, torch_bias, tt_bias_grad = get_bias_tensors(bias_shape, requires_bias_grad, device)
 
     ## tt linear backward
-    tt_input_grad, tt_weight_grad, tt_bias_grad = ttl.operations.primary.moreh_linear_backward(
+    tt_input_grad, tt_weight_grad, tt_bias_grad = ttnn.experimental.operations.primary.moreh_linear_backward(
         tt_output_grad,
         tt_input,
         tt_weight,
@@ -177,7 +175,7 @@ def moreh_linear_backward(
 
     ## test for equivalance
     rtol = atol = 0.1
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     if requires_input_grad:
         ttcpu_input_grad = tt_input_grad.cpu().to(cpu_layout).unpad_from_tile(input_shape).to_torch()
         passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, ttcpu_input_grad, pcc=0.999, rtol=rtol, atol=atol)

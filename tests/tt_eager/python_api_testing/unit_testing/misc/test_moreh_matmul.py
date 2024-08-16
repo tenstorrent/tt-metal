@@ -6,7 +6,7 @@ import pytest
 import torch
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_allclose_and_pcc
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,
@@ -18,10 +18,10 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
 def get_tensors(
     input_shape, other_shape, output_shape, require_input_grad, require_other_grad, is_1d, device, use_randint=True
 ):
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
+    npu_dtype = ttnn.bfloat16
     cpu_dtype = torch.bfloat16
-    npu_layout = ttl.tensor.Layout.TILE
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    npu_layout = ttnn.TILE_LAYOUT
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
 
     # create tensors for forward
     if use_randint:
@@ -33,9 +33,9 @@ def get_tensors(
         other = torch.rand(other_shape, dtype=cpu_dtype)
         output = torch.rand(output_shape, dtype=cpu_dtype)
 
-    tt_input = ttl.tensor.Tensor(input, npu_dtype).pad_to_tile(float(1)).to(npu_layout).to(device)
-    tt_other = ttl.tensor.Tensor(other, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-    tt_output = ttl.tensor.Tensor(output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    tt_input = ttnn.Tensor(input, npu_dtype).pad_to_tile(float(1)).to(npu_layout).to(device)
+    tt_other = ttnn.Tensor(other, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    tt_output = ttnn.Tensor(output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
     torch_input = input.reshape(-1) if is_1d else input
     torch_other = other.reshape(-1) if is_1d else other
@@ -44,18 +44,18 @@ def get_tensors(
     output_grad = tt_output_grad = torch_output_grad = tt_input_grad = tt_other_grad = None
     if require_input_grad or require_other_grad:
         output_grad = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
-        # tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-        tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(float(-1)).to(npu_layout).to(device)
+        # tt_output_grad = ttnn.Tensor(output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+        tt_output_grad = ttnn.Tensor(output_grad, npu_dtype).pad_to_tile(float(-1)).to(npu_layout).to(device)
         torch_output_grad = output_grad[0][0][0][0] if is_1d else output_grad
 
         if require_input_grad:
             input_grad = torch.full(input_shape, float("nan"), dtype=cpu_dtype)
-            tt_input_grad = ttl.tensor.Tensor(input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+            tt_input_grad = ttnn.Tensor(input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
         if require_other_grad:
             other_grad = torch.full(other_shape, float("nan"), dtype=cpu_dtype)
             tt_other_grad = (
-                ttl.tensor.Tensor(
+                ttnn.Tensor(
                     other_grad,
                     npu_dtype,
                 )
@@ -95,9 +95,9 @@ def test_moreh_matmul_1d(input_shape, device):
     )
 
     # tt matmul
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_out = (
-        ttl.operations.primary.moreh_matmul(tt_input, tt_other)
+        ttnn.experimental.operations.primary.moreh_matmul(tt_input, tt_other)
         .cpu()
         .to(cpu_layout)
         .unpad_from_tile(output_shape)
@@ -159,13 +159,13 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
     torch_out.backward(torch_output_grad)
 
     # tt matmul backward
-    ttl.operations.primary.moreh_matmul_backward(
+    ttnn.experimental.operations.primary.moreh_matmul_backward(
         tt_output_grad, tt_input, tt_other, (require_input_grad, require_other_grad), tt_input_grad, tt_other_grad
     )
 
     # test for equivalance
     rtol = atol = 0.1
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     if require_input_grad:
         ttcpu_input_grad = tt_input_grad.cpu().to(cpu_layout).unpad_from_tile(input_shape).to_torch()
 
@@ -230,13 +230,13 @@ def test_moreh_matmul_backward(params, requires_grad, device):
     torch_out.backward(torch_output_grad)
 
     # tt matmul backward
-    tt_input_grad, tt_other_grad = ttl.operations.primary.moreh_matmul_backward(
+    tt_input_grad, tt_other_grad = ttnn.experimental.operations.primary.moreh_matmul_backward(
         tt_output_grad, tt_input, tt_other, (require_input_grad, require_other_grad), tt_input_grad, tt_other_grad
     )
 
     # test for equivalance
     rtol = atol = 0.1
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     if require_input_grad:
         ttcpu_input_grad = tt_input_grad.cpu().to(cpu_layout).unpad_from_tile(input_shape).to_torch()
         passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, ttcpu_input_grad, pcc=0.999, rtol=rtol, atol=atol)
@@ -269,8 +269,8 @@ def moreh_matmul(params, has_output, compute_kernel_config, device):
     torch_other = torch_other.transpose(-1, -2) if transpose_other else torch_other
 
     # tt matmul
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_output = ttl.operations.primary.moreh_matmul(
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
+    tt_output = ttnn.experimental.operations.primary.moreh_matmul(
         tt_input,
         tt_other,
         transpose_input=transpose_input,
@@ -397,8 +397,8 @@ def test_moreh_matmul_fp32_dest_acc(params, compute_kernel_options, device):
     torch_other = torch_other.transpose(-1, -2) if transpose_other else torch_other
 
     # tt matmul
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_output = ttl.operations.primary.moreh_matmul(
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
+    tt_output = ttnn.experimental.operations.primary.moreh_matmul(
         tt_input,
         tt_other,
         transpose_input=transpose_input,

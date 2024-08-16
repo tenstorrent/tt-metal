@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_moreh_matmul import get_tensors
 from models.utility_functions import comp_allclose_and_pcc
 
@@ -32,9 +32,9 @@ def test_moreh_bmm(shape, device):
     )
 
     # tt bmm
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_out = (
-        ttl.operations.primary.moreh_bmm(tt_input, tt_mat2)
+        ttnn.experimental.operations.primary.moreh_bmm(tt_input, tt_mat2)
         .cpu()
         .to(cpu_layout)
         .unpad_from_tile(output_shape)
@@ -92,8 +92,10 @@ def test_moreh_bmm_backward(shape, requires_grad, device):
     ) = get_tensors(input_shape, mat2_shape, output_shape, require_input_grad, require_mat2_grad, False, device)
 
     # tt bmm fwd, bwd
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    ttl.operations.primary.moreh_bmm_backward(tt_output_grad, tt_input, tt_mat2, tt_input_grad, tt_mat2_grad)
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
+    ttnn.experimental.operations.primary.moreh_bmm_backward(
+        tt_output_grad, tt_input, tt_mat2, tt_input_grad, tt_mat2_grad
+    )
 
     # torch bmm fwd, bwd
     torch_input = torch_input.reshape(-1, input_shape[2], input_shape[3])

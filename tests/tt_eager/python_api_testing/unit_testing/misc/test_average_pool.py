@@ -7,7 +7,6 @@ import pytest
 
 import torch
 
-import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
@@ -28,7 +27,7 @@ def shape_padded(shape):
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
     ids=[
         "BFLOAT16",
     ],
@@ -39,7 +38,7 @@ def test_run_average_pool(act_shape, dtype, device):
     torch.manual_seed(0)
 
     act = torch.randn(act_shape, dtype=torch.bfloat16).float()
-    ttact = ttl.tensor.Tensor(act, ttl.tensor.DataType.BFLOAT16)
+    ttact = ttnn.Tensor(act, ttnn.bfloat16)
     act_shape_padded = shape_padded(act_shape)
     if act_shape != act_shape_padded:
         ttact = ttact.pad_to_tile(0.0)
@@ -47,7 +46,7 @@ def test_run_average_pool(act_shape, dtype, device):
 
     out = ttnn.avg_pool2d(ttact)
 
-    out = out.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    out = out.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     out_shape = [batch_size, 1, 1, channels]
     out_shape_padded = shape_padded(out_shape)
     if out_shape != out_shape_padded:

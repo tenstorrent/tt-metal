@@ -9,7 +9,6 @@ from functools import partial
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
-import tt_lib as ttl
 
 
 @pytest.mark.parametrize(

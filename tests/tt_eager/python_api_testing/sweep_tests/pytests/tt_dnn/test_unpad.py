@@ -5,7 +5,7 @@
 import pytest
 import torch
 from functools import partial
-import tt_lib
+import ttnn
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
@@ -22,11 +22,9 @@ params = [
     pytest.param([[5, 5, 50, 50]], unpad_args)
     for unpad_args in generation_funcs.gen_unpad_args(
         [[5, 5, 50, 50]],
-        dtypes=[[tt_lib.tensor.DataType.BFLOAT16]],
-        layouts=[[tt_lib.tensor.Layout.ROW_MAJOR]],
-        mem_configs=[
-            [tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)]
-        ],
+        dtypes=[[ttnn.bfloat16]],
+        layouts=[[ttnn.ROW_MAJOR_LAYOUT]],
+        mem_configs=[[ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)]],
     )
 ]
 
@@ -34,11 +32,9 @@ params += [
     pytest.param([[5, 5, 64, 96]], unpad_args)
     for unpad_args in generation_funcs.gen_unpad_args(
         [[5, 5, 64, 96]],
-        dtypes=[[tt_lib.tensor.DataType.BFLOAT16]],
-        layouts=[[tt_lib.tensor.Layout.TILE]],
-        mem_configs=[
-            [tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)]
-        ],
+        dtypes=[[ttnn.bfloat16]],
+        layouts=[[ttnn.TILE_LAYOUT]],
+        mem_configs=[[ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)]],
     )
 ]
 

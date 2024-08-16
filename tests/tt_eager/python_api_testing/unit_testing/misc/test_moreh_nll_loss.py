@@ -4,7 +4,7 @@
 
 import torch
 
-import tt_lib as ttl
+import ttnn
 import pytest
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
@@ -37,7 +37,7 @@ def get_torch_tensors(shape):
 def get_tt_tensors(torch_input, torch_target, torch_weight, torch_divisor, torch_output, device):
     C = torch_input.shape[1]
 
-    npu_index_dtype = ttl.tensor.DataType.INT32
+    npu_index_dtype = ttnn.int32
 
     tt_input = to_npu(torch_input, device)
     tt_target = to_npu(torch_target, device, npu_dtype=npu_index_dtype)
@@ -64,7 +64,7 @@ def run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device, comp
     )
 
     reduction_mean = reduction == "mean"
-    tt_loss = ttl.operations.primary.moreh_nll_loss(
+    tt_loss = ttnn.experimental.operations.primary.moreh_nll_loss(
         tt_input,
         tt_target,
         tt_weight,
@@ -100,7 +100,7 @@ def run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight
     )
     if reduction_mean == False:
         tt_divisor = None
-    tt_loss = ttl.operations.primary.moreh_nll_loss(
+    tt_loss = ttnn.experimental.operations.primary.moreh_nll_loss(
         tt_input,
         tt_target,
         tt_weight,
@@ -118,7 +118,7 @@ def run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight
     tt_output_grad = to_npu(output_grad, device)
     tt_input_grad = to_npu(torch_input, device)
 
-    tt_input_grad = ttl.operations.primary.moreh_nll_loss_backward(
+    tt_input_grad = ttnn.experimental.operations.primary.moreh_nll_loss_backward(
         tt_target,
         tt_weight,
         tt_divisor,

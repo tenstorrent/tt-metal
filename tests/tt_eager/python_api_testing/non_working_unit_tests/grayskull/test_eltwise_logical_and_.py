@@ -60,13 +60,13 @@ def run_eltwise_logical_andi_tests(
 test_sweep_args = [
     (
         (6, 9, 192, 128),
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [ttnn.bfloat16, ttnn.bfloat16],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         14854324,
     ),
 ]

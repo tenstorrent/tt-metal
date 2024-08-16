@@ -4,7 +4,7 @@
 
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 from functools import partial
 
 
@@ -23,7 +23,7 @@ shapes = [
 
 
 @pytest.mark.parametrize("input_shapes", shapes)
-@pytest.mark.parametrize("dtype", (ttl.tensor.DataType.BFLOAT16,))
+@pytest.mark.parametrize("dtype", (ttnn.bfloat16,))
 def test_run_outer_test(input_shapes, device, dtype, function_level_defaults):
     datagen_func = [
         generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
@@ -37,10 +37,8 @@ def test_run_outer_test(input_shapes, device, dtype, function_level_defaults):
         device,
         {
             "dtype": [dtype, dtype],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [None, None],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         },
     )

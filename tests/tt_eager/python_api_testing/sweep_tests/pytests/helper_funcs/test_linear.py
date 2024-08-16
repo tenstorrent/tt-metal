@@ -4,7 +4,7 @@
 
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 from functools import partial
 
 
@@ -33,15 +33,10 @@ def test_linear_no_bias(input_shapes, device):
         device,
         {
             "weight": weight,
-            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-            "dtype": [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-            "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-            ]
-            * 2,
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "layout": [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
+            "dtype": [ttnn.bfloat16, ttnn.bfloat16],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)] * 2,
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             "bias": None,
         },
     )
@@ -73,14 +68,9 @@ def test_linear_with_bias(input_shapes, device):
         {
             "weight": weight,
             "bias": bias,
-            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.ROW_MAJOR],
-            "dtype": [ttl.tensor.DataType.BFLOAT16] * 3,
-            "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-            ]
-            * 3,
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "layout": [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+            "dtype": [ttnn.bfloat16] * 3,
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)] * 3,
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         },
     )

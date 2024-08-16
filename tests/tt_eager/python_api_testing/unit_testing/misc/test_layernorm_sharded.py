@@ -9,7 +9,6 @@ import pytest
 import torch
 import math
 
-import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
@@ -24,27 +23,27 @@ def rms_norm(x, dim, gamma, beta, eps):
 # @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "out_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1),),
+    (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1),),
     ids=["out_L1"],
 )
 @pytest.mark.parametrize(
     "gamma_beta_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),),
     ids=[
         "gb_DRAM",
     ],
 )
 @pytest.mark.parametrize(
     "gamma_dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
     ids=["BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "in_dtype",
     (
-        ttl.tensor.DataType.FLOAT32,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.float32,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ),
     ids=["FLOAT32", "BFLOAT16", "BFLOAT8_B"],
 )
@@ -70,17 +69,17 @@ def rms_norm(x, dim, gamma, beta, eps):
 def test_layernorm_sharded_mix_precision_rm(
     test_id, in_dtype, gamma_dtype, gamma_beta_mem_config, out_mem_config, device, width_padding
 ):
-    if is_grayskull() and in_dtype == ttl.tensor.DataType.FLOAT32:
+    if is_grayskull() and in_dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
     torch.manual_seed(1234)
-    in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     compute_grid_size = device.compute_with_storage_grid_size()
     grid_size = [compute_grid_size.x, compute_grid_size.y]
     if grid_size[1] > 8:
         grid_size[1] = 8
-    fidelity = ttl.tensor.MathFidelity.HiFi4
+    fidelity = ttnn.MathFidelity.HiFi4
 
     epsf = 1e-2
     batch = grid_size[1]
@@ -96,23 +95,23 @@ def test_layernorm_sharded_mix_precision_rm(
     in0 = torch.rand(in0_shape) * 2 - 0.95
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
     shard_shape = [M // grid_size[0], math.ceil(K / grid_size[1] / 32) * 32]
-    in0_t_shard = ttl.tensor.interleaved_to_sharded(
+    in0_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
         in0_t,
         grid_size,
         shard_shape,
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ttl.tensor.ShardOrientation.COL_MAJOR,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
     )
 
     if test_id <= 5:
         in1 = torch.rand(in0_shape) * 2 - 0.8
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-        in1_t_shard = ttl.tensor.interleaved_to_sharded(
+        in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
             in1_t,
             grid_size,
             shard_shape,
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttl.tensor.ShardOrientation.COL_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.ShardOrientation.COL_MAJOR,
         )
 
     if test_id % 3 == 0:
@@ -126,19 +125,19 @@ def test_layernorm_sharded_mix_precision_rm(
         beta = torch.rand(in0_shape[3]) * 2.0 - 1.1
 
     gamma = gamma.reshape(1, 1, -1, 32)
-    gamma_t = ttl.tensor.Tensor(
+    gamma_t = ttnn.Tensor(
         gamma.reshape(-1).tolist(),
         gamma.shape,
         gamma_dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
     ).to(device, gamma_beta_mem_config)
 
     beta = beta.reshape(1, 1, -1, 32)
-    beta_t = ttl.tensor.Tensor(
+    beta_t = ttnn.Tensor(
         beta.reshape(-1).tolist(),
         beta.shape,
         gamma_dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
     ).to(device, gamma_beta_mem_config)
 
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -150,8 +149,8 @@ def test_layernorm_sharded_mix_precision_rm(
     )
 
     if not is_grayskull():
-        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4, math_approx_mode=True, fp32_dest_acc_en=True
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=True, fp32_dest_acc_en=True
         )
 
     if test_id == 0:
@@ -269,8 +268,8 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
 
-    ttz = ttl.tensor.sharded_to_interleaved(ttz, in0_mem_config)
-    tt_got_back = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().float()
+    ttz = ttnn.experimental.tensor.sharded_to_interleaved(ttz, in0_mem_config)
+    tt_got_back = ttz.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().float()
 
     pt_in = in0 + in1 if test_id <= 5 else in0
     if test_id <= 2 or 6 <= test_id <= 8:
@@ -286,32 +285,32 @@ def test_layernorm_sharded_mix_precision_rm(
 
 @pytest.mark.parametrize(
     "shard_orientation",
-    (ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR),
+    (ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR),
     ids=["RM", "CM"],
 )
 @pytest.mark.parametrize(
     "out_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1),),
+    (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1),),
     ids=["out_L1"],
 )
 @pytest.mark.parametrize(
     "gamma_beta_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),),
     ids=[
         "gb_DRAM",
     ],
 )
 @pytest.mark.parametrize(
     "gamma_dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
     ids=["BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "in_dtype",
     (
-        ttl.tensor.DataType.FLOAT32,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.DataType.BFLOAT8_B,
+        ttnn.float32,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ),
     ids=["FLOAT32", "BFLOAT16", "BFLOAT8_B"],
 )
@@ -344,11 +343,11 @@ def test_layernorm_sharded_mix_precision_rm(
 def test_layernorm_1d_sharded_mix_precision_rm(
     test_id, M, K, subblock_w, in_dtype, gamma_dtype, gamma_beta_mem_config, out_mem_config, shard_orientation, device
 ):
-    if is_grayskull() and in_dtype == ttl.tensor.DataType.FLOAT32:
+    if is_grayskull() and in_dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
     torch.manual_seed(1234)
-    in0_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     device_grid_size = device.compute_with_storage_grid_size()
     if device_grid_size.x >= 8 and device_grid_size.y >= 4:
@@ -359,7 +358,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
     else:
         pytest.skip("Device grid size is too small for this test")
 
-    fidelity = ttl.tensor.MathFidelity.HiFi2
+    fidelity = ttnn.MathFidelity.HiFi2
 
     epsf = 1e-2
 
@@ -370,22 +369,22 @@ def test_layernorm_1d_sharded_mix_precision_rm(
     in0 = torch.rand(in0_shape) * 2 - 0.95
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
     shard_shape = [M, math.ceil(K / (grid_size[0] * grid_size[1]) / 32) * 32]
-    in0_t_shard = ttl.tensor.interleaved_to_sharded(
+    in0_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
         in0_t,
         grid_size,
         shard_shape,
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         shard_orientation,
     )
 
     if test_id <= 5:
         in1 = torch.rand(in0_shape) * 2 - 0.8
         in1_t = torch2tt_tensor(in1, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-        in1_t_shard = ttl.tensor.interleaved_to_sharded(
+        in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
             in1_t,
             grid_size,
             shard_shape,
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             shard_orientation,
         )
 
@@ -400,19 +399,19 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         beta = torch.rand(in0_shape[3]) * 2.0 - 1.1
 
     gamma = gamma.reshape(1, 1, -1, 32)
-    gamma_t = ttl.tensor.Tensor(
+    gamma_t = ttnn.Tensor(
         gamma.reshape(-1).tolist(),
         gamma.shape,
         gamma_dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
     ).to(device, gamma_beta_mem_config)
 
     beta = beta.reshape(1, 1, -1, 32)
-    beta_t = ttl.tensor.Tensor(
+    beta_t = ttnn.Tensor(
         beta.reshape(-1).tolist(),
         beta.shape,
         gamma_dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.ROW_MAJOR_LAYOUT,
     ).to(device, gamma_beta_mem_config)
 
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -422,7 +421,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         block_w=shard_shape[1] // 32,
         inplace=True,
     )
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -544,8 +543,8 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
 
-    ttz = ttl.tensor.sharded_to_interleaved(ttz, in0_mem_config)
-    tt_got_back = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().float()
+    ttz = ttnn.experimental.tensor.sharded_to_interleaved(ttz, in0_mem_config)
+    tt_got_back = ttz.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().float()
 
     pt_in = in0 + in1 if test_id <= 5 else in0
     if test_id <= 2 or 6 <= test_id <= 8:

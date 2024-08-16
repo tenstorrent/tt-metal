@@ -10,7 +10,7 @@ from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 from models.utility_functions import is_wormhole_b0
-import tt_lib as ttl
+import ttnn
 import numpy as np
 
 fns = [
@@ -85,10 +85,10 @@ class TestStats:
 
 class TestEPS:
     def test_basic_gs(self):
-        assert ttl.device.EPS_GS == 0.001953125
+        assert ttnn.experimental.device.EPS_GS == 0.001953125
 
     def test_basic_whb0(self):
-        assert np.isclose(ttl.device.EPS_WHB0, 1.19209e-07)
+        assert np.isclose(ttnn.experimental.device.EPS_WHB0, 1.19209e-07)
 
     def test_basic_bh(self):
-        assert np.isclose(ttl.device.EPS_BH, 1.19209e-07)
+        assert np.isclose(ttnn.experimental.device.EPS_BH, 1.19209e-07)

@@ -42,18 +42,18 @@ def run_eltwise_isnan_test(input_shape, dtype, dlayout, in_mem_config, out_mem_c
 test_sweep_args = [
     (
         (7, 14, 32, 160),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE],
-        [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        [ttnn.bfloat16],
+        [ttnn.TILE_LAYOUT],
+        [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         16305027,
     ),
     (
         (6, 11, 3, 190),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
+        [ttnn.bfloat16],
+        [ttnn.ROW_MAJOR_LAYOUT],
         [None],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         17290030,
     ),
 ]

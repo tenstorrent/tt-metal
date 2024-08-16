@@ -43,18 +43,18 @@ def run_eltwise_isneginf_test(input_shape, dtype, dlayout, in_mem_config, out_me
 test_sweep_args = [
     (
         (5, 10, 35, 162),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
-        [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        [ttnn.bfloat16],
+        [ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)],
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         3624344,
     ),
     (
         (6, 12, 39, 22),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
-        [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        [ttnn.bfloat16],
+        [ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)],
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         7965166,
     ),
 ]

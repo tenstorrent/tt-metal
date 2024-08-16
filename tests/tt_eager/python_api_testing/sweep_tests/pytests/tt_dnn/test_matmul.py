@@ -4,7 +4,7 @@
 
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 from functools import partial
 
 
@@ -50,7 +50,7 @@ if is_wormhole_b0():
 @pytest.mark.parametrize("input_shapes", shapes_mm)
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B),
+    (ttnn.bfloat16, ttnn.bfloat8_b),
     ids=["BFLOAT16", "BFLOAT8_B"],
 )
 def test_run_matmul_test(input_shapes, device, dtype, function_level_defaults):
@@ -66,13 +66,8 @@ def test_run_matmul_test(input_shapes, device, dtype, function_level_defaults):
         device,
         {
             "dtype": [dtype, dtype],
-            "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-            "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-            ]
-            * 2,
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "layout": [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)] * 2,
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         },
     )

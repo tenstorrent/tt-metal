@@ -14,7 +14,7 @@ import random
 from pathlib import Path
 from loguru import logger
 from functools import partial
-import tt_lib
+import ttnn
 from itertools import permutations, product
 from tracy import signpost
 
@@ -28,23 +28,23 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import (
 )
 
 DTYPES_TT_DICT = {
-    "BFLOAT16": tt_lib.tensor.DataType.BFLOAT16,
-    "BFLOAT8_B": tt_lib.tensor.DataType.BFLOAT8_B,
-    "UINT32": tt_lib.tensor.DataType.UINT32,
-    "UINT16": tt_lib.tensor.DataType.UINT16,
-    "INT32": tt_lib.tensor.DataType.INT32,
-    "BFLOAT4_B": tt_lib.tensor.DataType.BFLOAT4_B,
-    "FLOAT32": tt_lib.tensor.DataType.FLOAT32,
+    "BFLOAT16": ttnn.bfloat16,
+    "BFLOAT8_B": ttnn.bfloat8_b,
+    "UINT32": ttnn.uint32,
+    "UINT16": ttnn.uint16,
+    "INT32": ttnn.int32,
+    "BFLOAT4_B": ttnn.bfloat4_b,
+    "FLOAT32": ttnn.float32,
 }
 
 LAYOUTS_TT_DICT = {
-    "ROW_MAJOR": tt_lib.tensor.Layout.ROW_MAJOR,
-    "TILE": tt_lib.tensor.Layout.TILE,
+    "ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT,
+    "TILE": ttnn.TILE_LAYOUT,
 }
 
 MEM_CONFIGS_TT_DICT = {
-    "DRAM": tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    "L1": tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
+    "DRAM": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    "L1": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     "SYSTEM_MEMORY": None,
 }
 
@@ -313,7 +313,7 @@ def run_sweep_tests(test_sweep_parameters, output_folder, output_file, run_tests
 
             test_pass = run_sweep_test(parameters, op_map, device, results_csv_writer)
 
-            tt_lib.device.Synchronize(device)
+            ttnn.synchronize_device(device)
             signpost(header=f"{test_profiling_key} - end")
             logger.info(f"Stopped profiling test {test_profiling_key}")
             run_id += 1
@@ -365,12 +365,12 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     device_id = args.device_id
-    device = tt_lib.device.CreateDevice(device_id)
-    tt_lib.device.SetDefaultDevice(device)
+    device = ttnn.open_device(device_id)
+    ttnn.experimental.device.SetDefaultDevice(device)
 
     logger.info(f"Running on device {device_id} for test.")
 
     test_sweep_parameters, output_file = generate_test_sweep_parameters(args.input_test_config, args.env)
     run_sweep_tests(test_sweep_parameters, args.output_folder_path, output_file, args.run_tests_for_ci, device)
 
-    tt_lib.device.CloseDevice(device)
+    ttnn.close_device(device)

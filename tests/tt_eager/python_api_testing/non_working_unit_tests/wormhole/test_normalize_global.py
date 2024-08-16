@@ -45,42 +45,42 @@ def run_normalize_global_test(input_shape, dtype, dlayout, in_mem_config, out_me
 test_sweep_args = [
     (
         (4, 8, 32, 32),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
+        [ttnn.bfloat16],
+        [ttnn.ROW_MAJOR_LAYOUT],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         14854324,
     ),
     (
         (4, 8, 32, 32),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
+        [ttnn.bfloat16],
+        [ttnn.ROW_MAJOR_LAYOUT],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         14854324,
     ),
     (
         (4, 12, 32, 128),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
+        [ttnn.bfloat16],
+        [ttnn.ROW_MAJOR_LAYOUT],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         14854324,
     ),
     (
         (4, 12, 32, 128),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
+        [ttnn.bfloat16],
+        [ttnn.ROW_MAJOR_LAYOUT],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         14854324,
     ),
 ]

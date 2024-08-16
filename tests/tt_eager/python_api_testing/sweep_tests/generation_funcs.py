@@ -6,7 +6,6 @@ import torch
 import random
 from itertools import permutations, product
 from functools import lru_cache
-import tt_lib as ttl
 import ttnn
 import numpy as np
 from tt_lib.utils import _nearest_32 as nearest_32, tilize
@@ -22,21 +21,21 @@ supported_dtypes = {
     "chalf": torch.chalf,
 }
 
-supported_tt_dtypes = [ttl.tensor.DataType.BFLOAT16]
+supported_tt_dtypes = [ttnn.bfloat16]
 
 supported_tt_layouts = [
-    ttl.tensor.Layout.ROW_MAJOR,
-    ttl.tensor.Layout.TILE,
+    ttnn.ROW_MAJOR_LAYOUT,
+    ttnn.TILE_LAYOUT,
 ]
 
 supported_tt_buffer_types = [
-    ttl.tensor.BufferType.DRAM,
-    ttl.tensor.BufferType.L1,
+    ttnn.BufferType.DRAM,
+    ttnn.BufferType.L1,
 ]
 
 supported_mem_configs = [
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
 ]
 
 
@@ -47,23 +46,23 @@ def gen_func_with_cast(gen_func, dtype, tilize_input=False):
 
 def gen_func_with_cast_tt(gen_func, dtype):
     def tensor_to_dtype(x):
-        if dtype == ttl.tensor.DataType.BFLOAT16:
+        if dtype == ttnn.bfloat16:
             x = x.to(torch.bfloat16)
 
-        elif dtype == ttl.tensor.DataType.BFLOAT8_B:
+        elif dtype == ttnn.bfloat8_b:
             tt_tensor = ttnn.from_torch(
                 x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
             )
 
             x = ttnn.to_torch(tt_tensor)
 
-        elif dtype == ttl.tensor.DataType.UINT16:
+        elif dtype == ttnn.uint16:
             x = x.to(torch.int16)
 
-        elif dtype == ttl.tensor.DataType.UINT32:
+        elif dtype == ttnn.uint32:
             x = x.to(torch.int32)
 
-        elif dtype == ttl.tensor.DataType.INT32:
+        elif dtype == ttnn.int32:
             x = x.to(torch.int32)
 
         else:
@@ -286,12 +285,10 @@ def gen_tensor_pad_args(
             "output_tensor_shape": output_tensor_shape,
             "input_tensor_start": input_tensor_start,
             "pad_value": pad_value,
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [None],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         }
     )
 
@@ -311,12 +308,10 @@ def gen_tensor_unpad_args(
         {
             "output_tensor_start": output_tensor_start,
             "output_tensor_end": output_tensor_end,
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [None],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         }
     )
 
@@ -335,12 +330,10 @@ def gen_pad_to_tile_args(
 
     test_args = {
         "pad_value": pad_value,
-        "dtype": [ttl.tensor.DataType.BFLOAT16],
-        "layout": [ttl.tensor.Layout.ROW_MAJOR],
+        "dtype": [ttnn.bfloat16],
+        "layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_mem_config": [None],
-        "output_mem_config": ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-        ),
+        "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     }
 
     return [test_args]
@@ -362,12 +355,10 @@ def gen_unpad_from_tile_args(
 
     test_args = {
         "output_tensor_shape": output_tensor_shape,
-        "dtype": [ttl.tensor.DataType.BFLOAT16],
-        "layout": [ttl.tensor.Layout.ROW_MAJOR],
+        "dtype": [ttnn.bfloat16],
+        "layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_mem_config": [None],
-        "output_mem_config": ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-        ),
+        "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     }
 
     return [test_args]
@@ -381,24 +372,20 @@ def gen_default_dtype_layout_device(
     input_mem_config = []
 
     for input_shape in input_shapes:
-        dtype.append(ttl.tensor.DataType.BFLOAT16)
-        input_mem_config.append(
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-        )
+        dtype.append(ttnn.bfloat16)
+        input_mem_config.append(ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM))
 
         if input_shape[-2] % 32 == 0 and input_shape[-1] % 32 == 0:
-            layout.append(ttl.tensor.Layout.TILE)
+            layout.append(ttnn.TILE_LAYOUT)
         else:
-            layout.append(ttl.tensor.Layout.ROW_MAJOR)
+            layout.append(ttnn.ROW_MAJOR_LAYOUT)
 
     return [
         {
             "dtype": dtype,
             "layout": layout,
             "input_mem_config": input_mem_config,
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         }
     ]
 
@@ -408,15 +395,11 @@ def gen_default_dtype_layout_rm_device(
 ):
     return [
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16] * len(input_shapes),
-            "layout": [ttl.tensor.Layout.ROW_MAJOR] * len(input_shapes),
-            "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-            ]
+            "dtype": [ttnn.bfloat16] * len(input_shapes),
+            "layout": [ttnn.ROW_MAJOR_LAYOUT] * len(input_shapes),
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)]
             * len(input_shapes),
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             "use_multicore": True,
         }
     ]
@@ -428,16 +411,15 @@ def sanitize_args(input_shapes, input_setup):
 
         if (
             (
-                input_setup[i]["layout"] == ttl.tensor.Layout.TILE and (shape[-2] % 32 != 0 or shape[-1] % 32 != 0)
+                input_setup[i]["layout"] == ttnn.TILE_LAYOUT and (shape[-2] % 32 != 0 or shape[-1] % 32 != 0)
             )  # Shape cannot be tilized
             or (
-                input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
+                input_setup[i]["layout"] == ttnn.ROW_MAJOR_LAYOUT
                 and input_setup[i]["input_mem_config"] != None
                 and shape[-1] % 2 != 0
             )  # Shape cannot be placed as row major on device
             or (
-                input_setup[i]["dtype"] == ttl.tensor.DataType.BFLOAT8_B
-                and input_setup[i]["layout"] != ttl.tensor.Layout.TILE
+                input_setup[i]["dtype"] == ttnn.bfloat8_b and input_setup[i]["layout"] != ttnn.TILE_LAYOUT
             )  # BFLOAT8_B must be tile layout
         ):
             return None
@@ -505,7 +487,7 @@ def sanitize_args_layernorm(
         shape = input_shapes[i]
         if (
             (
-                input_setup[i]["layout"] == ttl.tensor.Layout.TILE
+                input_setup[i]["layout"] == ttnn.TILE_LAYOUT
                 and (
                     (
                         shape[2] % 32 != 0
@@ -518,13 +500,12 @@ def sanitize_args_layernorm(
                 )
             )  # Shape cannot be tilized
             or (
-                input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
+                input_setup[i]["layout"] == ttnn.ROW_MAJOR_LAYOUT
                 and input_setup[i]["input_mem_config"] != None
                 and shape[3] % 2 != 0
             )  # Shape cannot be placed as row major on device
             or (
-                input_setup[i]["dtype"] == ttl.tensor.DataType.BFLOAT8_B
-                and input_setup[i]["layout"] != ttl.tensor.Layout.TILE
+                input_setup[i]["dtype"] == ttnn.bfloat8_b and input_setup[i]["layout"] != ttnn.TILE_LAYOUT
             )  # BFLOAT8_B must be tile layout
         ):
             return None
@@ -644,7 +625,7 @@ def gen_permute_args(
             mem_configs,
             do_sanitize_args=do_sanitize_args,
         ):
-            if input_info["layout"][0] == ttl.tensor.Layout.ROW_MAJOR:
+            if input_info["layout"][0] == ttnn.ROW_MAJOR_LAYOUT:
                 # Last dim of output must be divisible by 2 for row_major
                 last_dim = permute_dims[-1]
                 last_dim_shape = input_shapes[0][last_dim]
@@ -731,9 +712,9 @@ def _gen_reshape_args_from_volume(volume, step, out_dims=4):
 
 def gen_reshape_args(
     input_shapes,
-    dtypes=[[ttl.tensor.DataType.BFLOAT16]],
-    layouts=[[ttl.tensor.Layout.TILE]],
-    mem_configs=[[ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)]],
+    dtypes=[[ttnn.bfloat16]],
+    layouts=[[ttnn.TILE_LAYOUT]],
+    mem_configs=[[ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)]],
     max_out_shapes=2,
     do_sanitize_args=True,
     coregrid=[],
@@ -792,7 +773,7 @@ def gen_split_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=
 def gen_tilize_with_val_padding_args(
     input_shapes,
     dtypes=[supported_tt_dtypes],
-    layouts=[[ttl.tensor.Layout.ROW_MAJOR]],
+    layouts=[[ttnn.ROW_MAJOR_LAYOUT]],
     mem_configs=[supported_mem_configs],
     do_sanitize_args=True,
     coregrid=[],
@@ -872,7 +853,7 @@ def gen_pad_args(
         input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
-            if input_info["layout"][0] == ttl.tensor.Layout.ROW_MAJOR:
+            if input_info["layout"][0] == ttnn.ROW_MAJOR_LAYOUT:
                 pad_sizes = (10, 10, 64, 64)
                 output_tensor_shape = [
                     random.randint(input_shapes[0][i], input_shapes[0][i] + pad_sizes[i]) for i in range(4)
@@ -891,7 +872,7 @@ def gen_pad_args(
                         "pad_value": pad_value,
                     }
                 )
-            elif input_info["layout"][0] == ttl.tensor.Layout.TILE:
+            elif input_info["layout"][0] == ttnn.TILE_LAYOUT:
                 pad_sizes = (10, 10, 64, 64)
                 output_tensor_shape = [
                     random.randrange(
@@ -934,7 +915,7 @@ def gen_unpad_args(
         input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
-            if input_info["layout"][0] == ttl.tensor.Layout.ROW_MAJOR:
+            if input_info["layout"][0] == ttnn.ROW_MAJOR_LAYOUT:
                 output_tensor_start = [0, 0, 0, 0]
                 output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
                 if output_tensor_end[-1] % 2 == 0:
@@ -945,7 +926,7 @@ def gen_unpad_args(
                         "output_tensor_end": output_tensor_end,
                     }
                 )
-            elif input_info["layout"][0] == ttl.tensor.Layout.TILE:
+            elif input_info["layout"][0] == ttnn.TILE_LAYOUT:
                 output_tensor_start = [0, 0, 0, 0]
                 output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
                 output_tensor_end[-2] = max(nearest_32(output_tensor_end[-2]), 32) - 1

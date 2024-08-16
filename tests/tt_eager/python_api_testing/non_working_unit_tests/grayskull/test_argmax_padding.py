@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
 
@@ -25,14 +25,9 @@ class TestArgmax:
     def test_argmax(self, input_shapes, dim, all, device):
         torch.manual_seed(10)
         input_data = torch.randn(input_shapes).bfloat16()
-        input_tensor = (
-            tt_lib.tensor.Tensor(input_data, tt_lib.tensor.DataType.BFLOAT16)
-            .pad_to_tile(100)
-            .to(tt_lib.tensor.Layout.TILE)
-            .to(device)
-        )
+        input_tensor = ttnn.Tensor(input_data, ttnn.bfloat16).pad_to_tile(100).to(ttnn.TILE_LAYOUT).to(device)
         tt_output_tensor_on_device = ttnn.experimental.argmax(input_tensor, dim=dim, all=all)
-        tt_out_tensor = tt_output_tensor_on_device.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_out_tensor = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         if all:
             golden_tensor = torch.argmax(input_data)
             tt_out_tensor = tt_out_tensor[0, 0, 0, 0]
