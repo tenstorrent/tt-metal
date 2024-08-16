@@ -114,16 +114,21 @@ void write_downstream(uint32_t& data_ptr,
                       uint32_t length) {
 
     uint32_t remaining = downstream_cb_end - downstream_data_ptr;
+    uint32_t writes = 0;
     if (length > remaining) {
         if (remaining > 0) {
-            noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), remaining);
+            cq_noc_async_write_with_state_any_len(data_ptr, downstream_data_ptr, remaining);
+            writes += div_up(remaining, NOC_MAX_BURST_SIZE);
             data_ptr += remaining;
             length -= remaining;
         }
         downstream_data_ptr = downstream_cb_base;
     }
 
-    noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
+    cq_noc_async_write_with_state_any_len(data_ptr, downstream_data_ptr, length);
+    writes += div_up(length, NOC_MAX_BURST_SIZE);
+    noc_nonposted_writes_num_issued[noc_index] += writes;
+    noc_nonposted_writes_acked[noc_index] += writes;
     downstream_data_ptr += length;
 }
 
@@ -376,12 +381,16 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr,
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
+        cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dispatch_data_ptr, remaining);
+        noc_nonposted_writes_num_issued[noc_index]++;
+        noc_nonposted_writes_acked[noc_index]++;
         dispatch_data_ptr += remaining;
         length -= remaining;
         data_ptr = cmddat_q_base;
     }
-    noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
+    cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dispatch_data_ptr, length);
+    noc_nonposted_writes_num_issued[noc_index]++;
+    noc_nonposted_writes_acked[noc_index]++;
     dispatch_data_ptr += length;
 
     return cmd->relay_inline.stride;
@@ -406,19 +415,21 @@ static uint32_t write_pages_to_dispatcher(uint32_t& downstream_data_ptr,
         cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages);
     }
 
-    uint64_t noc_addr;
+    uint32_t writes = 0;
     if (downstream_data_ptr == downstream_cb_end) {
         downstream_data_ptr = downstream_cb_base;
     } else if (downstream_data_ptr + amt_to_write > downstream_cb_end) {  // wrap
         uint32_t last_chunk_size = downstream_cb_end - downstream_data_ptr;
-        noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-        noc_async_write(scratch_write_addr, noc_addr, last_chunk_size);
+        cq_noc_async_write_with_state_any_len(scratch_write_addr, downstream_data_ptr, last_chunk_size);
+        writes += div_up(last_chunk_size, NOC_MAX_BURST_SIZE);
         downstream_data_ptr = downstream_cb_base;
         scratch_write_addr += last_chunk_size;
         amt_to_write -= last_chunk_size;
     }
-    noc_addr = get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr);
-    noc_async_write(scratch_write_addr, noc_addr, amt_to_write);
+    cq_noc_async_write_with_state_any_len(scratch_write_addr, downstream_data_ptr, amt_to_write);
+    writes += div_up(amt_to_write, NOC_MAX_BURST_SIZE);
+    noc_nonposted_writes_num_issued[noc_index] += writes;
+    noc_nonposted_writes_acked[noc_index] += writes;
     downstream_data_ptr += amt_to_write;
 
     return npages;
@@ -981,7 +992,9 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(uint32_t& cmd_ptr,
     uint32_t remaining = exec_buf_state.length - sizeof(CQPrefetchCmd);
     while (length > remaining) {
         // wrap cmddat
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
+        cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dispatch_data_ptr, remaining);
+        noc_nonposted_writes_num_issued[noc_index]++;
+        noc_nonposted_writes_acked[noc_index]++;
         dispatch_data_ptr += remaining;
         length -= remaining;
         stride -= remaining_stride;
@@ -996,7 +1009,9 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(uint32_t& cmd_ptr,
         remaining = exec_buf_state.length;
         remaining_stride = exec_buf_state.length;
     }
-    noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
+    cq_noc_async_write_with_state<CQ_NOC_SnDL>(data_ptr, dispatch_data_ptr, length);
+    noc_nonposted_writes_num_issued[noc_index]++;
+    noc_nonposted_writes_acked[noc_index]++;
     dispatch_data_ptr += length;
 
     return stride;
@@ -1224,22 +1239,27 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
     }
 
     uint32_t downstream_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
+    uint32_t writes = 0;
     if (downstream_pages_left >= npages) {
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
+        cq_noc_async_write_with_state_any_len(data_ptr, downstream_data_ptr, length);
+        writes += div_up(length, NOC_MAX_BURST_SIZE);
         downstream_data_ptr += npages * downstream_cb_page_size;
     } else {
         uint32_t tail_pages = npages - downstream_pages_left;
         uint32_t available = downstream_pages_left * downstream_cb_page_size;
         if (available > 0) {
-            noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
+            cq_noc_async_write_with_state_any_len(data_ptr, downstream_data_ptr, available);
+            writes += div_up(available, NOC_MAX_BURST_SIZE);
             data_ptr += available;
             length -= available;
         }
 
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
+        cq_noc_async_write_with_state_any_len(data_ptr, downstream_cb_base, length);
+        writes += div_up(length, NOC_MAX_BURST_SIZE);
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
-
+    noc_nonposted_writes_num_issued[noc_index] += writes;
+    noc_nonposted_writes_acked[noc_index] += writes;
     noc_async_writes_flushed();
     cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
@@ -1415,6 +1435,10 @@ void kernel_main_hd() {
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
     upstream_total_acquired_page_count = 0;
+
+    // Program NOC coords for downstream writes here as prefetcher only ever writes to one location
+    // If this is changed, then this needs to be moved within the various commands instead
+    cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, get_noc_addr_helper(downstream_noc_xy, 0));
 
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(my_downstream_cb_sem_id));
