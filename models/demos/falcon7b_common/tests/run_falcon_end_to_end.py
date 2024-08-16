@@ -8,8 +8,6 @@ from loguru import logger
 import numpy as np
 from sklearn.metrics import top_k_accuracy_score
 
-import ttnn
-from ttnn import ConcatMeshToTensor
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 
 from models.demos.falcon7b_common.tt.falcon_common import (
@@ -30,6 +28,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 
 from models.utility_functions import (
+    tt_tensors_to_torch_tensors,
     profiler,
 )
 from models.perf.perf_utils import prep_perf_report
@@ -321,16 +320,10 @@ def run_test_FalconCausalLM_end_to_end(
         tt_out_tmp = torch.zeros(global_batch, seq_len, configuration.vocab_size)  # Output tensor to overwrite
         for user_id, tt_out in enumerate(tt_outs):
             # Get outputs from all devices
-            tt_out_tmp[user_id::batch] = ttnn.to_torch(
-                tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh
-            ).squeeze(1)
+            tt_out_tmp[user_id::batch] = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=0).squeeze(1)
         tt_out = tt_out_tmp
     elif llm_mode == "decode":
-        tt_out = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=2), device=device_mesh)
-            .squeeze(1)
-            .transpose(0, 1)
-        )
+        tt_out = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=2).squeeze(1).transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------
     does_pass = True

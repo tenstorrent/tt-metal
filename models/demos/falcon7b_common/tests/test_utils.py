@@ -4,8 +4,9 @@
 
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.demos.falcon7b_common.reference.hf_modeling_falcon import FalconForCausalLM
+from models.utility_functions import tt_tensors_to_torch_tensors
 
 
 def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, device_mesh):
@@ -256,12 +257,8 @@ def get_rand_falcon_inputs(
 
 def concat_device_out_layer_present(device_mesh, tt_layer_present, seq_end_idx, end_idx_only=False):
     tt_layer_present = (
-        ttnn.to_torch(
-            tt_layer_present[0], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh
-        ).squeeze(1),
-        ttnn.to_torch(
-            tt_layer_present[1], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh
-        ).squeeze(1),
+        tt_tensors_to_torch_tensors(tt_layer_present[0], device_mesh, concat_dim=0).squeeze(1),
+        tt_tensors_to_torch_tensors(tt_layer_present[1], device_mesh, concat_dim=0).squeeze(1),
     )
     if not end_idx_only:
         tt_layer_present = (
@@ -278,9 +275,7 @@ def concat_device_out_layer_present(device_mesh, tt_layer_present, seq_end_idx, 
 
 def concat_device_outputs(device_mesh, tt_out, llm_mode, tt_layer_present, seq_end_idx):
     concat_dim = 2 if llm_mode == "decode" else 0
-    tt_out = ttnn.to_torch(
-        tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=concat_dim), device=device_mesh
-    ).squeeze(1)
+    tt_out = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=concat_dim).squeeze(1)
     if llm_mode == "decode":
         tt_out = tt_out.transpose(0, 1)
     tt_layer_present = concat_device_out_layer_present(device_mesh, tt_layer_present, seq_end_idx)

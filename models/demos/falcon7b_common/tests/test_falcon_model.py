@@ -5,8 +5,6 @@
 import torch
 import pytest
 from loguru import logger
-import ttnn
-from ttnn import ConcatMeshToTensor
 from models.demos.falcon7b_common.tt.falcon_model import TtFalconModel
 from models.demos.falcon7b_common.tt.model_config import (
     get_model_config,
@@ -20,6 +18,7 @@ from models.demos.falcon7b_common.tests.test_utils import (
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
+from models.utility_functions import tt_tensors_to_torch_tensors
 
 
 class PytorchFalconModel(torch.nn.Module):
@@ -130,9 +129,7 @@ def run_test_FalconModel_inference(
                 use_cache=use_cache,
             )
             # Get outputs from all devices
-            tt_outs[user_id::batch] = ttnn.to_torch(
-                tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh
-            ).squeeze(1)
+            tt_outs[user_id::batch] = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=0).squeeze(1)
         tt_out = tt_outs
 
     elif llm_mode == "decode":
@@ -147,11 +144,7 @@ def run_test_FalconModel_inference(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        tt_out = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=2), device=device_mesh)
-            .squeeze(1)
-            .transpose(0, 1)
-        )
+        tt_out = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=2).squeeze(1).transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)

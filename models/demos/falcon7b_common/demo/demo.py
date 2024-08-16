@@ -10,7 +10,6 @@ from functools import partial
 import torch
 import torch.nn.functional as F
 import ttnn
-from ttnn import ConcatMeshToTensor
 from loguru import logger
 from models.demos.falcon7b_common.reference.hf_modeling_falcon import FalconConfig
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
@@ -27,6 +26,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     nearest_32,
+    tt_tensors_to_torch_tensors,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tqdm import tqdm
@@ -192,14 +192,9 @@ def run_falcon_demo_kv(
     )
 
     # State dict is needed for embeddings
-    logger.info("Loading weights...")
+    logger.info("Loading huggingface weights...")
     profiler.start(f"loading_weights")
-    if len(os.listdir(tt_cache_path)) < 337:
-        logger.info("Weights not found on machine; downloading weights...")
-        _, state_dict = load_hf_model(model_location_generator, model_version)
-    else:
-        state_dict = None
-
+    _, state_dict = load_hf_model(model_location_generator, model_version)
     logger.info("Loading weights finished!")
     profiler.end(f"loading_weights")
 
@@ -384,9 +379,7 @@ def run_falcon_demo_kv(
             else:
                 raise ValueError("Invalid type for tt_attention_mask")
 
-        logits = ttnn.to_torch(
-            tt_logits, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh
-        ).squeeze(1)
+        logits = tt_tensors_to_torch_tensors(tt_logits, device_mesh, concat_dim=0).squeeze(1)
 
         tt_prefill_input_ids.deallocate()
         tt_logits.deallocate()
@@ -449,9 +442,7 @@ def run_falcon_demo_kv(
         )
         synchronize_devices(device_mesh)
 
-        logits = ttnn.to_torch(
-            tt_logits, mesh_composer=ConcatMeshToTensor(device_mesh, dim=2), device=device_mesh
-        ).squeeze(1)
+        logits = tt_tensors_to_torch_tensors(tt_logits, device_mesh, concat_dim=2).squeeze(1)
 
         tt_decode_input_ids.deallocate()
         if tt_decode_attention_mask is not None:

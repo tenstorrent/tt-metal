@@ -6,11 +6,12 @@ import pytest
 import torch
 from loguru import logger
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from ttnn import ShardTensorToMesh
 from models.demos.falcon7b_common.tt.falcon_mlp import TtFalconMLPDecode, TtFalconMLPPrefill
 from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.demos.falcon7b_common.tests.test_utils import load_hf_model, tt_from_torch, get_num_devices
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from models.utility_functions import tt_tensors_to_torch_tensors
 
 
 class PytorchFalconMLPModel(torch.nn.Module):
@@ -82,9 +83,7 @@ def run_test_FalconMLP_inference(
     )
 
     tt_out = tt_FalconMLP_model(tt_mlp_input)
-    tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh).to(
-        pytorch_out.dtype
-    )
+    tt_out = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=0).to(pytorch_out.dtype)
 
     # check outputs ----------------------------------------------------------------------
     logger.info(comp_allclose(pytorch_out, tt_out))
