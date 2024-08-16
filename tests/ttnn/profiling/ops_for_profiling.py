@@ -1309,6 +1309,14 @@ def empty(x):
     ttnn.empty(shape=x.get_legacy_shape(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
 
 
+def sum_dim_0(x):
+    ttnn.sum(x, dim=0)
+
+
+def sum_dim_1(x):
+    ttnn.sum(x, dim=1)
+
+
 def sum_dim_2(x):
     ttnn.sum(x, dim=2)
 
@@ -1355,22 +1363,6 @@ def rsub(x):
 
 def rdiv(x):
     ttnn.rdiv(x, 3)
-
-
-def sum_0(x):
-    ttnn.sum(x, 0)
-
-
-def sum_1(x):
-    ttnn.sum(x, 1)
-
-
-def sum_2(x):
-    ttnn.sum(x, 2)
-
-
-def sum_3(x):
-    ttnn.sum(x, 3)
 
 
 def erf_slow(x):
@@ -1491,24 +1483,24 @@ def argmax_shape_func(input_shape):
     return [1, 1, 128, 128]
 
 
-def argmin_1(x):
-    tt_lib.argmin(x, dim=-1)
+def argmin_dim_3(x):
+    ttnn.argmin(x, dim=3)
 
 
-def argmin_2(x):
-    ttnn.argmin(x, dim=-2)
+def argmin_dim_2(x):
+    ttnn.argmin(x, dim=2)
 
 
-def argmin_3(x):
-    ttnn.argmin(x, dim=-3)
+def argmin_dim_1(x):
+    ttnn.argmin(x, dim=1)
 
 
-def argmin_4(x):
-    ttnn.argmin(x, dim=-4)
+def argmin_dim_0(x):
+    ttnn.argmin(x, dim=0)
 
 
 def argmin_all(x):
-    ttnn.argmin(x, dim=-1, all=True)
+    ttnn.argmin(x, dim=None)
 
 
 def primary_moreh_softmax_0(x):
@@ -2002,6 +1994,15 @@ all_unary_ops = [
         "num_repeats": 3,
     },
     {
+        "op": sum_dim_0,
+        "name": "ttnn.sum_dim_0",
+        "num_repeats": 2,
+    },
+    {
+        "op": sum_dim_1,
+        "name": "ttnn.sum_dim_1",
+    },
+    {
         "op": sum_dim_2,
         "name": "ttnn.sum_dim_2",
     },
@@ -2100,15 +2101,6 @@ all_unary_ops = [
         "name": "ttnn.polar",
         "is_complex": [True],
         "need_out_mem_cfg": True,
-    },
-    {
-        "op": sum_0,
-        "name": "ttnn.sum_dim_0",
-        "num_repeats": 2,
-    },
-    {
-        "op": sum_1,
-        "name": "ttnn.sum_dim_1",
     },
     {
         "op": ttnn.log_sigmoid,
@@ -2270,23 +2262,24 @@ all_unary_ops = [
         "num_repeats": 2,
     },
     {
-        "op": argmin_1,
+        "op": argmin_dim_3,
         "name": "ttnn.argmin_dim_3",
+        "shape_func": argmax_shape_func,
+        "layout": "ROW_MAJOR",
         "num_repeats": 2,
     },
     {
-        "op": argmin_2,
+        "op": argmin_dim_2,
         "name": "ttnn.argmin_dim_2",
-        "num_repeats": 2,
-    },
-    {
-        "op": argmin_3,
-        "name": "ttnn.argmin_dim_1",
+        "shape_func": argmax_shape_func,
+        "layout": "ROW_MAJOR",
         "num_repeats": 2,
     },
     {
         "op": argmin_all,
         "name": "ttnn.argmin_all",
+        "shape_func": argmax_shape_func,
+        "layout": "ROW_MAJOR",
         "num_repeats": 2,
     },
     {
