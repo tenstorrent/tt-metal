@@ -4,8 +4,10 @@
 
 
 
-#include "conv2d_pybind.hpp"
+#include "ttnn/cpp/pybind11/decorators.hpp"
 
+#include "conv2d_pybind.hpp"
+#include "conv2d.hpp"
 
 namespace py = pybind11;
 
