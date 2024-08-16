@@ -7,7 +7,6 @@ import math
 import pytest
 import ttnn
 
-import tt_lib as ttl
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     comp_pcc,
@@ -28,7 +27,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 @pytest.mark.parametrize("num_slices", [16])
 @pytest.mark.parametrize("num_cores", [64])
 @pytest.mark.parametrize("num_heads", [16])
-@pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("data_format", [ttnn.bfloat8_b])
 def test_time_sharded_attnention_hwb(
     device,
     seq_len,
@@ -58,17 +57,14 @@ def test_time_sharded_attnention_hwb(
     torch_value_layer = torch.randn(value_layer_shape).bfloat16().float()
     torch_output = torch.randn(output_shape).bfloat16().float()
 
-    dram_interleaved_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
-    )
+    dram_interleaved_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    height_sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttl.tensor.BufferType.L1
+    height_sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttnn.BufferType.L1
     )
-    block_sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    block_sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
     # compare output to regular case
@@ -95,8 +91,8 @@ def test_time_sharded_attnention_hwb(
     attn_weights_torch_sm = torch.nn.functional.softmax(attn_weights_qkt, dim=-1)
     attn_weights_torch = attn_weights_torch_sm @ torch_value_layer
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -121,21 +117,21 @@ def test_time_sharded_attnention_hwb(
     for i in range(num_slices):
         q_slice = ttnn.interleaved_to_sharded_partial(
             reference_query_layer,
-            ttl.tensor.CoreCoord(1, grid_size[0]),
+            ttnn.CoreCoord(1, grid_size[0]),
             [M // grid_size[0], K],
             num_slices,
             i,
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
         k_slice = ttnn.interleaved_to_sharded_partial(
             reference_key_layer_transposed,
-            ttl.tensor.CoreCoord(grid_size[1], 1),
+            ttnn.CoreCoord(grid_size[1], 1),
             [K, N // grid_size[1]],
             num_slices,
             i,
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -165,14 +161,12 @@ def test_time_sharded_attnention_hwb(
         q_slice.deallocate()
 
         height_per_core = seq_len // 64
-        output_shard_grid = ttl.tensor.CoreRangeSet(
-            {ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 7))}
+        output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+        output_shard_spec = ttnn.ShardSpec(
+            output_shard_grid, [height_per_core, seq_len], ttnn.ShardOrientation.ROW_MAJOR, False
         )
-        output_shard_spec = ttl.tensor.ShardSpec(
-            output_shard_grid, [height_per_core, seq_len], ttl.tensor.ShardOrientation.ROW_MAJOR, False
-        )
-        output_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, output_shard_spec
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
         )
         mm_slice = ttnn.reshard(
             mm_slice,
@@ -246,7 +240,7 @@ def test_time_sharded_attnention_hwb(
 @pytest.mark.parametrize("num_slices", [16])
 @pytest.mark.parametrize("num_cores", [64])
 @pytest.mark.parametrize("num_heads", [16])
-@pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("data_format", [ttnn.bfloat8_b])
 def test_time_sharded_attnention(
     device,
     seq_len,
@@ -272,17 +266,11 @@ def test_time_sharded_attnention(
     torch_value_layer = torch.randn(value_layer_shape).bfloat16().float()
     torch_output = torch.randn(output_shape).bfloat16().float()
 
-    dram_interleaved_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
-    )
-    l1_interleaved_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
-    )
+    dram_interleaved_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    l1_interleaved_memory_config = ttnn.L1_MEMORY_CONFIG
 
-    height_sharded_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttl.tensor.BufferType.L1
+    height_sharded_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttnn.BufferType.L1
     )
 
     # compare output to regular case
@@ -305,8 +293,8 @@ def test_time_sharded_attnention(
         tt_dtype=data_format,
     )
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -333,8 +321,8 @@ def test_time_sharded_attnention(
             mm_activations_height_shard_spec,
             num_slices,
             i,
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -433,7 +421,7 @@ def test_time_sharded_attnention(
 @pytest.mark.parametrize("seq_len", [4096, 1024, 256, 64])
 @pytest.mark.parametrize("kv_len", [96])
 @pytest.mark.parametrize("num_heads", [16])
-@pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("data_format", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("reshard_for_softmax", [True, False])
 def test_cross_attnention(
     device,
@@ -462,17 +450,11 @@ def test_cross_attnention(
     torch_value_layer = torch.randn(value_layer_shape).bfloat16().float()
     torch_output = torch.randn(output_shape).bfloat16().float()
 
-    dram_interleaved_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
-    )
-    l1_interleaved_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
-    )
+    dram_interleaved_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    l1_interleaved_memory_config = ttnn.L1_MEMORY_CONFIG
 
-    height_sharded_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttl.tensor.BufferType.L1
+    height_sharded_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttnn.BufferType.L1
     )
 
     # compare output to regular case
@@ -495,8 +477,8 @@ def test_cross_attnention(
         tt_dtype=data_format,
     )
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -509,8 +491,8 @@ def test_cross_attnention(
         reference_query_layer,
         grid_size,
         [num_heads * seq_len // num_cores, 64],
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.ShardOrientation.COL_MAJOR,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
     )
 
     program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
@@ -523,8 +505,8 @@ def test_cross_attnention(
     )
     print(program_config)
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -549,18 +531,16 @@ def test_cross_attnention(
                 mm_slice,
                 (8, 8),
                 [height_per_core, kv_len],
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.COL_MAJOR,
             )
         else:
-            output_shard_grid = ttl.tensor.CoreRangeSet(
-                {ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 7))}
+            output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+            output_shard_spec = ttnn.ShardSpec(
+                output_shard_grid, [height_per_core, kv_len], ttnn.ShardOrientation.COL_MAJOR, False
             )
-            output_shard_spec = ttl.tensor.ShardSpec(
-                output_shard_grid, [height_per_core, kv_len], ttl.tensor.ShardOrientation.COL_MAJOR, False
-            )
-            output_mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, output_shard_spec
+            output_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
             )
             mm_slice = ttnn.reshard(
                 mm_slice,
@@ -588,11 +568,11 @@ def test_cross_attnention(
         reference_value_layer,
         grid_size,
         [num_heads * kv_len // num_cores, 64],
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.ShardOrientation.COL_MAJOR,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
     )
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -631,7 +611,7 @@ def test_cross_attnention(
 @skip_for_grayskull()
 @pytest.mark.parametrize("seq_len", [1024, 256, 64])
 @pytest.mark.parametrize("num_heads", [16])
-@pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("data_format", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("reshard_for_softmax", [True, False])
 def test_attention(
     device,
@@ -659,17 +639,11 @@ def test_attention(
     torch_value_layer = torch.randn(value_layer_shape).bfloat16().float()
     torch_output = torch.randn(output_shape).bfloat16().float()
 
-    dram_interleaved_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
-    )
-    l1_interleaved_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
-    )
+    dram_interleaved_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    l1_interleaved_memory_config = ttnn.L1_MEMORY_CONFIG
 
-    height_sharded_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttl.tensor.BufferType.L1
+    height_sharded_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttnn.BufferType.L1
     )
 
     # compare output to regular case
@@ -692,8 +666,8 @@ def test_attention(
         tt_dtype=data_format,
     )
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -706,8 +680,8 @@ def test_attention(
         reference_query_layer,
         grid_size,
         [num_heads * seq_len // num_cores, 64],
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
     )
     M = num_heads * seq_len
     K = 64
@@ -722,8 +696,8 @@ def test_attention(
     )
     print(program_config)
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -748,8 +722,8 @@ def test_attention(
                 mm_slice,
                 (8, 8),
                 [height_per_core, seq_len],
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
             softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
@@ -763,19 +737,17 @@ def test_attention(
                 mm_slice,
                 (8, 2),
                 [num_heads * seq_len // 16, seq_len],
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttl.tensor.ShardOrientation.COL_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.COL_MAJOR,
             )
 
         else:
-            output_shard_grid = ttl.tensor.CoreRangeSet(
-                {ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(7, 7))}
+            output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+            output_shard_spec = ttnn.ShardSpec(
+                output_shard_grid, [height_per_core, seq_len], ttnn.ShardOrientation.COL_MAJOR, False
             )
-            output_shard_spec = ttl.tensor.ShardSpec(
-                output_shard_grid, [height_per_core, seq_len], ttl.tensor.ShardOrientation.COL_MAJOR, False
-            )
-            output_mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, output_shard_spec
+            output_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
             )
             mm_slice = ttnn.reshard(
                 mm_slice,
@@ -803,11 +775,11 @@ def test_attention(
         reference_value_layer,
         grid_size,
         [num_heads * seq_len // num_cores, 64],
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
     )
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -846,7 +818,7 @@ def test_attention(
 @skip_for_grayskull()
 @pytest.mark.parametrize("size", [4096, 1024, 256, 64])
 @pytest.mark.parametrize("is_qkv", [1, 2, 3])
-@pytest.mark.parametrize("data_format", [ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("data_format", [ttnn.bfloat8_b])
 def test_q_and_kv(
     device,
     size,
@@ -875,21 +847,15 @@ def test_q_and_kv(
     in_2_torch = torch.randn(in_2_shape).bfloat16().float()
     in_3_torch = torch.randn(in_3_shape).bfloat16().float()
 
-    dram_interleaved_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
-    )
-    l1_interleaved_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    dram_interleaved_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    l1_interleaved_memory_config = ttnn.L1_MEMORY_CONFIG
+
+    height_sharded_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttnn.BufferType.L1
     )
 
-    height_sharded_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttl.tensor.BufferType.L1
-    )
-
-    block_sharded_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttl.tensor.BufferType.L1
+    block_sharded_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1
     )
 
     # compare output to regular case
@@ -918,8 +884,8 @@ def test_q_and_kv(
         tt_dtype=data_format,
     )
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -932,8 +898,8 @@ def test_q_and_kv(
         in_0,
         grid_size,
         [M // grid_size[1], K // grid_size[0]],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
     )
     M, K = in_0.shape[-2], in_0.shape[-1]
     N = in_1.shape[-1]
@@ -951,8 +917,8 @@ def test_q_and_kv(
         fused_activation=None,
     )
 
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -983,8 +949,8 @@ def test_q_and_kv(
         transpose_mcast=False,
         fused_activation=None,
     )
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,

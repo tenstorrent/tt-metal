@@ -197,27 +197,23 @@ def test_performance_vit_e2e(
         patch_size = 16
         pixel_values = pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
         N, H, W, C = pixel_values.shape
-        shard_grid = tt_lib.tensor.CoreRangeSet(
+        shard_grid = ttnn.CoreRangeSet(
             {
-                tt_lib.tensor.CoreRange(
-                    tt_lib.tensor.CoreCoord(0, 0),
-                    tt_lib.tensor.CoreCoord(7, 0),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 0),
                 ),
             }
         )
         n_cores = 8
-        shard_spec = tt_lib.tensor.ShardSpec(
-            shard_grid, [N * H * W // n_cores, C], tt_lib.tensor.ShardOrientation.ROW_MAJOR, False
-        )
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
 
         pixel_values = torch2tt_tensor(
             pixel_values,
             device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-            tt_memory_config=tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
-            ),
-            tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
+            ttnn.ROW_MAJOR_LAYOUT,
+            tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
+            tt_dtype=ttnn.bfloat16,
         )
         # pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
