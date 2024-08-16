@@ -9,7 +9,7 @@ import torch
 from transformers import BertForQuestionAnswering
 import numpy as np
 
-import tt_lib as ttl
+import ttnn
 from models.experimental.bert_large_perf.fused_ops.add_and_norm import AddAndNorm
 from models.experimental.bert_large_perf.fused_ops.layernorm import create_var_scaler
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
@@ -25,55 +25,49 @@ class TtAddAndNormModel(torch.nn.Module):
         super().__init__()
 
         if lnorm_type == "attention":
-            gamma = pad_weight(
-                state_dict["bert.encoder.layer.0.attention.output.LayerNorm.weight"]
-            )
+            gamma = pad_weight(state_dict["bert.encoder.layer.0.attention.output.LayerNorm.weight"])
             gamma = (
-                ttl.tensor.Tensor(
+                ttnn.Tensor(
                     gamma.reshape(-1).tolist(),
                     gamma.shape,
-                    ttl.tensor.DataType.BFLOAT16,
-                    ttl.tensor.Layout.ROW_MAJOR,
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
                 )
-                .to(ttl.tensor.Layout.TILE)
+                .to(ttnn.TILE_LAYOUT)
                 .to(device)
             )
-            beta = pad_weight(
-                state_dict["bert.encoder.layer.0.attention.output.LayerNorm.bias"]
-            )
+            beta = pad_weight(state_dict["bert.encoder.layer.0.attention.output.LayerNorm.bias"])
             beta = (
-                ttl.tensor.Tensor(
+                ttnn.Tensor(
                     beta.reshape(-1).tolist(),
                     beta.shape,
-                    ttl.tensor.DataType.BFLOAT16,
-                    ttl.tensor.Layout.ROW_MAJOR,
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
                 )
-                .to(ttl.tensor.Layout.TILE)
+                .to(ttnn.TILE_LAYOUT)
                 .to(device)
             )
         elif lnorm_type == "ffn":
-            gamma = pad_weight(
-                state_dict["bert.encoder.layer.0.output.LayerNorm.weight"]
-            )
+            gamma = pad_weight(state_dict["bert.encoder.layer.0.output.LayerNorm.weight"])
             gamma = (
-                ttl.tensor.Tensor(
+                ttnn.Tensor(
                     gamma.reshape(-1).tolist(),
                     gamma.shape,
-                    ttl.tensor.DataType.BFLOAT16,
-                    ttl.tensor.Layout.ROW_MAJOR,
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
                 )
-                .to(ttl.tensor.Layout.TILE)
+                .to(ttnn.TILE_LAYOUT)
                 .to(device)
             )
             beta = pad_weight(state_dict["bert.encoder.layer.0.output.LayerNorm.bias"])
             beta = (
-                ttl.tensor.Tensor(
+                ttnn.Tensor(
                     beta.reshape(-1).tolist(),
                     beta.shape,
-                    ttl.tensor.DataType.BFLOAT16,
-                    ttl.tensor.Layout.ROW_MAJOR,
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
                 )
-                .to(ttl.tensor.Layout.TILE)
+                .to(ttnn.TILE_LAYOUT)
                 .to(device)
             )
         else:
@@ -97,13 +91,9 @@ class PytorchAddAndNormModel(torch.nn.Module):
     def __init__(self, hugging_face_reference_model, lnorm_type):
         super().__init__()
         if lnorm_type == "attention":
-            self.layernorm = hugging_face_reference_model.bert.encoder.layer[
-                0
-            ].attention.output.LayerNorm
+            self.layernorm = hugging_face_reference_model.bert.encoder.layer[0].attention.output.LayerNorm
         elif lnorm_type == "ffn":
-            self.layernorm = hugging_face_reference_model.bert.encoder.layer[
-                0
-            ].output.LayerNorm
+            self.layernorm = hugging_face_reference_model.bert.encoder.layer[0].output.LayerNorm
         else:
             assert False, "Invalid lnorm_type"
 
@@ -112,18 +102,12 @@ class PytorchAddAndNormModel(torch.nn.Module):
         return out
 
 
-def run_add_and_norm_inference(
-    device, model_version, batch, seq_len, pcc, model_location_generator
-):
+def run_add_and_norm_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
-        model_name, torchscript=False
-    )
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     config = hugging_face_reference_model.config
-    var_scaler = create_var_scaler(
-        seq_len, config.hidden_size, config.layer_norm_eps, device
-    )
+    var_scaler = create_var_scaler(seq_len, config.hidden_size, config.layer_norm_eps, device)
 
     tt_add_and_norm_model = TtAddAndNormModel(
         config,
@@ -132,9 +116,7 @@ def run_add_and_norm_inference(
         device,
         "attention",
     )
-    pytorch_add_and_norm_model = PytorchAddAndNormModel(
-        hugging_face_reference_model, "attention"
-    )
+    pytorch_add_and_norm_model = PytorchAddAndNormModel(hugging_face_reference_model, "attention")
 
     # Prepare input
     torch.manual_seed(0)
@@ -145,25 +127,23 @@ def run_add_and_norm_inference(
 
     pad_add_and_norm_inputa = pad_activation(add_and_norm_inputa)
     pad_add_and_norm_inputb = pad_activation(add_and_norm_inputb)
-    tt_add_and_norm_input_a = ttl.tensor.Tensor(
+    tt_add_and_norm_input_a = ttnn.Tensor(
         pad_add_and_norm_inputa.reshape(-1).tolist(),
         pad_add_and_norm_inputa.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ).to(ttnn.TILE_LAYOUT)
     tt_add_and_norm_input_a = tt_add_and_norm_input_a.to(device)
-    tt_add_and_norm_input_b = ttl.tensor.Tensor(
+    tt_add_and_norm_input_b = ttnn.Tensor(
         pad_add_and_norm_inputb.reshape(-1).tolist(),
         pad_add_and_norm_inputb.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ).to(ttnn.TILE_LAYOUT)
     tt_add_and_norm_input_b = tt_add_and_norm_input_b.to(device)
 
-    tt_out = tt_add_and_norm_model(
-        tt_add_and_norm_input_a, tt_add_and_norm_input_b
-    ).cpu()
-    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_out = tt_add_and_norm_model(tt_add_and_norm_input_a, tt_add_and_norm_input_b).cpu()
+    tt_out = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
@@ -184,9 +164,5 @@ def run_add_and_norm_inference(
         ("phiyodr/bert-large-finetuned-squad2", 1, 384, 0.99),
     ),
 )
-def test_add_and_norm_inference(
-    device, model_version, batch, seq_len, pcc, model_location_generator
-):
-    run_add_and_norm_inference(
-        device, model_version, batch, seq_len, pcc, model_location_generator
-    )
+def test_add_and_norm_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
+    run_add_and_norm_inference(device, model_version, batch, seq_len, pcc, model_location_generator)
