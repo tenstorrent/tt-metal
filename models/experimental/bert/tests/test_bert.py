@@ -8,7 +8,7 @@ from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
-import tt_lib as ttl
+import ttnn
 from models.experimental.bert.tt.embeddings import PytorchEmbeddings
 from models.experimental.bert.tt.mha import TtMultiHeadAttentionModel
 from models.experimental.bert.tt.ffn import TtFeedForwardModel
@@ -34,15 +34,10 @@ class TtBertShared(torch.nn.Module):
 
         # So far on CPU until we add embeddings support on device
         self.embeddings = PytorchEmbeddings(hugging_face_reference_model)
-        self.get_extended_attention_mask = (
-            hugging_face_reference_model.get_extended_attention_mask
-        )
+        self.get_extended_attention_mask = hugging_face_reference_model.get_extended_attention_mask
 
         self.encoders = torch.nn.ModuleList(
-            [
-                TtBertEncoder(config, encoder_idx, state_dict, device)
-                for encoder_idx in range(config.num_hidden_layers)
-            ]
+            [TtBertEncoder(config, encoder_idx, state_dict, device) for encoder_idx in range(config.num_hidden_layers)]
         )
         self.device = device
 
@@ -50,25 +45,23 @@ class TtBertShared(torch.nn.Module):
     def forward(self, input_ids, attention_mask=None, token_type_ids=None):
         embeddings = self.embeddings(input_ids, token_type_ids)
         if attention_mask is not None:
-            extended_attention_mask = self.get_extended_attention_mask(
-                attention_mask, input_ids.shape
-            )
+            extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
             extended_attention_mask = torch.clamp(
                 extended_attention_mask, -100000
             )  # Limit neg value that goes into exp
             extended_attention_mask = pad_activation(extended_attention_mask)
-            tt_attention_mask = ttl.tensor.Tensor(
+            tt_attention_mask = ttnn.Tensor(
                 extended_attention_mask.reshape(-1).tolist(),
                 extended_attention_mask.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            ).to(ttl.tensor.Layout.TILE)
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+            ).to(ttnn.TILE_LAYOUT)
             tt_attention_mask = tt_attention_mask.to(self.device)
         else:
             tt_attention_mask = attention_mask
         # Convert to ll buda tensor
         pad_embeddings = pad_activation(embeddings)
-        tt_embeddings = ttl.tensor.Tensor(
+        tt_embeddings = ttnn.Tensor(
             pad_embeddings.reshape(-1).tolist(),
             (
                 pad_embeddings.shape[0],
@@ -76,9 +69,9 @@ class TtBertShared(torch.nn.Module):
                 pad_embeddings.shape[-2],
                 pad_embeddings.shape[-1],
             ),
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        ).to(ttl.tensor.Layout.TILE)
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+        ).to(ttnn.TILE_LAYOUT)
         tt_embeddings = tt_embeddings.to(self.device)
         hidden_states = tt_embeddings
         for encoder in self.encoders:
@@ -98,24 +91,24 @@ class TtBertForQuestionAnswering(TtBertShared):
 
         weight = pad_weight(state_dict["qa_outputs.weight"])
         weight = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 weight.reshape(-1).tolist(),
                 weight.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
         bias = pad_weight(state_dict["qa_outputs.bias"])
         bias = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 bias.reshape(-1).tolist(),
                 bias.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
 
@@ -143,9 +136,7 @@ def run_bert_question_and_answering_inference(
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
     tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
-        model_name, torchscript=False
-    )
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     hugging_face_reference_model.eval()
     tt_bert_model = TtBertForQuestionAnswering(
         hugging_face_reference_model.config, hugging_face_reference_model, device
@@ -201,7 +192,7 @@ def run_bert_question_and_answering_inference(
             bert_input = torch.stack(oneseq)
             bert_input = bert_input.reshape(batch, seq_len)
 
-    # tt_bert_input = ttl.tensor.Tensor(pad_activation(bert_input).reshape(-1).tolist(), bert_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+    # tt_bert_input = ttnn.Tensor(pad_activation(bert_input).reshape(-1).tolist(), bert_input.shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT)
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
     if real_input:
@@ -210,9 +201,7 @@ def run_bert_question_and_answering_inference(
     else:
         pytorch_out = hugging_face_reference_model(bert_input)
         tt_out = tt_bert_model(bert_input).cpu()
-    tt_untilized_output = (
-        tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().float().reshape(batch, 1, seq_len, -1)
-    )
+    tt_untilized_output = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch().float().reshape(batch, 1, seq_len, -1)
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -260,9 +249,7 @@ def run_bert_question_and_answering_inference(
             pt_answer = nlp.postprocess([pt_res], **postprocess_params)
             logger.info(f"PT: {pt_answer}")
             logger.info(f"PL: {pl_answer}")
-    assert (
-        passing_start and passing_end
-    ), f"At least one start or end logits don't meet PCC requirement {pcc}"
+    assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
     # start_logit_match = (abs(tt_start_logits - pytorch_start_logits) < 0.1).all().item()
     # if not start_logit_match:
     #     print("Start logits don't match")
