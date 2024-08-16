@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     comp_allclose_and_pcc,
     skip_for_grayskull,
@@ -24,11 +24,11 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
 
 
 def is_npu_dtype_uint32(data_type):
-    return data_type == ttl.tensor.DataType.UINT32
+    return data_type == ttnn.uint32
 
 
 def is_npu_dtype_float(data_type):
-    return data_type == ttl.tensor.DataType.FLOAT32 or data_type == ttl.tensor.DataType.BFLOAT16
+    return data_type == ttnn.float32 or data_type == ttnn.bfloat16
 
 
 def get_tensors(
@@ -39,10 +39,10 @@ def get_tensors(
     with_padding=True,
     use_randint=True,
     keep_batch_dim=False,
-    npu_dtype=ttl.tensor.DataType.BFLOAT16,
+    npu_dtype=ttnn.bfloat16,
     cpu_dtype=torch.bfloat16,
 ):
-    npu_layout = ttl.tensor.Layout.TILE
+    npu_layout = ttnn.TILE_LAYOUT
     output_shape = input_shape.copy()
     if dim is None or dim == []:
         dim = list(range(len(input_shape)))
@@ -71,11 +71,11 @@ def get_tensors(
         torch_output = torch.rand(tt_output_shape, dtype=cpu_dtype)
 
     if with_padding:
-        tt_input = ttl.tensor.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-        tt_output = ttl.tensor.Tensor(torch_output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+        tt_input = ttnn.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+        tt_output = ttnn.Tensor(torch_output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     else:
-        tt_input = ttl.tensor.Tensor(torch_input, npu_dtype).to(npu_layout).to(device)
-        tt_output = ttl.tensor.Tensor(torch_output, npu_dtype).to(npu_layout).to(device)
+        tt_input = ttnn.Tensor(torch_input, npu_dtype).to(npu_layout).to(device)
+        tt_output = ttnn.Tensor(torch_output, npu_dtype).to(npu_layout).to(device)
 
     return tt_input, tt_output, tt_output_shape, torch_output_shape, torch_input
 
@@ -89,9 +89,9 @@ def get_backward_tensors(
     with_padding=True,
     use_randint=True,
 ):
-    npu_dtype = ttl.tensor.DataType.BFLOAT16
+    npu_dtype = ttnn.bfloat16
     cpu_dtype = torch.bfloat16
-    npu_layout = ttl.tensor.Layout.TILE
+    npu_layout = ttnn.TILE_LAYOUT
 
     if use_randint:
         torch_output_grad = torch.randint(-2, 3, torch_output_grad_shape, dtype=cpu_dtype, requires_grad=True)
@@ -102,19 +102,17 @@ def get_backward_tensors(
 
     if with_padding:
         tt_output_grad = (
-            ttl.tensor.Tensor(torch_output_grad.reshape(tt_output_grad_shape), npu_dtype)
+            ttnn.Tensor(torch_output_grad.reshape(tt_output_grad_shape), npu_dtype)
             .pad_to_tile(float("nan"))
             .to(npu_layout)
             .to(device)
         )
-        tt_input_grad = (
-            ttl.tensor.Tensor(torch_input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-        )
+        tt_input_grad = ttnn.Tensor(torch_input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     else:
         tt_output_grad = (
-            ttl.tensor.Tensor(torch_output_grad.reshape(tt_output_grad_shape), npu_dtype).to(npu_layout).to(device)
+            ttnn.Tensor(torch_output_grad.reshape(tt_output_grad_shape), npu_dtype).to(npu_layout).to(device)
         )
-        tt_input_grad = ttl.tensor.Tensor(torch_input_grad, npu_dtype).to(npu_layout).to(device)
+        tt_input_grad = ttnn.Tensor(torch_input_grad, npu_dtype).to(npu_layout).to(device)
 
     return tt_output_grad, tt_input_grad, torch_output_grad
 
@@ -129,9 +127,9 @@ def moreh_sum(input_shape, dim, keep_batch_dim, use_provide_output, compute_kern
         tt_output = None
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_output_cpu = (
-        ttl.operations.primary.moreh_sum(
+        ttnn.experimental.operations.primary.moreh_sum(
             tt_input,
             dim=dim,
             keep_batch_dim=keep_batch_dim,
@@ -282,9 +280,9 @@ def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, devic
     torch_input = torch_input.float()
     torch_output = torch.sum(torch_input, dim, True)
 
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_output_cpu = (
-        ttl.operations.primary.moreh_sum(
+        ttnn.experimental.operations.primary.moreh_sum(
             tt_input, dim=dim, keep_batch_dim=True, output=tt_output, compute_kernel_config=compute_kernel_config
         )
         .cpu()
@@ -322,9 +320,9 @@ def moreh_sum_backward(input_shape, dim, keep_batch_dim, use_provide_output, com
     torch_output = torch.sum(torch_input, dim, keep_batch_dim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_input_grad_cpu = (
-        ttl.operations.primary.moreh_sum_backward(
+        ttnn.experimental.operations.primary.moreh_sum_backward(
             tt_output_grad,
             input=tt_input,
             dim=dim,
@@ -464,9 +462,9 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
     torch_output = torch.sum(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_input_grad_cpu = (
-        ttl.operations.primary.moreh_sum_backward(
+        ttnn.experimental.operations.primary.moreh_sum_backward(
             tt_output_grad,
             input=tt_input,
             dim=dim,
@@ -514,7 +512,7 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
 )
 @pytest.mark.parametrize(
     "data_type",
-    [ttl.tensor.DataType.INT32],
+    [ttnn.int32],
     ids=["int32"],
 )
 def test_moreh_sum_integer(input_shape, dim, data_type, device):
@@ -531,9 +529,9 @@ def test_moreh_sum_integer(input_shape, dim, data_type, device):
     normalized_dim = dim if dim >= 0 else len(input_shape) + dim
 
     torch_output = torch.sum(torch_input, normalized_dim, True)
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
 
-    tt_output = ttl.operations.primary.moreh_sum(
+    tt_output = ttnn.experimental.operations.primary.moreh_sum(
         tt_input, dim=normalized_dim, keep_batch_dim=True, output=tt_output, compute_kernel_config=compute_kernel_config
     )
 

@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_allclose
 from loguru import logger
 
@@ -14,7 +14,7 @@ from loguru import logger
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
-def to_cpu(npu_tensor, shape, *, cpu_layout=ttl.tensor.Layout.ROW_MAJOR):
+def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.ROW_MAJOR_LAYOUT):
     if npu_tensor is None:
         return None
     if not isinstance(shape, (list, tuple)):
@@ -27,15 +27,15 @@ def to_npu(
     cpu_tensor,
     device,
     *,
-    npu_layout=ttl.tensor.Layout.TILE,
-    npu_dtype=ttl.tensor.DataType.BFLOAT16,
+    npu_layout=ttnn.TILE_LAYOUT,
+    npu_dtype=ttnn.bfloat16,
     shape=None,
 ):
     if cpu_tensor is None:
         return None
     if shape is not None:
         cpu_tensor = cpu_tensor.view(shape)
-    npu_tensor = ttl.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    npu_tensor = ttnn.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     return npu_tensor
 
 
@@ -106,7 +106,7 @@ def tt_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_me
         npu_rstd = to_npu(npu_rstd, device)
 
     # Forward
-    npu_output, npu_mean, npu_rstd = ttl.operations.primary.moreh_groupnorm(
+    npu_output, npu_mean, npu_rstd = ttnn.experimental.operations.primary.moreh_groupnorm(
         npu_input,
         num_groups,
         eps,
@@ -170,7 +170,7 @@ def tt_groupnorm_backward(
         npu_db = to_npu(npu_db, device)
 
     # Backward
-    npu_dx, npu_dg, npu_db = ttl.operations.primary.moreh_groupnorm_backward(
+    npu_dx, npu_dg, npu_db = ttnn.experimental.operations.primary.moreh_groupnorm_backward(
         npu_output_grad,
         npu_input,
         npu_mean,

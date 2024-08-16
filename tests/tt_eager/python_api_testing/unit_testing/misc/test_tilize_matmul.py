@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import tt_lib as ttl
 import ttnn
 from loguru import logger
 
@@ -22,19 +21,19 @@ def run_tilize_matmul_test(M, K, N, device):
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
 
-    a = ttl.tensor.Tensor(
+    a = ttnn.Tensor(
         A.flatten().tolist(),
         a_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
         device,
     )
     a_t = ttnn.tilize(a)
-    b_t = ttl.tensor.Tensor(
+    b_t = ttnn.Tensor(
         tilize_to_list(B),
         b_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
     t2 = ttnn.matmul(a_t, b_t)

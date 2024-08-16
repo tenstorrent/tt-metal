@@ -4,7 +4,7 @@
 
 import torch
 
-import tt_lib as ttl
+import ttnn
 import pytest
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
@@ -41,13 +41,13 @@ def test_softmax_for_dim_hw(shape_dim, compute_kernel_options, device):
 
     x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16) + 100
 
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = torch.softmax(x, dim)
-    tt_npu = ttl.operations.primary.moreh_softmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
@@ -73,21 +73,21 @@ def test_softmax_large_algorithm_for_dim_hw(shape_dim, compute_kernel_options, d
 
     x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16) + 100
 
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = torch.softmax(x, dim)
 
     strategy = (
-        ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_W
+        ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_W
         if dim == 3
-        else ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_H
+        else ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_H
     )
-    tt_npu = ttl.operations.primary.moreh_softmax(
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmax(
         dev_x, dim, None, strategy, compute_kernel_config=compute_kernel_config
     )
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
@@ -114,16 +114,11 @@ def test_softmax_not_multiple_of_32_for_dim_hw(shape_dim, compute_kernel_options
 
     x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
-    dev_x = (
-        ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16)
-        .pad_to_tile(float("nan"))
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = torch.softmax(x, dim)
-    tt_npu = ttl.operations.primary.moreh_softmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(shape)
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
+    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
@@ -155,13 +150,11 @@ def test_softmax_for_dim_nc(shape_dim, compute_kernel_options, device):
 
     x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16) + 100
 
-    dev_x = (
-        ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).pad_to_tile(float("7")).to(ttl.tensor.Layout.TILE).to(device)
-    )
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).pad_to_tile(float("7")).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = torch.softmax(x, dim)
-    tt_npu = ttl.operations.primary.moreh_softmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(shape)
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmax(dev_x, dim, compute_kernel_config=compute_kernel_config)
+    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
@@ -196,18 +189,18 @@ def test_softmax_backward_for_dim_hw(shape_dim, compute_kernel_options, device):
     x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = torch.softmax(x, dim)
-    dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_y = ttnn.Tensor(y, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
-    dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
-    tt_npu = ttl.operations.primary.moreh_softmax_backward(
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmax_backward(
         dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config
     )
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
@@ -233,24 +226,24 @@ def test_softmax_backward_large_algorithmfor_dim_hw(shape_dim, compute_kernel_op
     x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = torch.softmax(x, dim)
-    dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_y = ttnn.Tensor(y, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
-    dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
 
     strategy = (
-        ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W
+        ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W
         if dim == 3
-        else ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H
+        else ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H
     )
-    tt_npu = ttl.operations.primary.moreh_softmax_backward(
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmax_backward(
         dev_y, dev_dy, dim, None, strategy, compute_kernel_config=compute_kernel_config
     )
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
@@ -278,26 +271,16 @@ def test_softmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, compute_kerne
     x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = torch.softmax(x, dim)
-    dev_y = (
-        ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16)
-        .pad_to_tile(float("10"))
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_y = ttnn.Tensor(y, ttnn.bfloat16).pad_to_tile(float("10")).to(ttnn.TILE_LAYOUT).to(device)
 
     dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
-    dev_dy = (
-        ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16)
-        .pad_to_tile(float("20"))
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).pad_to_tile(float("20")).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
-    tt_npu = ttl.operations.primary.moreh_softmax_backward(
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmax_backward(
         dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config
     )
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(shape)
+    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
@@ -330,16 +313,16 @@ def test_softmax_backward_for_dim_nc(shape_dim, compute_kernel_options, device):
     x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = torch.softmax(x, dim)
-    dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_y = ttnn.Tensor(y, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
-    dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
-    tt_npu = ttl.operations.primary.moreh_softmax_backward(
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmax_backward(
         dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config
     )
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to_torch().to(torch.bfloat16)
 
@@ -352,12 +335,12 @@ def test_softmax_backward_for_dim_nc(shape_dim, compute_kernel_options, device):
 @pytest.mark.parametrize(
     "shape_dim_strategy",
     (
-        ((32, 32), 1, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.SMALL_W),
-        ((32, 32), 0, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.SMALL_H),
-        ((32, 32), 1, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_W),
-        ((32, 32), 0, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_H),
-        ((1, 1, 32, 32), 1, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_C),
-        ((1, 1, 32, 32), 0, ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_C),
+        ((32, 32), 1, ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.SMALL_W),
+        ((32, 32), 0, ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.SMALL_H),
+        ((32, 32), 1, ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_W),
+        ((32, 32), 0, ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_H),
+        ((1, 1, 32, 32), 1, ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_C),
+        ((1, 1, 32, 32), 0, ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_C),
     ),
 )
 def test_softmax_callback(shape_dim_strategy, device):
@@ -368,14 +351,14 @@ def test_softmax_callback(shape_dim_strategy, device):
 
     x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = torch.softmax(x, dim)
     for i in range(2):
-        tt_npu = ttl.operations.primary.moreh_softmax(dev_x, dim, None, strategy)
+        tt_npu = ttnn.experimental.operations.primary.moreh_softmax(dev_x, dim, None, strategy)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
@@ -386,12 +369,12 @@ def test_softmax_callback(shape_dim_strategy, device):
 @pytest.mark.parametrize(
     "shape_dim_strategy",
     (
-        ((32, 32), 1, ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.SMALL_W),
-        ((32, 32), 0, ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.SMALL_H),
-        ((32, 32), 1, ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W),
-        ((32, 32), 0, ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H),
-        ((1, 1, 32, 32), 1, ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_C),
-        ((1, 1, 32, 32), 0, ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_C),
+        ((32, 32), 1, ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.SMALL_W),
+        ((32, 32), 0, ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.SMALL_H),
+        ((32, 32), 1, ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W),
+        ((32, 32), 0, ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H),
+        ((1, 1, 32, 32), 1, ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_C),
+        ((1, 1, 32, 32), 0, ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_C),
     ),
 )
 def test_softmax_backward_callback(shape_dim_strategy, device):
@@ -402,17 +385,17 @@ def test_softmax_backward_callback(shape_dim_strategy, device):
     x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = torch.softmax(x, dim)
-    dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_y = ttnn.Tensor(y, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
-    dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
     for i in range(2):
-        tt_npu = ttl.operations.primary.moreh_softmax_backward(dev_y, dev_dy, dim, None, strategy)
+        tt_npu = ttnn.experimental.operations.primary.moreh_softmax_backward(dev_y, dev_dy, dim, None, strategy)
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
@@ -440,16 +423,16 @@ def test_softmax_optional_output_tensor(shape_dim, optional_output_tensor, devic
     tt_cpu = torch.softmax(x, dim)
 
     # npu calculation
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
     if optional_output_tensor:
-        dev_y = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+        dev_y = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-        tt_npu = ttl.operations.primary.moreh_softmax(dev_x, dim, dev_y)
+        tt_npu = ttnn.experimental.operations.primary.moreh_softmax(dev_x, dim, dev_y)
     else:
-        tt_npu = ttl.operations.primary.moreh_softmax(dev_x, dim)
+        tt_npu = ttnn.experimental.operations.primary.moreh_softmax(dev_x, dim)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
@@ -478,17 +461,17 @@ def test_softmax_backward_optional_output_tensor(shape_dim, optional_output_tens
     y.backward(dy)
 
     # npu calculation
-    dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-    dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_y = ttnn.Tensor(y, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     if optional_output_tensor:
-        dev_dx = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-        tt_npu = ttl.operations.primary.moreh_softmax_backward(dev_y, dev_dy, dim, dev_dx)
+        dev_dx = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+        tt_npu = ttnn.experimental.operations.primary.moreh_softmax_backward(dev_y, dev_dy, dim, dev_dx)
     else:
-        tt_npu = ttl.operations.primary.moreh_softmax_backward(dev_y, dev_dy, dim)
+        tt_npu = ttnn.experimental.operations.primary.moreh_softmax_backward(dev_y, dev_dy, dim)
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
