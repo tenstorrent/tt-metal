@@ -247,7 +247,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
         ttnn.record_event(1, write_event)
         ttnn.wait_for_event(0, write_event)
-        reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, input_mem_config, reshard_out)
+        reshard_out = ttnn.reshard(tt_image_res, input_mem_config, reshard_out)
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
         ttnn.dump_device_profiler(device)
@@ -263,7 +263,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.record_event(1, write_event)
         ttnn.wait_for_event(0, write_event)
         # TODO: Add in place support to ttnn to_memory_config
-        reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, input_mem_config, reshard_out)
+        reshard_out = ttnn.reshard(tt_image_res, input_mem_config, reshard_out)
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(tt_output_res.cpu(blocking=False))

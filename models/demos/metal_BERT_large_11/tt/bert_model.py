@@ -149,7 +149,7 @@ class TtBertBatchDram:
                 hidden_states = ttnn.move(hidden_states)
             # profiler.end("__one_encoder")
         if hidden_states.memory_config().is_sharded():
-            hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+            hidden_states = ttnn.sharded_to_interleaved(
                 hidden_states,
                 self.model_config["QA_LINEAR_OUTPUT_MEMCFG"],
                 self.model_config["QA_LINEAR_WEIGHTS_DTYPE"],

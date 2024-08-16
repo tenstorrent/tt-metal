@@ -155,7 +155,7 @@ class MambaTT(torch.nn.Module):
                 program_config=self.configs["SHARDED_NORM_PRGM_CFG"],
                 memory_config=self.configs["sharded_h"],
             )
-            x = ttnn.experimental.tensor.sharded_to_interleaved(x)
+            x = ttnn.sharded_to_interleaved(x)
             x = ttnn.linear(
                 x,
                 self.lm_head_weights,

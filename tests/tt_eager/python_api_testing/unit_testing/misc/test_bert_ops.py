@@ -188,7 +188,7 @@ def test_bert_linear(
         )
 
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 
@@ -383,7 +383,7 @@ def test_bert_linear_batch7(
         )
 
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 
@@ -511,7 +511,7 @@ def run_bert_linear_batch4(
         )
 
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 

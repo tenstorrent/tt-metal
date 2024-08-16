@@ -67,9 +67,9 @@ def run_reshard_test(
         output_dtype=tt_dtype,
     )
 
-    tt_tensor_reshard = ttnn.experimental.tensor.reshard(tt_tensor_sharded, output_mem_config)
+    tt_tensor_reshard = ttnn.reshard(tt_tensor_sharded, output_mem_config)
 
-    tt_tensor_interleaved = ttnn.experimental.tensor.sharded_to_interleaved(
+    tt_tensor_interleaved = ttnn.sharded_to_interleaved(
         tt_tensor_reshard,
         dram_memory_config,
     )

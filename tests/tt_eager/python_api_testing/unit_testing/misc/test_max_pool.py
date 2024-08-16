@@ -252,7 +252,7 @@ def test_run_max_pool(
         use_multicore=use_multicore,
     )
     if out_mem_config.is_sharded():
-        out_padded = ttnn.experimental.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
+        out_padded = ttnn.sharded_to_interleaved(out_padded, interleaved_mem_config)
     out_padded = out_padded.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
 
     out_shape_padded = out_padded.get_legacy_shape()

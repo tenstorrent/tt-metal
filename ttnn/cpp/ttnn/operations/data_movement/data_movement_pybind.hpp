@@ -29,6 +29,7 @@
 #include "ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_pybind.hpp"
 #include "ttnn/operations/data_movement/reshape/reshape_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_pybind.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_pybind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/copy/copy_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/move/move_pybind.hpp"
@@ -65,12 +66,9 @@ void py_module(py::module& module) {
     detail::py_bind_copy(module);
     detail::py_bind_clone(module);
     detail::py_bind_assign(module);
-<<<<<<< HEAD
     detail::py_bind_move(module);
-=======
+    py_bind_sharded_to_interleaved(module);
     py_bind_interleaved_to_sharded(module);
-
->>>>>>> 089d8e1fa7... #10131: migrate interleaved to sharded
 }
 
 }  // namespace data_movement

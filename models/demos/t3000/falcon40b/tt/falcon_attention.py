@@ -422,7 +422,7 @@ class TtFalconAttention:
 
         # Reshard
         if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
-            hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+            hidden_states = ttnn.sharded_to_interleaved(
                 hidden_states,
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
@@ -447,7 +447,7 @@ class TtFalconAttention:
         ### TMs ###
         ###########
         if self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] != self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]:
-            fused_query_key_value = ttnn.experimental.tensor.sharded_to_interleaved(
+            fused_query_key_value = ttnn.sharded_to_interleaved(
                 fused_query_key_value,
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
@@ -588,7 +588,7 @@ class TtFalconAttention:
             attn_output,
             memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )
-        attn_output = ttnn.experimental.tensor.sharded_to_interleaved(
+        attn_output = ttnn.sharded_to_interleaved(
             attn_output,
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )

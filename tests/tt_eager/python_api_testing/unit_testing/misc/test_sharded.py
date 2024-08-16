@@ -78,7 +78,7 @@ def test_sharded_tile(
         xt, grid_size, shard_size, shard_scheme, shard_orientation, output_dtype=output_dtype
     )
 
-    zt = ttnn.experimental.tensor.sharded_to_interleaved(
+    zt = ttnn.sharded_to_interleaved(
         yt,
         ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -162,7 +162,7 @@ def test_sharded_rm(
 
     yt = ttnn.interleaved_to_sharded(xt, grid_size, shard_size, shard_scheme, shard_orientation)
 
-    zt = ttnn.experimental.tensor.sharded_to_interleaved(
+    zt = ttnn.sharded_to_interleaved(
         yt,
         ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -239,7 +239,7 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, dtype, device, 
     )
 
     if out_sharded:
-        yt = ttnn.experimental.tensor.sharded_to_interleaved(
+        yt = ttnn.sharded_to_interleaved(
             yt,
             interleaved_mem_config,
         )
@@ -300,7 +300,7 @@ def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defau
         dtype=output_dtype,
     )
 
-    zt = ttnn.experimental.tensor.sharded_to_interleaved(
+    zt = ttnn.sharded_to_interleaved(
         yt_tilized,
         ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -378,7 +378,7 @@ def test_height_sharded_matmul_1d_padding(device, M, K, N, num_cores):
         dtype=ttnn.bfloat16,
     )
 
-    output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+    output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
     pt_out = in0 @ in1
     tt_out = tt2torch_tensor(output_t)
@@ -464,7 +464,7 @@ def test_sharded_matmul_1d_in1(
         dtype=activations_dtype,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
@@ -937,7 +937,7 @@ def test_sharded_binary(
 
     output_t = ttnn.add(in0_t, in1_t, memory_config=output_mem_config, dtype=output_dtype)
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 + in1
 
     tt_out = tt2torch_tensor(output_t)
@@ -985,7 +985,7 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    zt = ttnn.experimental.tensor.sharded_to_interleaved(
+    zt = ttnn.sharded_to_interleaved(
         yt,
         ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -1018,14 +1018,14 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
         ttnn.ShardOrientation.ROW_MAJOR,
     )
 
-    zt2 = ttnn.experimental.tensor.sharded_to_interleaved(
+    zt2 = ttnn.sharded_to_interleaved(
         yt2,
         ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
             buffer_type=ttnn.BufferType.L1,
         ),
     )
-    zt = ttnn.experimental.tensor.sharded_to_interleaved(
+    zt = ttnn.sharded_to_interleaved(
         yt,
         ttnn.MemoryConfig(
             memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -1121,7 +1121,7 @@ def test_sharded_matmul_2d(
         dtype=activations_dtype,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
@@ -1218,7 +1218,7 @@ def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
     )
 
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
     pt_out = in0 @ in1 + bias
 
@@ -1304,7 +1304,7 @@ def test_sharded_matmul_2d_transposed(
         dtype=activations_dtype,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
@@ -1394,7 +1394,7 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
         program_config=program_config,
         memory_config=block_sharded_mem_config,
     )
-    output_matmul_t = ttnn.experimental.tensor.sharded_to_interleaved(output_matmul_t, interleaved_mem_config)
+    output_matmul_t = ttnn.sharded_to_interleaved(output_matmul_t, interleaved_mem_config)
 
     tt_out = tt2torch_tensor(output_matmul_t)
 
@@ -1464,7 +1464,7 @@ def test_sharded_untilize_padded_shard(in_sharded, out_sharded, dtype, device, f
     )
 
     if out_sharded:
-        yt = ttnn.experimental.tensor.sharded_to_interleaved(
+        yt = ttnn.sharded_to_interleaved(
             yt,
             interleaved_mem_config,
         )
@@ -1563,7 +1563,7 @@ def test_sharded_binary_padded_shard(
     zt = ttnn.add(xt, yt, memory_config=out_mem_config, dtype=output_dtype)
 
     if out_sharded:
-        zt = ttnn.experimental.tensor.sharded_to_interleaved(
+        zt = ttnn.sharded_to_interleaved(
             zt,
             interleaved_mem_config,
         )
@@ -1635,7 +1635,7 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
     )
 
     if out_sharded:
-        yt = ttnn.experimental.tensor.sharded_to_interleaved(
+        yt = ttnn.sharded_to_interleaved(
             yt,
             interleaved_mem_config,
         )
@@ -1723,7 +1723,7 @@ def test_width_sharded_untilize_with_unpadding(
     )
 
     if out_sharded:
-        yt = ttnn.experimental.tensor.sharded_to_interleaved(
+        yt = ttnn.sharded_to_interleaved(
             yt,
             interleaved_mem_config,
         )
@@ -1793,7 +1793,7 @@ def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dt
     )
 
     if out_sharded:
-        yt = ttnn.experimental.tensor.sharded_to_interleaved(
+        yt = ttnn.sharded_to_interleaved(
             yt,
             interleaved_mem_config,
         )
@@ -1863,7 +1863,7 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
     yt = ttnn.max(xt, 2, memory_config=out_mem_config)
 
     if out_sharded:
-        yt = ttnn.experimental.tensor.sharded_to_interleaved(
+        yt = ttnn.sharded_to_interleaved(
             yt,
             interleaved_mem_config,
         )
@@ -1958,7 +1958,7 @@ def test_sharded_matmul_1d_in0(
         dtype=activations_dtype,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
@@ -2031,7 +2031,7 @@ def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
         memory_config=output_mem_config,
         dtype=dtype,
     )
-    output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+    output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
@@ -2123,7 +2123,7 @@ def test_sharded_matmul_no_mcast(
         dtype=activations_dtype,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
     pt_out = in0 @ in1
 
@@ -2186,7 +2186,7 @@ def test_sharded_concat_heads(
         memory_config=output_mem_config,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
     pt_out = torch.transpose(in0, -3, -2).reshape([B, 1, seq_len, num_heads * head_dim])
 
@@ -2237,9 +2237,9 @@ def run_reshard_test(
         output_dtype=tt_dtype,
     )
 
-    tt_tensor_reshard = ttnn.experimental.tensor.reshard(tt_tensor_sharded, output_mem_config)
+    tt_tensor_reshard = ttnn.reshard(tt_tensor_sharded, output_mem_config)
 
-    tt_tensor_interleaved = ttnn.experimental.tensor.sharded_to_interleaved(
+    tt_tensor_interleaved = ttnn.sharded_to_interleaved(
         tt_tensor_reshard,
         dram_memory_config,
     )

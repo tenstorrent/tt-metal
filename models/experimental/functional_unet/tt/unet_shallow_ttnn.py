@@ -22,7 +22,7 @@ def unet_reshard(
         )
     else:
         ttl_tensor = ttnn_tensor
-        ttl_tensor = ttnn.experimental.tensor.sharded_to_interleaved(ttl_tensor, interleaved_memory_config, dtype)
+        ttl_tensor = ttnn.sharded_to_interleaved(ttl_tensor, interleaved_memory_config, dtype)
         ttl_tensor = ttnn.interleaved_to_sharded(
             ttl_tensor,
             sharded_memory_config,
@@ -61,7 +61,7 @@ def unet_concat(ttnn_tensors, dim=-1, use_reshard=True, perf_mode=False):
                 t_mem_config.shard_spec.shape = reshard_shape
                 t_mem_config.shard_spec.grid = output_mem_config.shard_spec.grid
                 t_mem_config.shard_spec.orientation = output_mem_config.shard_spec.orientation
-                ttlib_tensors[i] = ttnn.experimental.tensor.reshard(t, t_mem_config)
+                ttlib_tensors[i] = ttnn.reshard(t, t_mem_config)
     else:
         output_mem_config = ttnn.DRAM_MEMORY_CONFIG
         for i in range(0, len(ttlib_tensors)):
@@ -115,7 +115,7 @@ class UNet:
         if perf_mode:
             save_c1_2_out = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         else:
-            save_c1_2_out = ttnn.experimental.tensor.sharded_to_interleaved(
+            save_c1_2_out = ttnn.sharded_to_interleaved(
                 output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16
             )
         output_tensor = self.p1(output_tensor)
@@ -127,7 +127,7 @@ class UNet:
         if perf_mode:
             save_c2_2_out = output_tensor
         else:
-            save_c2_2_out = ttnn.experimental.tensor.sharded_to_interleaved(
+            save_c2_2_out = ttnn.sharded_to_interleaved(
                 output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16
             )
         output_tensor = self.p2(output_tensor)
@@ -139,7 +139,7 @@ class UNet:
         if perf_mode:
             save_c3_2_out = output_tensor
         else:
-            save_c3_2_out = ttnn.experimental.tensor.sharded_to_interleaved(
+            save_c3_2_out = ttnn.sharded_to_interleaved(
                 output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16
             )
         output_tensor = self.p3(output_tensor)
@@ -151,7 +151,7 @@ class UNet:
         if perf_mode:
             save_c4_2_out = output_tensor
         else:
-            save_c4_2_out = ttnn.experimental.tensor.sharded_to_interleaved(
+            save_c4_2_out = ttnn.sharded_to_interleaved(
                 output_tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16
             )
         output_tensor = self.p4(output_tensor)
@@ -164,7 +164,7 @@ class UNet:
         if not perf_mode:
             # need to convert into interleaved, then back into sharded due to pcc issues
             # for certain tensor shape sizes, you get pcc issues when trying to convert between data layouts
-            output_tensor = ttnn.experimental.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         ## upsample block
@@ -186,7 +186,7 @@ class UNet:
         if not perf_mode:
             # need to convert into interleaved, then back into sharded due to pcc issues
             # for certain tensor shape sizes, you get pcc issues when trying to convert between data layouts
-            output_tensor = ttnn.experimental.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         profiler.tracy_message("upsample2")
@@ -207,7 +207,7 @@ class UNet:
         if not perf_mode:
             # need to convert into interleaved, then back into sharded due to pcc issues
             # for certain tensor shape sizes, you get pcc issues when trying to convert between data layouts
-            output_tensor = ttnn.experimental.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         profiler.tracy_message("upsample3")
@@ -231,7 +231,7 @@ class UNet:
         if not perf_mode:
             # need to convert into interleaved, then back into sharded due to pcc issues
             # for certain tensor shape sizes, you get pcc issues when trying to convert between data layouts
-            output_tensor = ttnn.experimental.tensor.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         profiler.tracy_message("upsample4")

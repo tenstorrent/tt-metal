@@ -177,7 +177,7 @@ def run_test_matmul_in1_dram_sharded(
             dtype=out_dtype,
             compute_kernel_config=compute_kernel_config,
         )
-    output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+    output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
     pt_out = in0 @ in1
     if has_bias:
@@ -612,7 +612,7 @@ def test_matmul_2d_in1_dram_sharded(
         )
 
     if in0_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_DRAM)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_DRAM)
     tt_out = tt2torch_tensor(output_t)
 
     pt_out = in0 @ in1

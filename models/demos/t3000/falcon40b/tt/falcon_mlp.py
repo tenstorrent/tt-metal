@@ -117,7 +117,7 @@ class TtFalconMLP:
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
 
-        hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+        hidden_states = ttnn.sharded_to_interleaved(
             hidden_states, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
         )
 

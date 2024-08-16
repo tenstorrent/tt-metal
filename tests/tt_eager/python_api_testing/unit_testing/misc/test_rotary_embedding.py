@@ -167,7 +167,11 @@ def test_rotary_embedding_decode(
     sint = ttnn.Tensor(sin_cached, sincos_dtype).to(ttnn.TILE_LAYOUT).to(device)
     xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx, memory_config=out_mem_config)
     if out_sharded:
-        xtt = ttnn.experimental.tensor.sharded_to_interleaved(xtt)
+<<<<<<< HEAD
+        xtt = ttnn.sharded_to_interleaved(xtt)
+=======
+        xtt = ttnn.sharded_to_interleaved(xtt)
+>>>>>>> 7295728705... #10131: migrate sharded to interleaved
 
     tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
@@ -314,7 +318,7 @@ def test_rotary_embedding_decode_fp32(
     sint = ttnn.Tensor(sin_cached, sincos_dtype).to(ttnn.TILE_LAYOUT).to(device)
     xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx, memory_config=out_mem_config)
     if out_sharded:
-        xtt = ttnn.experimental.tensor.sharded_to_interleaved(xtt)
+        xtt = ttnn.sharded_to_interleaved(xtt)
 
     tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 

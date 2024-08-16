@@ -102,7 +102,7 @@ def test_matmul_1d_in0_batched(
         in1_t.deallocate()
         bias_t.deallocate()
         if out_sharded:
-            output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
         pt_out = in0 @ in1 + bias
 
         tt_out = tt2torch_tensor(output_t)
@@ -211,7 +211,7 @@ def test_linear_fp32_acc_l1(
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
-            output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
         pt_out = in0 @ in1 + bias
 
         tt_out = tt2torch_tensor(output_t)
@@ -318,7 +318,7 @@ def test_matmul_no_mcast_fp32_acc_l1(
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
-            output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
         pt_out = in0 @ in1
 
@@ -434,7 +434,7 @@ def test_matmul_1d_fp32_input_output(
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
-            output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
         pt_out = in0 @ in1 + bias
 
         tt_out = tt2torch_tensor(output_t)
@@ -547,7 +547,7 @@ def test_matmul_no_mcast_fp32_input_output(
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
-            output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
         pt_out = in0 @ in1
 
@@ -671,7 +671,7 @@ def test_matmul_no_untilize_output_param(
             compute_kernel_config=compute_kernel_config,
         )
         if out_sharded:
-            output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+            output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
         pt_out = in0 @ in1
 

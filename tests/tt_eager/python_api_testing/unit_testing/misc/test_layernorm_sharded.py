@@ -268,7 +268,7 @@ def test_layernorm_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
         )
 
-    ttz = ttnn.experimental.tensor.sharded_to_interleaved(ttz, in0_mem_config)
+    ttz = ttnn.sharded_to_interleaved(ttz, in0_mem_config)
     tt_got_back = ttz.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().float()
 
     pt_in = in0 + in1 if test_id <= 5 else in0
@@ -543,7 +543,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
             compute_kernel_config=compute_kernel_config,
         )
 
-    ttz = ttnn.experimental.tensor.sharded_to_interleaved(ttz, in0_mem_config)
+    ttz = ttnn.sharded_to_interleaved(ttz, in0_mem_config)
     tt_got_back = ttz.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().float()
 
     pt_in = in0 + in1 if test_id <= 5 else in0

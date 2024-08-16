@@ -194,7 +194,7 @@ class TtFalconDecoderLayer:
         assert not output_attentions
 
         if self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"].is_sharded():
-            replicated_hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+            replicated_hidden_states = ttnn.sharded_to_interleaved(
                 hidden_states,
                 output_mem_config=self.model_config["DEFAULT_MEMCFG"],
             )
@@ -302,7 +302,7 @@ class TtFalconDecoderLayer:
 
         assert not output_attentions
 
-        replicated_hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+        replicated_hidden_states = ttnn.sharded_to_interleaved(
             hidden_states,
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )

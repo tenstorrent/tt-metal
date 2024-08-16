@@ -161,7 +161,7 @@ def test_ttnn_linear(
             dtype=input_a_dtype,
         )
         if output_is_sharded:
-            output_tensor = ttnn.experimental.tensor.sharded_to_interleaved(output_tensor, interleaved_memory_config)
+            output_tensor = ttnn.sharded_to_interleaved(output_tensor, interleaved_memory_config)
 
         output_tensor = ttnn.to_torch(output_tensor)
         ttnn.tracer.visualize(output_tensor)

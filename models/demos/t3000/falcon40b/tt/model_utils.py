@@ -18,7 +18,7 @@ def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=F
             return [convert_to_layout(t, input_memory_layout, output_memory_layout, clone=clone) for t in tensor]
         else:
             if input_memory_layout.is_sharded() and not output_memory_layout.is_sharded():  # sharded_to_interleaved
-                tensor = ttnn.experimental.tensor.sharded_to_interleaved(tensor, output_mem_config=output_memory_layout)
+                tensor = ttnn.sharded_to_interleaved(tensor, output_mem_config=output_memory_layout)
             elif not input_memory_layout.is_sharded() and output_memory_layout.is_sharded():  # interleaved_to_sharded
                 tensor = ttnn.interleaved_to_sharded(tensor, sharded_mem_config=output_memory_layout)
             elif (
@@ -29,7 +29,7 @@ def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=F
                 else:
                     tensor = ttnn.move(tensor, memory_config=output_memory_layout)
             else:  # reshard
-                tensor = ttnn.experimental.tensor.sharded_to_interleaved(
+                tensor = ttnn.sharded_to_interleaved(
                     tensor,
                     output_mem_config=ttnn.experimental.tensor.MemoryConfig(
                         ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
@@ -553,7 +553,7 @@ def fused_partial_layernorm(
             dim=ttnn.experimental.tensor.BcastOpDim.H,
             output_mem_config=memconfig,
         )
-        xs_output1 = ttnn.experimental.tensor.sharded_to_interleaved(xs_output1, output_mem_config=dram_memcfg)
+        xs_output1 = ttnn.sharded_to_interleaved(xs_output1, output_mem_config=dram_memcfg)
 
         # Apply second layernorm gamma+beta
         xs_output2 = ttnn.experimental.tensor.bcast(
@@ -570,7 +570,7 @@ def fused_partial_layernorm(
             dim=ttnn.experimental.tensor.BcastOpDim.H,
             output_mem_config=memconfig,
         )
-        xs_output2 = ttnn.experimental.tensor.sharded_to_interleaved(xs_output2, output_mem_config=dram_memcfg)
+        xs_output2 = ttnn.sharded_to_interleaved(xs_output2, output_mem_config=dram_memcfg)
 
         output1 = xs_output1
         output2 = xs_output2

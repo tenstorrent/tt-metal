@@ -2120,7 +2120,7 @@ class ResNet(nn.Module):
             x.get_legacy_shape()[3],
         ]
 
-        x = ttnn.experimental.tensor.reshard(
+        x = ttnn.reshard(
             x,
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -2177,7 +2177,7 @@ class ResNet(nn.Module):
                 x = x.to(self.device, mem_config)
             elif x.memory_config().is_sharded():
                 if x.memory_config() != mem_config:
-                    x = ttnn.experimental.tensor.reshard(x, mem_config)
+                    x = ttnn.reshard(x, mem_config)
                 else:
                     x_in = x
             else:
@@ -2248,7 +2248,7 @@ class ResNet(nn.Module):
                     False,
                 ),
             )
-            x = ttnn.experimental.tensor.reshard(
+            x = ttnn.reshard(
                 x,
                 reshard_mem_config,
             )
@@ -2280,7 +2280,7 @@ class ResNet(nn.Module):
                     False,
                 ),
             )
-            x = ttnn.experimental.tensor.reshard(
+            x = ttnn.reshard(
                 x,
                 reshard_mem_config,
             )
@@ -2310,7 +2310,7 @@ class ResNet(nn.Module):
                     False,
                 ),
             )
-            x = ttnn.experimental.tensor.reshard(
+            x = ttnn.reshard(
                 x,
                 reshard_mem_config,
             )

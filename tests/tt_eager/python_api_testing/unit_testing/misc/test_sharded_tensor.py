@@ -8,8 +8,13 @@ import pathlib
 
 import torch
 
+<<<<<<< HEAD
 import ttnn
 
+=======
+import tt_lib as ttl
+import ttnn
+>>>>>>> 7295728705... #10131: migrate sharded to interleaved
 from models.utility_functions import get_debug_tensor
 from enum import Enum
 
@@ -307,7 +312,7 @@ def test_tensor_conversion_between_torch_and_tt_tile(
     ttnn.synchronize_device(device)
     # not doing direct read
     if direct_read_write_type == DirectReadWriteType.WRITE_ONLY:
-        tt_tensor = ttnn.experimental.tensor.sharded_to_interleaved(tt_tensor, interleaved_mem_config)
+        tt_tensor = ttnn.sharded_to_interleaved(tt_tensor, interleaved_mem_config)
     tt_tensor = tt_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     torch_tensor_after_round_trip = tt_tensor.to_torch()
 

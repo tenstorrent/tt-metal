@@ -101,9 +101,7 @@ def test_group_attn_matmul(
         dtype=output_dtype,
     )
     if output_sharded:
-        tt_output_tensor_on_device = ttnn.experimental.tensor.sharded_to_interleaved(
-            tt_output_tensor_on_device, interleaved_mem_config
-        )
+        tt_output_tensor_on_device = ttnn.sharded_to_interleaved(tt_output_tensor_on_device, interleaved_mem_config)
 
     tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -182,7 +180,7 @@ def test_sharded_matmul_1d_in0(
         dtype=activations_dtype,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
     pt_out = in0 @ in1 + bias
 

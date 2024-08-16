@@ -365,7 +365,7 @@ class TtFalconModelShared:
             presents += layer_output[1:]
             layer_output = layer_output[0]
 
-        layer_output = ttnn.experimental.tensor.sharded_to_interleaved(
+        layer_output = ttnn.sharded_to_interleaved(
             layer_output,
             output_mem_config=self.model_config["DEFAULT_MEMCFG"],
         )

@@ -318,7 +318,7 @@ class resnetBlock2D:
             output_shard_spec,
         )
         if tensor.is_sharded():
-            tensor = ttnn.experimental.tensor.reshard(
+            tensor = ttnn.reshard(
                 tensor,
                 output_mem_config,
             )
@@ -393,9 +393,7 @@ class resnetBlock2D:
             #     hidden_states, self.conv1s[0].conv.input_sharded_memory_config, hidden_states.dtype
             # )
             hidden_states = nonlinearity(hidden_states, memory_config=ttnn.get_memory_config(hidden_states))
-            hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-                hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
-            )
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
             hidden_states = ttnn.reallocate(hidden_states)
             # hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
@@ -443,9 +441,7 @@ class resnetBlock2D:
             split_input_channels = in_channels // conv1_split_chunks
 
             # unpad sharded causes output mismatch
-            hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-                hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
-            )
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
             output_tensor_end_width_dim = split_input_channels
             for i in range(conv1_split_chunks):
                 # TODO: Can we replace this with interleaved_to_sharded_partial
@@ -594,7 +590,7 @@ class resnetBlock2D:
             (1, 1, self.batch_size * self.conv2_input_height * self.conv2_input_width, out_channels),
         )
 
-        # hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+        # hidden_states = ttnn.sharded_to_interleaved(
         #     hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
         # )
         # hidden_states = ttnn.interleaved_to_sharded(
@@ -603,9 +599,7 @@ class resnetBlock2D:
 
         hidden_states = nonlinearity(hidden_states, memory_config=ttnn.get_memory_config(hidden_states))
         # hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-            hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
-        )
+        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
 
         # hidden_states = self.conv2(hidden_states)
 
@@ -646,7 +640,7 @@ class resnetBlock2D:
             # if ttnn.get_memory_config(input_tensor) != self.conv_shortcut.conv.input_sharded_memory_config:
             #     # TODO: Once reshard fix is in, store input tensor in sharded
             #     if input_tensor.memory_config().is_sharded():
-            #         input_tensor = ttnn.experimental.tensor.sharded_to_interleaved(
+            #         input_tensor = ttnn.sharded_to_interleaved(
             #             input_tensor, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
             #         )
             #     input_tensor = ttnn.interleaved_to_sharded(

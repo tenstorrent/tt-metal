@@ -162,7 +162,7 @@ def test_llama2_matmul(
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
@@ -486,7 +486,7 @@ def test_multi_core_matmul_2d_wh(
     )
 
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 
@@ -814,7 +814,7 @@ def test_multi_core_matmul_1d_wh(
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)
@@ -1024,7 +1024,7 @@ def test_multi_core_matmul_2d_gs(
         )
 
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 
@@ -1178,7 +1178,7 @@ def test_multi_core_matmul_1d_gs(
         compute_kernel_config=compute_kernel_config,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 @ in1 + bias
 
     tt_out = tt2torch_tensor(output_t)

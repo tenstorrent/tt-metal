@@ -156,7 +156,7 @@ class TestBertOpsTrace:
                     compute_kernel_config=compute_kernel_config,
                 )
             if out_sharded:
-                output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+                output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
             return output_t
 
         # Compile

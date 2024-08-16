@@ -777,8 +777,8 @@ class TtFalconAttentionDecode(nn.Module):
             attn_weights.deallocate(True)
             value_layer.deallocate()
 
-            attn_output = ttnn.experimental.tensor.sharded_to_interleaved(
-                attn_output, output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"]
+            attn_output = ttnn.sharded_to_interleaved(
+                attn_output, memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"]
             )
 
             # Get batch in dim 1

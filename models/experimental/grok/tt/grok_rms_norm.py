@@ -102,6 +102,6 @@ class TtRMSNormSharded(LightweightModule):
         )
         if out_sharded:
             return x
-        x_interleaved = ttnn.experimental.tensor.sharded_to_interleaved(x)
+        x_interleaved = ttnn.sharded_to_interleaved(x)
         x.deallocate(True)
         return x_interleaved

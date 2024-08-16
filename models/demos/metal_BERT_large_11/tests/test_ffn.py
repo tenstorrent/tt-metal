@@ -66,7 +66,7 @@ def run_ffn_inference(
 
     tt_out = tt_ffn_model(tilized_ffn_input)
     if tt_out.is_sharded():
-        tt_out = ttnn.experimental.tensor.sharded_to_interleaved(tt_out)
+        tt_out = ttnn.sharded_to_interleaved(tt_out)
     tt_out = tt_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)

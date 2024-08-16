@@ -168,7 +168,7 @@ def test_layernorm_sharded_rm(test_id, device, grid_size, seq_len, per_core_k, t
 
     logger.info("Done")
 
-    ttz = ttnn.experimental.tensor.sharded_to_interleaved(ttz, in0_mem_config)
+    ttz = ttnn.sharded_to_interleaved(ttz, in0_mem_config)
     t2_data = ttz.cpu().to_torch().float()
     tt_got_back = torch.Tensor(t2_data).reshape(in0_shape)
     tt_got_back = untilize(tt_got_back)
@@ -324,7 +324,7 @@ def test_layernorm_sharded_mix_precision_rm(test_id, device, grid_size, seq_len,
 
     logger.info("Done")
 
-    ttz = ttnn.experimental.tensor.sharded_to_interleaved(ttz, in0_mem_config)
+    ttz = ttnn.sharded_to_interleaved(ttz, in0_mem_config)
     t2_data = ttz.cpu().to_torch().float()
     tt_got_back = torch.Tensor(t2_data).reshape(in0_shape)
     tt_got_back = untilize(tt_got_back)
