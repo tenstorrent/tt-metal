@@ -9,6 +9,7 @@ import torch
 import ttnn
 from models.utility_functions import comp_pcc
 from models.utility_functions import is_grayskull
+import ttnn
 
 
 def generate_input_shapes():
@@ -50,12 +51,12 @@ def test_attn_matmul(num_loops, enable_async, in0_dtype, in1_dtype, out_dtype, d
             tt_input_tensor_a = tt_input_tensor_a.to(device)
             tt_input_tensor_b = tt_input_tensor_b.to(device)
             compute_grid_size = device.compute_with_storage_grid_size()
-            tt_output_tensor_on_device = ttnn.experimental.operations.primary.transformers.attn_matmul(
+            tt_output_tensor_on_device = ttnn.experimental.attn_matmul(
                 tt_input_tensor_a,
                 tt_input_tensor_b,
                 compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
-                output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-                output_dtype=out_dtype,
+                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+                dtype=out_dtype,
             )
             tt_input_tensor_a.deallocate()
             tt_input_tensor_b.deallocate()
@@ -96,12 +97,12 @@ def test_attn_matmul_fp32(num_loops, enable_async, in_dtype, device):
                 packer_l1_acc=False,
             )
 
-            tt_output_tensor_on_device = ttnn.experimental.operations.primary.transformers.attn_matmul(
+            tt_output_tensor_on_device = ttnn.experimental.attn_matmul(
                 tt_input_tensor_a,
                 tt_input_tensor_b,
                 compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
-                output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-                output_dtype=in_dtype,
+                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+                dtype=in_dtype,
                 compute_kernel_config=compute_kernel_config,
             )
             tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
@@ -136,12 +137,12 @@ def test_attn_matmul_with_program_cache(
 
             compute_grid_size = device.compute_with_storage_grid_size()
 
-            tt_output_tensor_on_device = ttnn.experimental.operations.primary.transformers.attn_matmul(
+            tt_output_tensor_on_device = ttnn.experimental.attn_matmul(
                 tt_input_tensor_a,
                 tt_input_tensor_b,
                 compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
-                output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-                output_dtype=out_dtype,
+                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+                dtype=out_dtype,
             )
             tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
@@ -247,12 +248,12 @@ def test_group_attn_matmul(
         else:
             output_mem_config = interleaved_mem_config
 
-        tt_output_tensor_on_device = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+        tt_output_tensor_on_device = ttnn.experimental.group_attn_matmul(
             tt_input_tensor_a,
             tt_input_tensor_b,
             compute_with_storage_grid_size=compute_grid_size,
-            output_mem_config=output_mem_config,
-            output_dtype=output_dtype,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
         )
 
         tt_input_tensor_a.deallocate()
@@ -341,12 +342,12 @@ def test_group_attn_matmul_with_program_cache(
                 output_mem_config = interleaved_mem_config
 
             num_cache_entries_start = device.num_program_cache_entries()
-            tt_output_tensor_on_device = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+            tt_output_tensor_on_device = ttnn.experimental.group_attn_matmul(
                 tt_input_tensor_a,
                 tt_input_tensor_b,
                 compute_with_storage_grid_size=compute_grid_size,
-                output_mem_config=output_mem_config,
-                output_dtype=output_dtype,
+                memory_config=output_mem_config,
+                dtype=output_dtype,
             )
             num_cache_entries += device.num_program_cache_entries() - num_cache_entries_start
 
@@ -474,12 +475,12 @@ def test_group_attn_matmul_fp32(
             packer_l1_acc=False,
         )
 
-        tt_output_tensor_on_device = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+        tt_output_tensor_on_device = ttnn.experimental.group_attn_matmul(
             tt_input_tensor_a,
             tt_input_tensor_b,
             compute_with_storage_grid_size=compute_grid_size,
-            output_mem_config=output_mem_config,
-            output_dtype=output_dtype,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
             compute_kernel_config=compute_kernel_config,
         )
         if output_sharded:

@@ -308,7 +308,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     std::vector<uint32_t> compute_args = {num_tiles_per_tensor};
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/transformer_tms/kernels/compute/transpose_wh_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/device/kernels/compute/transpose_wh_sharded.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = compute_args}
     );

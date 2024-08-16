@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib as ttl
 import ttnn
 from loguru import logger
 from pathlib import Path
@@ -98,16 +97,12 @@ def pretty_print_model_config(model_config):
 
 def get_model_config(model_config_str, num_devices=1, all_gather=True):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
-    DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
-    WIDTH_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttl.tensor.BufferType.L1
-    )
-    HEIGHT_SHARDED_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
-    )
-    BFLOAT16_DTYPE = ttl.tensor.DataType.BFLOAT16
-    BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
+    DRAM_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    L1_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    WIDTH_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    BFLOAT16_DTYPE = ttnn.bfloat16
+    BFP8_DTYPE = ttnn.bfloat8_b
     # BFP2_DTYPE = ttl.tensor.DataType.BFLOAT2_B
 
     # Set default dtype and mem_config based on model_config_str
@@ -115,7 +110,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         dtype_str, mem_config_str = model_config_str.split("-")
         # TODO: Set default memcfg for BFLOAT16-L1 to L1
         mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
-        dtype = getattr(ttl.tensor.DataType, dtype_str)
+        dtype = getattr(ttnn.DataType, dtype_str)
     else:
         raise NotImplementedError(f"Model config {model_config_str} is not supported!")
 
@@ -155,15 +150,15 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"] = L1_MEMCFG
 
     # Embeddings
-    model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
@@ -171,21 +166,21 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 32,
                 64,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
     if num_devices == 4:
-        model_config["ATTN_MASK_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["ATTN_MASK_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
+                        ttnn.CoreRange(
                             # Volume must match # of attn heads
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 1),
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 1),
                         ),
                     }
                 ),
@@ -193,21 +188,21 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,  # Each core has 32 users
                     1,  # Dynamic - must set before using this config
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
     elif num_devices == 8:
-        model_config["ATTN_MASK_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["ATTN_MASK_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
+                        ttnn.CoreRange(
                             # Volume must match # of attn heads
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 0),
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 0),
                         ),
                     }
                 ),
@@ -215,22 +210,22 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,  # Each core has 32 users
                     1,  # Dynamic - must set before using this config
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
 
     model_config["ATTN_MASK_DTYPE"] = BFP8_DTYPE
 
-    model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
@@ -238,19 +233,19 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 32,
                 64,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    model_config["DROPOUT_ADD_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    model_config["DROPOUT_ADD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
@@ -258,20 +253,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 32,
                 64,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
     # Decoder
-    model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
@@ -279,19 +274,19 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 32,  # per_core_M * TILE_HEIGHT
                 256,  # per_core_N * TILE_WIDTH
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    model_config["LN_ATTN_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    model_config["LN_ATTN_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
@@ -299,7 +294,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 32,
                 256,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
@@ -320,15 +315,15 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     # LLama2 Attention Module
     # Fused QKV Matmul Config
     if num_devices == 1:
-        model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 3),
                         ),
                     }
                 ),
@@ -336,20 +331,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     256,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
     elif num_devices == 4:
-        model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 1),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 1),
                         ),
                     }
                 ),
@@ -357,21 +352,21 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     512,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
     elif num_devices == 8:
         # Unpadded version
-        model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 0),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 0),
                         ),
                     }
                 ),
@@ -379,20 +374,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     1024,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
         # Padded version
-        # model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        #     ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        #     ttl.tensor.BufferType.L1,
-        #     ttl.tensor.ShardSpec(
-        #         ttl.tensor.CoreRangeSet(
+        # model_config["FUSED_QKV_MM_INPUT_MEMCFG"] = ttnn.MemoryConfig(
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        #     ttnn.BufferType.L1,
+        #     ttnn.ShardSpec(
+        #         ttnn.CoreRangeSet(
         #             {
-        #                 ttl.tensor.CoreRange(
-        #                     ttl.tensor.CoreCoord(0, 0),
-        #                     ttl.tensor.CoreCoord(7, 7),
+        #                 ttnn.CoreRange(
+        #                     ttnn.CoreCoord(0, 0),
+        #                     ttnn.CoreCoord(7, 7),
         #                 ),
         #             }
         #         ),
@@ -400,7 +395,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         #             32,
         #             128,
         #         ],
-        #         ttl.tensor.ShardOrientation.ROW_MAJOR,
+        #         ttnn.ShardOrientation.ROW_MAJOR,
         #         False,
         #     ),
         # )
@@ -480,15 +475,15 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         mcast_in0=True,
     )
 
-    model_config["WK_MM_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    model_config["WK_MM_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
@@ -496,20 +491,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 32,
                 32,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
 
-    model_config["WQ_MM_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    model_config["WQ_MM_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
@@ -517,20 +512,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 32,
                 256,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
     if num_devices == 4:
-        model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(1, 0),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(1, 0),
                         ),
                     }
                 ),
@@ -538,20 +533,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     1280,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
     elif num_devices == 8:
-        model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(0, 0),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(0, 0),
                         ),
                     }
                 ),
@@ -559,20 +554,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     1280,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
     model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
-    # model_config["ROT_MAT_K_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-    #     ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-    #     ttl.tensor.BufferType.L1,
-    #     ttl.tensor.ShardSpec(
-    #         ttl.tensor.CoreRangeSet(
+    # model_config["ROT_MAT_K_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+    #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    #     ttnn.BufferType.L1,
+    #     ttnn.ShardSpec(
+    #         ttnn.CoreRangeSet(
     #             {
-    #                 ttl.tensor.CoreRange(
-    #                     ttl.tensor.CoreCoord(0, 0),
-    #                     ttl.tensor.CoreCoord(0, 0),
+    #                 ttnn.CoreRange(
+    #                     ttnn.CoreCoord(0, 0),
+    #                     ttnn.CoreCoord(0, 0),
     #                 ),
     #             }
     #         ),
@@ -580,7 +575,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     #             128,
     #             128,  # Dynamic
     #         ],
-    #         ttl.tensor.ShardOrientation.ROW_MAJOR,
+    #         ttnn.ShardOrientation.ROW_MAJOR,
     #         False,
     #     ),
     # )
@@ -615,15 +610,15 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     model_config["ROT_MAT_MEMCFG"] = DRAM_MEMCFG  # L1_MEMCFG
     model_config["L1_K_HEADS_INTERLEAVED_MEMCFG"] = L1_MEMCFG
 
-    model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
@@ -631,20 +626,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 1,
                 128,  # Dynamic
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
     if num_devices == 4:
-        model_config["Q_ROTARY_EMB_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["Q_ROTARY_EMB_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 1),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 1),
                         ),
                     }
                 ),
@@ -652,20 +647,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     128,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
     elif num_devices == 8:
-        model_config["Q_ROTARY_EMB_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["Q_ROTARY_EMB_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 0),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 0),
                         ),
                     }
                 ),
@@ -673,7 +668,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     128,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
@@ -696,15 +691,15 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
     model_config["CONCAT_HEADS_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
     if num_devices == 4:
-        model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 7),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 7),
                         ),
                     }
                 ),
@@ -712,20 +707,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     128,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
     elif num_devices == 8:
-        model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 3),
                         ),
                     }
                 ),
@@ -733,7 +728,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     256,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
@@ -766,15 +761,15 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
         )
     # Llama2 LN_MLP config
     if num_devices == 1:
-        model_config["LN_MLP_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["LN_MLP_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 7),  # Full core grid
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 7),  # Full core grid
                         ),
                     }
                 ),
@@ -782,20 +777,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     128,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
     elif num_devices == 4:
-        model_config["LN_MLP_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["LN_MLP_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 3),
                         ),
                     }
                 ),
@@ -803,20 +798,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     256,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
     elif num_devices == 8:
-        model_config["LN_MLP_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["LN_MLP_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 1),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 1),
                         ),
                     }
                 ),
@@ -824,7 +819,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     512,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
@@ -835,15 +830,15 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
     model_config["FF13_MUL_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
     model_config["ALL_REDUCE_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
     if num_devices == 4:
-        model_config["ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["ALL_GATHER_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 3),
                         ),
                     }
                 ),
@@ -851,20 +846,20 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     896,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
     elif num_devices == 8:
-        model_config["ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["ALL_GATHER_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 3),
                         ),
                     }
                 ),
@@ -872,7 +867,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     896,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
@@ -977,15 +972,15 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             )
     # ***IMPORTANT***
     # Padded MLP 32K config:
-    model_config["PADDED_LN_MLP_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    model_config["PADDED_LN_MLP_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 7),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 7),
                     ),
                 }
             ),
@@ -993,7 +988,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 32,
                 128,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
@@ -1020,15 +1015,15 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             fused_activation=None,
             mcast_in0=True,
         )
-        model_config["PADDED_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["PADDED_ALL_GATHER_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 7),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 7),
                         ),
                     }
                 ),
@@ -1036,7 +1031,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     512,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
@@ -1075,15 +1070,15 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             fused_activation=None,
             mcast_in0=True,
         )
-        model_config["PADDED_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        model_config["PADDED_ALL_GATHER_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(0, 0),
-                            ttl.tensor.CoreCoord(7, 3),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 3),
                         ),
                     }
                 ),
@@ -1091,7 +1086,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                     32,
                     1024,
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
@@ -1107,15 +1102,15 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
             mcast_in0=True,
         )
 
-    model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
@@ -1123,19 +1118,19 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 32,
                 256,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    model_config["LN_F_OUTPUT_MEMCFG"] = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
-            ttl.tensor.CoreRangeSet(
+    model_config["LN_F_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttl.tensor.CoreRange(
-                        ttl.tensor.CoreCoord(0, 0),
-                        ttl.tensor.CoreCoord(7, 3),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 3),
                     ),
                 }
             ),
@@ -1143,7 +1138,7 @@ def get_model_config(model_config_str, num_devices=1, all_gather=True):
                 32,
                 256,
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )

@@ -10,7 +10,6 @@ from models.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )
-import tt_lib
 import ttnn
 import tt_lib.fallback_ops as fallback_ops
 from models.helper_funcs import Linear as TtLinear
@@ -64,22 +63,22 @@ class TtMultiHeadSelfAttention(nn.Module):
 
         self.attention_head_size = self.dim // self.n_heads
 
-    def const_tensor(self, shape: List[int], value: int) -> tt_lib.tensor.Tensor:
+    def const_tensor(self, shape: List[int], value: int) -> ttnn.Tensor:
         return ttnn.full(shape, value)
 
-    def get_min(self, tensor: tt_lib.tensor.Tensor):
+    def get_min(self, tensor: ttnn.Tensor):
         tensor = tt_to_torch_tensor(tensor)
-        return torch.finfo(tensor.dtype).min
+        return torch.finfo(ttnn.dtype).min
 
     def forward(
         self,
-        query: tt_lib.tensor.Tensor,
-        key: tt_lib.tensor.Tensor,
-        value: tt_lib.tensor.Tensor,
-        mask: tt_lib.tensor.Tensor,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        query: ttnn.Tensor,
+        key: ttnn.Tensor,
+        value: ttnn.Tensor,
+        mask: ttnn.Tensor,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attention: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.Tensor]:
         _, bs, q_length, dim = query.get_legacy_shape()
         k_length = key.get_legacy_shape()[-2]
 
@@ -87,11 +86,11 @@ class TtMultiHeadSelfAttention(nn.Module):
 
         mask_reshape = (bs, 1, 1, k_length)
 
-        def shape(x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+        def shape(x: ttnn.Tensor) -> ttnn.Tensor:
             x = fallback_ops.reshape(x, bs, -1, self.n_heads, dim_per_head)
             return ttnn.transpose(x, 1, -2)
 
-        def unshape(x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+        def unshape(x: ttnn.Tensor) -> ttnn.Tensor:
             x = ttnn.transpose(x, 1, -2)
             x = fallback_ops.reshape(x, 1, bs, -1, self.n_heads * dim_per_head)
             return x
@@ -120,7 +119,7 @@ class TtMultiHeadSelfAttention(nn.Module):
         weights = fallback_ops.softmax(scores, -1)
 
         if head_mask is not None:
-            weights = tt_lib.temsor.mul(weights, head_mask)
+            weights = ttnn.mul(weights, head_mask)
 
         context = ttnn.matmul(weights, v)
         context = unshape(context)
