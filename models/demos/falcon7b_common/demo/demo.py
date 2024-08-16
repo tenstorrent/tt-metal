@@ -257,7 +257,7 @@ def run_falcon_demo_kv(
 
         tt_prefill_input_ids.deallocate()
         if tt_prefill_attention_mask is not None:
-            if isinstance(tt_prefill_attention_mask, ttnn.experimental.tensor.Tensor):
+            if isinstance(tt_prefill_attention_mask, ttnn.Tensor):
                 tt_prefill_attention_mask.deallocate()
             elif isinstance(tt_prefill_attention_mask, list):
                 for tt_attention_mask_element in tt_prefill_attention_mask:
@@ -371,7 +371,7 @@ def run_falcon_demo_kv(
         synchronize_devices(device_mesh)
 
         if tt_prefill_attention_mask is not None:
-            if isinstance(tt_prefill_attention_mask, ttnn.experimental.tensor.Tensor):
+            if isinstance(tt_prefill_attention_mask, ttnn.Tensor):
                 tt_prefill_attention_mask.deallocate()
             elif isinstance(tt_prefill_attention_mask, list):
                 for tt_attention_mask_element in tt_prefill_attention_mask:

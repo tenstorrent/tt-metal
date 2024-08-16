@@ -94,8 +94,8 @@ def layernorm(ln_input, ln_eps, ln_gamma, ln_betta, model_config):
         )
         ln_output = ttnn.multiply(ln_output, ln_gamma, memory_config=model_config["LN_F_OUTPUT_MEMCFG"])
         ln_output = ttnn.add(
-                ln_output,
-                ln_betta,
-                memory_config=model_config["LN_F_OUTPUT_MEMCFG"],
-            )
+            ln_output,
+            ln_betta,
+            memory_config=model_config["LN_F_OUTPUT_MEMCFG"],
+        )
     return ln_output

@@ -54,7 +54,7 @@ def calculate_perplexity(
                     logits = tt_tensors_to_torch_tensors(tt_logits, device_mesh, concat_dim=0).squeeze(1)
                     # Deallocate tt tensors
                     tt_prefill_input_ids.deallocate()
-                    if isinstance(tt_prefill_attention_mask, ttnn.experimental.tensor.Tensor):
+                    if isinstance(tt_prefill_attention_mask, ttnn.Tensor):
                         tt_prefill_attention_mask.deallocate()
                     elif isinstance(tt_prefill_attention_mask, list):
                         for tt_attention_mask_element in tt_prefill_attention_mask:

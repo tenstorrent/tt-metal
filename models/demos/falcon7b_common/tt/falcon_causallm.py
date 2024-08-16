@@ -127,15 +127,15 @@ class TtFalconCausalLM(TtFalconModelShared):
 
     def forward(
         self,
-        input_ids: ttnn.experimental.tensor.Tensor,
+        input_ids: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
         device_perf_run: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         hidden_states, presents = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,

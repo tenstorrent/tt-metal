@@ -71,9 +71,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
             weights_to_cache=emb.sin()[None, None, :, :],
         )
 
-    def forward(
-        self, layer: ttnn.experimental.tensor.Tensor, token_idx: Optional[int] = None
-    ) -> ttnn.experimental.tensor.Tensor:
+    def forward(self, layer: ttnn.Tensor, token_idx: Optional[int] = None) -> ttnn.Tensor:
         seq_len = layer.get_legacy_shape()[2]
         assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
 
@@ -183,16 +181,16 @@ class TtFalconAttentionPrefill(nn.Module):
 
     def forward(
         self,
-        hidden_states: ttnn.experimental.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: bool = False,
         use_cache: bool = False,
-    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[ttnn.experimental.tensor.Tensor]]]:
+    ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor]]]:
         """
         Prefill input shape: [1, 1, seq_len, hidden_size]
         """
@@ -321,12 +319,12 @@ class TtFalconAttentionPrefill(nn.Module):
 
     def _optimized_forward(
         self,
-        hidden_states: ttnn.experimental.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         attention_mask: torch.Tensor,
         user_id: int = 0,
-        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         use_cache: bool = False,
-    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[ttnn.experimental.tensor.Tensor]]]:
+    ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor]]]:
         seq_len = hidden_states.get_legacy_shape()[2]
 
         #################
@@ -555,16 +553,16 @@ class TtFalconAttentionDecode(nn.Module):
 
     def forward(
         self,
-        hidden_states: ttnn.experimental.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: bool = False,
         use_cache: bool = False,
-    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[ttnn.experimental.tensor.Tensor]]]:
+    ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor]]]:
         """
         Prefill input shape: [batch, 1, seq_len, hidden_size]
         Decode input shape: [seq_len, 1, batch, hidden_size]

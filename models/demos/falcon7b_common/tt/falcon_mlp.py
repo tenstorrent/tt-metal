@@ -185,7 +185,7 @@ class TtFalconMLPPrefill(nn.Module):
         )
         self.model_config["MLP_OUTPUT_TENSORS"] = out_tt
 
-    def forward(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.model_config["PREFILL_OPTIMIZED_MODE"] and self.seq_len in [1024, 2048]:
             tt_padding = self.model_config["MLP_PREFILL_PADDING_TENSORS"][self.seq_len]
             x = ttnn.concat([x, tt_padding], dim=3)
@@ -338,7 +338,7 @@ class TtFalconMLPDecode(nn.Module):
         )
         self.model_config["MLP_DECODE_PADDING_TENSORS"] = tt_paddings
 
-    def forward(self, x: ttnn.experimental.tensor.Tensor) -> ttnn.experimental.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch_size = x.shape[-2]  # assume all devices have same shape
         # pad inputs with padding tensor if not already padded
         if (
