@@ -4,7 +4,6 @@
 
 import ttnn
 import torch
-import tt_lib as ttl
 
 
 class TensorCache:

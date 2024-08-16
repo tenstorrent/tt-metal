@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import tt_lib as ttl
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention import cross_attention
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_feedforward import feedforward
 import torch
