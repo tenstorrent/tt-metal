@@ -20,7 +20,7 @@ parameters = {
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    "scalar": [1, 2, 3],
+    "alpha": [1, 2, 3],
 }
 
 
@@ -32,7 +32,7 @@ def skip(
     input_memory_config,
     output_memory_config,
     layout,
-    scalar,
+    alpha,
 ) -> Tuple[bool, Optional[str]]:
     if input_dtype == ttnn.bfloat8_b or layout == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Skipped as BFLOAT8_B or ROW_MAJOR_LAYOUT not supported"
@@ -47,7 +47,7 @@ def run(
     input_memory_config,
     output_memory_config,
     layout,
-    scalar,
+    alpha,
     *,
     device,
 ) -> Tuple[bool, Optional[str]]:
@@ -57,13 +57,13 @@ def run(
     high = 100
 
     torch_input_tensor = torch_random(input_shape, low, high, dtype=torch.float32)
-    torch_output_tensor = torch.logit(torch_input_tensor, scalar)
+    torch_output_tensor = torch.celu(torch_input_tensor, alpha)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=input_dtype, device=device, layout=layout, memory_config=input_memory_config
     )
 
-    output_tensor = ttnn.logit(input_tensor, eps=scalar, memory_config=output_memory_config)
+    output_tensor = ttnn.celu(input_tensor, alpha=alpha, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     return check_with_pcc(torch_output_tensor, output_tensor, 0.999)
