@@ -36,7 +36,7 @@ TEST(TGTests, TestAllGatherDeadlock) {
     }
 
     // Create the device mesh: Grid size is <num_tunnels, tunnel_depth>.
-    auto mesh = ttnn::multi_device::open_device_mesh({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, all_device_ids, 0, 0, 1);
+    auto mesh = ttnn::multi_device::open_device_mesh({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, all_device_ids, 0, 0, 1, DispatchCoreType::WORKER);
 
     // Setup input data and output data containers
     MemoryConfig mem_cfg = MemoryConfig{
@@ -94,7 +94,7 @@ TEST(TGTests, TestAllGatherDeadlock) {
             }
             // Readback data and verify correctness.
             for (auto& tensor : output_tensors) {
-                ASSERT_EQ(tensor.get_shape(), ttnn::Shape(Shape({1, 1, 32, 16384 * device_ids.size()})));
+                ASSERT_EQ(tensor.get_shape(), ttnn::Shape(Shape({1, 1, 32, static_cast<uint32_t>(16384 * device_ids.size())})));
                 ttnn::read_buffer(0, tensor, {readback_data});
                 for (int j = 0; j < device_ids.size() * 32 * 16384; j++) {
                     ASSERT_EQ(readback_data[j].to_float(), 1);
@@ -127,7 +127,7 @@ TEST(TGTests, TestReduceScatterDeadlock) {
     }
 
     // Create the device mesh: Grid size is <num_tunnels, tunnel_depth>.
-    auto mesh = ttnn::multi_device::open_device_mesh({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, all_device_ids, 0, 0, 1);
+    auto mesh = ttnn::multi_device::open_device_mesh({cluster_tunnel_count * num_mmio_devices, num_devices_in_tunnel}, all_device_ids, 0, 0, 1, DispatchCoreType::WORKER);
     // Create the outer ring on which Reduce Scatter will be run. This allows us to verify that there are no deadlocks when we send CCLs to the
     // first tunnel (forward path).
     std::vector<Device*> ring_devices = mesh.get_devices_on_row(0); // Tunnel 0
@@ -149,7 +149,7 @@ TEST(TGTests, TestReduceScatterDeadlock) {
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
-    ttnn::Shape shape = ttnn::Shape(Shape({1, 2, 256, 256 * ring_devices.size()}));
+    ttnn::Shape shape = ttnn::Shape(Shape({1, 2, 256, static_cast<uint32_t>(256 * ring_devices.size())}));
     uint32_t buf_size_datums = 2 * 256 * 256 * 20;
     uint32_t datum_size_bytes = 2;
     // Output of reduce scatter is input_numel / num_devices_used_in_scatter_op
@@ -190,7 +190,7 @@ TEST(TGTests, TestReduceScatterDeadlock) {
             uint32_t receiver_device_id = device_ids[(dev_idx + 1) % ring_devices.size()];
             uint32_t sender_device_id = device_ids[(dev_idx + ring_devices.size() - 1) % ring_devices.size()];
             auto all_gather_op = ttnn::ReduceScatter{
-                                    ttnn::operations::binary::BinaryOpType::ADD, scatter_dim, 1, ring_devices.size(), dev_idx, receiver_device_id, sender_device_id, input_tensor.memory_config(), ttnn::all_gather_op::Topology::Ring};
+                                    ttnn::operations::binary::BinaryOpType::ADD, scatter_dim, 1, static_cast<uint32_t>(ring_devices.size()), dev_idx, receiver_device_id, sender_device_id, input_tensor.memory_config(), ttnn::all_gather_op::Topology::Ring};
             // Send CCL to this device. All CCLs will complete simultaneously.
             output_tensors.push_back(ttnn::run_operation(0, all_gather_op, {input_tensor}).at(0));
             // Expose deadlock: After the CCL is sent to a device in the first tunnel, send enough data to it to backpressure prefetch_h. This will block the

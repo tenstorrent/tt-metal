@@ -2067,6 +2067,67 @@ def cos_bw(x, y, *args, **kwargs):
     return in_data.grad
 
 
+def complex_polar_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.polar(in_data.real, in_data.imag)
+    pyt_y.backward(gradient=grad_data)
+
+    grad_real = torch.real(in_data.grad)
+    grad_imag = torch.imag(in_data.grad)
+
+    return torch.complex(grad_real, grad_imag)
+
+
+def complex_recip_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.reciprocal(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def complex_mul_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = in_data * other_data
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
+def complex_add_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = in_data + other_data
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
     x = x.to(torch.float32)
@@ -2346,6 +2407,22 @@ def floor_bw(x, y, *args, **kwargs):
 
     in_data.retain_grad()
     pyt_y = torch.floor(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def complex_angle(x, *args, **kwargs):
+    return torch.angle(x)
+
+
+def complex_conj_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.conj(in_data)
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad

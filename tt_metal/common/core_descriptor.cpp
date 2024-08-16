@@ -8,9 +8,15 @@
 
 namespace tt {
 
-const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const uint8_t num_hw_cqs) {
+const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const uint8_t num_hw_cqs, CoreType dispatch_core_type) {
     // {arch : {product : {num hardware command queues : config}}}
     static std::unordered_map<ARCH, std::unordered_map<std::string, std::unordered_map<uint8_t, core_descriptor_t>>> config_by_arch;
+    // TODO: is there a better way to do this?
+    static CoreType previous_dispatch_core_type;
+    if (previous_dispatch_core_type != dispatch_core_type) {
+        config_by_arch.clear();
+        previous_dispatch_core_type = dispatch_core_type;
+    }
 
     ARCH arch = tt::Cluster::instance().arch();
     uint32_t harvesting_mask = tt::Cluster::instance().get_harvested_rows(device_id);
@@ -42,7 +48,7 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
     std::unordered_map<std::string, std::unordered_map<uint8_t, core_descriptor_t>> &config_by_product = config_by_arch[arch];
     std::unordered_map<uint8_t, core_descriptor_t> &config_by_num_cqs = config_by_product[product_name];
 
-    YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(arch));
+    YAML::Node core_descriptor_yaml = YAML::LoadFile(get_core_descriptor_file(arch, dispatch_core_type));
     YAML::Node desc_yaml = core_descriptor_yaml[product_name][std::to_string(num_hw_cqs)];
 
     // Parse the yaml into core_descriptor_t
@@ -108,23 +114,12 @@ const core_descriptor_t &get_core_descriptor_config(chip_id_t device_id, const u
     }
     TT_ASSERT(dispatch_cores.size(), "Dispatch cores size must be positive");
 
-    auto dispatch_core_type = arch == tt::ARCH::GRAYSKULL ? "tensix" : desc_yaml["dispatch_core_type"].as<std::string>();
-    CoreType core_type;
-    if (dispatch_core_type == "tensix") {
-        core_type = CoreType::WORKER;
-    } else if (dispatch_core_type == "ethernet") {
-        core_type = CoreType::ETH;
-    } else {
-        TT_THROW("Only tensix/ethernet cores supported for dispatch_core_type");
-    }
-
     config_by_num_cqs[num_hw_cqs] = core_descriptor_t{
         .compute_grid_size = compute_grid_size,
         .relative_compute_cores = compute_cores,
         .relative_storage_cores = storage_cores,
         .storage_core_bank_size = storage_core_bank_size,
         .relative_dispatch_cores = dispatch_cores,
-        .dispatch_core_type = core_type
     };
     return config_by_arch.at(arch).at(product_name).at(num_hw_cqs);
 }

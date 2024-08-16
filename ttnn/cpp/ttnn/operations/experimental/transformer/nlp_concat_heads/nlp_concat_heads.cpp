@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-    ttnn::Tensor NLPConcatHeadsOperation::operator()(
+    ttnn::Tensor NLPConcatHeadsOperation::invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config,
@@ -17,11 +17,11 @@ namespace ttnn::operations::experimental::transformer {
         return operation::run(NLPConcatHeadsDeviceOperation{memory_config.value_or(input_tensor.memory_config())}, {input_tensor}, {}, {optional_output_tensor}).at(0);
     }
 
-    ttnn::Tensor NLPConcatHeadsOperation::operator()(
+    ttnn::Tensor NLPConcatHeadsOperation::invoke(
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor) {
-        return operator()(
+        return invoke(
             ttnn::DefaultQueueId, input_tensor, memory_config, optional_output_tensor);
     }
 };  // namespace ttnn::operations::experimental::transformer

@@ -21,11 +21,12 @@ class MultiCommandQueueSingleDeviceFixture : public ::testing::Test {
             GTEST_SKIP() << "Skipping Multi CQ test suite, since it can only be run in Fast Dispatch Mode.";
         }
 
+        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ != 1) {
             tt::log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
-            setenv("WH_ARCH_YAML", "wormhole_b0_80_arch_eth_dispatch.yaml", true);
+            dispatch_core_type = DispatchCoreType::ETH;
         }
-        device_ = tt::tt_metal::CreateDevice(0, 2);
+        device_ = tt::tt_metal::CreateDevice(0, 2, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     }
 
     void TearDown() override {
@@ -50,10 +51,8 @@ class MultiCommandQueueT3KFixture : public ::testing::Test {
             GTEST_SKIP() << "Skipping T3K Multi CQ test suite on non T3K machine.";
         }
         // Enable Ethernet Dispatch for Multi-CQ tests.
-        tt::log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
-        setenv("WH_ARCH_YAML", "wormhole_b0_80_arch_eth_dispatch.yaml", true);
 
-        devs = tt::tt_metal::detail::CreateDevices({0, 1, 2, 3, 4, 5, 6, 7}, 2);
+        devs = tt::tt_metal::detail::CreateDevices({0, 1, 2, 3, 4, 5, 6, 7}, 2, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::ETH);
     }
 
     void TearDown() override {

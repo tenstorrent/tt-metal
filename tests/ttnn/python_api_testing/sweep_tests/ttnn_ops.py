@@ -2126,7 +2126,7 @@ def clone(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.clone(t0, memory_config_to_ttnn(output_mem_config), dtype[0])
+    t1 = ttnn.clone(t0, memory_config_to_ttnn(output_mem_config), dtype=dtype[0])
 
     return ttnn_tensor_to_torch(t1)
 
@@ -3137,7 +3137,7 @@ def eltwise_mac(x, y, z, *args, device, dtype, layout, input_mem_config, output_
 
 def mean(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.mean(t0, dim, keepdim=True)
+    t1 = ttnn.mean(t0, dim)
 
     return ttnn_tensor_to_torch(t1)
 
@@ -4420,6 +4420,34 @@ def eltwise_div_no_nan(
     return ttnn_tensor_to_torch(t2)
 
 
+def complex_polar_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+
+    t1 = ttnn.complex_tensor(
+        setup_ttnn_tensor(y.real, device, layout[1], input_mem_config[0], dtype[1]),
+        setup_ttnn_tensor(y.imag, device, layout[1], input_mem_config[0], dtype[1]),
+    )
+
+    t2 = ttnn.polar_bw(t0, t1, memory_config=output_mem_config)[0]
+
+    return torch.complex(
+        ttnn_tensor_to_torch(t2.real).to(torch.float32), ttnn_tensor_to_torch(t2.imag).to(torch.float32)
+    )
+
+
 def eltwise_unary_div_no_nan(
     x,
     *args,
@@ -4461,6 +4489,33 @@ def complex_abs(x, *args, device, dtype, layout, input_mem_config, output_mem_co
     return ttnn_tensor_to_torch(t1)
 
 
+def complex_recip_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+    t1 = ttnn.complex_tensor(
+        setup_ttnn_tensor(y.real, device, layout[1], input_mem_config[1], dtype[1]),
+        setup_ttnn_tensor(y.imag, device, layout[1], input_mem_config[1], dtype[1]),
+    )
+
+    t2 = ttnn.reciprocal_bw(t0, t1, memory_config=output_mem_config)[0]
+
+    return torch.complex(
+        ttnn_tensor_to_torch(t2.real).to(torch.float32), ttnn_tensor_to_torch(t2.imag).to(torch.float32)
+    )
+
+
 def complex_polar(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = ttnn.complex_tensor(
         setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
@@ -4474,6 +4529,44 @@ def complex_polar(x, *args, device, dtype, layout, input_mem_config, output_mem_
     )
 
 
+def complex_mul_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    z,  # other_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+    t1 = ttnn.complex_tensor(
+        setup_ttnn_tensor(y.real, device, layout[1], input_mem_config[1], dtype[1]),
+        setup_ttnn_tensor(y.imag, device, layout[1], input_mem_config[1], dtype[1]),
+    )
+
+    t2 = ttnn.complex_tensor(
+        setup_ttnn_tensor(z.real, device, layout[2], input_mem_config[2], dtype[2]),
+        setup_ttnn_tensor(z.imag, device, layout[2], input_mem_config[2], dtype[2]),
+    )
+
+    t3 = ttnn.mul_bw(t0, t1, t2, memory_config=output_mem_config)
+
+    return [
+        torch.complex(
+            ttnn_tensor_to_torch(t3[0].real).to(torch.float32), ttnn_tensor_to_torch(t3[0].imag).to(torch.float32)
+        ),
+        torch.complex(
+            ttnn_tensor_to_torch(t3[1].real).to(torch.float32), ttnn_tensor_to_torch(t3[1].imag).to(torch.float32)
+        ),
+    ]
+
+
 def complex_recip(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = ttnn.complex_tensor(
         setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
@@ -4484,4 +4577,86 @@ def complex_recip(x, *args, device, dtype, layout, input_mem_config, output_mem_
 
     return torch.complex(
         ttnn_tensor_to_torch(t1.real).to(torch.float32), ttnn_tensor_to_torch(t1.imag).to(torch.float32)
+    )
+
+
+def complex_add_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    z,  # other_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    alpha = torch.tensor(1.0, dtype=torch.bfloat16)
+
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+
+    t1 = ttnn.complex_tensor(
+        setup_ttnn_tensor(y.real, device, layout[1], input_mem_config[1], dtype[1]),
+        setup_ttnn_tensor(y.imag, device, layout[1], input_mem_config[1], dtype[1]),
+    )
+
+    t2 = ttnn.complex_tensor(
+        setup_ttnn_tensor(z.real, device, layout[2], input_mem_config[2], dtype[2]),
+        setup_ttnn_tensor(z.imag, device, layout[2], input_mem_config[2], dtype[2]),
+    )
+
+    t3 = ttnn.add_bw(t0, t1, t2, alpha=alpha, memory_config=output_mem_config)
+
+    return [
+        torch.complex(
+            ttnn_tensor_to_torch(t3[0].real).to(torch.float32), ttnn_tensor_to_torch(t3[0].imag).to(torch.float32)
+        ),
+        torch.complex(
+            ttnn_tensor_to_torch(t3[1].real).to(torch.float32), ttnn_tensor_to_torch(t3[1].imag).to(torch.float32)
+        ),
+    ]
+
+
+def complex_angle(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+
+    t1 = ttnn.angle(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def complex_conj_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    if dtype[0] == tt_lib.tensor.DataType.BFLOAT8_B:
+        dtype[0] = tt_lib.tensor.DataType.BFLOAT16
+
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+    t1 = ttnn.complex_tensor(
+        setup_ttnn_tensor(y.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(y.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+
+    t2 = ttnn.conj_bw(t0, t1, memory_config=output_mem_config)[0]
+
+    return torch.complex(
+        ttnn_tensor_to_torch(t2.real).to(torch.float32), ttnn_tensor_to_torch(t2.imag).to(torch.float32)
     )

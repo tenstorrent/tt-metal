@@ -45,7 +45,7 @@ def run(
         torch_input_tensor, dtype=input_dtype, device=device, layout=layout, memory_config=input_memory_config
     )
 
-    output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=True)
+    output_tensor = ttnn.mean(input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(output_tensor)
 
     return check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)

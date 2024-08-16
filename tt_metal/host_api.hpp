@@ -4,15 +4,11 @@
 
 #pragma once
 
-#include <optional>
 #include <variant>
 #include <vector>
-#include <future>
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/impl/kernels/runtime_args_data.hpp"
 
 /** @file */
 
@@ -26,16 +22,20 @@
  * https://www.tablesgenerator.com/markdown_tables
  * */
 
+class CoreRange;
+class CoreRangeSet;
+
 namespace tt {
 
 namespace tt_metal {
 
 class Program;
-class Host;
 class Device;
 class CommandQueue;
 class Trace;
 class CircularBuffer;
+class Event;
+class Buffer;
 
 // ==================================================
 //                  HOST API: Device management
@@ -71,6 +71,7 @@ Device *CreateDevice(
     const uint8_t num_hw_cqs = 1,
     const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+    DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER,
     const std::vector<uint32_t> &l1_bank_remap = {});
 
 /**
@@ -84,7 +85,9 @@ Device *CreateDevice(
  * */
 Device *CreateDeviceMinimal(
     chip_id_t device_id,
-    const uint8_t num_hw_cqs = 1);
+    const uint8_t num_hw_cqs = 1,
+    DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER
+    );
 
 /**
  * Resets device and closes device

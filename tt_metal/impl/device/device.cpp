@@ -4,6 +4,8 @@
 
 #include <string>
 #include <chrono>
+#include "tt_metal/host_api.hpp"
+#include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
@@ -154,6 +156,7 @@ void Device::initialize_cluster() {
 void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id_);
     // Construct allocator config from soc_desc
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
@@ -161,7 +164,7 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
          .dram_bank_offsets = {},
          .worker_grid_size = this->logical_grid_size(),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-         .l1_bank_size = static_cast<size_t>(get_l1_bank_size(this->id_, this->num_hw_cqs_)),
+         .l1_bank_size = static_cast<size_t>(get_l1_bank_size(id_, num_hw_cqs_, dispatch_core_type)),
          .l1_small_size = l1_small_size,
          .trace_region_size = trace_region_size,
          .core_type_from_noc_coord_table = {},  // Populated later
@@ -183,18 +186,17 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
         config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
     }
 
-    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_)) {
+    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_type)) {
         this->compute_cores_.insert(core);
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
-    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_)) {
+    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_type)) {
         this->storage_only_cores_.insert(core);
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
-    CoreType dispatch_core_type = tt::get_dispatch_core_type(id_, num_hw_cqs_);
-    for (const CoreCoord& core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_)) {
+    for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_type)) {
         const auto noc_coord = this->physical_core_from_logical_core(core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
@@ -247,7 +249,7 @@ void Device::build_firmware() {
     log_debug(tt::LogMetal, "Building base firmware for device {}", this->id_);
     ZoneScoped;
 
-    detail::GenerateDeviceHeaders(this, this->build_env_.get_out_firmware_root_path());
+    this->generate_device_headers(this->build_env_.get_out_firmware_root_path());
     jit_build_set(this->firmware_build_states_, nullptr, "");
 }
 
@@ -493,19 +495,22 @@ void Device::configure_kernel_variant(
     CoreCoord upstream_physical_core,
     CoreCoord downstream_physical_core,
     std::map<string, string> defines_in,
-    NOC noc_index,
+    NOC my_noc_index,
+    NOC upstream_noc_index,
+    NOC downstream_noc_index,
     bool is_active_eth_core) {
 
-    const auto& grid_size = tt::Cluster::instance().get_soc_desc(this->id()).grid_size;
+    const auto& grid_size = this->grid_size();
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
-        {"MY_NOC_X", std::to_string(NOC_0_X(noc_index, grid_size.x, kernel_physical_core.x))},
-        {"MY_NOC_Y", std::to_string(NOC_0_Y(noc_index, grid_size.y, kernel_physical_core.y))},
-        {"UPSTREAM_NOC_X", std::to_string(NOC_0_X(noc_index, grid_size.x, upstream_physical_core.x))},
-        {"UPSTREAM_NOC_Y", std::to_string(NOC_0_Y(noc_index, grid_size.y, upstream_physical_core.y))},
-        {"DOWNSTREAM_NOC_X", std::to_string(NOC_0_X(noc_index, grid_size.x, downstream_physical_core.x))},
-        {"DOWNSTREAM_NOC_Y", std::to_string(NOC_0_Y(noc_index, grid_size.y, downstream_physical_core.y))},
+        {"MY_NOC_X", std::to_string(NOC_0_X(my_noc_index, grid_size.x, kernel_physical_core.x))},
+        {"MY_NOC_Y", std::to_string(NOC_0_Y(my_noc_index, grid_size.y, kernel_physical_core.y))},
+        {"UPSTREAM_NOC_INDEX", std::to_string(upstream_noc_index)},
+        {"UPSTREAM_NOC_X", std::to_string(NOC_0_X(upstream_noc_index, grid_size.x, upstream_physical_core.x))},
+        {"UPSTREAM_NOC_Y", std::to_string(NOC_0_Y(upstream_noc_index, grid_size.y, upstream_physical_core.y))},
+        {"DOWNSTREAM_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, downstream_physical_core.x))},
+        {"DOWNSTREAM_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, downstream_physical_core.y))},
     };
     defines.insert(defines_in.begin(), defines_in.end());
 
@@ -516,7 +521,7 @@ void Device::configure_kernel_variant(
             kernel_core,
             tt::tt_metal::DataMovementConfig {
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = noc_index,
+                .noc = my_noc_index,
                 .compile_args = compile_args,
                 .defines = defines
             }
@@ -528,7 +533,7 @@ void Device::configure_kernel_variant(
             kernel_core,
             tt::tt_metal::EthernetConfig{
                 .eth_mode = is_active_eth_core ? Eth::SENDER : Eth::IDLE,
-                .noc = noc_index,
+                .noc = my_noc_index,
                 .compile_args = compile_args,
                 .defines = defines
             }
@@ -1141,7 +1146,7 @@ void Device::setup_tunnel_for_remote_devices() {
                 settings.cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
                 settings.cb_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages();
                 settings.cb_size_bytes = (1 << settings.cb_log_page_size) * settings.cb_pages;
-                CoreCoord compute_grid_size = tt::get_compute_grid_size(device_id, num_hw_cqs);
+                CoreCoord compute_grid_size = this->compute_with_storage_grid_size();
                 settings.num_compute_cores = uint32_t(compute_grid_size.x * compute_grid_size.y);
                 tunnel_core_allocations[DISPATCH].push_back(std::make_tuple(dispatch_location, settings));
                 settings.semaphores.clear();
@@ -1342,6 +1347,14 @@ void Device::compile_command_queue_programs() {
     constexpr uint32_t prefetch_d_downstream_cb_sem = 2;
     constexpr uint32_t dispatch_downstream_cb_sem = 1;
 
+    // TODO: this->hw_command_queues_[cq_id]->noc_index is also hardcoded to NOC_0 elsewhere, should have one definition and remove assertion
+    constexpr NOC my_noc_index = NOC::NOC_0;
+    constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
+    static_assert(my_noc_index != dispatch_upstream_noc_index, "Dispatch NOC used to communicate with upstream must be different from NOC used for other transactions");
+    for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+        TT_ASSERT(this->hw_command_queues_[cq_id]->noc_index == my_noc_index, "Command Queue NOC index must match");
+    }
+
     if (this->is_mmio_capable()) {
         auto device_id = this->id();
         uint32_t num_compute_cores = this->compute_with_storage_grid_size().x * this->compute_with_storage_grid_size().y;
@@ -1356,8 +1369,6 @@ void Device::compile_command_queue_programs() {
 
             CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_core, dispatch_core_type);
             CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_core, dispatch_core_type);
-
-            NOC noc_index = this->hw_command_queues_[cq_id]->noc_index;
 
             log_debug(LogDevice, "Dispatching out of {} cores",  magic_enum::enum_name(dispatch_core_type));
             log_debug(LogDevice, "Prefetch HD logical location: {} physical core: {}", prefetch_core.str(), prefetch_physical_core.str());
@@ -1405,7 +1416,9 @@ void Device::compile_command_queue_programs() {
                 CoreCoord{0, 0},
                 dispatch_physical_core,
                 std::map<string, string> {},
-                noc_index
+                my_noc_index,
+                my_noc_index,
+                my_noc_index
             );
 
             tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, 0, dispatch_core_type); // prefetch_sync_sem
@@ -1446,7 +1459,9 @@ void Device::compile_command_queue_programs() {
                 prefetch_physical_core,
                 CoreCoord{0, 0},
                 std::map<string, string> {},
-                noc_index
+                my_noc_index,
+                dispatch_upstream_noc_index,
+                my_noc_index
             );
 
             tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_core, 0, dispatch_core_type); // dispatch_sem
@@ -1494,7 +1509,6 @@ void Device::compile_command_queue_programs() {
             /////////////////Following section is for mmio device serving Remote Device
             uint32_t cq_id = 0;
             for (auto [prefetch_core, prefetch_settings] : mmio_device_worker_variants[DispatchWorkerType::PREFETCH]) {
-                NOC noc_index = this->hw_command_queues_[cq_id]->noc_index;
                 for (auto sem : prefetch_settings.semaphores) {
                     //size of semaphores vector is number of needed semaphores on the core.
                     //Value of each vector entry is the initialization value for the semaphore.
@@ -1510,7 +1524,9 @@ void Device::compile_command_queue_programs() {
                     prefetch_settings.upstream_cores[0],
                     prefetch_settings.downstream_cores[0],
                     std::map<string, string> {},
-                    this->hw_command_queues_[cq_id]->noc_index
+                    my_noc_index,
+                    my_noc_index,
+                    my_noc_index
                 );
                 cq_id = (cq_id + 1) % num_hw_cqs;
             }
@@ -1531,7 +1547,9 @@ void Device::compile_command_queue_programs() {
                 CoreCoord{0, 0},
                 CoreCoord{0, 0},
                 std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                this->hw_command_queues_[0]->noc_index // Only one Mux - use NOC for CQ 0
+                my_noc_index, // Only one Mux - use NOC for CQ 0
+                my_noc_index,
+                my_noc_index
             );
 
             auto [tunneler_core, tunneler_settings] = mmio_device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0];
@@ -1545,7 +1563,9 @@ void Device::compile_command_queue_programs() {
                 CoreCoord{0, 0},
                 CoreCoord{0, 0},
                 std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                this->hw_command_queues_[0]->noc_index, // Only one Remote Tunneler - use NOC for CQ 0
+                my_noc_index, // Only one Remote Tunneler - use NOC for CQ 0
+                my_noc_index,
+                my_noc_index,
                 true
             );
 
@@ -1565,7 +1585,9 @@ void Device::compile_command_queue_programs() {
                 CoreCoord{0, 0},
                 CoreCoord{0, 0},
                 std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                this->hw_command_queues_[0]->noc_index // Only one Demux - use NOC for CQ 0
+                my_noc_index, // Only one Demux - use NOC for CQ 0
+                my_noc_index,
+                my_noc_index
             );
             cq_id = 0;
             for (auto [dispatch_core, dispatch_settings] : mmio_device_worker_variants[DispatchWorkerType::DISPATCH]) {
@@ -1584,7 +1606,9 @@ void Device::compile_command_queue_programs() {
                     dispatch_settings.upstream_cores[0],
                     CoreCoord{0xffffffff, 0xffffffff},
                     std::map<string, string> {},
-                    this->hw_command_queues_[cq_id]->noc_index
+                    my_noc_index,
+                    dispatch_upstream_noc_index,
+                    my_noc_index
                 );
                 cq_id = (cq_id + 1) % num_hw_cqs;
             }
@@ -1603,7 +1627,9 @@ void Device::compile_command_queue_programs() {
             CoreCoord{0, 0},
             CoreCoord{0, 0},
             std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-            this->hw_command_queues_[0]->noc_index, // Only one Local Tunneler - use NOC for CQ 0
+            my_noc_index, // Only one Local Tunneler - use NOC for CQ 0
+            my_noc_index,
+            my_noc_index,
             true
         );
 
@@ -1620,7 +1646,9 @@ void Device::compile_command_queue_programs() {
                 CoreCoord{0, 0},
                 CoreCoord{0, 0},
                 std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                this->hw_command_queues_[0]->noc_index, // Only one Remote Tunneler - use NOC for CQ 0
+                my_noc_index, // Only one Remote Tunneler - use NOC for CQ 0
+                my_noc_index,
+                my_noc_index,
                 true
             );
         }
@@ -1641,7 +1669,9 @@ void Device::compile_command_queue_programs() {
             CoreCoord{0, 0},
             CoreCoord{0, 0},
             std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-            this->hw_command_queues_[0]->noc_index // Only one Demux - use NOC for CQ 0
+            my_noc_index, // Only one Demux - use NOC for CQ 0
+            my_noc_index,
+            my_noc_index
         );
         uint32_t cq_id = 0;
         for (auto [prefetch_d_core, prefetch_d_settings] : device_worker_variants[DispatchWorkerType::PREFETCH_D]) {
@@ -1660,7 +1690,9 @@ void Device::compile_command_queue_programs() {
                 prefetch_d_settings.upstream_cores[0],
                 prefetch_d_settings.downstream_cores[0],
                 std::map<string, string> {},
-                this->hw_command_queues_[cq_id]->noc_index
+                my_noc_index,
+                my_noc_index,
+                my_noc_index
             );
             cq_id = (cq_id + 1) % num_hw_cqs;
         }
@@ -1681,7 +1713,9 @@ void Device::compile_command_queue_programs() {
                 dispatch_d_settings.upstream_cores[0],
                 dispatch_d_settings.downstream_cores[0],
                 std::map<string, string> {},
-                this->hw_command_queues_[cq_id]->noc_index
+                my_noc_index,
+                dispatch_upstream_noc_index,
+                my_noc_index
             );
             cq_id = (cq_id + 1) % num_hw_cqs;
         }
@@ -1703,7 +1737,9 @@ void Device::compile_command_queue_programs() {
             CoreCoord{0, 0},
             CoreCoord{0, 0},
             std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-            this->hw_command_queues_[0]->noc_index // Only one Mux - use NOC for CQ 0
+            my_noc_index, // Only one Mux - use NOC for CQ 0
+            my_noc_index,
+            my_noc_index
         );
 
         detail::CompileProgram(this, *command_queue_program_ptr, /*fd_bootloader_mode=*/true);
@@ -1878,7 +1914,7 @@ void Device::initialize_synchronous_sw_cmd_queue() {
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
-    log_info(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
+    log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
     hal.initialize(this->arch());
     this->using_fast_dispatch = false;
@@ -1915,7 +1951,7 @@ bool Device::close() {
     tt_metal::detail::DumpDeviceProfileResults(this, true);
 
     this->trace_buffer_pool_.clear();
-    detail::EnableAllocs(this);
+    this->EnableAllocs();
 
     this->deallocate_buffers();
 
@@ -2008,12 +2044,17 @@ uint32_t Device::dram_size_per_channel() const {
     return tt::Cluster::instance().get_soc_desc(id_).dram_bank_size;
 }
 
+CoreCoord Device::grid_size() const {
+    return tt::Cluster::instance().get_soc_desc(id_).grid_size;
+}
+
 CoreCoord Device::logical_grid_size() const {
     return tt::Cluster::instance().get_soc_desc(id_).worker_grid_size;
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
-    return tt::get_compute_grid_size(id_, num_hw_cqs_);
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(id_);
+    return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_type);
 }
 
 CoreCoord Device::dram_grid_size() const {
@@ -2077,7 +2118,7 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
 }
 
 uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const {
-    const auto& grid_size = tt::Cluster::instance().get_soc_desc(this->id()).grid_size;
+    const auto& grid_size = this->grid_size();
     return NOC_XY_ENCODING(
         NOC_0_X(noc_index, grid_size.x, physical_core.x),
         NOC_0_Y(noc_index, grid_size.y, physical_core.y)
@@ -2085,7 +2126,7 @@ uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& ph
 }
 
 uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& physical_cores) const {
-    const auto& grid_size = tt::Cluster::instance().get_soc_desc(this->id()).grid_size;
+    const auto& grid_size = this->grid_size();
 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
@@ -2277,7 +2318,7 @@ bool Device::using_slow_dispatch() const {
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
     TT_FATAL(this->trace_buffer_pool_.count(tid) == 0, "Trace already exists for tid {} on device", tid);
     TT_FATAL(!this->hw_command_queues_[cq_id]->tid.has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
-    detail::EnableAllocs(this);
+    this->EnableAllocs();
     // Create an empty trace buffer here. This will get initialized in end_trace
     this->trace_buffer_pool_.insert({tid, Trace::create_empty_trace_buffer()});
     this->hw_command_queues_[cq_id]->record_begin(tid, this->trace_buffer_pool_[tid]->desc);
@@ -2296,7 +2337,7 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);
     }
     Trace::initialize_buffer(this->command_queue(cq_id), this->trace_buffer_pool_[tid]);
-    detail::DisableAllocs(this);
+    this->DisableAllocs();
 }
 
 void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
@@ -2316,7 +2357,7 @@ void Device::release_trace(const uint32_t tid) {
     uint32_t erased = this->trace_buffer_pool_.erase(tid);
     // Only enable allocations once all captured traces are released
     if (this->trace_buffer_pool_.empty()) {
-        detail::EnableAllocs(this);
+        this->EnableAllocs();
     }
 }
 
@@ -2326,6 +2367,84 @@ std::shared_ptr<TraceBuffer> Device::get_trace(const uint32_t tid) {
     } else {
         return nullptr;
     }
+}
+
+void Device::DisableAllocs() { 
+    tt::tt_metal::allocator::disable_allocs(*(this->allocator_)); 
+}
+
+void Device::EnableAllocs() { 
+    tt::tt_metal::allocator::enable_allocs(*(this->allocator_));
+}
+
+void Device::generate_device_headers(const std::string &path) const
+{
+
+    // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
+    const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
+    const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
+    std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
+    std::vector<int32_t> dram_offsets_per_bank(num_dram_banks);
+    for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+        dram_noc_coord_per_bank[bank_id] = this->dram_core_from_dram_channel(this->dram_channel_from_bank_id(bank_id));
+        dram_offsets_per_bank[bank_id] = this->bank_offset(BufferType::DRAM, bank_id);
+    }
+    const size_t num_l1_banks = this->num_banks(BufferType::L1); // 128
+    const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
+    std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
+    std::vector<int32_t> l1_offset_per_bank(num_l1_banks);
+    for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
+        l1_noc_coord_per_bank[bank_id] = this->worker_core_from_logical_core(this->logical_core_from_bank_id(bank_id));
+        l1_offset_per_bank[bank_id] = this->bank_offset(BufferType::L1, bank_id);
+    }
+
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
+
+    // Generate header file in proper location
+    jit_build_genfiles_bank_to_noc_coord_descriptor (
+        path,
+        soc_d.grid_size,
+        dram_noc_coord_per_bank,
+        dram_offsets_per_bank,
+        l1_noc_coord_per_bank,
+        l1_offset_per_bank,
+        soc_d.profiler_ceiled_core_count_perf_dram_bank,
+        soc_d.physical_routing_to_profiler_flat_id
+    );
+
+    // Determine which noc-coords are harvested
+    // TODO(PGK/Almeet): fix this w/ new UMD
+    vector<uint32_t> harvested_rows;
+    uint32_t harvested_noc_rows = tt::Cluster::instance().get_harvested_rows(this->id());
+    for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
+        bool row_harvested = (harvested_noc_rows >> y) & 0x1;
+        if (row_harvested) {
+            harvested_rows.push_back(y);
+        }
+    }
+
+    // Create valid PCIe address ranges
+    // This implementation assumes contiguous ranges and aggregates the ranges into one bounds check
+    // TODO: consider checking multiple ranges to detect straddling transactions
+    uint64_t pcie_chan_base_addr = tt::Cluster::instance().get_pcie_base_addr_from_device(this->id());
+    uint32_t num_host_channels = tt::Cluster::instance().get_num_host_channels(this->id());
+    uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
+    for (int pcie_chan = 0; pcie_chan < num_host_channels; pcie_chan++) {
+        pcie_chan_end_addr += tt::Cluster::instance().get_host_channel_size(this->id(), pcie_chan);
+    }
+
+    jit_build_genfiles_noc_addr_ranges_header(
+        path,
+        pcie_chan_base_addr,
+        pcie_chan_end_addr - pcie_chan_base_addr,
+        0,
+        soc_d.dram_core_size,
+        soc_d.get_pcie_cores(),
+        soc_d.get_dram_cores(),
+        soc_d.get_physical_ethernet_cores(),
+        soc_d.grid_size,
+        harvested_rows,
+        num_host_channels > 0);
 }
 
 }  // namespace tt_metal

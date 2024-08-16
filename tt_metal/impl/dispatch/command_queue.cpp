@@ -19,10 +19,13 @@
 #include "noc/noc_parameters.h"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
-#include "tt_metal/detail/program.hpp"
+
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
@@ -41,6 +44,21 @@ std::mutex finish_mutex;
 std::condition_variable finish_cv;
 
 namespace tt::tt_metal {
+
+namespace detail {
+
+    bool DispatchStateCheck( bool isFastDispatch){
+        static bool fd = isFastDispatch;
+        TT_FATAL( fd == isFastDispatch, "Mixing fast and slow dispatch is prohibited!" );
+        return fd;
+    }
+
+    void SetLazyCommandQueueMode(bool lazy)
+    {
+        DispatchStateCheck(true);
+        LAZY_COMMAND_QUEUE_MODE = lazy;
+    }
+}
 
 enum DispatchWriteOffsets {
     DISPATCH_WRITE_OFFSET_ZERO = 0,
@@ -614,8 +632,8 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
                         }
                     } else {
                         vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                            extract_dst_noc_multicast_info<std::vector<CoreRange>>(
-                                device, kernel->logical_coreranges(), core_type);
+                            device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
+                                kernel->logical_coreranges(), core_type);
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
                             std::vector<CQDispatchWritePackedMulticastSubCmd>());
                         auto& multicast_sub_cmd =
@@ -909,7 +927,8 @@ void EnqueueProgramCommand::assemble_device_commands(
                             .noc_xy_addr = noc_encoding,
                             .addr = dst_addr,
                             .length = (uint16_t)write_length,
-                            .num_mcast_dests = (uint16_t)num_mcast_dests});
+                            .num_mcast_dests = (uint8_t)num_mcast_dests,
+                            .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
                         RecordDispatchData(
                             program, DISPATCH_DATA_BINARY, write_length, kg_transfer_info.riscvs[kernel_idx]);
                         dst_addr += write_length;
@@ -924,6 +943,10 @@ void EnqueueProgramCommand::assemble_device_commands(
                         kernel_bins_write_packed_large_data_aligned_sizeB.back() += read_length;
                     }
                 }
+            }
+            // Unlink the last subcmd of the current core range
+            if (!write_linear) {
+                kernel_bins_dispatch_subcmds.back().back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
             }
         }
         for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {

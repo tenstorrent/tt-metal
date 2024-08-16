@@ -308,7 +308,9 @@ class TtFalconModelShared:
             layer_output = layer_output[0]
 
         if layer_output.dtype != self.model_config["BFP8_DTYPE"]:
-            layer_output = ttnn.experimental.tensor.typecast(layer_output, self.model_config["BFP8_DTYPE"])
+            layer_output = ttnn.experimental.typecast(
+                layer_output, self.model_config["BFP8_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
 
         layer_output = ttnn.all_gather(
             layer_output,
@@ -318,9 +320,8 @@ class TtFalconModelShared:
         )
 
         if self.model_config["LN_INPUT_DTYPE"] != self.model_config["BFP8_DTYPE"]:
-            layer_output = ttnn.experimental.tensor.typecast(
-                layer_output,
-                self.model_config["LN_INPUT_DTYPE"],
+            layer_output = ttnn.experimental.typecast(
+                layer_output, self.model_config["LN_INPUT_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
         # apply final norm layer

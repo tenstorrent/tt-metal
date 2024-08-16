@@ -39,8 +39,11 @@ set(UNIT_TESTS_SRC
 )
 
 add_executable(unit_tests ${UNIT_TESTS_SRC} $<TARGET_OBJECTS:unit_tests_common_o>)
+add_executable(unit_tests_galaxy ${CMAKE_CURRENT_SOURCE_DIR}/multichip/galaxy_cluster_api.cpp)
 
 target_link_libraries(unit_tests PRIVATE test_metal_common_libs Boost::smart_ptr)
+target_link_libraries(unit_tests_galaxy PRIVATE test_metal_common_libs Boost::smart_ptr)
+
 target_include_directories(unit_tests PRIVATE
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
@@ -50,4 +53,13 @@ target_include_directories(unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/common
     ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer
 )
-set_target_properties(unit_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tt_metal)
+target_include_directories(unit_tests_galaxy PRIVATE
+    ${UMD_HOME}
+    ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/tt_metal
+    ${PROJECT_SOURCE_DIR}/tests
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+
+set_target_properties(unit_tests unit_tests_galaxy PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tt_metal)

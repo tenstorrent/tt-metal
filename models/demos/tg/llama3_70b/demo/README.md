@@ -48,9 +48,9 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     1. The first run will cache the weights. This will take some time.
     2. The second run will use the cached weights, thereby running much faster.
 
+    Command to run the decode demo using greedy sampling
     ```bash
-    # Run the decode demo using greedy sampling
-    pytest models/demos/tg/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-short_context-check_disabled-greedy-tt-70b-glx-80L-decode_only-text_completion-llama3-4x8_grid]
+    pytest models/demos/tg/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-short_context-check_disabled-greedy-tt-70b-glx-80L-decode_only-text_completion-llama3-tg-4x8_grid]
     ```
 
 ## Details

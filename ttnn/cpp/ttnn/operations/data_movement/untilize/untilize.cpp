@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor ExecuteUntilize::operator()(
+ttnn::Tensor ExecuteUntilize::invoke(
     uint8_t queue_id,
     const ttnn::Tensor &input_tensor,
     const std::optional<MemoryConfig> &memory_config,
@@ -33,12 +33,12 @@ ttnn::Tensor ExecuteUntilize::operator()(
         .at(0);
 }
 
-ttnn::Tensor ExecuteUntilize::operator()(
+ttnn::Tensor ExecuteUntilize::invoke(
     const ttnn::Tensor &input_tensor,
     const std::optional<MemoryConfig> &memory_config,
     bool use_multicore,
     bool use_pack_untilize) {
-    return operator()(DefaultQueueId, input_tensor, memory_config, use_multicore, use_pack_untilize);
+    return invoke(DefaultQueueId, input_tensor, memory_config, use_multicore, use_pack_untilize);
 }
 
 }  // namespace ttnn::operations::data_movement

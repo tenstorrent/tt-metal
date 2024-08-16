@@ -37,7 +37,7 @@ def get_weights_cached(
         weights = weights_dict[str(path)]
     elif not overwrite and path.exists():
         # Load cached weights
-        weights_host = ttnn.experimental.tensor.load_tensor(str(path))
+        weights_host = ttnn.load_tensor(str(path))
         # Duplicate weights on all devices
         weights = [weights_host.to(device, model_config[f"{weight_config_str}_MEMCFG"]) for device in devices]
         # Add to weights_dict

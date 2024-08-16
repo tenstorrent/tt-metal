@@ -3,42 +3,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <mutex>
-#include <variant>
+#include <vector>
+#include <map>
 
-#include "third_party/magic_enum/magic_enum.hpp"
-
-#include "tt_metal/jit_build/build.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/third_party/umd/device/tt_cluster_descriptor_types.h"
+#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
+#include "tt_metal/hostdevcommon/common_values.hpp"
+#include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
 
-#include "tt_metal/detail/program.hpp"
-#include "tt_metal/jit_build/genfiles.hpp"
-#include "tt_metal/host_api.hpp"
-
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-
-using std::unique_lock;
-using std::mutex;
-
-namespace tt::tt_metal{
+namespace tt::tt_metal {
+    class Program;
+    class Buffer;
+    class Device;
 
     namespace detail {
 
-        inline static bool DispatchStateCheck( bool isFastDispatch){
-            static bool fd = isFastDispatch;
-            TT_FATAL( fd == isFastDispatch, "Mixing fast and slow dispatch is prohibited!" );
-            return fd;
-        }
+        bool DispatchStateCheck( bool isFastDispatch);
 
         std::map<chip_id_t, Device *> CreateDevices(
             // TODO: delete this in favour of DevicePool
-            std::vector<chip_id_t> device_ids,
+            const std::vector<chip_id_t>& device_ids,
             const uint8_t num_hw_cqs = 1,
             const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
             const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+            tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER,
             const std::vector<uint32_t> &l1_bank_remap = {});
 
         void CloseDevices(std::map<chip_id_t, Device *> devices);
@@ -232,13 +221,7 @@ namespace tt::tt_metal{
          * | address      | Starting address on DRAM channel to begin writing data | uint32_t              | [DRAM_UNRESERVED_BASE, dram_size)         | Yes      |
          * | host_buffer  | Buffer on host to copy data from                       | std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
          */
-        inline bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer)
-        {
-            bool pass = true;
-            TT_FATAL(address >= DRAM_UNRESERVED_BASE, "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", DRAM_UNRESERVED_BASE);
-            tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
-            return pass;
-        }
+        bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer);
 
         /**
          * Copy data from a device DRAM channel to a host buffer
@@ -253,13 +236,7 @@ namespace tt::tt_metal{
          * | size         | Size of buffer to read from device in bytes                  | uint32_t              |                                | Yes      |
          * | host_buffer  | Buffer on host to copy data into                             | std::vector<uint32_t> |                                | Yes      |
          */
-        inline bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
-        {
-            bool pass = true;
-            tt::Cluster::instance().dram_barrier(device->id());
-            tt::Cluster::instance().read_dram_vec(host_buffer, size, tt_target_dram{device->id(), dram_channel, 0}, address);
-            return pass;
-        }
+        bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer);
 
         /**
          * Copy data from a host buffer into an L1 buffer. (Note: Current Can not be a CircularBuffer.)
@@ -273,21 +250,9 @@ namespace tt::tt_metal{
          * | address       | Starting address in L1 to write into            | uint32_t              | Any non-reserved address in L1 that fits for buffer | Yes      |
          * | host_buffer   | Buffer on host whose data to copy from          | std::vector<uint32_t> | Buffer must fit into L1                             | Yes      |
          */
-        inline bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer, CoreType core_type = CoreType::WORKER)
-        {
-            ZoneScoped;
-            auto worker_core = device->physical_core_from_logical_core(logical_core, core_type);
-            llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
-            return true;
-        }
+        bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer, CoreType core_type = CoreType::WORKER);
 
-        inline bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval)
-        {
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
-            tt::Cluster::instance().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
-            return true;
-        }
-
+        bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval);
 
         /**
          * Copy data from an L1 buffer into a host buffer. Must be a buffer, and not a CB.
@@ -302,188 +267,15 @@ namespace tt::tt_metal{
          * | size                 | Size of L1 buffer in bytes                  | uint32_t              |                                                   | Yes      |
          * | host_buffer          | Buffer on host to copy data into            | std::vector<uint32_t> | Buffer must fit L1 buffer                         | Yes      |
          */
-        inline bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
-        {
-            tt::Cluster::instance().l1_barrier(device->id());
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
-            host_buffer = llrt::read_hex_vec_from_core(device->id(), worker_core, address, size);
-            return true;
-        }
+        bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer);
 
-        inline bool ReadRegFromDevice(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t &regval)
-        {
-            tt::Cluster::instance().l1_barrier(device->id());
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
-            tt::Cluster::instance().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
-            return true;
-        }
+        bool ReadRegFromDevice(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t &regval);
 
-        inline void SetLazyCommandQueueMode(bool lazy)
-        {
-            DispatchStateCheck(true);
-            LAZY_COMMAND_QUEUE_MODE = lazy;
-        }
-        inline void DumpDeviceProfiler(Device * device, bool last_dump)
-        {
-            tt::tt_metal::detail::DumpDeviceProfileResults(device, last_dump);
-        }
+        void SetLazyCommandQueueMode(bool lazy);
 
         void AllocateBuffer(Buffer* buffer, bool bottom_up);
 
         void DeallocateBuffer(Buffer *buffer);
 
-        void GetBufferAddress(const Buffer* Buffer, uint32_t* address_on_host);
-
-        inline void DeallocateBuffers(Device * device)
-        {
-            device->deallocate_buffers();
-        }
-
-        void DisableAllocs(Device *device);
-        void EnableAllocs(Device *device);
-
-        inline void GenerateDeviceHeaders(Device *device,
-                                          const std::string &path)
-        {
-
-            // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
-            const size_t num_dram_banks = device->num_banks(BufferType::DRAM);
-            const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
-            std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
-            std::vector<int32_t> dram_offsets_per_bank(num_dram_banks);
-            for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-                dram_noc_coord_per_bank[bank_id] = device->dram_core_from_dram_channel(device->dram_channel_from_bank_id(bank_id));
-                dram_offsets_per_bank[bank_id] = device->bank_offset(BufferType::DRAM, bank_id);
-            }
-            const size_t num_l1_banks = device->num_banks(BufferType::L1); // 128
-            const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
-            std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
-            std::vector<int32_t> l1_offset_per_bank(num_l1_banks);
-            for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
-                l1_noc_coord_per_bank[bank_id] = device->worker_core_from_logical_core(device->logical_core_from_bank_id(bank_id));
-                l1_offset_per_bank[bank_id] = device->bank_offset(BufferType::L1, bank_id);
-            }
-
-            const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
-
-            // Generate header file in proper location
-            jit_build_genfiles_bank_to_noc_coord_descriptor (
-                path,
-                soc_d.grid_size,
-                dram_noc_coord_per_bank,
-                dram_offsets_per_bank,
-                l1_noc_coord_per_bank,
-                l1_offset_per_bank,
-                soc_d.profiler_ceiled_core_count_perf_dram_bank,
-                soc_d.physical_routing_to_profiler_flat_id
-            );
-
-            // Determine which noc-coords are harvested
-            // TODO(PGK/Almeet): fix this w/ new UMD
-            vector<uint32_t> harvested_rows;
-            uint32_t harvested_noc_rows = tt::Cluster::instance().get_harvested_rows(device->id());
-            for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
-                bool row_harvested = (harvested_noc_rows >> y) & 0x1;
-                if (row_harvested) {
-                    harvested_rows.push_back(y);
-                }
-            }
-
-            // Create valid PCIe address ranges
-            // This implementation assumes contiguous ranges and aggregates the ranges into one bounds check
-            // TODO: consider checking multiple ranges to detect straddling transactions
-            uint64_t pcie_chan_base_addr = tt::Cluster::instance().get_pcie_base_addr_from_device(device->id());
-            uint32_t num_host_channels = tt::Cluster::instance().get_num_host_channels(device->id());
-            uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
-            for (int pcie_chan = 0; pcie_chan < num_host_channels; pcie_chan++) {
-                pcie_chan_end_addr += tt::Cluster::instance().get_host_channel_size(device->id(), pcie_chan);
-            }
-
-            jit_build_genfiles_noc_addr_ranges_header(
-                path,
-                pcie_chan_base_addr,
-                pcie_chan_end_addr - pcie_chan_base_addr,
-                0,
-                soc_d.dram_core_size,
-                soc_d.get_pcie_cores(),
-                soc_d.get_dram_cores(),
-                soc_d.get_physical_ethernet_cores(),
-                soc_d.grid_size,
-                harvested_rows,
-                num_host_channels > 0);
-        }
-
-        inline void CheckDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges) {
-            bool riscv0_in_use = false; bool riscv1_in_use = false;
-            bool noc0_in_use = false; bool noc1_in_use = false;
-
-            auto set_global_and_local_noc_usage = [&](KernelHandle kernel_id, bool &local_noc0_usage, bool &local_noc1_usage) {
-                const auto kernel = detail::GetKernel(program, kernel_id);
-                auto kernel_config = std::get<DataMovementConfig>(kernel->config());
-                auto noc_value = magic_enum::enum_integer(kernel_config.noc);
-                local_noc0_usage = noc_value == 0;
-                local_noc1_usage = noc_value == 1;
-                noc0_in_use = local_noc0_usage;
-                noc1_in_use = local_noc1_usage;
-            };
-
-            for (const auto &core_range : core_ranges.ranges()) {
-                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
-                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                        const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y), CoreType::WORKER);
-                        if (kernel_group != nullptr) {
-                            bool local_noc0_in_use = false; bool local_noc1_in_use = false;
-                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value()) {
-                                riscv0_in_use = true;
-                                set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value(), local_noc0_in_use, local_noc1_in_use);
-                            }
-                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
-                                riscv1_in_use = true;
-                                set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value(), local_noc0_in_use, local_noc1_in_use);
-                            }
-                            if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
-                                kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
-                                TT_FATAL(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!", CoreCoord(x, y).str());
-                            }
-                        }
-                    }
-                }
-            }
-
-            TT_FATAL(not (riscv0_in_use and riscv1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because both data movement processors are in use!", file_name);
-            TT_FATAL(not (noc0_in_use and noc1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernels for {} across specified cores because both NOCs are in use!", file_name);
-        }
-
-        inline CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {
-            ZoneScoped;
-            return std::visit(
-                [](auto&& core_spec) -> CoreRangeSet
-                {
-                    using T = std::decay_t<decltype(core_spec)>;
-                    if constexpr (std::is_same_v<T, CoreCoord>) {
-                        return CoreRangeSet({CoreRange(core_spec, core_spec)});
-                    }
-                    else if constexpr (std::is_same_v<T, CoreRange>) {
-                        return CoreRangeSet({core_spec});
-                    }
-                    else if constexpr (std::is_same_v<T, CoreRangeSet>) {
-                        return core_spec;
-                    }
-                },
-                specified_core_spec
-            );
-        }
-
-        inline void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
-            // Push empty work to threads and ensure its been picked up
-            static auto empty_work = std::make_shared<std::function<void()>>([](){});
-            for (auto target_device : workers) {
-                target_device->work_executor.push_work(empty_work);
-            }
-            // Block until work has been picked up, to flush the queue
-            for (auto target_device : workers) {
-                while(not target_device->work_executor.worker_queue.empty());
-            }
-        }
     }
 }

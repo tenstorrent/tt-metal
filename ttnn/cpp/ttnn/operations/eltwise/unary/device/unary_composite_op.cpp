@@ -10,7 +10,6 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/common/bfloat16.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
@@ -19,6 +18,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 
@@ -377,14 +377,16 @@ Tensor _trunc(const Tensor& input, const std::optional<MemoryConfig>& output_mem
 // Function variance of whole tensor.
 // Tensor variance(const Tensor& y,const Tensor& mean_y);
 Tensor _variance_impl(
-    const Tensor& y, const Tensor& mean_y, Tensor& y_minus_mean_y, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& y,
+    const Tensor& mean_y,
+    Tensor& y_minus_mean_y,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<int> dims = { 2, 3 };
     constexpr float correction = 0.0f;
     auto shape_wh = y.get_legacy_shape();
     float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
     Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
-    Tensor sum_sqr_y_minus_mean_y =
-        reduce(sqr_y_minus_mean_y, ReduceOpMath::SUM, ReduceOpDim::HW, scale);
-    return sum_sqr_y_minus_mean_y;  // var
+    return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor y_minus_mean_y = bcast(y, mean_y, BcastOpMath::SUB, BcastOpDim::HW);
@@ -393,7 +395,8 @@ Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional
 
 Tensor _variance(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(y.memory_config());
-    Tensor mean_y = mean_hw(y);
+    std::vector<int> dims = { 2, 3 };
+    Tensor mean_y = ttnn::mean(y, dims, true);
     return _variance_impl(y, mean_y, output_memory_config);
 }
 
@@ -415,7 +418,8 @@ Tensor _std_overload(const Tensor& y, const std::optional<MemoryConfig>&  output
 // Function normalize
 // use transformation y = (y - mean(y))/std(y) by broadcast
 Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor mean_y = mean_hw(y);
+    std::vector<int> dims = { 2, 3 };
+    Tensor mean_y = ttnn::mean(y, dims, true);
     Tensor y_minus_mean_y = bcast(y, mean_y, BcastOpMath::SUB, BcastOpDim::HW);
     Tensor std_y = _std(y, mean_y, y_minus_mean_y, output_mem_config);
     Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
@@ -666,7 +670,7 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
 }
 
 //rdiv
-Tensor ExecuteRdiv::operator()(uint8_t queue_id, const Tensor& input_tensor, float value, const std::string& round_mode, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor) {
+Tensor ExecuteRdiv::invoke(uint8_t queue_id, const Tensor& input_tensor, float value, const std::string& round_mode, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor) {
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor recip_result = ttnn::reciprocal(queue_id, input_tensor, memory_config, optional_output_tensor);
     Tensor result = ttnn::multiply(queue_id, recip_result, value, std::nullopt, memory_config, optional_output_tensor);

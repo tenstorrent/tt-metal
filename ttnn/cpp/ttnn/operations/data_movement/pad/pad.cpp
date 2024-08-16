@@ -113,7 +113,7 @@ static ttnn::Tensor pad_impl(
 
 // This function signature is similar to pytorch's signature
 // Any rank tensor supported
-ttnn::Tensor ExecutePad::operator()(
+ttnn::Tensor ExecutePad::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const std::vector<std::pair<uint32_t, uint32_t>>& padding,
@@ -159,7 +159,7 @@ ttnn::Tensor ExecutePad::operator()(
     return output_tensor;
 }
 
-#define PAD_OVERLOAD_DIM_IMPL(ShapeType) ttnn::Tensor ExecutePad::operator()(\
+#define PAD_OVERLOAD_DIM_IMPL(ShapeType) ttnn::Tensor ExecutePad::invoke(\
     uint8_t queue_id,\
     const ttnn::Tensor& input_tensor,\
     const ShapeType& output_padded_shape,\
@@ -171,7 +171,7 @@ ttnn::Tensor ExecutePad::operator()(
         queue_id, input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config_arg);\
 }\
 \
-ttnn::Tensor ExecutePad::operator()(\
+ttnn::Tensor ExecutePad::invoke(\
     const ttnn::Tensor& input_tensor,\
     const ShapeType& output_padded_shape,\
     const ShapeType& input_tensor_start,\

@@ -13,10 +13,18 @@
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
+#include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "type_caster.hpp"
 
 namespace py = pybind11;
+
+namespace {
+    inline void DumpDeviceProfiler(Device * device, bool last_dump)
+    {
+        tt::tt_metal::detail::DumpDeviceProfileResults(device, last_dump);
+    }
+}
 
 namespace tt {
 
@@ -27,6 +35,10 @@ void DeviceModule(py::module &m_device) {
         .value("GRAYSKULL", tt::ARCH::GRAYSKULL)
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0)
         .value("BLACKHOLE", tt::ARCH::BLACKHOLE);
+
+    py::enum_<DispatchCoreType>(m_device, "DispatchCoreType", "Enum of types of dispatch cores.")
+        .value("WORKER", DispatchCoreType::WORKER)
+        .value("ETH", DispatchCoreType::ETH);
 
     auto pyDevice = py::class_<Device, std::unique_ptr<Device, py::nodelete>>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
     pyDevice
@@ -79,7 +91,7 @@ void DeviceModule(py::module &m_device) {
         )doc");
     m_device.def(
         "CreateDevice",
-        [](int device_id, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size) { return CreateDevice(device_id, num_hw_cqs, l1_small_size, trace_region_size); },
+        [](int device_id, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, DispatchCoreType dispatch_core_type) { return CreateDevice(device_id, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type); },
         R"doc(
         Creates an instance of TT device.
 
@@ -92,11 +104,12 @@ void DeviceModule(py::module &m_device) {
         py::arg("device_id"),
         py::arg("num_hw_cqs") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
-        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE);
+        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
+        py::arg("dispatch_core_type") = DispatchCoreType::WORKER);
     m_device.def(
         "CreateDevices",
-        [](std::vector<int> device_ids, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size) {
-            return tt::tt_metal::detail::CreateDevices(device_ids, num_hw_cqs, l1_small_size, trace_region_size);
+        [](std::vector<int> device_ids, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, DispatchCoreType dispatch_core_type) {
+            return tt::tt_metal::detail::CreateDevices(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
         },
         R"doc(
         Creates an instance of TT device.
@@ -110,7 +123,8 @@ void DeviceModule(py::module &m_device) {
         py::arg("device_ids"),
         py::arg("num_hw_cqs") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
-        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE);
+        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
+        py::arg("dispatch_core_type") = DispatchCoreType::WORKER);
     m_device.def("CloseDevice", &CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
@@ -211,7 +225,7 @@ void DeviceModule(py::module &m_device) {
         the FinishCommand. Once set to false, all subsequent commands will immediately notify the device
         that the write pointer has been updated.
     )doc");
-    m_device.def("DumpDeviceProfiler", &detail::DumpDeviceProfiler, py::arg("device"), py::arg("last_dump") = false, R"doc(
+    m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), py::arg("last_dump") = false, R"doc(
         Dump device side profiling data.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
@@ -267,30 +281,6 @@ void DeviceModule(py::module &m_device) {
             });
         }, R"doc(
         Release captured Trace on Device handle
-    )doc");
-
-    auto pyEvent = py::class_<Event, std::shared_ptr<Event>>(m_device, "Event", "Event class");
-    m_device.def("CreateEvent",
-        [] () {
-            return std::make_shared<Event>();
-        }, R"doc(
-        Create new event
-    )doc");
-    m_device.def("RecordEvent",
-        [] (Device* device, const uint8_t cq_id, std::shared_ptr<Event> event) {
-            device->push_work([device, cq_id, event] {
-                EnqueueRecordEvent(device->command_queue(cq_id), event);
-            });
-        }, R"doc(
-        Record an event
-    )doc");
-    m_device.def("WaitForEvent",
-        [] (Device* device, const uint8_t cq_id, std::shared_ptr<Event> event) {
-            device->push_work([device, cq_id, event] {
-                EnqueueWaitForEvent(device->command_queue(cq_id), event);
-            });
-        }, R"doc(
-        Wait for an event
     )doc");
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);

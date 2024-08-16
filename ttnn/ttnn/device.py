@@ -18,12 +18,14 @@ def get_device_core_grid(device):
 # TODO: Device = ttnn._ttnn.Device
 Device = ttnn._ttnn.deprecated.device.Device
 Device.core_grid = property(get_device_core_grid)
+DispatchCoreType = ttnn._ttnn.deprecated.device.DispatchCoreType
 
 
 def open_device(
     device_id: int,
     l1_small_size: int = ttnn._ttnn.deprecated.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.deprecated.device.DEFAULT_TRACE_REGION_SIZE,
+    dispatch_core_type: int = DispatchCoreType.WORKER,
 ):
     """
     open_device(device_id: int) -> ttnn.Device:
@@ -31,7 +33,10 @@ def open_device(
     Open a device with the given device_id. If the device is already open, return the existing device.
     """
     return ttnn._ttnn.device.open_device(
-        device_id=device_id, l1_small_size=l1_small_size, trace_region_size=trace_region_size
+        device_id=device_id,
+        l1_small_size=l1_small_size,
+        trace_region_size=trace_region_size,
+        dispatch_core_type=dispatch_core_type,
     )
 
 

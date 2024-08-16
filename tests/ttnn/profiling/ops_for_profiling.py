@@ -1338,11 +1338,11 @@ def rdiv(x):
 
 
 def sum_0(x):
-    tt_lib.tensor.sum(x, 0)
+    ttnn.sum(x, 0)
 
 
 def sum_1(x):
-    tt_lib.tensor.sum(x, 1)
+    ttnn.sum(x, 1)
 
 
 def sum_2(x):
@@ -1556,7 +1556,7 @@ def primary_moreh_norm_3(x):
 
 
 def clone(x):
-    ttnn.clone(x, ttnn.get_memory_config(x), x.dtype)
+    ttnn.clone(x, ttnn.get_memory_config(x), dtype=x.dtype)
 
 
 from tt_lib.fused_ops.softmax import softmax as fused_softmax
@@ -1986,20 +1986,20 @@ all_unary_ops = [
         "name": "ttnn.max_dim_23",
     },
     {
-        "op": tt_lib.tensor.global_min,
-        "name": "tt_lib.tensor.global_min",
+        "op": ttnn.min,
+        "name": "ttnn.min",
     },
     {
-        "op": tt_lib.tensor.global_max,
-        "name": "tt_lib.tensor.global_max",
+        "op": ttnn.max,
+        "name": "ttnn.max",
     },
     {
-        "op": tt_lib.tensor.global_sum,
-        "name": "tt_lib.tensor.global_sum",
+        "op": ttnn.sum,
+        "name": "ttnn.sum",
     },
     {
-        "op": tt_lib.tensor.global_mean,
-        "name": "tt_lib.tensor.global_mean",
+        "op": ttnn.mean,
+        "name": "ttnn.mean",
     },
     {
         "op": rpow,
@@ -2051,12 +2051,12 @@ all_unary_ops = [
     },
     {
         "op": sum_0,
-        "name": "tt_lib.tensor.sum_dim_0",
+        "name": "ttnn.sum_dim_0",
         "num_repeats": 2,
     },
     {
         "op": sum_1,
-        "name": "tt_lib.tensor.sum_dim_1",
+        "name": "ttnn.sum_dim_1",
     },
     {
         "op": ttnn.log_sigmoid,
@@ -2111,7 +2111,7 @@ all_unary_ops = [
         "name": "tt_lib.tensor.fill_ones_rm",
     },
     {
-        "op": tt_lib.tensor.mean_hw,
+        "op": ttnn.mean,
         "name": "tt_lib.tensor.mean_hw",
     },
     {

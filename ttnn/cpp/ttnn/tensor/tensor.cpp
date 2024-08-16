@@ -18,6 +18,20 @@
 
 using namespace tt::constants;
 
+namespace{
+    inline void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
+        // Push empty work to threads and ensure its been picked up
+        static auto empty_work = std::make_shared<std::function<void()>>([](){});
+        for (auto target_device : workers) {
+            target_device->work_executor.push_work(empty_work);
+        }
+        // Block until work has been picked up, to flush the queue
+        for (auto target_device : workers) {
+            while(not target_device->work_executor.worker_queue.empty());
+        }
+    }
+}
+
 namespace tt {
 
 namespace tt_metal {
@@ -464,7 +478,7 @@ Tensor Tensor::to(const std::vector<Device*>& workers, const MemoryConfig& mem_c
     return device_tensor;
 }
 
-Tensor Tensor::cpu(bool blocking) const {
+Tensor Tensor::cpu(bool blocking, uint8_t cq_id) const {
     ZoneScoped;
     auto workers = this->get_workers(blocking);
     if (not workers.size()) {
@@ -479,12 +493,12 @@ Tensor Tensor::cpu(bool blocking) const {
     uint32_t original_tensor_ref_count = this->tensor_attributes->record_main_thread_ref_count();
     for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
         auto target_device = workers[worker_index];
-        target_device->push_work([host_tensor, blocking, target_device, *this, workers, worker_index]() mutable {
+        target_device->push_work([host_tensor, blocking, target_device, *this, workers, worker_index, cq_id]() mutable {
             TT_ASSERT(
                 this->storage_type() == StorageType::DEVICE or this->storage_type() == StorageType::MULTI_DEVICE,
                 "Can only use worker queue for cpu call if tensor is on device.");
             auto shard = get_shard_for_device(*this, target_device);
-            shard = tensor_impl::to_host_wrapper(shard, blocking);
+            shard = tensor_impl::to_host_wrapper(shard, blocking, cq_id);
             insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
             uint32_t num_workers_completed = (host_tensor.tensor_attributes->num_workers_completed)++;
             if (not num_workers_completed) {
@@ -497,7 +511,7 @@ Tensor Tensor::cpu(bool blocking) const {
     }
 
     if (blocking) {
-        detail::SynchronizeWorkerThreads(workers);
+        SynchronizeWorkerThreads(workers);
     }
     // Update main_thread_ref_count for tensor after pushing to queue.
     this->tensor_attributes->update_main_thread_ref_count(workers.at(0), original_tensor_ref_count);

@@ -116,7 +116,7 @@ def get_model_config(
     n_heads = model_config_entries["num_attention_heads"]
     n_kv_heads = model_config_entries["num_kv_heads"]
 
-    if llama_version == "llama3":
+    if llama_version == "llama3" or llama_version == "llama3-tg":
         model_config["FFN_EXPANDED_HIDDEN_SIZE"] = 28 * 1024
     elif llama_version == "llama3-405b":
         model_config["FFN_EXPANDED_HIDDEN_SIZE"] = 52 * 1024

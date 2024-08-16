@@ -7,7 +7,6 @@ import math
 import torch
 
 from typing import Optional
-import tt_lib
 import ttnn
 from tt_lib.utils import pad_weight
 from models.utility_functions import torch2tt_tensor
@@ -140,10 +139,10 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         if reserve_split_heads_shape is not None:
             temp = ttnn.empty(
                 reserve_split_heads_shape,
-                tt_lib.tensor.DataType.BFLOAT16,
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
                 activation.device(),
-                tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
+                ttnn.L1_MEMORY_CONFIG,
             )
         qkv = op1_qkv_fused(activation, qkv_weight, qkv_bias)
         if reserve_split_heads_shape is not None:
@@ -182,13 +181,13 @@ class TtMultiHeadAttentionModel:
             interleaved_str = ""
             if "QKV_INTERLEAVED" in model_config:
                 interleaved_str = f"interleaved_{model_config['QKV_INTERLEAVED']}_"
-            qkv_weight = tt_lib.tensor.load_tensor(
+            qkv_weight = ttnn.load_tensor(
                 str(
                     tt_cache_path
                     / f"{layer_name}.qkv.weight_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
                 )
             ).to(device, model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"])
-            qkv_bias = tt_lib.tensor.load_tensor(
+            qkv_bias = ttnn.load_tensor(
                 str(
                     tt_cache_path
                     / f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.bin"
@@ -227,7 +226,7 @@ class TtMultiHeadAttentionModel:
             qkv_weight = torch2tt_tensor(
                 qkv_weight,
                 device,
-                tt_layout=tt_lib.tensor.Layout.TILE,
+                tt_layout=ttnn.TILE_LAYOUT,
                 tt_memory_config=model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"],
                 tt_dtype=model_config["OP1_FUSED_QKV_MM_WEIGHTS_DTYPE"],
             )
@@ -235,7 +234,7 @@ class TtMultiHeadAttentionModel:
             qkv_bias = torch2tt_tensor(
                 qkv_bias,
                 device,
-                tt_layout=tt_lib.tensor.Layout.TILE,
+                tt_layout=ttnn.TILE_LAYOUT,
                 tt_memory_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
                 tt_dtype=model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
             )
@@ -252,8 +251,6 @@ class TtMultiHeadAttentionModel:
             model_config,
         )
 
-    def __call__(
-        self, activation: tt_lib.tensor.Tensor, attention_mask: Optional[tt_lib.tensor.Tensor] = None
-    ) -> tt_lib.tensor.Tensor:
+    def __call__(self, activation: ttnn.Tensor, attention_mask: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         result = self.mha(activation, attention_mask)
         return result

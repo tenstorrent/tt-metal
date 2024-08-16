@@ -24,6 +24,7 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
     runs-on: ${{ matrix.arch }}
     steps:
