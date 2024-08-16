@@ -8,7 +8,6 @@ import torchvision
 from transformers import AutoImageProcessor
 import pytest
 import ttnn
-import tt_lib
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
@@ -37,7 +36,8 @@ except ModuleNotFoundError:
     use_signpost = False
 
 # TODO: Create ttnn apis for this
-ttnn.dump_device_profiler = tt_lib.device.DumpDeviceProfiler
+ttnn.dump_device_profiler = ttnn.experimental.device.DumpDeviceProfiler
+
 
 model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,

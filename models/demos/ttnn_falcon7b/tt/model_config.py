@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib as ttl
+import ttnn
 from loguru import logger
 from pathlib import Path
 
@@ -92,9 +92,9 @@ def pretty_print_model_config(model_config):
 
 def get_model_config(model_config_str):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
-    DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
-    BFP8_DTYPE = ttl.tensor.DataType.BFLOAT8_B
+    DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
+    L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
+    BFP8_DTYPE = ttnn.bfloat8_b
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in ("BFLOAT16-DRAM", "BFLOAT16-L1"):
@@ -102,7 +102,7 @@ def get_model_config(model_config_str):
         # TODO: Set default memcfg for BFLOAT16-L1 to L1
         # mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
         mem_config = DRAM_MEMCFG
-        dtype = ttl.tensor.DataType.BFLOAT16 if dtype_str == "BFLOAT16" else ttl.tensor.DataType.BFLOAT8_B
+        dtype = ttnn.bfloat16 if dtype_str == "BFLOAT16" else ttnn.bfloat8_b
     else:
         raise NotImplementedError(f"Model config {model_config_str} is not supported!")
 
