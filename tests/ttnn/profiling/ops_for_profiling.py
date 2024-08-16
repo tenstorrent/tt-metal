@@ -1245,6 +1245,14 @@ def sum_dim_1(x):
     ttnn.sum(x, dim=1)
 
 
+def sum_dim_0(x):
+    ttnn.sum(x, dim=0)
+
+
+def sum_dim_1(x):
+    ttnn.sum(x, dim=1)
+
+
 def sum_dim_2(x):
     ttnn.sum(x, dim=2)
 
