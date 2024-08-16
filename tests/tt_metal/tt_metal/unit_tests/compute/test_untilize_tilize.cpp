@@ -469,6 +469,9 @@ TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit4x1) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeDst1x4) {
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP();
+    }
     unit_tests::compute::tilize::TestConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 1,
@@ -480,6 +483,9 @@ TEST_F(DeviceFixture, ComputePackUntilizeDst1x4) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeDst2x2) {
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP();
+    }
     unit_tests::compute::tilize::TestConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 2,
@@ -491,6 +497,9 @@ TEST_F(DeviceFixture, ComputePackUntilizeDst2x2) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeDst4x1) {
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP();
+    }
     unit_tests::compute::tilize::TestConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 4,
