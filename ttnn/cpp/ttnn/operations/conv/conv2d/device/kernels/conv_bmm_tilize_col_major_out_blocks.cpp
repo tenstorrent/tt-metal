@@ -102,6 +102,11 @@ void MAIN {
     constexpr bool tilize_in0                 = get_compile_time_arg_val(14);
     constexpr bool untilize_out               = get_compile_time_arg_val(15);
 
+
+    #ifdef WIDTH_SHARDED
+    constexpr uint32_t in0_nblocks_w_tilize   = get_compile_time_arg_val(17);
+    #endif
+
     constexpr uint32_t out_block_num_tiles    = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
     constexpr bool spill = in0_num_blocks_w > 1;
@@ -164,6 +169,16 @@ void MAIN {
             PACK( const uint32_t partials_cb_write_ptr = cb_interface[matmul_partials_cb].fifo_wr_ptr );
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for(uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
+                #ifdef WIDTH_SHARDED
+                if(in0_block_w_i % in0_nblocks_w_tilize == 0) {
+                    unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
+
+                    // DPRINT_MATH(DPRINT<<"Tilize Loop "<<in0_block_h_i<<" "<<in0_block_w_i<<"\n";)
+                    tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
+
+                    mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, in0_pretilize_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                }
+                #endif
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if constexpr (tilize_in0) {
                     #if defined PACK_RELU and not defined FUSE_BIAS

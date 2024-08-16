@@ -683,9 +683,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
 
 
-    std::string compute_kernel_path = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/compute_width_sharded.cpp";
-    std::string activation_kernel_path = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/activation_reader_width_sharded.cpp";
-    std::string weights_kernel_path = "ttnn/cpp/ttnn/operations/conv2d/device/kernels/weights_reader_width_sharded.cpp";
+    std::string compute_kernel_path = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
+    std::string activation_kernel_path = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp";
+    std::string weights_kernel_path = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/weights_reader_width_sharded.cpp";
 
     std::vector<uint32_t> reader_rt_args;
     std::vector<uint32_t> activation_kernel_compile_args;
@@ -751,7 +751,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     std::map<string, string> writer_mcast_sender_defines;
     std::map<string, string> compute_defines;
 
-    compute_defines["TEST"] = "1";
+    compute_defines["WIDTH_SHARDED"] = "1";
 
     if (output.memory_config().is_sharded()) {
         writer_defines["SHARDED_OUT"] = "1";
@@ -768,10 +768,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     if (fuse_relu) {
         compute_defines["PACK_RELU"] = "1";
-    }
-
-    if (!tilize_in0) {
-        compute_defines["PRE_TILIZE"] = "1";
     }
 
     if (split_reader) {
@@ -803,12 +799,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         out_subblock_w_ntiles,        //out_sublock_w
         out_subblock_num_tiles,       //out_sublock_num_tiles
 
-        total_num_cores,              //in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
 
         tilize_in0,                   //tilize_in0
         untilize_out,                 //untilize_out
 
-        bias_ntiles_per_core
+        bias_ntiles_per_core,
+
+        total_num_cores,              //in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
     };
 
     bool packer_l1_acc_en = packer_l1_acc && ((has_bias && num_blocks_act_w > 1) || (num_blocks_act_w > 2));
