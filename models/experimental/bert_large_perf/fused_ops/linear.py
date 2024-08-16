@@ -45,9 +45,7 @@ def Linear(
         output = ttnn.matmul(activation, weight_T)
 
         if bias is not None:
-            output_plus_bias = ttnn.experimental.tensor.bcast(
-                output, bias, ttnn.experimental.tensor.BcastOpMath.ADD, ttnn.experimental.tensor.BcastOpDim.H
-            )
+            output_plus_bias = ttnn.add(output, bias)
             return output_plus_bias
 
         return output

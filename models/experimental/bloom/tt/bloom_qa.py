@@ -64,12 +64,10 @@ class TtBloomForQuestionAnswering:
         sequence_output = outputs[0]
 
         logits = ttnn.matmul(sequence_output, self.qa_outputs_weight, output_mem_config=self.mem_config)
-        logits = tt_lib.tensor.bcast(
+        logits = ttnn.add(
             logits,
             self.qa_outputs_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            self.mem_config,
+            memory_config=self.mem_config,
         )
         logits = bloom_utils.tt2torch_tensor(logits)
 

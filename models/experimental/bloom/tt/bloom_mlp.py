@@ -45,12 +45,10 @@ class TtBloomMLP(torch.nn.Module):
     def forward(self, hidden_states, residual, device):
         # h4h = self.dense_h_to_4h(hidden_states)
         h4h = bloom_utils.tt_matmul(hidden_states, self.tt_weight_mlp_h4h, device)
-        h4h = tt_lib.tensor.bcast(
+        h4h = ttnn.add(
             h4h,
             self.tt_bias_mlp_h4h,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            self.mem_config,
+            memory_config=self.mem_config,
         )
 
         if self.use_tt_gelu:
@@ -61,12 +59,10 @@ class TtBloomMLP(torch.nn.Module):
             hidden_states = bloom_utils.torch2tt_tensor(hidden_states, device)
 
         intermediate_output = bloom_utils.tt_matmul(hidden_states, self.tt_weight_mlp_4hh, device)
-        intermediate_output = tt_lib.tensor.bcast(
+        intermediate_output = ttnn.add(
             intermediate_output,
             self.tt_bias_mlp_4hh,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            self.mem_config,
+            memory_config=self.mem_config,
         )
 
         # Dropout is used in training only

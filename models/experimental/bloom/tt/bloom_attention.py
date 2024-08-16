@@ -257,13 +257,7 @@ class TtBloomAttention(torch.nn.Module):
     ):
         # fused_qkv = self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
         fused_qkv = bloom_utils.tt_matmul(hidden_states, self.weight_q, device)
-        fused_qkv = tt_lib.tensor.bcast(
-            fused_qkv,
-            self.bias_q,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            self.mem_config,
-        )
+        fused_qkv = ttnn.add(fused_qkv, self.bias_q, memory_config=self.mem_config)
         fused_qkv = bloom_utils.tt2torch_tensor(fused_qkv)
 
         # 3 x [batch_size, seq_length, num_heads, head_dim]
@@ -342,12 +336,10 @@ class TtBloomAttention(torch.nn.Module):
 
         # output_tensor = self.dense(merged_context_layer)
         output_tensor = bloom_utils.tt_matmul(tt_context_layer, self.weight_d, device)
-        output_tensor = tt_lib.tensor.bcast(
+        output_tensor = ttnn.add(
             output_tensor,
             self.bias_d,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            self.mem_config,
+            memory_config=self.mem_config,
         )
 
         # Dropout is used in training only

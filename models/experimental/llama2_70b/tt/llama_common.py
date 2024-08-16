@@ -3,23 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import math
 from loguru import logger
 import re
 from typing import Tuple
 import numpy as np
 import torch
 from torch import nn
+from ttnn import experimental as tt_lib
 import ttnn
 from models.utility_functions import tt2torch_tensor, torch2tt_tensor
 from loguru import logger
 from pathlib import Path
-from models.demos.t3000.llama2_70b.reference.llama.llama.generation import (
+from models.experimental.llama2_70b.reference.llama.llama.generation import (
     load_chunked_checkpoints,
     load_sharded_checkpoints,
 )
 import pytest
-from models.demos.t3000.llama2_70b.tt.model_config import get_model_config
+from models.experimental.llama2_70b.tt.model_config import get_model_config
 
 MAX_SEQ_LEN = 4096
 MAX_SEQ_LEN_LLAMA3 = 8192
@@ -28,59 +28,6 @@ UNIT_TEST_N_LAYER = 1
 UNIT_TEST_LAYER_NUM = 0
 UNIT_TEST_START_POS = 0
 UNIT_TEST_GENERATION_LENGTH = 20
-from ttnn import (
-    TensorToMesh,
-    MeshToTensor,
-)
-
-
-class ShardTensor2dMesh(TensorToMesh):
-    def __init__(self, device_mesh, dims, cluster_shape):
-        super().__init__(device_mesh)
-        self.dims = dims
-        self.cluster_shape = cluster_shape
-
-    def map(self, tensor: torch.tensor):
-        # Returns list of tensors to map to row-major ordering of chips in cluster
-        tensors_grid_y = None
-        if self.dims[1] == None:
-            tensors_grid_y = [tensor.clone() for _ in range(self.cluster_shape[1])]
-        else:
-            tensors_grid_y = torch.chunk(tensor, self.cluster_shape[1], dim=self.dims[1])
-
-        tensors_grid_all = None
-        if self.dims[0] == None:
-            tensors_grid_all = [t.clone() for t in tensors_grid_y for _ in range(self.cluster_shape[0])]
-        else:
-            tensors_grid_all = [
-                tt for t in tensors_grid_y for tt in torch.chunk(t, self.cluster_shape[0], dim=self.dims[0])
-            ]
-
-        return list(tensors_grid_all)
-
-    def config(self):
-        return {
-            "strategy": "shard",
-            "shard_dim": f"{self.dims[0] if self.dims[0] else self.dims[1]}",
-        }
-
-
-class ConcatMesh2DToTensor(MeshToTensor):
-    def __init__(self, device_mesh, dims, cluster_shape):
-        self.dims = dims
-        self.cluster_shape = cluster_shape
-        self.device_mesh = device_mesh
-
-    def compose(self, tensor: ttnn.Tensor) -> torch.Tensor:
-        tt_shards = [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
-
-        row_concat = []
-        for cluster_row in range(self.cluster_shape[1]):
-            start = cluster_row * self.cluster_shape[0]
-            end = start + self.cluster_shape[0]
-            row_concat.append(torch.cat(tt_shards[start:end], dim=self.dims[0]))
-        all_concat = torch.cat(row_concat, dim=self.dims[1])
-        return all_concat
 
 
 def load_llama_state_dict(ckpt_dir, n_layers, start_layer_idx=0):
@@ -125,39 +72,19 @@ def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, ma
             ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"
             tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3/tokenizer.model"
             cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-3/llama-data-cache/weights-cache-3")
-        elif llama_version == "llama3-tg":
-            ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"
-            tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3/tokenizer.model"
-            cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-3/llama-data-cache/weights-cache-tg")
-        elif llama_version == "llama3-405b":
-            ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3-405b/llama-3-405b-repacked/"
-            tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3-405b/tokenizer.model"
-            cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-3-405b/llama-data-cache/weights-cache-3-405b")
         else:
             ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-2/llama-2-70b-repacked/"
             tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-2/tokenizer.model"
             cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-2/llama-data-cache/weights-cache-2")
     else:
         if llama_version == "llama3":
-            ckpt_dir = os.getenv("LLAMA3_CKPT_DIR", "/proj_sw/llama3-data-repacked/llama-3-70b/")
-            tokenizer_path = os.getenv("LLAMA3_TOKENIZER_PATH", "/proj_sw/llama3-data-repacked/tokenizer.model")
-            cache_path = Path(os.getenv("LLAMA3_CACHE_PATH", "/proj_sw/llama-cache/llama-3-70b"))
-        elif llama_version == "llama3-tg":
-            ckpt_dir = os.getenv("LLAMA3_CKPT_DIR", "/proj_sw/user_dev/llama3-data-repacked/llama-3-70b/")
-            tokenizer_path = os.getenv(
-                "LLAMA3_TOKENIZER_PATH", "/proj_sw/user_dev/llama3-data-repacked/tokenizer.model"
-            )
-            cache_path = Path(os.getenv("LLAMA3_CACHE_PATH", "/proj_sw/user_dev/llama3-data-cache/weights-cache-2"))
-        elif llama_version == "llama3-405b":
-            ckpt_dir = os.getenv("LLAMA3_405B_CKPT_DIR", "/proj_sw/user_dev/llama3-405B-data-repacked/llama-3-405b/")
-            tokenizer_path = os.getenv(
-                "LLAMA3_405B_TOKENIZER_PATH", "/proj_sw/user_dev/llama3-405B-data-repacked/tokenizer.model"
-            )
-            cache_path = Path(os.getenv("LLAMA3_405B_CACHE_PATH", "/proj_sw/user_dev/llama3-405B-cache/llama-3-405b"))
+            ckpt_dir = os.getenv("LLAMA3_CKPT_DIR", "/home/llama3-data-repacked/llama-3-70b/")
+            tokenizer_path = os.getenv("LLAMA3_TOKENIZER_PATH", "/home/llama3-data/Meta-Llama-3-70B/tokenizer.model")
+            cache_path = Path(os.getenv("LLAMA3_CACHE_PATH", "/home/llama3-data-cache/weights-cache"))
         else:
-            ckpt_dir = os.getenv("LLAMA2_CKPT_DIR", "/proj_sw/llama2-data-repacked/llama-2-70b/")
-            tokenizer_path = os.getenv("LLAMA2_TOKENIZER_PATH", "/proj_sw/llama2-data-repacked/tokenizer.model")
-            cache_path = Path(os.getenv("LLAMA2_CACHE_PATH", "/proj_sw/llama-cache/llama-2-70b"))
+            ckpt_dir = os.getenv("LLAMA2_CKPT_DIR", "/home/llama-data-repacked-2/llama-2-70b/")
+            tokenizer_path = os.getenv("LLAMA2_TOKENIZER_PATH", "/home/llama-data/tokenizer.model")
+            cache_path = Path(os.getenv("LLAMA2_CACHE_PATH", "/home/llama-data-cache/weights-cache-2"))
 
         assert os.path.exists(
             ckpt_dir
@@ -225,7 +152,7 @@ def rms_decomp(x, norm_weight, eps):
     # Tensor is 1,1,32,1+31 now
     mean_squared = ttnn.multiply(sum_squared, (1 / x.shape[-1]))
     mean_squared_eps = ttnn.add(mean_squared, eps)
-    rms = ttnn.pow(mean_squared_eps, 0.5)
+    rms = tt_lib.tensor.pow(mean_squared_eps, 0.5)
     rms_recip = ttnn.reciprocal(rms)
     normed_x = ttnn.multiply(x, rms_recip)
     norm_out = ttnn.mul(normed_x, norm_weight)
@@ -261,37 +188,13 @@ def tt_all_gather_torch(tensors, dim=-1):
     return res
 
 
-def generate_rot_emb(dhead, end, theta: float = 10000.0, use_scaled: bool = False):
-    cos, sin = precompute_freqs(dhead, end, theta, use_scaled)
+def generate_rot_emb(dhead, end, theta: float = 10000.0):
+    cos, sin = precompute_freqs(dhead, end, theta)
     rot_mat = freqs_to_rotation_matrix(cos, sin)
     return rot_mat
 
 
-def apply_scaling(freqs: torch.Tensor):
-    # Llama-3.1 specific scaling
-    # Values obtained from grid search
-    scale_factor = 8
-    low_freq_factor = 1
-    high_freq_factor = 4
-    old_context_len = 8192  # original llama3 length
-
-    low_freq_wavelen = old_context_len / low_freq_factor
-    high_freq_wavelen = old_context_len / high_freq_factor
-    new_freqs = []
-    for freq in freqs:
-        wavelen = 2 * math.pi / freq
-        if wavelen < high_freq_wavelen:
-            new_freqs.append(freq)
-        elif wavelen > low_freq_wavelen:
-            new_freqs.append(freq / scale_factor)
-        else:
-            assert low_freq_wavelen != high_freq_wavelen
-            smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
-            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
-    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
-
-
-def precompute_freqs(dim: int, end: int, theta: float = 10000.0, use_scaled: bool = False):
+def precompute_freqs(dim: int, end: int, theta: float = 10000.0):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -305,8 +208,6 @@ def precompute_freqs(dim: int, end: int, theta: float = 10000.0, use_scaled: boo
     """
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
-    if use_scaled:
-        freqs = apply_scaling(freqs)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
@@ -514,14 +415,3 @@ def check_kv_cache(pt_cache_all, tt_cache_all, generation_start_pos, generation_
             logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
             test_passed = False
     return test_passed
-
-
-def num_to_corerange(x):
-    assert x < 8 or x % 8 == 0
-    num_x = min(x, 8)
-    num_y = x // num_x
-    assert num_x * num_y == x
-    return ttnn.CoreRange(
-        ttnn.CoreCoord(0, 0),
-        ttnn.CoreCoord(num_x - 1, num_y - 1),
-    )

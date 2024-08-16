@@ -93,12 +93,10 @@ def mha(
         reciprocal_of_sqrt_hidden_dim_tensor = ttnn.to_torch(ttnn.from_device(reciprocal_of_sqrt_hidden_dim_tensor))
         reciprocal_of_sqrt_hidden_dim_tensor = torch_to_tt_tensor(reciprocal_of_sqrt_hidden_dim_tensor, device)
 
-        return ttnn.experimental.tensor.bcast(
+        return ttnn.multiply(
             x,
             reciprocal_of_sqrt_hidden_dim_tensor,
-            ttnn.experimental.tensor.BcastOpMath.MUL,
-            ttnn.experimental.tensor.BcastOpDim.HW,
-            output_mem_config=out_mem_config,
+            memory_config=out_mem_config,
         )
 
     def mha_(activation: ttnn.Tensor, attention_mask: ttnn.Tensor):

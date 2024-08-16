@@ -78,13 +78,7 @@ class TtBertBatchDram:
         # TODO: Replace with custom op with fused bias?
         def qa_linear_(activation):
             output = ttnn.matmul(activation, weight, memory_config=model_config["QA_LINEAR_OUTPUT_MEMCFG"])
-            output_plus_bias = ttnn.experimental.tensor.bcast(
-                output,
-                bias,
-                ttnn.experimental.tensor.BcastOpMath.ADD,
-                ttnn.experimental.tensor.BcastOpDim.H,
-                model_config["QA_LINEAR_OUTPUT_MEMCFG"],
-            )
+            output_plus_bias = ttnn.add(output, bias, memory_config=model_config["QA_LINEAR_OUTPUT_MEMCFG"])
             return output_plus_bias
 
         self.qa_linear = qa_linear_
