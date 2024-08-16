@@ -1,44 +1,34 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "bcast_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "impl/buffers/buffer.hpp"
+#include "ttnn/run_operation.hpp"
 
-#include "ttnn/tensor/tensor.hpp"
+// using namespace tt;
+// using namespace tt_metal;
+// using namespace constants;
 
-#include "tt_metal/common/constants.hpp"
-
-
-namespace bcast_op_utils {
-
-std::map<std::string, std::string> get_defines(BcastOpDim bcast_dim, BcastOpMath bcast_math)
-{
-    std::map<std::string, std::string> defines;
-    const char* math_to_op_define[] = { "add_tiles_bcast", "sub_tiles_bcast", "mul_tiles_bcast" };
-    const char* math_to_llkop_define[] = {"ELWADD", "ELWSUB", "ELWMUL"};
-    const char* bdim_to_llkdim_define[] = { "BroadcastType::ROW", "BroadcastType::COL", "BroadcastType::SCALAR" };
-    defines["BCAST_OP"] = math_to_op_define[int(bcast_math)];
-    defines["BCAST_LLKOP"] = math_to_llkop_define[int(bcast_math)];
-    defines["BCAST_DIM"] = bdim_to_llkdim_define[int(bcast_dim)];
-    return defines;
-}
-
-} // namespace bcast_op_utils
+namespace ttnn::operations::data_movement {
 
 
-using namespace tt::tt_metal;
-using namespace tt::constants;
-using uint32_t = std::uint32_t;
 
+operation::ProgramWithCallbacks bcast_multi_core_h(
+    const Tensor &input_tensor_a, const Tensor &input_tensor_b, const Tensor &output_tensor, BcastOpMath bcast_op);
+operation::ProgramWithCallbacks bcast_sharded_h(
+    const Tensor &input_tensor_a, const Tensor &input_tensor_b, const Tensor &output_tensor, BcastOpMath bcast_op);
+operation::ProgramWithCallbacks bcast_sharded_h_optimised(
+    const Tensor &input_tensor_a, const Tensor &input_tensor_b, const Tensor &output_tensor, BcastOpMath bcast_op);
+operation::ProgramWithCallbacks bcast_multi_core_w(
+    const Tensor &input_tensor_a, const Tensor &input_tensor_b, const Tensor &output_tensor, BcastOpMath bcast_op);
+operation::ProgramWithCallbacks bcast_multi_core_hw(
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    const Tensor &output_tensor,
+    BcastOpMath bcast_op,
+    bool inplace);
 
-namespace tt {
-
-namespace tt_metal {
 
 void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
@@ -56,7 +46,7 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tens
     TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
     if(!output_tensors.empty() && output_tensors.at(0).has_value()){
         TT_FATAL(is_floating_point(output_tensors.at(0).value().get_dtype()), "Unsupported data format");
-        const auto output_shape_required = this->compute_output_shapes(input_tensors);
+        const std::vector<tt::tt_metal::Shape> output_shape_required = this->compute_output_shapes(input_tensors);
         const auto& out_tensor = output_tensors.at(0).value();
         TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), fmt::format("The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape()));
     }
@@ -118,7 +108,7 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tens
 }
 
 
-std::vector<Shape> EltwiseBinaryBroadcast::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::Shape> EltwiseBinaryBroadcast::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {input_tensor.get_legacy_shape()};
 }
@@ -212,6 +202,4 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
     }
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+} // ttnn::operations::data_movement

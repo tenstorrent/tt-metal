@@ -6,7 +6,7 @@
 
 #include <type_traits>
 
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_metal/host_api.hpp"
 

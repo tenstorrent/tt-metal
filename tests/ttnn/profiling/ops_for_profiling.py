@@ -27,39 +27,39 @@ def where_binary_2(x, y):
 
 
 def bcast_add_h(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H)
 
 
 def bcast_add_w(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.W)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.W)
 
 
 def bcast_add_hw(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.HW)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.HW)
 
 
 def bcast_sub_h(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.H)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.SUB, ttnn.BcastOpDim.H)
 
 
 def bcast_sub_w(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.W)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.SUB, ttnn.BcastOpDim.W)
 
 
 def bcast_sub_hw(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.SUB, tt_lib.tensor.BcastOpDim.HW)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.SUB, ttnn.BcastOpDim.HW)
 
 
 def bcast_mul_h(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.H)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.MUL, ttnn.BcastOpDim.H)
 
 
 def bcast_mul_w(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.W)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.MUL, ttnn.BcastOpDim.W)
 
 
 def bcast_mul_hw(x, y):
-    tt_lib.tensor.bcast(x, y, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+    ttnn.bcast(x, y, ttnn.BcastOpMath.MUL, ttnn.BcastOpDim.HW)
 
 
 def bcast_h_shape_func(input_shape):
@@ -537,47 +537,47 @@ all_binary_ops = [
     },
     {
         "op": bcast_add_h,
-        "name": "tt_lib.tensor.bcast_add_h",
+        "name": "ttnn.bcast_add_h",
         "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_add_w,
-        "name": "tt_lib.tensor.bcast_add_w",
+        "name": "ttnn.bcast_add_w",
         "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_add_hw,
-        "name": "tt_lib.tensor.bcast_add_hw",
+        "name": "ttnn.bcast_add_hw",
         "shape_func": bcast_hw_shape_func,
     },
     {
         "op": bcast_sub_h,
-        "name": "tt_lib.tensor.bcast_sub_h",
+        "name": "ttnn.bcast_sub_h",
         "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_sub_w,
-        "name": "tt_lib.tensor.bcast_sub_w",
+        "name": "ttnn.bcast_sub_w",
         "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_sub_hw,
-        "name": "tt_lib.tensor.bcast_sub_hw",
+        "name": "ttnn.bcast_sub_hw",
         "shape_func": bcast_hw_shape_func,
     },
     {
         "op": bcast_mul_h,
-        "name": "tt_lib.tensor.bcast_mul_h",
+        "name": "ttnn.bcast_mul_h",
         "shape_func": bcast_h_shape_func,
     },
     {
         "op": bcast_mul_w,
-        "name": "tt_lib.tensor.bcast_mul_w",
+        "name": "ttnn.bcast_mul_w",
         "shape_func": bcast_w_shape_func,
     },
     {
         "op": bcast_mul_hw,
-        "name": "tt_lib.tensor.bcast_mul_hw",
+        "name": "ttnn.bcast_mul_hw",
         "shape_func": bcast_hw_shape_func,
     },
     {
