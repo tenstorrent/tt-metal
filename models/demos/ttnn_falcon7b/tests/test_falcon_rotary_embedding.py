@@ -12,7 +12,6 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import comp_pcc, divup
-import tt_lib as ttl
 import ttnn
 
 from models.demos.ttnn_falcon7b.tt.falcon_rotary_embedding import TtFalconRotaryEmbedding

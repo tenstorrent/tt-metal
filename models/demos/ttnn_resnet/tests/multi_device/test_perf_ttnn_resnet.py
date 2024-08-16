@@ -7,7 +7,6 @@ from loguru import logger
 from transformers import AutoImageProcessor
 import pytest
 import ttnn
-import tt_lib
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
@@ -45,10 +44,10 @@ def buffer_address(tensor):
 
 def dump_device_profiler(device):
     if isinstance(device, ttnn.Device):
-        tt_lib.device.DumpDeviceProfiler(device)
+        ttnn.experimental.device.DumpDeviceProfiler(device)
     else:
         for dev in device.get_device_ids():
-            tt_lib.device.DumpDeviceProfiler(device.get_device(dev))
+            ttnn.experimental.device.DumpDeviceProfiler(device.get_device(dev))
 
 
 # TODO: Create ttnn apis for this
