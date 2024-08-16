@@ -47,6 +47,7 @@ uint32_t atomic_ret_val __attribute__ ((section ("l1_data"))) __attribute__((use
 
 uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *sem_l1_base __attribute__((used));
 
 void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
     DEBUG_STATUS("I");
@@ -86,6 +87,8 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
                 mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].rta_offset);
             crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
                 mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].crta_offset);
+            sem_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+                mailboxes->launch.kernel_config.sem_offset);
 
             kernel_init();
         } else {

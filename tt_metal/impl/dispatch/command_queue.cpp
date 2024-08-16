@@ -1051,18 +1051,21 @@ void EnqueueProgramCommand::assemble_device_commands(
 
         // Semaphores
         // Multicast Semaphore Cmd
+        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         for (uint32_t i = 0; i < num_multicast_semaphores; ++i) {
             uint32_t curr_sub_cmd_idx = 0;
             for (const auto& [num_sub_cmds_in_cmd, multicast_sem_payload_sizeB] : multicast_sem_payload[i]) {
                 program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
                     num_sub_cmds_in_cmd,
-                    multicast_sem_dst_size[i].first,
+                    multicast_sem_dst_size[i].first + program.get_program_config(index).sem_offset,
                     multicast_sem_dst_size[i].second,
                     multicast_sem_payload_sizeB,
                     multicast_sem_sub_cmds[i],
                     multicast_sem_data[i],
                     this->packed_write_max_unicast_sub_cmds,
-                    curr_sub_cmd_idx);
+                    curr_sub_cmd_idx,
+                    false,
+                    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 for (auto &data_and_size : multicast_sem_data[i]) {
                     RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
@@ -1071,18 +1074,21 @@ void EnqueueProgramCommand::assemble_device_commands(
         }
 
         // Unicast Semaphore Cmd
+        index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
         for (uint32_t i = 0; i < num_unicast_semaphores; ++i) {
             uint32_t curr_sub_cmd_idx = 0;
             for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : unicast_sem_payload[i]) {
                 program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
                     num_sub_cmds_in_cmd,
-                    unicast_sem_dst_size[i].first,
+                    unicast_sem_dst_size[i].first + program.get_program_config(index).sem_offset,
                     unicast_sem_dst_size[i].second,
                     unicast_sem_payload_sizeB,
                     unicast_sem_sub_cmds[i],
                     unicast_sem_data[i],
                     this->packed_write_max_unicast_sub_cmds,
-                    curr_sub_cmd_idx);
+                    curr_sub_cmd_idx,
+                    false,
+                    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 for (auto &data_and_size : unicast_sem_data[i]) {
                     RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);

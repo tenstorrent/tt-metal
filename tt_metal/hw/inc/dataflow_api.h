@@ -29,6 +29,7 @@
 extern uint8_t noc_index;
 extern uint32_t tt_l1_ptr *rta_l1_base;
 extern uint32_t tt_l1_ptr *crta_l1_base;
+extern uint32_t tt_l1_ptr *sem_l1_base;
 
 /** @file */
 
@@ -1271,12 +1272,12 @@ FORCE_INLINE void noc_async_write_tile(
 
 FORCE_INLINE
 uint32_t get_semaphore(uint32_t semaphore_id) {
-    return SEMAPHORE_BASE + semaphore_id * L1_ALIGNMENT;
+    return (uint32_t)sem_l1_base + semaphore_id * L1_ALIGNMENT;
 }
 
 FORCE_INLINE
 uint32_t eth_get_semaphore(uint32_t semaphore_id) {
-    return eth_l1_mem::address_map::SEMAPHORE_BASE + semaphore_id * L1_ALIGNMENT;
+    return (uint32_t)sem_l1_base + semaphore_id * L1_ALIGNMENT;
 }
 
 inline

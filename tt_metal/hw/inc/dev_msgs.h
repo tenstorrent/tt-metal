@@ -82,6 +82,8 @@ struct kernel_config_msg_t {
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base;
     dyn_mem_map_t mem_map[DISPATCH_CLASS_MAX];
+    volatile uint16_t sem_offset;
+    volatile uint16_t cb_offset;
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;

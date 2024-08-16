@@ -55,7 +55,7 @@ static_assert (PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC > PROFILER_L1_BUFFER_SIZE
 // Size is presently based on the old size of the RTAs (large enough to hold 1 set)
 // plus some extra space freed up in the mem map
 constexpr static std::uint32_t L1_KERNEL_CONFIG_BASE = PROFILER_L1_END_ADDRESS;
-constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 4 * 1024 + 256;
+constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 4 * 1024 + 256 + 128;
 
 constexpr static std::uint32_t IDLE_ERISC_L1_KERNEL_CONFIG_BASE = 32 * 1024;
 
@@ -72,12 +72,8 @@ constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
 constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
 constexpr static std::uint32_t PROFILER_L1_BUFFER_CONTROL = CIRCULAR_BUFFER_CONFIG_BASE + CIRCULAR_BUFFER_CONFIG_SIZE;
 
-// 4 uint32_t semaphores per core aligned to 16B
-constexpr static std::uint32_t SEMAPHORE_BASE = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
-constexpr static std::uint32_t NUM_SEMAPHORES = 8;
-constexpr static std::uint32_t SEMAPHORE_SIZE = NUM_SEMAPHORES * L1_ALIGNMENT;
+constexpr static std::uint32_t L1_UNRESERVED_BASE = ((PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE - 1) | (DRAM_ALIGNMENT - 1)) + 1;
 
-constexpr static std::uint32_t L1_UNRESERVED_BASE = ((SEMAPHORE_BASE + SEMAPHORE_SIZE - 1) | (DRAM_ALIGNMENT - 1)) + 1;
 constexpr static std::uint32_t ERISC_L1_UNRESERVED_BASE = L1_UNRESERVED_BASE; // Start of unreserved space
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.

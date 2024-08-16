@@ -68,6 +68,7 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *sem_l1_base __attribute__((used));
 
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
@@ -393,6 +394,8 @@ int main() {
                 mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_DM0].rta_offset);
             crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
                 mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_DM0].crta_offset);
+            sem_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+                mailboxes->launch.kernel_config.sem_offset);
 
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
                 setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true);

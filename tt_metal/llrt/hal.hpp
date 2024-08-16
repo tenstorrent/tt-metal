@@ -100,6 +100,8 @@ class Hal {
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) const;
+    template <typename T = DeviceAddr>
+    T get_dev_addr(uint32_t programmable_core_type_index, HalMemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) const;
 };
 
@@ -120,6 +122,12 @@ inline T Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalMe
     uint32_t index = static_cast<std::underlying_type<HalProgrammableCoreType>::type>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     return this->core_info_[index].get_dev_addr<T>(addr_type);
+}
+
+template <typename T>
+inline T Hal::get_dev_addr(uint32_t programmable_core_type_index, HalMemAddrType addr_type) const {
+    TT_ASSERT(programmable_core_type_index < this->core_info_.size());
+    return this->core_info_[programmable_core_type_index].get_dev_addr<T>(addr_type);
 }
 
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) const {

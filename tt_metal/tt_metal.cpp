@@ -735,7 +735,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
                         device_id, physical_core, circular_buffer_config_vec);
                 }
             }
-            program.init_semaphores(*device, logical_core, hal.get_core_type(index));
+            program.init_semaphores(*device, logical_core, index);
         }
     }
 

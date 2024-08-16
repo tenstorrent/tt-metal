@@ -50,9 +50,8 @@ struct address_map {
   static constexpr std::int32_t ERISC_BARRIER_BASE = MAX_SIZE;
   static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = TILE_HEADER_BUFFER_BASE;
   static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
-  static constexpr std::uint32_t SEMAPHORE_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
 
-  static constexpr uint32_t ISSUE_CQ_CB_BASE = SEMAPHORE_BASE + SEMAPHORE_SIZE;  // SIZE from shared common addr
+  static constexpr uint32_t ISSUE_CQ_CB_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
   static constexpr uint32_t COMPLETION_CQ_CB_BASE = ISSUE_CQ_CB_BASE + 7 * L1_ALIGNMENT;
 
   static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = COMPLETION_CQ_CB_BASE + 7 * L1_ALIGNMENT;

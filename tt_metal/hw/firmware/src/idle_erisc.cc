@@ -40,6 +40,7 @@ uint32_t atomic_ret_val __attribute__ ((section ("l1_data"))) __attribute__((use
 
 uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *sem_l1_base __attribute__((used));
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -126,6 +127,8 @@ int main() {
                     mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].rta_offset);
                 crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
                     mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].crta_offset);
+                sem_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+                    mailboxes->launch.kernel_config.sem_offset);
 
                 kernel_init();
                 RECORD_STACK_USAGE();
