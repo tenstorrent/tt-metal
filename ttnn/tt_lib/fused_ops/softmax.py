@@ -16,19 +16,15 @@ def softmax(x: ttnn.Tensor, stable=False):
     Performs Softmax on a ``ttnn.Tensor``.
     """
 
-    BCW = ttnn.experimental.tensor.BcastOpDim.W
-    BCMUL = ttnn.experimental.tensor.BcastOpMath.MUL
-    BCSUB = ttnn.experimental.tensor.BcastOpMath.SUB
-
     if stable:
         sumsW = ttnn.max(x, 3)
-        z = ttnn.experimental.tensor.bcast(x, sumsW, BCSUB, BCW)  # x-max(x)
+        z = ttnn.subtract(x, sumsW)  # x-max(x)
     else:
         z = x
     numerator = ttnn.exp(z)  # exp(z)
     denom1 = ttnn.sum(numerator, 3)  # torch.sum(x, 3)
     denom = ttnn.reciprocal(denom1)
-    output = ttnn.experimental.tensor.bcast(numerator, denom, BCMUL, BCW)
+    output = ttnn.multiply(numerator, denom)
 
     return output
 

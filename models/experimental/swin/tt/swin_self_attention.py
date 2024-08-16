@@ -121,11 +121,9 @@ class TtSwinSelfAttention(nn.Module):
             1,
         )
         attention_scores = ttnn.permute(attention_scores, (1, 2, 3, 0))
-        attention_scores = tt_lib.tensor.bcast(
+        attention_scores = ttnn.add(
             attention_scores,
             relative_position_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.W,
         )
 
         attention_scores = ttnn.permute(attention_scores, (3, 0, 1, 2))

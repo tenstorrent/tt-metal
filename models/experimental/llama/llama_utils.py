@@ -20,7 +20,7 @@ def linear(x, weight, bias, device):
     x = torch_to_tt_tensor_rm(x, device, put_on_device=False)
 
     if bias is not None:
-        x = tt_lib.tensor.bcast(x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
+        x = ttnn.add(x, bias)
     return x
 
 

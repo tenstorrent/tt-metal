@@ -54,19 +54,12 @@ class TtConvNet(torch.nn.Module):
         out = fallback_ops.reshape(out, out.get_legacy_shape()[0], 1, 1, last_dim_size)
 
         out = ttnn.matmul(out, self.linear1_weights)
-        out = tt_lib.tensor.bcast(
-            out,
-            self.linear1_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-        )
+        out = ttnn.add(out, self.linear1_bias)
         out = ttnn.relu(out)
         out = ttnn.matmul(out, self.linear2_weights)
-        out = tt_lib.tensor.bcast(
+        out = ttnn.add(
             out,
             self.linear2_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
         )
 
         return fallback_ops.softmax(out, -1)

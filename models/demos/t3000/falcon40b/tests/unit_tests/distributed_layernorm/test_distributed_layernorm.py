@@ -234,43 +234,19 @@ class TtDistributedLayernorm:
 
         nominators = []
         for i in range(num_devices):
-            nominators.append(
-                ttnn.experimental.tensor.bcast(
-                    xs[i],
-                    mean[i],
-                    math_op=ttnn.experimental.tensor.BcastOpMath.SUB,
-                    dim=ttnn.experimental.tensor.BcastOpDim.W,
-                )
-            )
+            nominators.append(ttnn.subtract(xs[i], mean[i]))
 
         x_hat = []
         for i in range(num_devices):
-            x_hat.append(
-                ttnn.experimental.tensor.bcast(
-                    nominators[i],
-                    denominators[i],
-                    math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
-                    dim=ttnn.experimental.tensor.BcastOpDim.W,
-                )
-            )
+            x_hat.append(ttnn.multiply(nominators[i], denominators[i]))
             nominators[i].deallocate(True)
             denominators[i].deallocate(True)
 
         # Scale and shift: x_hat = self.gammas * x_hat + self.betas_torch
         for i in range(num_devices):
-            x_hat[i] = ttnn.experimental.tensor.bcast(
-                x_hat[i],
-                self.ln_gamma[i],
-                math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
-                dim=ttnn.experimental.tensor.BcastOpDim.H,
-            )
+            x_hat[i] = ttnn.multiply(x_hat[i], self.ln_gamma[i])
         for i in range(num_devices):
-            x_hat[i] = ttnn.experimental.tensor.bcast(
-                x_hat[i],
-                self.ln_beta[i],
-                math_op=ttnn.experimental.tensor.BcastOpMath.ADD,
-                dim=ttnn.experimental.tensor.BcastOpDim.H,
-            )
+            x_hat[i] = ttnn.add(x_hat[i], self.ln_beta[i])
 
         return x_hat
 

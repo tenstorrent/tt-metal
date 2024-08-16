@@ -61,7 +61,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
         assert output.storage_type() == tensor.StorageType.DEVICE
 
         if bias_on_device is not None:
-            output_plus_bias = tensor.bcast(output, bias_on_device, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
+            output_plus_bias = ttnn.add(output, bias_on_device)
             if output_plus_bias.get_layout() != tensor.Layout.ROW_MAJOR:
                 assert output_plus_bias.get_layout() == tensor.Layout.TILE
                 assert output_plus_bias.storage_type() == tensor.StorageType.DEVICE

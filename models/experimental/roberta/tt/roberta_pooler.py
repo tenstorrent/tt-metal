@@ -43,12 +43,10 @@ class TtRobertaPooler(nn.Module):
     def linear(self, x, weight, bias):
         weight = ttnn.transpose(weight, -2, -1)
         x = ttnn.matmul(x, weight, memory_config=self.mem_config)
-        x = tt_lib.tensor.bcast(
+        x = ttnn.add(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            self.mem_config,
+            memory_config=self.mem_config,
         )
         return x
 

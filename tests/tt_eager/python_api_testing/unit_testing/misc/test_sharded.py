@@ -635,86 +635,65 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
     if in0_height_sharded != out_height_sharded:
         pytest.skip(f"Currently bcast hw op supports sharding if both inputs and outputs are sharded")
 
-    scalar_shape = [1, 1, 32, 32]
+    scalar_shape = [1, 1, 1, 1]
     in0_shape = [1, 1, num_cores * 32, 128]
     height_shard_spec = [32, 128]
 
     torch_scalar = torch.randn(scalar_shape).bfloat16().float()
     torch_in0 = torch.randn(in0_shape).bfloat16().float()
 
-    dram_interleaved_memory_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.BufferType.DRAM,
+    height_sharded_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+
+    tt_scalar_dram = ttnn.from_torch(
+        torch_scalar, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    height_sharded_memory_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttnn.BufferType.L1,
-    )
-
-    tt_scalar_dram = torch2tt_tensor(
-        torch_scalar,
-        device,
-        tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.bfloat16,
-    )
-
-    tt_in0_dram = torch2tt_tensor(
-        torch_in0,
-        device,
-        tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.bfloat16,
+    tt_in0_dram = ttnn.from_torch(
+        torch_in0, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
     if out_height_sharded:
         out_mem_config = height_sharded_memory_config
     else:
-        out_mem_config = dram_interleaved_memory_config
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     if in0_height_sharded:
-        tt_in0_height_sharded = ttnn.experimental.tensor.interleaved_to_sharded(
+        compute_with_storage_grid_size = device.compute_with_storage_grid_size()
+        device_grid_size = ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
+
+        tt_in0_height_sharded = ttnn.to_memory_config(
             tt_in0_dram,
-            device.compute_with_storage_grid_size(),
-            height_shard_spec,
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.create_sharded_memory_config(
+                height_shard_spec,
+                core_grid=device_grid_size,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
         )
-        tt_out = ttnn.experimental.operations.primary.bcast(
+
+        tt_out = ttnn.multiply(
             tt_in0_height_sharded,
             tt_scalar_dram,
-            ttnn.experimental.tensor.BcastOpMath.MUL,
-            ttnn.experimental.tensor.BcastOpDim.HW,
-            output_mem_config=out_mem_config,
-            in_place=in_place,
+            memory_config=out_mem_config,
         )
         tt_in0_height_sharded.deallocate()
     else:
-        tt_out = ttnn.experimental.operations.primary.bcast(
-            tt_in0_dram,
-            tt_scalar_dram,
-            ttnn.experimental.tensor.BcastOpMath.MUL,
-            ttnn.experimental.tensor.BcastOpDim.HW,
-            output_mem_config=out_mem_config,
-            in_place=in_place,
-        )
+        tt_out = ttnn.multiply(tt_in0_dram, tt_scalar_dram, memory_config=out_mem_config)
 
     if out_height_sharded:
-        tt_out = ttnn.experimental.tensor.sharded_to_interleaved(
-            tt_out, output_mem_config=dram_interleaved_memory_config
-        )
+        tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
 
     # Reference is out and input dram interleaved
-    tt_out_ref = ttnn.experimental.operations.primary.bcast(
+    tt_out_ref = ttnn.multiply(
         tt_in0_dram,
         tt_scalar_dram,
-        ttnn.experimental.tensor.BcastOpMath.MUL,
-        ttnn.experimental.tensor.BcastOpDim.HW,
-        output_mem_config=dram_interleaved_memory_config,
-        in_place=in_place,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    tt_in0_dram.deallocate()
 
-    tt_out_torch = tt2torch_tensor(tt_out)
-    tt_ref_torch = tt2torch_tensor(tt_out_ref)
+    tt_out_torch = ttnn.to_torch(tt_out)
+    tt_ref_torch = ttnn.to_torch(tt_out_ref)
 
     passing, output = comp_pcc(tt_out_torch, tt_ref_torch)
     logger.info(output)

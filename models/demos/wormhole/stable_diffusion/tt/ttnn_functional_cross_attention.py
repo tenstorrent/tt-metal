@@ -399,13 +399,12 @@ class cross_attention:
                         is_causal_mask=False,
                     )
                 else:
-                    mm_slice = ttl.operations.primary.bcast(
+                    # this needs to be in-place, when optional output tensors are available
+                    # this code should be updated
+                    mm_slice = ttnn.multiply(
                         mm_slice,
                         self.scale,
-                        ttl.tensor.BcastOpMath.MUL,
-                        ttl.tensor.BcastOpDim.HW,
-                        output_mem_config=self.height_sharded_memory_config,
-                        in_place=True,
+                        memory_config=self.height_sharded_memory_config,
                     )
                     mm_slice = ttnn.softmax_in_place(
                         mm_slice,
@@ -537,14 +536,14 @@ class cross_attention:
                 is_causal_mask=False,
             )
         else:
-            attention_scores = ttl.operations.primary.bcast(
-                attention_scores,
+            # This needs to be updated when optional output tensors are available
+            attention_scores_temp = attention_scores
+            attention_scores = ttnn.multiply(
+                attention_scores_temp,
                 self.scale,
-                ttl.tensor.BcastOpMath.MUL,
-                ttl.tensor.BcastOpDim.HW,
-                output_mem_config=attention_scores.memory_config(),
-                in_place=True,
+                memory_config=attention_scores.memory_config(),
             )
+            attention_scores_temp.deallocate()
             attention_scores = ttnn.softmax_in_place(
                 attention_scores,
                 program_config=softmax_program_config,
