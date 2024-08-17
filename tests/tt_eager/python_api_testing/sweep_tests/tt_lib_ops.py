@@ -162,7 +162,7 @@ def move(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     # Free up dummy tensor from memory to make available to move
     dummy_tensor.deallocate()
-    t1 = ttnn.experimental.tensor.move(t0, output_mem_config=output_mem_config)
+    t1 = ttnn.move(t0, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
