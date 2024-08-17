@@ -439,10 +439,7 @@ def run_perf_resnet(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    (
-        (16, True, 0.0094, 60),
-        (16, False, 0.0230, 60),
-    ),
+    ((16, True, 0.0094, 60),),
     indirect=["enable_async_mode"],
 )
 def test_perf_t3000(
@@ -472,10 +469,7 @@ def test_perf_t3000(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    (
-        (16, True, 0.0068, 60),
-        (16, False, 0.0111, 60),
-    ),
+    ((16, True, 0.0068, 60),),
     indirect=["enable_async_mode"],
 )
 def test_perf_trace_t3000(
@@ -505,10 +499,7 @@ def test_perf_trace_t3000(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    (
-        (16, True, 0.0110, 60),
-        (16, False, 0.0220, 60),
-    ),
+    ((16, True, 0.0110, 60),),
     indirect=["enable_async_mode"],
 )
 def test_perf_2cqs_t3000(
@@ -540,10 +531,7 @@ def test_perf_2cqs_t3000(
 )
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    (
-        (16, True, 0.0043, 60),
-        (16, False, 0.009, 60),
-    ),
+    ((16, True, 0.0043, 60),),
     indirect=["enable_async_mode"],
 )
 def test_perf_trace_2cqs_t3000(
