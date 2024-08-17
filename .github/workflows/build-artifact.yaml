@@ -46,7 +46,6 @@ jobs:
       SILENT: 0
       VERBOSE: 1
       CCACHE_NOCOMPRESS: 1
-      CCACHE_DIR: $HOME/.ccache
       # CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime
     environment: dev
     runs-on: 
@@ -58,9 +57,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ github.job }}-${{ inputs.build-type }}-${{ matrix.arch }}-${{ (inputs.tracy && '_profiler') || '' }}
-          max-size: 25G
-          save: false
-          restore: false
+          max-size: 25G    
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -68,7 +65,15 @@ jobs:
         run: |
           git submodule update --init --recursive
       - name: Build tt-metal and libs
+        id: buildcpp
         run: |
+          nice -n 19 cmake -B build -G Ninja -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }} -D CMAKE_C_COMPILER_LAUNCHER=ccache -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          nice -n 19 cmake --build build --target tests
+          nice -n 19 cmake --build build --target install
+      - name: Retry again after ccache clear
+        if: failure() && steps.buildcpp.outcome == 'failure'
+        run: |
+          ccache -C
           nice -n 19 cmake -B build -G Ninja -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }} -D CMAKE_C_COMPILER_LAUNCHER=ccache -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
           nice -n 19 cmake --build build --target tests
           nice -n 19 cmake --build build --target install
