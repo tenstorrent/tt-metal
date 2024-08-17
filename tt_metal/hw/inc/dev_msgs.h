@@ -83,6 +83,7 @@ struct kernel_config_msg_t {
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base[static_cast<int>(ProgrammableCoreType::COUNT)];
     volatile uint16_t sem_offset[static_cast<int>(ProgrammableCoreType::COUNT)];
+    volatile uint16_t cb_offset;
     dyn_mem_map_t mem_map[DISPATCH_CLASS_MAX];
 
     volatile uint8_t mode;                   // dispatch mode host/dev
@@ -93,6 +94,7 @@ struct kernel_config_msg_t {
     volatile uint8_t dispatch_core_y;
     volatile uint8_t exit_erisc_kernel;
     volatile uint8_t pad1;
+    volatile uint16_t pad2;
 } __attribute__((packed));
 
 struct go_msg_t {

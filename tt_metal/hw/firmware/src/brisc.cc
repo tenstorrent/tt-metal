@@ -384,15 +384,17 @@ int main() {
 
             noc_index = mailboxes->launch.kernel_config.brisc_noc_id;
 
-            setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true, false);
-            finish_ncrisc_copy_and_run(enables);
+            uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
+            uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+                mailboxes->launch.kernel_config.cb_offset);
+            setup_cb_read_write_interfaces(cb_l1_base, 0, num_cbs_to_early_init, true, true, false);
 
-            firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
+            finish_ncrisc_copy_and_run(enables);
 
             // Run the BRISC kernel
             DEBUG_STATUS("R");
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
-                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
+                setup_cb_read_write_interfaces(cb_l1_base, num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
                 kernel_init();
                 RECORD_STACK_USAGE();
             } else {
