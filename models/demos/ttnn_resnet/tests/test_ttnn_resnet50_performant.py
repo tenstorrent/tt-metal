@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-import tt_lib
 import ttnn
 from models.utility_functions import (
     is_wormhole_b0,

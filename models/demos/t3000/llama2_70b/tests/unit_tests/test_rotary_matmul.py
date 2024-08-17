@@ -7,7 +7,6 @@ import pytest
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib as ttl
 import ttnn
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
@@ -52,29 +51,29 @@ def run_test_rotary_matmul1(
     rotary_mat = torch.rand(1, 1, head_dim, head_dim)
 
     # memory configs
-    shard_spec_8_cores_grid = ttl.tensor.CoreRangeSet(
+    shard_spec_8_cores_grid = ttnn.CoreRangeSet(
         {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(7, 0),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 0),
             ),
         }
     )
 
-    ROT_MAT_Q_MM_OUTPUT_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
+    ROT_MAT_Q_MM_OUTPUT_MEMCFG = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
             shard_spec_8_cores_grid,
             [
                 32,
                 head_dim,  # head dim
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    L1_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     ROT_MAT_Q_MM_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 1),
@@ -88,8 +87,8 @@ def run_test_rotary_matmul1(
         mcast_in0=False,
     )
 
-    ROT_MAT_COMPUTE_KERNEL_CONFIG = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,  # Highest fidelity
+    ROT_MAT_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -165,29 +164,29 @@ def run_test_rotary_matmul2(
     rotary_mat = torch.rand(1, 1, head_dim, head_dim)
 
     # memory configs
-    shard_spec_32_cores_grid = ttl.tensor.CoreRangeSet(
+    shard_spec_32_cores_grid = ttnn.CoreRangeSet(
         {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(7, 3),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 3),
             ),
         }
     )
 
-    ROT_MAT_MM_OUTPUT_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
+    ROT_MAT_MM_OUTPUT_MEMCFG = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
             shard_spec_32_cores_grid,
             [
                 32,
                 head_dim,  # head dim
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    L1_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     ROT_MAT_MM_PROGCFG = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
@@ -201,8 +200,8 @@ def run_test_rotary_matmul2(
         mcast_in0=False,
     )
 
-    ROT_MAT_COMPUTE_KERNEL_CONFIG = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,  # Highest fidelity
+    ROT_MAT_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -279,29 +278,29 @@ def run_test_rotary_matmul3(
     rotary_mat = torch.rand(1, batch, head_dim, head_dim)
 
     # memory configs
-    shard_spec_32_cores_grid = ttl.tensor.CoreRangeSet(
+    shard_spec_32_cores_grid = ttnn.CoreRangeSet(
         {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(7, 3),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 3),
             ),
         }
     )
 
-    ROT_MAT_MM_OUTPUT_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
+    ROT_MAT_MM_OUTPUT_MEMCFG = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
             shard_spec_32_cores_grid,
             [
                 32,
                 head_dim,  # head dim
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    L1_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     ROT_MAT_MM_PROGCFG = ttnn.MatmulMultiCoreReuseProgramConfig(
         compute_with_storage_grid_size=[8, 4],
@@ -312,8 +311,8 @@ def run_test_rotary_matmul3(
         per_core_N=4,
     )
 
-    ROT_MAT_COMPUTE_KERNEL_CONFIG = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,  # Highest fidelity
+    ROT_MAT_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
@@ -390,38 +389,38 @@ def run_test_rotary_matmul4(
     rotary_mat = torch.rand(1, batch, head_dim, head_dim)
 
     # memory configs
-    shard_spec_32_cores_grid = ttl.tensor.CoreRangeSet(
+    shard_spec_32_cores_grid = ttnn.CoreRangeSet(
         {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(7, 3),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 3),
             ),
         }
     )
 
-    ROT_MAT_MM_OUTPUT_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
+    ROT_MAT_MM_OUTPUT_MEMCFG = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
             shard_spec_32_cores_grid,
             [
                 32,
                 head_dim,  # head dim
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
-    ROT_MAT_MM_IN1_MEMCFG = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.ShardSpec(
+    ROT_MAT_MM_IN1_MEMCFG = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
             shard_spec_32_cores_grid,
             [
                 head_dim,
                 head_dim,  # head dim
             ],
-            ttl.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
@@ -434,8 +433,8 @@ def run_test_rotary_matmul4(
         per_core_N=4,
     )
 
-    ROT_MAT_COMPUTE_KERNEL_CONFIG = ttl.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttl.tensor.MathFidelity.HiFi4,  # Highest fidelity
+    ROT_MAT_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,

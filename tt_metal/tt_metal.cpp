@@ -12,6 +12,7 @@
 #include <unordered_set>
 
 #include "dev_msgs.h"
+#include "llrt/hal.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "impl/dispatch/command_queue.hpp"
@@ -67,7 +68,8 @@ void CheckDataMovementConfig(Program &program, const std::string &file_name, con
     for (const auto &core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y), CoreType::WORKER);
+                const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y),
+                    hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
                 if (kernel_group != nullptr) {
                     bool local_noc0_in_use = false; bool local_noc1_in_use = false;
                     if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value()) {
@@ -648,11 +650,13 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done,
         // don't get the GO mailbox (eg, storage cores) have all landed
         tt::Cluster::instance().l1_barrier(device->id());
 
-        std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
+        std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
         std::unordered_set<CoreCoord> not_done_cores;
-        for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
-            for (const auto &logical_core : logical_cores) {
-                launch_msg_t *msg = &program.kernels_on_core(logical_core, core_type)->launch_msg;
+        for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size(); programmable_core_type_index++) {
+            CoreType core_type = hal.get_core_type(programmable_core_type_index);
+            for (const auto &logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+                launch_msg_t *msg = &program.kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+                msg->kernel_config.host_assigned_id = program.get_runtime_id();
 
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
@@ -671,9 +675,11 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done,
 
 void WaitProgramDone(Device *device, Program &program) {
     auto device_id = device->id();
-    std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
     std::unordered_set<CoreCoord> not_done_cores;
-    for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        const auto & logical_cores = logical_cores_used_in_program[index];
+        CoreType core_type = hal.get_core_type(index);
         for (const auto &logical_core : logical_cores) {
             auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
             not_done_cores.insert(physical_core);
@@ -698,10 +704,12 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
     program.allocate_circular_buffers();
     detail::ValidateCircularBufferRegion(program, device);
 
-    std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
-    for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        const auto & logical_cores = logical_cores_used_in_program[index];
+        CoreType core_type = hal.get_core_type(index);
         for (const auto &logical_core : logical_cores) {
-            KernelGroup *kernel_group = program.kernels_on_core(logical_core, core_type);
+            KernelGroup *kernel_group = program.kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
             ConfigureKernelGroup(program, kernel_group, device, logical_core);
@@ -727,7 +735,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
                         device_id, physical_core, circular_buffer_config_vec);
                 }
             }
-            program.init_semaphores(*device, logical_core, core_type);
+            program.init_semaphores(*device, logical_core, hal.get_core_type(index));
         }
     }
 
@@ -739,10 +747,9 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program, bool force_slow_
     auto device_id = device->id();
     detail::DispatchStateCheck(force_slow_dispatch);
 
-    static vector<CoreType>core_types = {CoreType::WORKER, CoreType::ETH }; // TODO: make this global
-
-    for (CoreType core_type : core_types) {
-        for (auto& kg : program.get_kernel_groups(core_type)) {
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        CoreType core_type = hal.get_core_type(index);
+        for (auto& kg : program.get_kernel_groups(index)) {
             uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base;
             for (const CoreRange &core_range : kg.core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -869,13 +876,17 @@ KernelHandle CreateKernel(
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
                 CheckDataMovementConfig(program, file_name, core_ranges);
                 kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
-                return detail::AddKernel(program, kernel, CoreType::WORKER);
+                return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
             } else if constexpr (std::is_same_v<T, ComputeConfig>) {
                 kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
-                return detail::AddKernel(program, kernel, CoreType::WORKER);
+                return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
             } else if constexpr (std::is_same_v<T, EthernetConfig>) {
                 kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
-                return detail::AddKernel(program, kernel, CoreType::ETH);
+                if (cfg.eth_mode == Eth::IDLE) {
+                    return detail::AddKernel(program, kernel, HalProgrammableCoreType::IDLE_ETH);
+                } else {
+                    return detail::AddKernel(program, kernel, HalProgrammableCoreType::ACTIVE_ETH);
+                }
             }
         },
         config);

@@ -4,7 +4,7 @@
 
 import pytest
 from loguru import logger
-
+import ttnn
 
 from models.utility_functions import is_wormhole_b0
 import ttnn
@@ -37,7 +37,7 @@ def run_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_config
     # Free up dummy tensor from memory to make available to move
     tt_dummy_tensor.deallocate()
 
-    output = ttnn.experimental.tensor.move(tt_tensor, output_mem_config)
+    output = ttnn.move(tt_tensor, memory_config=output_mem_config)
 
     tt_host_rm = output.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     pyt_got_back_rm = tt_host_rm.to_torch()

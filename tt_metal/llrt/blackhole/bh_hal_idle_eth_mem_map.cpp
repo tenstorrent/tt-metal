@@ -7,10 +7,11 @@
 #define COMPILE_FOR_ERISC
 
 #include "llrt/hal.hpp"
-#include "llrt/wormhole/wh_hal.hpp"
+#include "llrt/blackhole/bh_hal.hpp"
 #include "hw/inc/blackhole/dev_mem_map.h"
 #include "hw/inc/blackhole/eth_l1_address_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 #include "hw/inc/dev_msgs.h"
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((uint64_t) & (((mailboxes_t *)MEM_IERISC_MAILBOX_BASE)->x))
@@ -23,18 +24,29 @@ static inline int hv (enum HalMemAddrType v) {
     return static_cast<int>(v);
 }
 
-std::vector<DeviceAddr> create_idle_eth_mem_map() {
+HalCoreInfoType create_idle_eth_mem_map() {
 
-    std::vector<DeviceAddr> idle_eth_mem_map;
-    idle_eth_mem_map.resize(hv(HalMemAddrType::COUNT));
-    idle_eth_mem_map[hv(HalMemAddrType::BARRIER)] = MEM_L1_BARRIER;
-    idle_eth_mem_map[hv(HalMemAddrType::LAUNCH)] = GET_IERISC_MAILBOX_ADDRESS_HOST(launch);
-    idle_eth_mem_map[hv(HalMemAddrType::WATCHER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(watcher);
-    idle_eth_mem_map[hv(HalMemAddrType::DPRINT)] = GET_IERISC_MAILBOX_ADDRESS_HOST(dprint_buf);
-    idle_eth_mem_map[hv(HalMemAddrType::KERNEL_CONFIG_BASE)] = IDLE_ERISC_L1_KERNEL_CONFIG_BASE;
-    idle_eth_mem_map[hv(HalMemAddrType::UNRESERVED_BASE)] = ERISC_L1_UNRESERVED_BASE;
+    constexpr uint32_t num_proc_per_idle_eth_core = 1;
 
-    return idle_eth_mem_map;
+    std::vector<DeviceAddr> mem_map_bases;
+    mem_map_bases.resize(hv(HalMemAddrType::COUNT));
+    mem_map_bases[hv(HalMemAddrType::BARRIER)] = MEM_L1_BARRIER;
+    mem_map_bases[hv(HalMemAddrType::LAUNCH)] = GET_IERISC_MAILBOX_ADDRESS_HOST(launch);
+    mem_map_bases[hv(HalMemAddrType::WATCHER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(watcher);
+    mem_map_bases[hv(HalMemAddrType::DPRINT)] = GET_IERISC_MAILBOX_ADDRESS_HOST(dprint_buf);
+    mem_map_bases[hv(HalMemAddrType::KERNEL_CONFIG)] = IDLE_ERISC_L1_KERNEL_CONFIG_BASE;
+    mem_map_bases[hv(HalMemAddrType::UNRESERVED)] = ERISC_L1_UNRESERVED_BASE;
+
+    std::vector<uint32_t> mem_map_sizes;
+    mem_map_sizes.resize(hv(HalMemAddrType::COUNT));
+    mem_map_sizes[hv(HalMemAddrType::BARRIER)] = sizeof(uint32_t);
+    mem_map_sizes[hv(HalMemAddrType::LAUNCH)] = sizeof(launch_msg_t);
+    mem_map_sizes[hv(HalMemAddrType::WATCHER)] = sizeof(watcher_msg_t);
+    mem_map_sizes[hv(HalMemAddrType::DPRINT)] = sizeof(dprint_buf_msg_t);
+    mem_map_sizes[hv(HalMemAddrType::KERNEL_CONFIG)] = L1_KERNEL_CONFIG_SIZE; // TODO: this is wrong, need idle eth specific value
+    mem_map_sizes[hv(HalMemAddrType::UNRESERVED)] = MEM_ETH_SIZE - ERISC_L1_UNRESERVED_BASE;
+
+    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, num_proc_per_idle_eth_core, mem_map_bases, mem_map_sizes};
 }
 
 }  // namespace tt_metal

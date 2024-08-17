@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib as ttl
 import torch.nn as nn
 import math
 import ttnn
@@ -15,7 +14,6 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 from loguru import logger
-from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import is_grayskull
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding
@@ -433,7 +431,7 @@ class UNet2DConditionModel:
         down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
-            ttl.device.DumpDeviceProfiler(self.device)
+            ttnn.experimental.device.DumpDeviceProfiler(self.device)
             logger.info(f"Down block {i}")
             input_channel = output_channel
             output_channel = block_out_channels[i]
@@ -518,7 +516,7 @@ class UNet2DConditionModel:
         only_cross_attention = list(reversed(only_cross_attention))
         output_channel = reversed_block_out_channels[0]
         for i, (up_block_type, up_block) in enumerate(zip(self.up_block_types, self.up_blocks)):
-            ttl.device.DumpDeviceProfiler(self.device)
+            ttnn.experimental.device.DumpDeviceProfiler(self.device)
             logger.info(f"Up block {i}")
             is_final_block = i == len(block_out_channels) - 1
 

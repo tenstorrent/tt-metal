@@ -12,6 +12,7 @@
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
 #include "tt_metal/llrt/llrt.hpp"
+#include "tt_metal/llrt/hal.hpp"
 
 using namespace tt::tt_metal;
 
@@ -359,7 +360,7 @@ class SystemMemoryManager {
         fast_write_callable(tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)),
         bypass_enable(false),
         bypass_buffer_write_offset(0),
-        config_buffer_mgr({{L1_KERNEL_CONFIG_BASE, eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE}, {L1_KERNEL_CONFIG_SIZE, eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE}}) {
+        config_buffer_mgr() {
 
         this->completion_byte_addrs.resize(num_hw_cqs);
         this->prefetcher_cores.resize(num_hw_cqs);
@@ -425,6 +426,12 @@ class SystemMemoryManager {
         }
         vector<std::mutex> temp_mutexes(num_hw_cqs);
         cq_to_event_locks.swap(temp_mutexes);
+
+        for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+            this->config_buffer_mgr.init_add_core(
+                hal.get_dev_addr(hal.get_programmable_core_type(index), HalMemAddrType::KERNEL_CONFIG),
+                hal.get_dev_size(hal.get_programmable_core_type(index), HalMemAddrType::KERNEL_CONFIG));
+        }
     }
 
     uint32_t get_next_event(const uint8_t cq_id) {

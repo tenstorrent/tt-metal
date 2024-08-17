@@ -8,7 +8,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;

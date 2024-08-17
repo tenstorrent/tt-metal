@@ -25,7 +25,6 @@ from models.utility_functions import profiler, skip_for_grayskull
 
 if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
     from tracy import signpost
-import tt_lib
 
 
 class Emb(torch.nn.Module):
@@ -123,7 +122,7 @@ def test_mistral_model_perf(
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
-    tt_lib.device.DumpDeviceProfiler(device)
+    ttnn.experimental.device.DumpDeviceProfiler(device)
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")

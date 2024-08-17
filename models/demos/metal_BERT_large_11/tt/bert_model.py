@@ -78,13 +78,7 @@ class TtBertBatchDram:
         # TODO: Replace with custom op with fused bias?
         def qa_linear_(activation):
             output = ttnn.matmul(activation, weight, memory_config=model_config["QA_LINEAR_OUTPUT_MEMCFG"])
-            output_plus_bias = ttnn.experimental.tensor.bcast(
-                output,
-                bias,
-                ttnn.experimental.tensor.BcastOpMath.ADD,
-                ttnn.experimental.tensor.BcastOpDim.H,
-                model_config["QA_LINEAR_OUTPUT_MEMCFG"],
-            )
+            output_plus_bias = ttnn.add(output, bias, memory_config=model_config["QA_LINEAR_OUTPUT_MEMCFG"])
             return output_plus_bias
 
         self.qa_linear = qa_linear_
@@ -146,7 +140,7 @@ class TtBertBatchDram:
             # profiler.start("__one_encoder")
             hidden_states = encoder(hidden_states, attention_mask)
             if self.model_config["MOVE_ENCODER_OUTPUT_BOOL"]:
-                hidden_states = ttnn.experimental.tensor.move(hidden_states)
+                hidden_states = ttnn.move(hidden_states)
             # profiler.end("__one_encoder")
         if hidden_states.memory_config().is_sharded():
             hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(

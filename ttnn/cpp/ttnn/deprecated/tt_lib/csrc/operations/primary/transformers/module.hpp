@@ -4,9 +4,7 @@
 
 #pragma once
 
-#include "ttnn/deprecated/tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sdpa/sdpa_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/paged_update_cache/paged_update_cache_op.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -20,20 +18,6 @@ namespace transformers {
 
 
 void py_module(py::module& m_transformers) {
-    m_transformers.def("attn_matmul", &attn_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("compute_with_storage_grid_size").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
-        Performs a special pre-softmax matmul with [q_len, q_heads, batch, head_dim] and [batch, kv_heads, head_dim, kv_len]. q_len and kv_heads must be 1 and an intermediate value of [q_heads, batch, batch, kv_len] is produced (only on device cores). Batch dim from Z and Y is combined by taking the 1st, 2nd, ..., and 32nd row of Y from the batches in Z. Final output tensor is [1, q_heads, batch, kv_len]. In PyTorch, this is equivalent to: torch.matmul(A.transpose(0, 2), B).transpose(0, 2). Similar concept for post-softmax matmul.
-    )doc");
-    m_transformers.def("attn_matmul_from_cache", &attn_matmul_from_cache,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("num_tokens").noconvert(), py::arg("transpose_hw").noconvert(), py::arg("compute_with_storage_grid_size").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
-        Performs the same matmul as attn_matmul, but fuses additional functionality for reading in in1. For in1, read num_tokens (rounded up to 32) from full cache along in1.get_legacy_shape()[2] (num_tokens must be > 0 and <= max_cache_len). For example, 64 tokens will be read for 32 < token_idx <= 64. Additional option to apply transpose_hw to in1 for pre-attention matmul with transpose_hw=true. For post-attention matmul, transpose_hw should be false.
-    )doc");
-    m_transformers.def("group_attn_matmul", &group_attn_matmul,
-        py::arg().noconvert(), py::arg().noconvert(), py::arg("compute_with_storage_grid_size").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
-        Performs a special pre-softmax matmul with [q_len, q_heads, batch, head_dim] and [batch, kv_heads, head_dim, kv_len]. q_len and q_heads must be divisible by kv_heads. If kv_heads is sharded, then batch must be 32; otherwise, batch can any multiple of 32. An intermediate value of [q_heads, batch, batch, kv_len] is produced (only on device cores). Batch dim from Z and Y is combined by taking the 1st, 2nd, ..., and 32nd row of Y from the batches in Z. Final output tensor is [1, q_heads, batch, kv_len]. In PyTorch, this is equivalent to:
-            B = torch.repeat_interleave(B, q_heads // kv_heads, dim=1)
-            torch.matmul(A.transpose(0, 2), B).transpose(0, 2). Similar concept for post-softmax matmul.
-    )doc");
     py::class_<SDPADefaultProgramConfig>(m_transformers, "SDPADefaultProgramConfig")
         .def(py::init<>());
 
@@ -112,21 +96,7 @@ void py_module(py::module& m_transformers) {
         "output: [1 x b x qh x dh]"
 
         "Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension."
-        );
-    m_transformers.def(
-        "paged_update_cache",
-        &paged_update_cache,
-        py::arg("cache_tensor").noconvert(),
-        py::arg("input_tensor").noconvert(),
-        py::arg("update_idxs").noconvert(),
-        py::arg("batch_offset") = 0,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
-        )doc"
-    );
-
-
+        );    
 }
 
 }  // namespace transformers
