@@ -46,6 +46,7 @@ jobs:
       SILENT: 0
       VERBOSE: 1
       CCACHE_NOCOMPRESS: 1
+      CCACHE_DIR: $HOME/.ccache
       # CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime
     environment: dev
     runs-on: 
@@ -59,6 +60,7 @@ jobs:
           key: ${{ github.job }}-${{ inputs.build-type }}-${{ matrix.arch }}-${{ (inputs.tracy && '_profiler') || '' }}
           max-size: 25G
           save: false
+          restore: false
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
