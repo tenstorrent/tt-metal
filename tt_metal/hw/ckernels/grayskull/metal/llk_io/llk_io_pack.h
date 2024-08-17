@@ -17,10 +17,6 @@
 
 using namespace ckernel;
 
-// "llk_setup_outputs" is the old function name that HLKC emits
-inline void llk_setup_outputs() {
-}
-
 // Blocking call to wait for free space needed to pack N tiles
 template <bool skip_sync = false, bool wait_for_blocks = false, bool brisc_pack = false>
 inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
