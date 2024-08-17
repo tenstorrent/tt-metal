@@ -808,10 +808,14 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
         checksum += *data++;
     }
 
+#if 0
+    // Ugh, we are out of code memory for dispatcher+watcher
+    // Hack this off for now, have to revisit soon
     if (checksum != cmd->debug.checksum) {
         DEBUG_STATUS("!CHK");
         ASSERT(0);
     }
+#endif
 
     return cmd_ptr + cmd->debug.stride;
 }
