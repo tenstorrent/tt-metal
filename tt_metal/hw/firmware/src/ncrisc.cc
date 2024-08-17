@@ -96,7 +96,7 @@ int main(int argc, char *argv[]) {
         notify_brisc_and_wait();
         DeviceZoneScopedMainN("NCRISC-FW");
 
-        setup_cb_read_write_interfaces(0, mailboxes->launch.kernel_config.max_cb_index, true, true);
+        setup_cb_read_write_interfaces(0, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
 
         firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM1);
 
