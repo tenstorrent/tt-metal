@@ -134,7 +134,7 @@ def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None)
             if x.is_allocated() and x is not identity:
                 ttnn.deallocate(x)
             if module >= 2:
-                identity = ttnn.experimental.tensor.move_sharded(identity)
+                identity = ttnn.move(identity)
         identity = parameters.downsample(identity)
 
     if layer is not None and layer >= 3:
@@ -152,7 +152,7 @@ def resnet_bottleneck_block(x, parameters, layer=None, module=None, device=None)
         or (layer == 1 and module == 2 and is_grayskull())
         or (layer == 1 and module == 3 and is_grayskull())
     ):
-        out = ttnn.experimental.tensor.move_sharded(out)
+        out = ttnn.move(out)
 
     return out
 
@@ -490,7 +490,7 @@ class ResNet50:
     def __call__(self, input_tensor):
         output_tensor = self.impl.conv1(input_tensor)
         if self.batch_size == 20:
-            output_tensor = ttnn.experimental.tensor.move_sharded(output_tensor)
+            output_tensor = ttnn.move(output_tensor)
         output_tensor = self.impl.maxpool(output_tensor)
 
         """

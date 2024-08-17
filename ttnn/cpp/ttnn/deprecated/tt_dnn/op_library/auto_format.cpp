@@ -5,7 +5,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
@@ -13,6 +12,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -34,7 +34,7 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryCo
     if (input.storage_type() != StorageType::DEVICE) {
         return ttnn::data_transfer_to_device(input, AutoFormat::GetDefaultDevice(), mem_config);
     } else if (input.memory_config() != mem_config) {
-        return clone(input, mem_config);
+        return ttnn::clone(input, mem_config);
     } else {
         return input;
     }

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "tt_metal/host_api.hpp"

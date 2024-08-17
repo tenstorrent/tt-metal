@@ -321,7 +321,7 @@ class resnet50Bottleneck:
             )
         ttnn.deallocate(ds_out)
         if self.module_input_shape[0] == 20 and self.module_input_shape[1] == 56 and self.module_input_shape[3] == 64:
-            out = ttnn.experimental.tensor.move_sharded(out)
+            out = ttnn.move(out)
 
         return out
 
@@ -642,7 +642,7 @@ class resnet50:
         # Relu is fused with conv1
 
         if self.batch_size == 20:
-            x = ttnn.experimental.tensor.move_sharded(x)
+            x = ttnn.move(x)
 
         if is_wormhole_b0() and self.batch_size == 20:
             # TODO: fix the need to do the reshard here
@@ -659,13 +659,13 @@ class resnet50:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=self.model_config["ACTIVATIONS_DTYPE"])
 
         if self.batch_size == 20 and not is_wormhole_b0():
-            x = ttnn.experimental.tensor.move_sharded(x)
+            x = ttnn.move(x)
 
         x = self.layer1_module1(x)
         x = self.layer1_module2(x)
         x = self.layer1_module3(x)
         if self.batch_size == 20 and is_wormhole_b0():
-            x = ttnn.experimental.tensor.move_sharded(x)
+            x = ttnn.move(x)
 
         x = self.layer2_module1(x)
         x = self.layer2_module2(x)

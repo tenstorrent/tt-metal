@@ -4,7 +4,6 @@
 
 #include "transpose_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"

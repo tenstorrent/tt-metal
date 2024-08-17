@@ -178,7 +178,7 @@ def test_time_sharded_attnention_hwb(
             mm_slice,
             output_mem_config,
         )
-        mm_slice = ttl.tensor.move_sharded(mm_slice)
+        mm_slice = ttnn.move(mm_slice)
 
         softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,

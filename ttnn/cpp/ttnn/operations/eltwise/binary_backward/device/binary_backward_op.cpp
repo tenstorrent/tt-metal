@@ -9,6 +9,7 @@
 #include "ttnn/operations/eltwise/unary_backward/device/unary_backward_op.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/embedding/embedding.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
@@ -83,7 +84,7 @@ std::vector<std::optional<ttnn::Tensor>> _addalpha_bw(
 
     if (are_required_outputs.at(0)) {
         if(input_grad.has_value()){
-            assign(queue_id, grad, input_grad.value());
+            ttnn::assign(queue_id, grad, input_grad.value());
         } else {
             input_grad = grad;
         }

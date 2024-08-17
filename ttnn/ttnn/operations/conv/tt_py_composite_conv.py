@@ -850,14 +850,14 @@ class TTPyCompositeConv(TTPyOp):
             # assert(activation.get_layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
             activation.deallocate()
-            move_output = ttl.tensor.move_sharded(utwh_output)
+            move_output = ttnn.move(utwh_output)
             utwh_output.deallocate()
             return conv_(move_output)
 
         def composite_conv_with_move_utwh_output(activation):
             # assert(activation.get_layout() == ttl.tensor.Layout.ROW_MAJOR)
             utwh_output = self.tt_py_untilize_with_halo_op(activation)
-            move_output = ttl.tensor.move_sharded(utwh_output)
+            move_output = ttnn.move(utwh_output)
             utwh_output.deallocate()
             return conv_(move_output)
 
