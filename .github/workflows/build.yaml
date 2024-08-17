@@ -26,12 +26,12 @@ jobs:
     runs-on: ${{ matrix.build.runs-on }}
     name: cmake ${{ matrix.build.type }} ${{ matrix.build.cxx_compiler }} ${{ matrix.arch }} ${{ matrix.build.os }}
     steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ github.job }}-${{ matrix.build.os }}-${{ matrix.build.type }} 
           max-size: 1G
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Install dependencies
         if: ${{ matrix.build.runs-on != 'build' }}
         uses: ./.github/actions/install-metal-deps
