@@ -57,7 +57,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.13
         with:
           key: ${{ github.job }}-${{ inputs.build-type }}-${{ matrix.arch }}-${{ (inputs.tracy && '_profiler') || '' }}
-          max-size: 25G    
+          max-size: 25G  
+          append-timestamp: false  
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
