@@ -67,6 +67,7 @@ jobs:
           git submodule update --init --recursive
       - name: Build tt-metal and libs
         id: buildcpp
+        continue-on-error: true
         run: |
           nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }} -D CMAKE_C_COMPILER_LAUNCHER=ccache -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
           nice -n 19 cmake --build build --target tests
