@@ -24,6 +24,6 @@ struct MoveOperation {
 
 }  // namespace operations::data_movement
 
-constexpr auto move = ttnn::register_operation_with_auto_launch_op<"ttnn::move", ttnn::operations::data_movement::MoveOperation>();
+constexpr auto move = ttnn::register_operation<"ttnn::move", ttnn::operations::data_movement::MoveOperation>();
 
 }  // namespace ttnn
