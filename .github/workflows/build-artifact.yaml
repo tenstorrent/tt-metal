@@ -46,6 +46,7 @@ jobs:
       SILENT: 0
       VERBOSE: 1
       CCACHE_NOCOMPRESS: 1
+      CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime
     environment: dev
     runs-on: 
       - build
