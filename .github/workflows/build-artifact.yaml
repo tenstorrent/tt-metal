@@ -45,6 +45,7 @@ jobs:
       ARCH_NAME: ${{ matrix.arch }}
       SILENT: 0
       VERBOSE: 1
+      CCACHE_NOCOMPRESS: 1
     environment: dev
     runs-on: 
       - build
