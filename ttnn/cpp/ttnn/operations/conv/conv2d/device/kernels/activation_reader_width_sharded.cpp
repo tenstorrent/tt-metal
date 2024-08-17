@@ -138,7 +138,6 @@ void kernel_main() {
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), conv_act_c_read_bytes);
 
-    static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
     // Reset reader_idx to finish act_block_h_datums
 
     for(uint32_t block_w_index = 0; block_w_index < act_num_blocks_w; block_w_index++)

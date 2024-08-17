@@ -1169,6 +1169,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         in1_block_num_tiles *= window_size;
         in0_num_blocks_w /= window_size;
     }
+    uint32_t reader_arg_act_block_h_datums = (split_reader ? act_block_h_datums_split : act_block_h_datums);
+    TT_FATAL(reader_arg_act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
 
     reader_compile_time_args = {
         (uint32_t)(src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
@@ -1179,7 +1181,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)window_outer,
         (uint32_t)window_inner,
-        (uint32_t)(split_reader ? act_block_h_datums_split : act_block_h_datums),
+        (uint32_t)reader_arg_act_block_h_datums,
         (uint32_t)(split_reader ? act_block_num_tiles_split / conv_act_c_blocks : act_block_num_tiles / conv_act_c_blocks),
         (uint32_t)weight_size_w,
         (uint32_t)conv_act_size_w + (2 * pad_w),

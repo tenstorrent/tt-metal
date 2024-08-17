@@ -702,6 +702,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     CoreCoord act_mcast_end_core_logical(p_config.grid_size.x-1,p_config.grid_size.y-1);
     auto act_mcast_start = device->worker_core_from_logical_core(act_mcast_start_core_logical);
     auto act_mcast_end = device->worker_core_from_logical_core(act_mcast_end_core_logical);
+    TT_FATAL(act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
 
     activation_kernel_compile_args = {
         (uint32_t)0, // Never in DRAM
@@ -712,8 +713,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)weight_size_h, //Input filter window height
         (uint32_t)weight_size_w, //Input filter window width
-        (uint32_t)(split_reader ? act_block_h_datums_split : act_block_h_datums),
-        (uint32_t)(split_reader ? act_block_num_tiles_split  : act_block_num_tiles ),
+        (uint32_t)act_block_h_datums,
+        (uint32_t)act_block_num_tiles,
         (uint32_t)total_num_cores,
         (uint32_t)per_core_num_blocks_act_w,
         (uint32_t)act_mcast_sender_semaphore,
