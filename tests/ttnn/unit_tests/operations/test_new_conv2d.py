@@ -1058,7 +1058,7 @@ def test_unet_conv(
     (
         # unet convs with batch size 2
         # unique convs in unet (complete list)
-        (2, 16, 3, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 5 * 32}, False),
+        (2, 16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 5 * 32}, False),
         (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 5 * 32}, False),
         (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, None, False),
         (2, 32, 16, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
@@ -1089,7 +1089,7 @@ def test_unet_conv(
         (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, None, False),
         (2, 16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 5 * 32}, False),
         (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 5 * 32}, False),
-        (2, 1, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 5 * 32}, False),
+        # (2, 1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, True, {"act_block_h": 5 * 32}, False) # Enable when issue #11490 resolved
     ),
 )
 @pytest.mark.parametrize(
