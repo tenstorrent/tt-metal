@@ -444,8 +444,17 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-    noc_async_read(noc_addr, scratch_read_addr, scratch_db_half_size);
-    uint32_t amt_read = scratch_db_half_size;
+    uint32_t write_length = pages * page_size - length_adjust;
+    uint32_t read_length;
+    uint32_t amt_read;
+    if (scratch_db_half_size >= write_length) {
+        amt_read = write_length;
+        read_length = 0;
+    } else {
+        amt_read = scratch_db_half_size;
+        read_length = write_length - amt_read;
+    }
+    noc_async_read(noc_addr, scratch_read_addr, amt_read);
     uint32_t page_length = page_size - amt_read;
     uint32_t page_offset = amt_read;
 
@@ -453,8 +462,6 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
     // Writes are fast, reads are slow
     uint32_t db_toggle = 0;
     uint32_t scratch_write_addr;
-    uint32_t read_length = pages * page_size - amt_read;
-    uint32_t write_length = pages * page_size - length_adjust;
 
     noc_async_read_barrier();
     while (read_length != 0) {
@@ -494,14 +501,15 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
         // Third step - write from DB
         if (write_length < amt_to_write) {
             amt_to_write = write_length;
+            read_length = 0;
+        } else {
+            read_length -= amt_read;
         }
 
         write_length -= amt_to_write;
         uint32_t npages = write_pages_to_dispatcher<0, false>
             (downstream_data_ptr, scratch_write_addr, amt_to_write);
         cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
-
-        read_length -= amt_read;
 
         // TODO(pgk); we can do better on WH w/ tagging
         noc_async_read_barrier();
