@@ -51,6 +51,11 @@ jobs:
       - in-service
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ github.job }}-${{ inputs.build-type }}-${{ matrix.arch }}-${{ (inputs.tracy && '_profiler') || '' }}
+          max-size: 25G
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -59,7 +64,7 @@ jobs:
           git submodule update --init --recursive
       - name: Build tt-metal and libs
         run: |
-          nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
+          nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }} -D CMAKE_C_COMPILER_LAUNCHER=ccache -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
           nice -n 19 cmake --build build --target tests
           nice -n 19 cmake --build build --target install
       - name: 'Tar files'
