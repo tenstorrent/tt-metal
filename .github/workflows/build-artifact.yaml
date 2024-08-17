@@ -46,7 +46,7 @@ jobs:
       SILENT: 0
       VERBOSE: 1
       CCACHE_NOCOMPRESS: 1
-      CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime
+      # CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime
     environment: dev
     runs-on: 
       - build
@@ -67,7 +67,7 @@ jobs:
           git submodule update --init --recursive
       - name: Build tt-metal and libs
         run: |
-          nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }} -D CMAKE_C_COMPILER_LAUNCHER=ccache -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
+          nice -n 19 cmake -B build -G Ninja -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }} -D CMAKE_C_COMPILER_LAUNCHER=ccache -D CMAKE_CXX_COMPILER_LAUNCHER=ccache
           nice -n 19 cmake --build build --target tests
           nice -n 19 cmake --build build --target install
       - name: 'Tar files'
