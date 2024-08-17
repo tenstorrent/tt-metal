@@ -96,7 +96,7 @@ int main(int argc, char *argv[]) {
         notify_brisc_and_wait();
         DeviceZoneScopedMainN("NCRISC-FW");
 
-        setup_cb_read_write_interfaces(0, mailboxes->launch.kernel_config.max_cb_index, true, true);
+        setup_cb_read_write_interfaces(0, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
 
         uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
         rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +

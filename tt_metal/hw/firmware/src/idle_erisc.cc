@@ -49,8 +49,6 @@ uint8_t my_y[NUM_NOCS] __attribute__((used));
 
 tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_IERISC_MAILBOX_BASE);
 
-constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
-
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 #if defined(PROFILE_KERNEL)
@@ -114,14 +112,12 @@ int main() {
 
             noc_index = mailboxes->launch.kernel_config.brisc_noc_id;
 
-            //UC FIXME: do i need this?
-            setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
+            setup_cb_read_write_interfaces(0, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
 
             // Run the ERISC kernel
             DEBUG_STATUS("R");
             //if (mailboxes->launch.enable_brisc) {
                 //UC FIXME: do i need this?
-                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true);
                 uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
                 rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
                     mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].rta_offset);

@@ -108,7 +108,7 @@ int main(int argc, char *argv[]) {
         DeviceZoneScopedMainN("TRISC-FW");
 
 #if !defined(UCK_CHLKC_MATH)
-        setup_cb_read_write_interfaces(0, mailboxes->launch.kernel_config.max_cb_index, cb_init_read, cb_init_write);
+        setup_cb_read_write_interfaces(0, mailboxes->launch.kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
 #if defined(UCK_CHLKC_UNPACK)
         // Hack workaround for issue #11591
         for (volatile uint32_t xxx = 0; xxx < 100; xxx++);
