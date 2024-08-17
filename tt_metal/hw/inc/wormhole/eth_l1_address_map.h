@@ -28,6 +28,8 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_SIZE_ETH = 4 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE_NOC = 16 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE = 24 * 1024;
+  // Kernel config buffer is WIP
+  // Size is presently based on the old sizes of the RTAs + CB config + Sems
   static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4 + 8 * 16;
 
   // Base addresses

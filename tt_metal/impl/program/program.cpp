@@ -889,6 +889,28 @@ uint32_t Program::finalize_sems(uint32_t programmable_core_type_index, uint32_t 
     return base_offset + sem_size;
 }
 
+uint32_t Program::finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset) {
+
+    int max_id = -1;
+
+    // TODO: has to be better way to do this and don't read from volatile
+    for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
+        int32_t id = kg.launch_msg.kernel_config.max_cb_index;
+        if (id > max_id) {
+            max_id = id;
+        }
+
+        kg.launch_msg.kernel_config.cb_offset = base_offset;
+    }
+
+    uint32_t cb_size = (max_id + 1) * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
+
+    this->program_configs_[programmable_core_type_index].cb_offset = base_offset;
+    this->program_configs_[programmable_core_type_index].cb_size = cb_size;
+
+    return base_offset + cb_size;
+}
+
 uint32_t& Program::get_program_config_size(uint32_t programmable_core_type_index) {
     return this->program_config_sizes_[programmable_core_type_index];
  }
@@ -911,6 +933,7 @@ void Program::finalize() {
         uint32_t offset = 0;
         offset = finalize_rt_args(index, offset);
         offset = finalize_sems(index, offset);
+        offset = finalize_cbs(index, offset);
         this->get_program_config_size(index) = offset;
     }
 
@@ -1043,6 +1066,19 @@ uint32_t Program::get_sem_base_addr(Device *device, CoreCoord logical_core, Core
     return base_addr + this->program_configs_[index].sem_offset;
 }
 
+uint32_t Program::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const {
+
+    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+    uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
+
+    uint32_t base_addr = device->using_fast_dispatch ?
+        device->sysmem_manager().get_config_buffer_mgr().get_last_slot_addr(programmable_core_type) :
+        hal.get_dev_addr(programmable_core_type, HalMemAddrType::KERNEL_CONFIG);
+
+    return base_addr + this->program_configs_[index].cb_offset;
+}
+
 uint32_t Program::get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
 
     CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
@@ -1050,6 +1086,15 @@ uint32_t Program::get_sem_size(Device *device, CoreCoord logical_core, CoreType 
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].sem_size;
+}
+
+uint32_t Program::get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
+
+    CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
+    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
+    uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
+
+    return this->program_configs_[index].cb_size;
 }
 
 Program::~Program() {}

@@ -58,6 +58,7 @@ volatile tt_l1_ptr uint32_t l1_buffer[16] __attribute__((section("l1_data"))) __
 __attribute__((used));
 
 #if !defined(UCK_CHLKC_MATH)
+uint32_t tt_l1_ptr *cb_l1_base __attribute__((used));
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 #endif
 
@@ -107,15 +108,18 @@ int main(int argc, char *argv[]) {
         while (*trisc_run != RUN_SYNC_MSG_GO);
         DeviceZoneScopedMainN("TRISC-FW");
 
+        uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
+
 #if !defined(UCK_CHLKC_MATH)
-        setup_cb_read_write_interfaces(0, mailboxes->launch.kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
+        uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+            mailboxes->launch.kernel_config.cb_offset);
+        setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch.kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
 #if defined(UCK_CHLKC_UNPACK)
         // Hack workaround for issue #11591
         for (volatile uint32_t xxx = 0; xxx < 100; xxx++);
 #endif
 #endif
 
-        uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
         rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
             mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
         crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
