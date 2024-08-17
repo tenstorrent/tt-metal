@@ -57,6 +57,7 @@ jobs:
         with:
           key: ${{ github.job }}-${{ inputs.build-type }}-${{ matrix.arch }}-${{ (inputs.tracy && '_profiler') || '' }}
           max-size: 25G
+          save: false
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
