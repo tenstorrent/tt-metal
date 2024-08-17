@@ -30,6 +30,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ github.job }}-${{ matrix.build.os }}-${{ matrix.build.type }} 
+          max-size: 1G
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Install dependencies
         if: ${{ matrix.build.runs-on != 'build' }}
