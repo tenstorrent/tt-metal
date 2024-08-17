@@ -39,7 +39,6 @@ void pack_main()
     int __outer_loop_iter;
     llk_pack_init();
     llk_pack_hw_configure_disaggregated<false>(16);
-    llk_setup_outputs();
     llk_pack_dest_init<DstTileFaceLayout::RowMajor, false>();
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
@@ -56,7 +55,6 @@ void pack_main()
 void unpack_main()
 {
     int __outer_loop_iter;
-    llk_setup_operands();
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
     UNPACK(( llk_unpack_A_hw_configure_disaggregated<BroadcastType::NONE>(0) ));
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);

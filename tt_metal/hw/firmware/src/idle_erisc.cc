@@ -49,8 +49,6 @@ uint8_t my_y[NUM_NOCS] __attribute__((used));
 
 tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_IERISC_MAILBOX_BASE);
 
-constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
-
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 #if defined(PROFILE_KERNEL)
@@ -128,24 +126,17 @@ int main() {
 
             noc_index = mailboxes->launch.kernel_config.brisc_noc_id;
 
-            //UC FIXME: do i need this?
-            setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
-
-            //if (mailboxes->launch.enable_brisc) {
-                //UC FIXME: do i need this?
-            setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true);
+            setup_cb_read_write_interfaces(0, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
 
             firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM0);
 
             flush_icache();
+
             // Run the ERISC kernel
             DEBUG_STATUS("R");
             kernel_init();
             RECORD_STACK_USAGE();
-            //} else {
-                // This was not initialized in kernel_init
-            //    noc_local_state_init(noc_index);
-            //}
+
             DEBUG_STATUS("D");
 
             mailboxes->launch.go.run = RUN_MSG_DONE;

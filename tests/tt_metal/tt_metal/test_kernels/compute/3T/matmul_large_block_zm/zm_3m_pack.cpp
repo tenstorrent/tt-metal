@@ -86,7 +86,6 @@ void pack_main()
 {
 uint32_t in0_block_w = get_compile_time_arg_val(0);
 llk_pack_init();
-llk_setup_outputs();
 llk_pack_dest_init<DstTileFaceLayout::RowMajor, false>();
 llk_init_packer_dest_offset_registers<DstTileFaceLayout::RowMajor,false>();
 llk_pack_hw_configure_disaggregated<false>(16);

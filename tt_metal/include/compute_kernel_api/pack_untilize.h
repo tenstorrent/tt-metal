@@ -27,10 +27,8 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb)
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_untilize_init<block_ct_dim>(ocb) ));
-    PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<true, DST_ACCUM_MODE>() ));
 
-    UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(icb) ));
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(false, false, icb) )); // init must be after configure
 }
