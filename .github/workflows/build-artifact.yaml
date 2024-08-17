@@ -54,7 +54,7 @@ jobs:
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2.13
         with:
           key: ${{ github.job }}-${{ inputs.build-type }}-${{ matrix.arch }}-${{ (inputs.tracy && '_profiler') || '' }}
           max-size: 25G    
