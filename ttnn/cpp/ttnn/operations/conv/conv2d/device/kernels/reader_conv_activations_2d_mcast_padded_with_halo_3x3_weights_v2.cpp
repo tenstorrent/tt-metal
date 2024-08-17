@@ -45,14 +45,14 @@ void kernel_main() {
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t window_inner = get_compile_time_arg_val(7);
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(10); //Input filter window width
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(15);
     constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(16);
     constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(17);
     constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(18);
-    uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(19));
-    uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(20));
+    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(19));
+    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(20));
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(21);
 
     constexpr bool transpose_mcast = get_compile_time_arg_val(22) == 1;
