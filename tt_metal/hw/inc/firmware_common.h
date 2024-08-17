@@ -67,7 +67,7 @@ inline void firmware_kernel_common_init(void *init_local_l1_base) {
 
 }
 FORCE_INLINE
-void firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {
+uint32_t firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {
 
     extern uint32_t tt_l1_ptr *rta_l1_base;
     extern uint32_t tt_l1_ptr *crta_l1_base;
@@ -86,4 +86,6 @@ void firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_
         mailboxes->launch.kernel_config.mem_map[dispatch_class].rta_offset);
     crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base[core_type_index] +
         mailboxes->launch.kernel_config.mem_map[dispatch_class].crta_offset);
+
+    return kernel_config_base[core_type_index];
 }

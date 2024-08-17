@@ -28,7 +28,9 @@ struct address_map {
   static constexpr std::int32_t DATA_BUFFER_SIZE_ETH = 4 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE_NOC = 16 * 1024;
   static constexpr std::int32_t DATA_BUFFER_SIZE = 24 * 1024;
-  static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4;
+  // Kernel config buffer is WIP
+  // Size is presently based on the old sizes of the RTAs + CB config + Sems
+  static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4 + 8 * 16;
 
   // Base addresses
   static constexpr std::int32_t FIRMWARE_BASE = 0x9040;
@@ -58,6 +60,8 @@ struct address_map {
   // erisc early exit functionality re-uses mailboxes_t::ncrisc_halt_msg_t::stack_save memory
   static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = ERISC_MEM_MAILBOX_BASE + 4;
 
+  // Kernel config buffer is WIP
+  // Size is presently based on the old sizes of the RTAs + CB config + Sems
   static constexpr std::uint32_t PROFILER_L1_BUFFER_ER = ERISC_MEM_MAILBOX_BASE + 288 + 256 + 16;
   static constexpr std::uint32_t PROFILER_L1_BUFFER_CONTROL = PROFILER_L1_BUFFER_ER + PROFILER_L1_BUFFER_SIZE;
 

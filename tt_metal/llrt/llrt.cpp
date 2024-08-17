@@ -174,32 +174,6 @@ void print_worker_cores(chip_id_t chip_id) {
     std::cout << std::endl << std::endl;
 }
 
-CircularBufferConfigVec create_circular_buffer_config_vector() {
-    CircularBufferConfigVec circular_buffer_config_vec(
-        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG, 0);  // init to 0's
-    return circular_buffer_config_vec;
-}
-
-void set_config_for_circular_buffer(
-    CircularBufferConfigVec &circular_buffer_config_vec,
-    uint32_t circular_buffer_index,
-    uint32_t addr_in_bytes,
-    uint32_t size_in_bytes,
-    uint32_t num_pages) {
-
-    uint32_t page_size = size_in_bytes / num_pages;
-    circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index) =
-        addr_in_bytes >> 4;  // convert to addr in 16B words
-    circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 1) =
-        size_in_bytes >> 4;  // convert to addr in 16B words
-    circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 2) = num_pages;
-    circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 3) = page_size >> 4;
-}
-
-void write_circular_buffer_config_vector_to_core(chip_id_t chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec) {
-    write_hex_vec_to_core(chip, core, circular_buffer_config_vec, CIRCULAR_BUFFER_CONFIG_BASE);
-}
-
 ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
 
     ll_api::memory read_mem;

@@ -1110,6 +1110,7 @@ void EnqueueProgramCommand::assemble_device_commands(
         }
 
         // CB Configs commands
+        index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         if (num_multicast_cb_sub_cmds > 0) {
             uint32_t curr_sub_cmd_idx = 0;
             cached_program_command_sequence.cb_configs_payloads.reserve(num_multicast_cb_sub_cmds);
@@ -1118,13 +1119,15 @@ void EnqueueProgramCommand::assemble_device_commands(
                 uint32_t write_offset_bytes = program_command_sequence.write_offset_bytes();
                 program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
                     num_sub_cmds_in_cmd,
-                    CIRCULAR_BUFFER_CONFIG_BASE,
+                    program.get_program_config(index).cb_offset,
                     cb_config_size_bytes,
                     mcast_cb_payload_sizeB,
                     multicast_cb_config_sub_cmds,
                     multicast_cb_config_data,
                     this->packed_write_max_unicast_sub_cmds,
-                    curr_sub_cmd_idx);
+                    curr_sub_cmd_idx,
+                    false,
+                    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
                 for (auto &data_and_size : multicast_cb_config_data) {
                     RecordDispatchData(program, DISPATCH_DATA_CB_CONFIG, data_and_size.second);
                 }

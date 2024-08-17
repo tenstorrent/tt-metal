@@ -65,6 +65,8 @@ struct ProgramConfig {
     std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
     uint32_t sem_offset;
     uint32_t sem_size;
+    uint32_t cb_offset;
+    uint32_t cb_size;
 };
 
 class Program {
@@ -142,6 +144,8 @@ class Program {
 
     void capture_multi_device_dependencies() { capture_multi_device_dependencies_ = true; }
     bool has_multi_device_dependencies() { return capture_multi_device_dependencies_; }
+
+    ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
 
     // debug/test
     uint32_t get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
@@ -241,7 +245,6 @@ class Program {
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 
-    ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
     uint32_t& get_program_config_size(uint32_t programmable_core_type_index);
 
     uint32_t finalize_rt_args(uint32_t programmable_core_type_index, uint32_t base_offset);
