@@ -276,7 +276,7 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] 
 
 
 def shape_tt(states, batch_size, seq_len, n_heads, head_dim):
-    tt_out = tt_lib.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
+    tt_out = ttnn.reshape_on_device(states, batch_size, seq_len, n_heads, head_dim)
     tt_out = ttnn.transpose(tt_out, 1, -2)
 
     return tt_out

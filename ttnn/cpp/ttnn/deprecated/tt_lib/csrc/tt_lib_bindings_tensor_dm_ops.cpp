@@ -4,7 +4,6 @@
 
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
 
@@ -24,26 +23,6 @@ namespace tt::tt_metal::detail{
         */
 
         detail::export_enum<BcastOpDim>(m_tensor);
-
-        m_tensor.def("reshape", &reshape,
-            py::arg("input").noconvert(), py::arg("W"), py::arg("Z"), py::arg("Y"), py::arg("X"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Returns a tensor with the new shape of ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
-
-            Input tensor must be on host device, in TILE layout, and have BFLOAT16 data type.
-
-            Output tensor will be on host device, in TILE layout, and have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "W", "W dim of output tensor", "int", "", "Yes"
-                "Z", "Z dim of output tensor", "int", "", "Yes"
-                "Y", "Y dim of output tensor", "int", "", "Yes"
-                "X", "X dim of output tensor", "int", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
         // *** broadcast and reduce ***
         m_tensor.def("bcast",
         [](const Tensor &input_tensor_a,

@@ -8,7 +8,7 @@
 
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape/reshape.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
 
 #include "fold.hpp"
@@ -58,7 +58,7 @@ std::vector<Tensor> fold_with_transpose_(
 
     // reshape
     n = transpose_hc_output.shape()[0], w = transpose_hc_output.shape()[1], c = transpose_hc_output.shape()[2], h = transpose_hc_output.shape()[3];
-    auto reshape_hc_output = tt::tt_metal::reshape(transpose_hc_output, n, (w / stride_w), (c * stride_w), h, L1_mem_config);
+    auto reshape_hc_output = ttnn::reshape_on_device(transpose_hc_output, n, (w / stride_w), (c * stride_w), h, L1_mem_config);
 
     tt::log_debug("reshape_hc_output: {}", reshape_hc_output.shape());
 
@@ -69,7 +69,7 @@ std::vector<Tensor> fold_with_transpose_(
 
     // reshape
     n = transpose_hw_output2.shape()[0], w = transpose_hw_output2.shape()[1], h = transpose_hw_output2.shape()[2], c = transpose_hw_output2.shape()[3];
-    auto reshape_hw_output = tt::tt_metal::reshape(transpose_hw_output2, n, w, (h / stride_h), (c * stride_h), L1_mem_config);
+    auto reshape_hw_output = ttnn::reshape_on_device(transpose_hw_output2, n, w, (h / stride_h), (c * stride_h), L1_mem_config);
 
     tt::log_debug("reshape_hw_output: {}", reshape_hw_output.shape());
 

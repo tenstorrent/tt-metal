@@ -48,7 +48,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             #        return x.permute(0, 2, 1, 3)
 
             untilized_x = ttnn.untilize(x)
-            reshaped_unt = ttnn.experimental.tensor.reshape(
+            reshaped_unt = ttnn.reshape_on_device(
                 untilized_x,
                 x.get_legacy_shape()[0],
                 x.get_legacy_shape()[2],
@@ -76,7 +76,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             """
             ctx = ttnn.transpose(x, 1, -2)
             ushape = ctx.get_legacy_shape()
-            reshaped = ttnn.experimental.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
+            reshaped = ttnn.reshape_on_device(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
             retval = ttnn.tilize(reshaped)
             return retval
 
@@ -103,12 +103,12 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             W,
         ) = qkt.get_legacy_shape()  # Need to reshape right now since multi-C not supported for broadcast yet
         new_shape = [N, 1, C * H, W]
-        ttnn.experimental.tensor.reshape(qkt, *new_shape)
+        ttnn.reshape_on_device(qkt, *new_shape)
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
         if attention_mask is not None:
             attention_score_input = ttnn.add(attention_score_input, attention_mask)
         attention_scores = softmax(attention_score_input)
-        ttnn.experimental.tensor.reshape(attention_scores, N, C, H, W)  # Reshape back to original shape
+        ttnn.reshape_on_device(attention_scores, N, C, H, W)  # Reshape back to original shape
 
         # Apply attention to value matrix
         weighted_activation = ttnn.matmul(attention_scores, V_heads)

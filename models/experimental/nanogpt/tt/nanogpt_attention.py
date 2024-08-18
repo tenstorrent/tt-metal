@@ -88,16 +88,16 @@ class TtCausalSelfAttention(nn.Module):
         q, k, v = pt_x1.split(self.n_embd, dim=2)
 
         k = torch_to_tt_tensor_rm(k, self.device)
-        k = tt_lib.tensor.reshape(k, B, T, self.n_head, C // self.n_head)
+        k = ttnn.reshape_on_device(k, B, T, self.n_head, C // self.n_head)
         k = ttnn.transpose(k, 1, 2)
 
         q = torch_to_tt_tensor_rm(q, self.device)
-        q = tt_lib.tensor.reshape(q, B, T, self.n_head, C // self.n_head)
+        q = ttnn.reshape_on_device(q, B, T, self.n_head, C // self.n_head)
         q = ttnn.transpose(q, 1, 2)
 
         v = torch_to_tt_tensor_rm(v, self.device)
 
-        v = tt_lib.tensor.reshape(v, B, T, self.n_head, C // self.n_head)
+        v = ttnn.reshape_on_device(v, B, T, self.n_head, C // self.n_head)
         v = ttnn.transpose(v, 1, 2)
 
         # manual implementation of attention
@@ -118,7 +118,7 @@ class TtCausalSelfAttention(nn.Module):
         tt_y = ttnn.matmul(tt_att, v)
 
         tt_y = ttnn.transpose(tt_y, 1, -2)
-        tt_y = tt_lib.tensor.reshape(tt_y, 1, B, T, C)
+        tt_y = ttnn.reshape_on_device(tt_y, 1, B, T, C)
 
         # output projection
         x2 = self.c_proj(tt_y)

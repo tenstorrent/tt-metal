@@ -249,15 +249,6 @@ Enums
 
 .. autoclass:: tt_lib.tensor.BcastOpDim
 
-Tensor manipulation operations
--=============================
-
-These operations change the tensor shape in some way, giving it new dimensions
-but in general retaining the data.
-
-.. autofunction:: tt_lib.tensor.reshape
-
-
 
 Broadcast and Reduce
 ====================

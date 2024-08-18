@@ -7,6 +7,7 @@ import math
 from torch.nn import functional as F
 
 import tt_lib as ttm
+import ttnn
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.baddbmm as baddbmm
 import models.experimental.bloom_old.tt.bloom_attention_merge_heads as bloom_attention_merge_heads

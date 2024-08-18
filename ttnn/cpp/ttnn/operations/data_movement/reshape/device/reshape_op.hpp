@@ -7,12 +7,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
-namespace tt {
 
-namespace tt_metal {
+namespace ttnn::operations::data_movement {
 
-struct Reshape {
-
+struct ReshapeDeviceOperation {
     int N, C, H, W;
     const MemoryConfig output_mem_config;
 
@@ -22,8 +20,4 @@ struct Reshape {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
-Tensor reshape (const Tensor &a, int N, int C, int H, int W, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-}  // namespace tt_metal
-
-}  // namespace tt
+}

@@ -26,7 +26,7 @@ def t5_shape_tt(states, batch_size, n_heads, key_value_proj_dim, device):
         states = states.transpose(1, 2)
         tt_out = torch2tt_tensor(states, device)
     else:
-        tt_out = tt_lib.tensor.reshape(states, batch_size, -1, n_heads, key_value_proj_dim)
+        tt_out = ttnn.reshape_on_device(states, batch_size, -1, n_heads, key_value_proj_dim)
         tt_out = ttnn.transpose(tt_out, 1, -2)
 
     return tt_out
@@ -57,7 +57,7 @@ def t5_unshape_tt(states, batch_size, inner_dim, device):
         tt_out = torch2tt_tensor(states, device)
     else:
         states = ttnn.transpose(states, 1, -2)
-        tt_out = tt_lib.tensor.reshape(states, 1, batch_size, -1, inner_dim)
+        tt_out = ttnn.reshape_on_device(states, 1, batch_size, -1, inner_dim)
 
     return tt_out
 
