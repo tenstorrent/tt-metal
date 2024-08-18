@@ -40,7 +40,6 @@ FORCE_INLINE void run_loop_iteration(
                     channel_addrs[i],
                     channel_addrs[i],
                     full_payload_size,
-                    i,
                     full_payload_size,
                     full_payload_size_eth_words);
             }
@@ -60,7 +59,6 @@ FORCE_INLINE void run_loop_iteration(
                 channel_addrs[i],
                 channel_addrs[i],
                 full_payload_size,
-                i,
                 full_payload_size,
                 full_payload_size_eth_words);
         }

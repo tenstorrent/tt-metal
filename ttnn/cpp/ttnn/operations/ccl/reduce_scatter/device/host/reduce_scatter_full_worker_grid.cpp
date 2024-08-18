@@ -58,10 +58,7 @@ struct WorkerTransferInfo {
 
 static std::size_t decide_number_of_edm_channels(
    ttnn::ccl::CCLOpConfig const& ccl_op_config, std::size_t max_num_workers, bool enable_bidirectional) {
-    return ccl_op_config.is_input_sharded() ? std::min<uint32_t>(
-                                                  ccl_op_config.get_shard_grid_size(),
-                                                  std::min<std::size_t>(max_num_workers, enable_bidirectional ? 8 : 4))
-                                            : std::min<std::size_t>(max_num_workers, enable_bidirectional ? 8 : 4);
+    return std::min<std::size_t>(max_num_workers, enable_bidirectional ? 8 : 4);
 }
 
 struct ReduceScatterWorkerArgBuilder {
@@ -377,7 +374,7 @@ static void add_worker_config_to_edm_builders(
                 device->worker_core_from_logical_core(worker_cores.at(w)).y));
         }
 
-        // Get the expected message size in bytes for this worker
+        // Get the maximum message size we'd like to use. Not the actual packet size
         uint32_t expected_message_size_bytes = tensor_slicer.get_worker_slice_size_bytes(global_worker_idx);
 
         bool sender_enabled = true;  // (!is_linear || !is_last_chip_in_chain); // update for linear
@@ -385,7 +382,7 @@ static void add_worker_config_to_edm_builders(
             auto& sender_edm_builder = is_buffer_in_clockwise_direction_fn(c) ? clockwise_edm_builders.at(link)
                                                                               : counter_clockwise_edm_builders.at(link);
             log_trace(tt::LogOp, "Adding sender EDM channel");
-           ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =
+            ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =
                 sender_edm_builder.add_sender_channel(
                     worker_sender_semaphore_id,
                     1,  // cw_edm_channel_num_messages_to_send_per_transfer.at(c) * (ring_size - 1),
@@ -403,7 +400,7 @@ static void add_worker_config_to_edm_builders(
                                              ? counter_clockwise_edm_builders.at(link)
                                              : clockwise_edm_builders.at(link);
             log_trace(tt::LogOp, "Adding receiver EDM channel");
-           ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
+            ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
                 receiver_edm_builder.add_receiver_channel(
                     worker_receiver_semaphore_id,
                     // Since we are in worker signal EDM termination mode, we don't need to set the actual number of
@@ -726,17 +723,21 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
     std::unique_ptr<ttnn::ccl::CclOpTensorConfig> output_tensor_config =
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
-    uint32_t per_step_dim_size = input_tensor.get_legacy_shape()[scatter_split_dim] / ring_size;
-    uint32_t input_tensor_num_units_per_scatter_dim =
-        per_step_dim_size / tt::constants::TILE_WIDTH;  // TODO: find the divisibility based on layout
-    TT_ASSERT(input_tensor_num_units_per_scatter_dim > 0);
-    uint32_t max_num_workers = std::min<std::size_t>(8, input_tensor_num_units_per_scatter_dim);
+    // // The input tensor is fractured by ring_size so we divi
+    std::size_t input_tensor_n_elems_per_slice = input_tensor.volume() / ring_size;
+    uint32_t input_tensor_num_units_per_tensor_slice =
+        input_tensor_n_elems_per_slice / (tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT);
+
+    TT_ASSERT(input_tensor_num_units_per_tensor_slice > 0);
+    uint32_t max_num_workers = std::min<std::size_t>(8, input_tensor_num_units_per_tensor_slice);
     bool enable_bidirectional = true;
     auto num_edm_channels = decide_number_of_edm_channels(op_config, max_num_workers, enable_bidirectional);
     log_trace(tt::LogOp, "num_edm_channels: {}", num_edm_channels);
-    auto edm_termination_mode =ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
+    auto edm_termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
+
+    constexpr std::size_t num_buffers_per_channel = 1; // enable double buffering later
     auto const& edm_builder = create_erisc_datamover_builder(
-        num_edm_channels, op_config.get_page_size(), buffer_sharing_mode, edm_termination_mode);
+        num_edm_channels, op_config.get_page_size(), num_buffers_per_channel, buffer_sharing_mode, edm_termination_mode);
     TT_ASSERT(num_edm_channels > 0);
 
     Tensor const& local_chip_tensor = input_tensor;
@@ -756,9 +757,6 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
     auto const& topology_config =
        ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
-
-    auto dim_slice_factors = tt::tt_metal::Shape(std::vector<uint32_t>(local_chip_tensor.get_legacy_shape().rank(), 1));
-    dim_slice_factors[-1] = ring_size;
 
     CoreRangeSet const& worker_core_range = select_worker_cores(op_config, num_links, num_edm_channels);
     auto const& worker_cores = corerange_to_cores(worker_core_range, std::nullopt, true);
@@ -870,7 +868,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
             worker_receiver_kernels.push_back(receiver_kernel_id);
             worker_sender_kernels.push_back(sender_kernel_id);
 
-            TT_ASSERT(is_cb_buffering_sufficient_to_avoid_deadlock(
+            TT_FATAL(is_cb_buffering_sufficient_to_avoid_deadlock(
                 worker_slice,
                 cb_num_pages,
                 cb_num_pages,
