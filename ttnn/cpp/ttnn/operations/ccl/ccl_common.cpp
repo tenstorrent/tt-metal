@@ -256,6 +256,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     }
 }
 
+
 KernelHandle generate_edm_kernel(
    tt::tt_metal::Program& program,
     Device const* device,
@@ -294,6 +295,7 @@ KernelHandle generate_edm_kernel(
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_channels,
     uint32_t page_size,
+    std::size_t num_buffers_per_channel,
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     ccl::EriscDataMoverTerminationMode termination_mode) {
     TT_ASSERT(num_channels > 0);
@@ -304,23 +306,26 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     uint32_t edm_buffer_addr = ccl::EriscDatamoverConfig::get_buffers_base_address(num_channels);
     TT_ASSERT(edm_sem_addr > 0);
     TT_ASSERT(edm_buffer_addr > 0);
-    const uint32_t buffer_size = ccl::EriscDatamoverConfig::compute_buffer_size(num_channels, page_size);
+    const uint32_t channel_buffer_size = ccl::EriscDatamoverConfig::compute_buffer_size(num_channels, num_buffers_per_channel, page_size);
     for (std::size_t c = 0; c < num_channels; ++c) {
         edm_sem_addresses.at(c) = edm_sem_addr;
         edm_sem_addr += ccl::EriscDatamoverConfig::semaphore_size;
+        TT_ASSERT(edm_buffer_addr % EriscDatamoverConfig::get_eth_word_size() == 0);
         edm_buffer_addresses.at(c) = edm_buffer_addr;
-        edm_buffer_addr += buffer_size;
+        log_trace(tt::LogOp, " edm_buffer_addresses({}) = {}", c, edm_buffer_addr);
+        edm_buffer_addr += num_buffers_per_channel * (channel_buffer_size + (ccl::EriscDatamoverConfig::enable_merged_payload_and_channel_sync ? ccl::EriscDatamoverConfig::get_eth_channel_sync_size_bytes() : 0));
         TT_ASSERT((c == 0) || (edm_buffer_addresses.back() != edm_buffer_addresses.front()));
         TT_ASSERT((c == 0) || (edm_sem_addresses.back() != edm_sem_addresses.front()));
     }
 
     return ccl::EriscDatamoverBuilder(
-        buffer_size,
+        channel_buffer_size,
         ccl::EriscDatamoverConfig::get_edm_handshake_address(),
         edm_sem_addresses,
         edm_buffer_addresses,
         buffer_sharing_mode,
-        termination_mode);
+        termination_mode,
+        num_buffers_per_channel);
 }
 
 template <class DERIVED_SLICER_T>
@@ -340,12 +345,8 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     this->slice_dim_is_width = input_tensor.get_legacy_shape().rank() - 1 == slice_dim;
     this->is_sharded = input_tensor.is_sharded();
 
-    int32_t shard_size_in_bytes =
-        is_sharded ? (input_tensor.buffer()->page_size() * input_tensor.buffer()->shard_spec().tensor2d_shape[0] *
-                        input_tensor.buffer()->shard_spec().tensor2d_shape[1]) /
-                            input_tensor.shard_spec()->num_cores()
-                    : -1;
-    this->input_page_size = is_sharded ? shard_size_in_bytes : input_tensor.buffer()->page_size();
+    this->input_page_size = input_tensor.buffer()->page_size();
+    log_trace(tt::LogOp, "input_page_size={}", input_page_size);
     if (row_major) {
         this->num_cols = input_tensor.get_legacy_shape()[-1];
         auto input_shape = input_tensor.get_legacy_shape();

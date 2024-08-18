@@ -9,6 +9,20 @@
 #include <limits>
 #include <vector>
 
+/*
+ *    ------   ATTENTION  ATTENTION  ATTENTION  ATTENTION  ATTENTION   ------
+ * This file is intended to be useable across both host and device code. Therefore.
+ *
+ * DO NOT include any headers that are not host/device agnostic.
+ * DO NOT use any types that do not have fixed sizes across host and device.
+ * e.g. int32_t -> good (always 32 bits), int -> bad (size depends on platform)
+ *
+ * The reason for dual inclusion across host/device is because this code is used
+ * on device, but is further tested on host through gtests. This enables us to
+ * sweep functionality quickly and easily without involving end-to-end device kernel
+ * invocations and program creation.
+ */
+
 namespace ttnn {
 namespace ccl {
 
@@ -38,12 +52,12 @@ struct WorkerXY {
     uint16_t x;
     uint16_t y;
 
-    WorkerXY(uint16_t x, uint16_t y) : x(x), y(y) {}
+    constexpr WorkerXY(uint16_t x, uint16_t y) : x(x), y(y) {}
 
-    uint32_t to_uint32() const { return (y << 16) | x; }
+    constexpr uint32_t to_uint32() const { return (y << 16) | x; }
 
-    bool operator==(const WorkerXY &rhs) const { return x == rhs.x && y == rhs.y; }
-    bool operator!=(const WorkerXY &rhs) const { return !(*this == rhs); }
+    constexpr bool operator==(const WorkerXY &rhs) const { return x == rhs.x && y == rhs.y; }
+    constexpr bool operator!=(const WorkerXY &rhs) const { return !(*this == rhs); }
 };
 
 struct coord_t {

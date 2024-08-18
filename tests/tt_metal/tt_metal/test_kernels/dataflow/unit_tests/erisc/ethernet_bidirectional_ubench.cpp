@@ -120,7 +120,6 @@ void kernel_main() {
                     channel_addrs[sender_channel],
                     channel_addrs[sender_channel],
                     message_size_payload,
-                    sender_channel,
                     message_size_payload,
                     message_size_payload_eth_words + 1);
                 ready_to_send_payload &= ~(1 << s_i);

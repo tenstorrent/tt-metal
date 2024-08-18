@@ -46,7 +46,6 @@ FORCE_INLINE void run_loop_iteration(
                     reinterpret_cast<uint32_t>(channel_sync_addrs[i]),
                     reinterpret_cast<uint32_t>(channel_sync_addrs[i]),
                     sizeof(eth_channel_sync_t),
-                    i, // remove this field - it's superfluous
                     sizeof(eth_channel_sync_t),
                     sizeof(eth_channel_sync_t) >> 4);
             }
@@ -67,7 +66,6 @@ FORCE_INLINE void run_loop_iteration(
                     reinterpret_cast<uint32_t>(channel_sync_addrs[i]),
                     reinterpret_cast<uint32_t>(channel_sync_addrs[i]),
                     sizeof(eth_channel_sync_t),
-                    i, // remove this field - it's superfluous
                     sizeof(eth_channel_sync_t),
                     sizeof(eth_channel_sync_t) >> 4);
             }
