@@ -23,8 +23,11 @@ void kernel_main() {
     const uint32_t tile_size_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
-    InterleavedAddrGenFast<false> l1_src_addr_gens[num_tensors];
-    InterleavedAddrGenFast<true> dram_src_addr_gens[num_tensors];
+    uint8_t l1_src_addr_gens_memblk[sizeof(InterleavedAddrGenFast<false>) * num_tensors];
+    uint8_t dram_src_addr_gens_memblk[sizeof(InterleavedAddrGenFast<true>) * num_tensors];
+
+    InterleavedAddrGenFast<false> *l1_src_addr_gens = reinterpret_cast<InterleavedAddrGenFast<false>*>(l1_src_addr_gens_memblk);
+    InterleavedAddrGenFast<true> *dram_src_addr_gens = reinterpret_cast<InterleavedAddrGenFast<true>*>(dram_src_addr_gens_memblk);
 
     bool is_dram[num_tensors];
     uint32_t num_tiles_per_block[num_tensors];
@@ -40,13 +43,13 @@ void kernel_main() {
         num_tiles_per_block[i] = arg_ptr[num_tiles_per_block_base_offset + i];
         tile_id_per_tensor[i] = arg_ptr[tile_id_per_tensor_offset + i];
         if (is_dram[i]) {
-            dram_src_addr_gens[i] = {
+            new(&dram_src_addr_gens[i]) InterleavedAddrGenFast<true>{
                 .bank_base_address = src_addr,
                 .page_size = tile_size_bytes,
                 .data_format = data_format
             };
         } else {
-            l1_src_addr_gens[i] = {
+            new(&l1_src_addr_gens[i]) InterleavedAddrGenFast<false>{
                 .bank_base_address = src_addr,
                 .page_size = tile_size_bytes,
                 .data_format = data_format
