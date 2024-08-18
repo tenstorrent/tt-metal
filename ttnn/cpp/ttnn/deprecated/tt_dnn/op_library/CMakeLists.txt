@@ -96,7 +96,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_cumsum/moreh_cumsum_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reshape/reshape_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/multi_core/update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_op.cpp

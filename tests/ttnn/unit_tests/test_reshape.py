@@ -23,7 +23,7 @@ def test_reshape_cw_div2_rm(device, n, c, h, w):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    output_tensor = ttl.tensor.reshape(input_tensor, n, c * 2, h, w // 2, output_mem_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.reshape_on_device(input_tensor, n, c * 2, h, w // 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
@@ -41,7 +41,7 @@ def test_reshape_cw_mul2_rm(device, n, c, h, w):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    output_tensor = ttl.tensor.reshape(input_tensor, n, c // 2, h, w * 2, output_mem_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.reshape_on_device(input_tensor, n, c // 2, h, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
@@ -59,7 +59,7 @@ def test_reshape_hw_div2_rm(device, n, c, h, w):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    output_tensor = ttl.tensor.reshape(input_tensor, n, c, h * 2, w // 2, output_mem_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h * 2, w // 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
@@ -77,7 +77,7 @@ def test_reshape_hw_mul2_rm(device, n, c, h, w):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    output_tensor = ttl.tensor.reshape(input_tensor, n, c, h // 2, w * 2, output_mem_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h // 2, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
@@ -91,7 +91,7 @@ def run_reshape_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    output_tensor = ttl.tensor.reshape(input_tensor, n, c, h // 2, w * 2, output_mem_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.reshape_on_device(input_tensor, n, c, h // 2, w * 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)

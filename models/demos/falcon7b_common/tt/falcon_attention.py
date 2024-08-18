@@ -740,7 +740,7 @@ class TtFalconAttentionDecode(nn.Module):
                 )
 
             for i in range(self.num_devices):
-                query_layer[i] = ttnn.experimental.tensor.reshape(
+                query_layer[i] = ttnn.reshape_on_device(
                     query_layer[i],
                     batch,
                     1,
@@ -921,7 +921,7 @@ class TtFalconAttentionDecode(nn.Module):
 
             # Get batch in dim 1
             for i in range(self.num_devices):
-                attn_output[i] = ttnn.experimental.tensor.reshape(
+                attn_output[i] = ttnn.reshape_on_device(
                     attn_output[i], 1, batch, self.padded_local_heads, self.head_dim
                 )
 
