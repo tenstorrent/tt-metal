@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#pragma once
 
 #include "dataflow_api.h"
 #include "debug/assert.h"
@@ -33,7 +34,7 @@ FORCE_INLINE void write_and_send_chunk(
     uint32_t l1_read_addr = get_read_ptr(cb_id);
     noc_async_write(l1_read_addr, remote_l1_write_addr, page_size * num_pages);
     noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
-    // TODO: do eth semaphore inc here
+
     for (uint32_t i = 0; i < num_pages; ++i) {
 #ifdef ROW_MAJOR_LAYOUT
     #ifdef INTERLEAVED_MEM_LAYOUT

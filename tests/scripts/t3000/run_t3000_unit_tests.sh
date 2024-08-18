@@ -34,6 +34,7 @@ run_t3000_ttnn_tests() {
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/ttnn/test_multi_device
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/ttnn/unit_tests_ttnn
+  ./build/test/ttnn/unit_tests_ttnn_ccl
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_trace.py ; fail+=$?
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_events.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/test_multi_device.py ; fail+=$?

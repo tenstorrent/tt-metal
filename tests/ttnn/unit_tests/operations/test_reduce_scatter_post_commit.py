@@ -41,7 +41,7 @@ def run_reduce_scatter_test(
     mem_config,
     use_program_cache,
     function_level_defaults,
-    enable_async=False,
+    enable_async=True,
     num_iters=1,
 ):
     if len(t3k_device_mesh.get_device_ids()) != 8:
@@ -214,7 +214,7 @@ def run_reduce_scatter_sharded_test(
     tensor_mem_layout,
     use_program_cache,
     function_level_defaults,
-    enable_async=False,
+    enable_async=True,
     num_iters=1,
 ):
     if len(t3k_device_mesh.get_device_ids()) != 8:
@@ -285,10 +285,6 @@ def run_reduce_scatter_sharded_test(
         for device_id in t3k_device_mesh.get_device_ids():
             ttl.device.Synchronize(t3k_device_mesh.get_device(device_id))
         logger.info(f"Done iteration {i}")
-
-        for device_id in t3k_device_mesh.get_device_ids():
-            ttl.device.Synchronize(t3k_device_mesh.get_device(device_id))
-    logger.info(f"Done iteration {i}")
 
     # Compute golden
     # TODO: Make it model how reduce scatter actually works for numerical correctness/ordering
