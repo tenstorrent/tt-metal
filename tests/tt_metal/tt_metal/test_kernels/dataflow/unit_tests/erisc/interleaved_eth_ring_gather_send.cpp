@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
+#include "eth_l1_direct_ring_gather_utils.h"
 
 void kernel_main() {
     std::uint32_t local_eth_l1_src_addr = get_arg_val<uint32_t>(0);
