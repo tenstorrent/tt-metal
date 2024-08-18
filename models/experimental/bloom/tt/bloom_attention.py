@@ -272,18 +272,18 @@ class TtBloomAttention(torch.nn.Module):
 
         query_layer = query_layer.transpose(1, 2)
         query_layer = bloom_utils.torch2tt_tensor(query_layer, device)
-        reshaped_query_layer = tt_lib.tensor.reshape(
+        reshaped_query_layer = ttnn.reshape_on_device(
             query_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
         )
 
         key_layer = key_layer.permute(0, 2, 3, 1)
 
         key_layer = bloom_utils.torch2tt_tensor(key_layer, device)
-        reshaped_key_layer = tt_lib.tensor.reshape(key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length)
+        reshaped_key_layer = ttnn.reshape_on_device(key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length)
 
         value_layer = value_layer.transpose(1, 2)
         value_layer = bloom_utils.torch2tt_tensor(value_layer, device)
-        reshaped_value_layer = tt_lib.tensor.reshape(
+        reshaped_value_layer = ttnn.reshape_on_device(
             value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
         )
 
@@ -299,7 +299,7 @@ class TtBloomAttention(torch.nn.Module):
         )
 
         # change view to [batch_size, num_heads, q_length, kv_length]
-        attention_scores = tt_lib.tensor.reshape(matmul_result, batch_size, self.num_heads, q_length, kv_length)
+        attention_scores = ttnn.reshape_on_device(matmul_result, batch_size, self.num_heads, q_length, kv_length)
         attention_scores = bloom_utils.tt2torch_tensor(attention_scores)
 
         if self.use_tt_softmax:
@@ -320,7 +320,7 @@ class TtBloomAttention(torch.nn.Module):
             attention_probs = tt_lib.mul(attention_probs, head_mask)
 
         # change view [batch_size x num_heads, q_length, kv_length]
-        attention_probs_reshaped = tt_lib.tensor.reshape(
+        attention_probs_reshaped = ttnn.reshape_on_device(
             attention_probs, 1, batch_size * self.num_heads, q_length, kv_length
         )
 

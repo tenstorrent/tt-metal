@@ -413,7 +413,7 @@ def test_generate_all_configs_and_references(
     untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.to(device, memory_config)
 
     # untilize_with_halp_input_tt_tensor = ttl.tensor.permute(untilize_with_halp_input_tt_tensor, (0, 2, 3, 1))
-    # untilize_with_halp_input_tt_tensor = ttl.tensor.reshape(untilize_with_halp_input_tt_tensor, batch_size, 1, input_h * input_w, input_c)
+    # untilize_with_halp_input_tt_tensor = ttnn.reshape_on_device(untilize_with_halp_input_tt_tensor, batch_size, 1, input_h * input_w, input_c)
     grid_size_binary = device.compute_with_storage_grid_size()
 
     logger.info(f"GRID SIZE BINARY: {grid_size_binary}")
