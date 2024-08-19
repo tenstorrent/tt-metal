@@ -6,7 +6,7 @@ import os
 from elasticsearch import Elasticsearch
 
 ELASTIC_CORP_URL = "http://yyz-elk:9200"
-ELASTIC_CLOUD_URL = "http://e12cs07:9200"
+ELASTIC_CLOUD_URL = "http://172.27.28.43:9200"
 ELASTIC_USERNAME = os.getenv("ELASTIC_USERNAME")
 ELASTIC_PASSWORD = os.getenv("ELASTIC_PASSWORD")
 VECTOR_INDEX_PREFIX = "ttnn_sweeps_test_vectors_"
