@@ -7,7 +7,6 @@ import torch.nn as nn
 import timm
 
 import ttnn
-import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm
 
@@ -358,7 +357,7 @@ class TtHighResolutionNet(nn.Module):
 
         return nn.Sequential(*modules), num_inchannels
 
-    def forward(self, x: tt_lib.tensor.Tensor):
+    def forward(self, x: ttnn.Tensor):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)

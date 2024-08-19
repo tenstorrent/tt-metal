@@ -6,7 +6,6 @@ import torch.nn as nn
 import logging
 
 import ttnn
-import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm
 from models.experimental.hrnet.hrnet_utils import create_batchnorm
@@ -20,7 +19,7 @@ class TtInterpolate(nn.Module):
         self.scale_factor = scale_factor
         self.mode = mode
 
-    def forward(self, x: tt_lib.tensor.Tensor):
+    def forward(self, x: ttnn.Tensor):
         out = fallback_ops.interpolate(x, scale_factor=self.scale_factor, mode=self.mode)
         return out
 
@@ -220,7 +219,7 @@ class TtHighResolutionModule(nn.Module):
     def get_num_inchannels(self):
         return self.num_inchannels
 
-    def forward(self, x: tt_lib.tensor.Tensor):
+    def forward(self, x: ttnn.Tensor):
         if self.num_branches == 1:
             return [self.branches[0](x[0])]
 

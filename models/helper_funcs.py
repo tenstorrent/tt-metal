@@ -3,21 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Union, Optional
-from tt_lib import tensor
-import tt_lib as ttl
 import ttnn
 from loguru import logger
-import tt_lib
 
 
 def Linear(
     in_features: int,
     out_features: int,
-    weight: tensor.Tensor,
-    bias: Optional[tensor.Tensor] = None,
-    output_mem_config=tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-    ),
+    weight: ttnn.Tensor,
+    bias: Optional[ttnn.Tensor] = None,
+    output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
 ):
     """
     Returns a function that performs a Linear operation with optional bias.
