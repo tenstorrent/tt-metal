@@ -9,7 +9,6 @@
 #include "dataflow_api.h"
 #include "debug/assert.h"
 #include "impl/buffers/buffer_constants.hpp"
-#include "tensix_types.h"
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -319,6 +318,7 @@ void kernel_main() {
                 uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - p);
                 ASSERT(n_pages > 0);
                 // Fetch from input tensor
+
                 read_wrapped_chunk_from_output_tensor(
                     curr_tile_id,
                     offset_into_worker_slice,

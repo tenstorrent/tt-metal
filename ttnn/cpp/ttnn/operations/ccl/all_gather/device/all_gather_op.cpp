@@ -25,7 +25,7 @@ AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor con
     return AllGatherBidirectionalMode::FULL_TENSOR;
 }
 
-AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology) :
+AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology, std::size_t num_buffers_per_worker) :
     num_links(num_links),
     semaphore_size(32),
     ring_size(ring_size),
@@ -37,8 +37,11 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
     input_is_dram(input_tensor.buffer()->buffer_type() == BufferType::DRAM),
     output_is_dram(output_tensor.buffer()->buffer_type() == BufferType::DRAM),
 
-    bidirectional_mode(choose_bidirectional_mode(input_tensor))
+    bidirectional_mode(choose_bidirectional_mode(input_tensor)),
+    enable_merged_payload_and_channel_sync(true),
+    num_buffers_per_worker(num_buffers_per_worker)
 {
+    TT_FATAL(num_buffers_per_worker > 0, "num_buffers_per_worker must be > 0");
     TT_ASSERT(erisc_handshake_address >= eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
     TT_ASSERT(erisc_handshake_address < eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 16);
     TT_ASSERT((erisc_handshake_address & (16-1)) == 0);
@@ -68,15 +71,17 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
 
     this->num_workers_per_link = this->num_eth_buffers;
     this->eth_sems_l1_base_byte_address = this->erisc_handshake_address + 16 * 3;//16;
+    // Really should be called offset_after_semaphore_region
     this->semaphore_offset = this->semaphore_size * this->num_eth_buffers * num_duplicate_directions; // TODO: Remove this once dedicated semaphore space for user kernels are added
     this->eth_buffers_l1_base_byte_address = this->eth_sems_l1_base_byte_address + this->semaphore_offset;
 
+    std::size_t channel_sync_bytes_overhead = (enable_merged_payload_and_channel_sync * 16);
     uint32_t const page_size = input_tensor.buffer()->page_size();
-    this->eth_buffer_size = tt::round_down((total_l1_buffer_space - this->semaphore_offset) / (this->num_eth_buffers * num_duplicate_directions), page_size);
+    std::size_t l1_per_buffer_region = ((total_l1_buffer_space - this->semaphore_offset) / (this->num_eth_buffers * num_duplicate_directions * this->num_buffers_per_worker)) - channel_sync_bytes_overhead;
+    this->eth_buffer_size = tt::round_down(l1_per_buffer_region, page_size);
 
+    TT_FATAL((this->eth_buffer_size + channel_sync_bytes_overhead) * (this->num_eth_buffers * num_duplicate_directions * this->num_buffers_per_worker) + this->semaphore_offset <= total_l1_buffer_space);
     TT_FATAL(eth_buffer_size == 0 or (this->num_eth_buffers * num_duplicate_directions) <= eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS);
-    TT_FATAL(this->eth_buffer_size * (this->num_eth_buffers * num_duplicate_directions) + this->semaphore_offset <= total_l1_buffer_space);
-
 }
 
 
