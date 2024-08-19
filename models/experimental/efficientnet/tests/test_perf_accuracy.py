@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import ttnn
 import torch
 from loguru import logger
 import torchvision
@@ -78,7 +78,7 @@ def run_perf_efficientnet_b0(
     test_input = make_input_tensor(imagenet_sample_input)
 
     hf_model = torchvision.models.efficientnet_b0()
-    tt_input = torch2tt_tensor(test_input, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_input = torch2tt_tensor(test_input, tt_device=device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
     tt_model = efficientnet_b0(device)
 
     folder_path = str(model_location_generator("ImageNet_data"))
@@ -88,12 +88,12 @@ def run_perf_efficientnet_b0(
     with torch.no_grad():
         profiler.start(cpu_key)
         hf_model(test_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
         tt_output = tt_model(tt_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_output
 
@@ -102,7 +102,7 @@ def run_perf_efficientnet_b0(
         profiler.start(second_key)
         tt_output = tt_model(tt_input)
         torch_op = tt_to_torch_tensor(tt_output)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
         del tt_output
 
@@ -114,7 +114,7 @@ def run_perf_efficientnet_b0(
             torch_op_tt = tt_to_torch_tensor(tt_output)
             tt_prediction = torch.argmax(torch_op_tt)
             predicted_label.append(tt_prediction.item())
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(third_key)
 
     first_iter_time = profiler.get(first_key)
