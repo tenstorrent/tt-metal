@@ -8,7 +8,6 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaForMultipleChoice
 
-import tt_lib
 
 from models.experimental.roberta.tt.roberta_for_multiple_choice import TtRobertaForMultipleChoice
 from models.utility_functions import (

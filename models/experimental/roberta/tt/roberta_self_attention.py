@@ -8,7 +8,6 @@ import torch.nn as nn
 
 from typing import Optional, Tuple
 
-import tt_lib
 import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
@@ -29,9 +28,7 @@ class TtRobertaSelfAttention(nn.Module):
                 f"heads ({config.num_attention_heads})"
             )
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
 
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
@@ -75,7 +72,7 @@ class TtRobertaSelfAttention(nn.Module):
             self.value_bias,
         )
 
-    def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def transpose_for_scores(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # x must be 4d originaly
         # 1 is appended to the beggining
         # so create tensor shape by ommiting the first dimension
@@ -99,14 +96,14 @@ class TtRobertaSelfAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_value: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        hidden_states: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
+        encoder_hidden_states: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
+        past_key_value: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         output_attentions: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.Tensor]:
         mixed_query_layer = self.query_linear(hidden_states)
 
         # If this is instantiated as a cross-attention module, the keys

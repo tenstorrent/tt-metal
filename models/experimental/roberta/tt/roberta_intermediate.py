@@ -5,7 +5,6 @@
 import torch
 import torch.nn as nn
 
-import tt_lib
 import ttnn
 
 from models.helper_funcs import Linear as TTLinear
@@ -20,9 +19,7 @@ from models.experimental.roberta.roberta_common import torch2tt_tensor
 class TtRobertaIntermediate(nn.Module):
     def __init__(self, config, state_dict, base_address, device, fall_back_to_torch_gelu=True):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
         self.device = device
 
         self.fall_back_to_torch_gelu = fall_back_to_torch_gelu

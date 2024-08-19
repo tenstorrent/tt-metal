@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaForTokenClassification
 
-import tt_lib
 import pytest
 
 from models.experimental.roberta.tt.roberta_for_token_classification import TtRobertaForTokenClassification
