@@ -817,7 +817,7 @@ void gen_rnd_dram_paged_cmd(Device *device,
 
     uint32_t length_adjust = std::rand() % page_size;
     length_adjust = (length_adjust >> 5) << 5;
-    if (length_adjust > 64 * 1024) length_adjust = 63 * 1024;
+    if (length_adjust >= 64 * 1024) length_adjust = 63 * 1024;
 
     if (device_data.size() * sizeof(uint32_t) + page_size * pages - length_adjust + l1_buf_base_g >=
         device->l1_size_per_core()) {
