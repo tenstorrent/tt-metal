@@ -11,7 +11,6 @@
 #include <filesystem>
 
 #include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/program/program.hpp"
 #include "llrt/llrt.hpp"
 #include "tools/profiler/profiler_state.hpp"
 #include "tools/profiler/common.hpp"
@@ -27,6 +26,7 @@ namespace tt {
 
 namespace tt_metal {
 
+class Program;
 class DeviceProfiler {
     private:
 
