@@ -21,6 +21,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/graph/graph_tracking.hpp"
 
 namespace tt::tt_metal {
 
@@ -480,7 +481,7 @@ void Program::allocate_circular_buffers() {
                 }
             }
         }
-
+        tt::tt_metal::GraphTracker::instance().track_allocate_cb(circular_buffer->core_ranges(), computed_addr, circular_buffer->size());
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
     this->local_circular_buffer_allocation_needed_ = false;

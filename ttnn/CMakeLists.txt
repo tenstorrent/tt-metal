@@ -2,6 +2,8 @@ set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/async_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph_processor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph_processor_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/multi_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operation_history.cpp
