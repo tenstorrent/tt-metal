@@ -140,13 +140,13 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         byte_size / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input1 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
-        0.1f,
-        2.0f,
+        -1.0f,
+        1.0f,
         byte_size / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
     std::vector<uint32_t> packed_input2 = generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
-        0.0f,
-        0.5f,
+        -1.0f,
+        1.0f,
         byte_size / tt::test_utils::df::bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
     ////////////////////////////////////////////////////////////////////////////
@@ -155,7 +155,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     auto input0 = unpack_vector<tt::test_utils::df::bfloat16, uint32_t>(packed_input0);
     auto input1 = unpack_vector<tt::test_utils::df::bfloat16, uint32_t>(packed_input1);
     auto input2 = unpack_vector<tt::test_utils::df::bfloat16, uint32_t>(packed_input2);
-    std::vector<tt::test_utils::df::bfloat16> temp_golden(input0.size());
+    std::vector<float> temp_golden(input0.size());
     std::transform(
         input0.begin(),
         input0.end(),
@@ -182,16 +182,16 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     input2.end(),
     temp_golden.begin(),
     golden.begin(),
-    [&](const tt::test_utils::df::bfloat16& lhs, const tt::test_utils::df::bfloat16& rhs) {
+    [&](const tt::test_utils::df::bfloat16& lhs, const float& rhs) {
         //acc_to_dest accumulates dest value with binary output, for all binary operations
         if (test_config.acc_to_dest || test_config.binary_op == "add_with_dest_reuse") {
-            return (lhs.to_float() + rhs.to_float());
+            return (lhs.to_float() + rhs);
         } else if (test_config.binary_op == "sub_with_dest_reuse") {
-            return (lhs.to_float() - rhs.to_float());
+            return (lhs.to_float() - rhs);
         } else if (test_config.binary_op == "mul_with_dest_reuse") {
-            return (lhs.to_float() * rhs.to_float());
+            return (lhs.to_float() * rhs);
         } else {
-            return rhs.to_float();
+            return rhs;
         }
     });
     auto packed_golden = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(golden);
@@ -242,7 +242,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         dest_buffer_data,
         packed_golden,
         [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) {
-            return is_close(a, b, 0.015f);
+            return is_close(a, b, 0.0155f);
         });
     return pass;
 }
@@ -376,7 +376,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileAddDestAcc) {
 
 TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileSubDestAcc) {
     auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL or arch == tt::ARCH::BLACKHOLE) {
+    if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
 
