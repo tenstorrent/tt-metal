@@ -7,8 +7,6 @@ import timm
 
 from loguru import logger
 
-import tt_lib
-
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
@@ -22,9 +20,7 @@ from models.experimental.vovnet.tt.vovnet import vovnet_for_image_classification
     "model_name, pcc",
     (("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", 0.99),),
 )
-def test_vovnet_model_inference(
-    device, pcc, imagenet_sample_input, model_name, reset_seeds
-):
+def test_vovnet_model_inference(device, pcc, imagenet_sample_input, model_name, reset_seeds):
     model = timm.create_model(model_name, pretrained=True)
 
     torch_model = model

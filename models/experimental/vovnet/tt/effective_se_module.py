@@ -9,7 +9,6 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 import ttnn
-import tt_lib
 from tt_lib import fallback_ops
 
 
@@ -51,7 +50,7 @@ class TtEffectiveSEModule(nn.Module):
 
         self.activation = ttnn.hardsigmoid
 
-    def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         out = tt_to_torch_tensor(input)
         out = out.mean((2, 3), keepdim=True)
         if self.add_maxpool:

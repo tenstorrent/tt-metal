@@ -4,7 +4,6 @@
 
 import torch
 import ttnn
-import tt_lib
 
 from models.experimental.t5.tt.t5_layer_norm import TtT5LayerNorm
 from models.experimental.t5.tt.t5_dense_act_dense import TtT5DenseActDense

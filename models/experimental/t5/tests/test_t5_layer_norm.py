@@ -4,7 +4,6 @@
 
 import torch
 import json
-import tt_lib
 from loguru import logger
 
 from transformers import T5Model
@@ -37,9 +36,7 @@ def run_test_T5LayerNorm_inference(device, model_name, input_h, input_w):
 
     # PyTorch output
     pt_out = hf_reference_module(t5_layer_norm_input)[0].unsqueeze(1)
-    tt_T5LayerNorm_model = TtT5LayerNorm(
-        config, hf_reference_model.state_dict(), base_address, device
-    )
+    tt_T5LayerNorm_model = TtT5LayerNorm(config, hf_reference_model.state_dict(), base_address, device)
 
     # TT hardware execution
     tt_layer_norm_input = torch2tt_tensor(t5_layer_norm_input, device)

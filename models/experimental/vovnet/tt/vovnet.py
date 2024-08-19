@@ -4,8 +4,7 @@
 
 import torch.nn as nn
 import timm
-
-import tt_lib
+import ttnn
 
 from models.experimental.vovnet.tt.classifier_head import TtClassifierHead
 from models.experimental.vovnet.tt.conv_norm_act import TtConvNormAct
@@ -104,9 +103,7 @@ class TtVoVNet(nn.Module):
 
         stages = []
         for i in range(4):  # num_stages
-            downsample = (
-                stem_stride == 2 or i > 0
-            )  # first stage has no stride/downsample if stem_stride is 4
+            downsample = stem_stride == 2 or i > 0  # first stage has no stride/downsample if stem_stride is 4
             stages += [
                 TtOsaStage(
                     in_chs=in_ch_list[i],
@@ -137,7 +134,7 @@ class TtVoVNet(nn.Module):
             state_dict=self.state_dict,
         )
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.stem(x)
         x = self.stages(x)
         x = self.head(x)

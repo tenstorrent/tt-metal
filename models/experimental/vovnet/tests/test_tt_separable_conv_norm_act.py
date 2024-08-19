@@ -5,7 +5,6 @@
 import torch
 import pytest
 import timm
-import tt_lib
 
 from loguru import logger
 
