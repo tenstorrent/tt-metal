@@ -261,7 +261,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {
+inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {
     std::vector<std::vector<uint32_t>> chunks;
     if (values.empty()) return chunks;
 
