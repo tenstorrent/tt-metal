@@ -869,6 +869,96 @@ def reshape(
     return ttnn_tensor_to_torch(t1)
 
 
+def transpose_01(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 0, 1)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def transpose_02(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 0, 2)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def transpose_03(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 0, 3)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def transpose_12(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 1, 2)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def transpose_13(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 1, 3)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def transpose_23(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 2, 3)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
 def gelu(
     x,
     *args,

@@ -1202,8 +1202,28 @@ def reshape(x):
     ttnn.reshape(x, [shape[-4], shape[-3], shape[-1], shape[-2]])
 
 
-def transpose(x):
-    ttnn.transpose(x, dim0=2, dim1=3)
+def transpose_01(x):
+    ttnn.transpose(x, 0, 1)
+
+
+def transpose_02(x):
+    ttnn.transpose(x, 0, 2)
+
+
+def transpose_03(x):
+    ttnn.transpose(x, 0, 3)
+
+
+def transpose_12(x):
+    ttnn.transpose(x, 1, 2)
+
+
+def transpose_13(x):
+    ttnn.transpose(x, 1, 3)
+
+
+def transpose_23(x):
+    ttnn.transpose(x, 2, 3)
 
 
 def permute(x):
@@ -1857,8 +1877,28 @@ all_unary_ops = [
         "name": "ttnn.reshape",
     },
     {
-        "op": transpose,
-        "name": "ttnn.transpose",
+        "op": transpose_01,
+        "name": "ttnn.transpose_01",
+    },
+    {
+        "op": transpose_02,
+        "name": "ttnn.transpose_02",
+    },
+    {
+        "op": transpose_03,
+        "name": "ttnn.transpose_03",
+    },
+    {
+        "op": transpose_12,
+        "name": "ttnn.transpose_12",
+    },
+    {
+        "op": transpose_13,
+        "name": "ttnn.transpose_13",
+    },
+    {
+        "op": transpose_23,
+        "name": "ttnn.transpose_23",
     },
     {
         "op": permute,
