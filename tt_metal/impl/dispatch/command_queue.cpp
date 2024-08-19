@@ -316,7 +316,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     uint32_t command_queue_id,
     Device* device,
     NOC noc_index,
-    Program& program,
+    MetalProgram& program,
     CoreCoord& dispatch_core,
     SystemMemoryManager& manager,
     uint32_t expected_num_workers_completed) :
@@ -850,7 +850,7 @@ void EnqueueProgramCommand::assemble_device_commands(
                 mcast_cb_payload);
         }
 
-        // Program Binaries and Go Signals
+        // MetalProgram Binaries and Go Signals
         // Get launch msg data while getting size of cmds
         std::vector<std::vector<CQPrefetchRelayPagedPackedSubCmd>> kernel_bins_prefetch_subcmds;
         std::vector<std::vector<CQDispatchWritePackedLargeSubCmd>> kernel_bins_dispatch_subcmds;
@@ -1142,7 +1142,7 @@ void EnqueueProgramCommand::assemble_device_commands(
             }
         }
 
-        // Program Binaries
+        // MetalProgram Binaries
         for (const auto& kernel_bins_unicast_cmd : kernel_bins_unicast_cmds) {
             program_command_sequence.add_data(
                 kernel_bins_unicast_cmd.data(),
@@ -1291,7 +1291,7 @@ void EnqueueProgramCommand::process() {
             (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.offset2));
         TT_ASSERT(
             this->cached_program_command_sequences.find(program.id) != this->cached_program_command_sequences.end(),
-            "Program cache hit, but no stored command sequence");
+            "MetalProgram cache hit, but no stored command sequence");
 
         this->cached_program_command_sequences[program.id].stall_command_sequence.update_cmd_sequence(
             wait_count_offset, &this->expected_num_workers_completed, sizeof(uint32_t));
@@ -2061,7 +2061,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
     }
 }
 
-void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
+void HWCommandQueue::enqueue_program(MetalProgram& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
     if (not program.is_finalized()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing should only be used when programs have been cached");
@@ -2523,7 +2523,7 @@ void HWCommandQueue::terminate() {
 
 void EnqueueAddBufferToProgramImpl(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program) {
+    std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program) {
     std::visit(
         [program](auto&& b) {
             using buffer_type = std::decay_t<decltype(b)>;
@@ -2531,7 +2531,7 @@ void EnqueueAddBufferToProgramImpl(
                 std::visit(
                     [&b](auto&& p) {
                         using program_type = std::decay_t<decltype(p)>;
-                        if constexpr (std::is_same_v<program_type, std::reference_wrapper<Program>>) {
+                        if constexpr (std::is_same_v<program_type, std::reference_wrapper<MetalProgram>>) {
                             p.get().add_buffer(b);
                         } else {
                             p->add_buffer(b);
@@ -2546,7 +2546,7 @@ void EnqueueAddBufferToProgramImpl(
 void EnqueueAddBufferToProgram(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program,
+    std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program,
     bool blocking) {
     EnqueueAddBufferToProgramImpl(buffer, program);
     // cq.run_command(CommandInterface{
@@ -2748,34 +2748,34 @@ void EnqueueWriteBufferImpl(
 }
 
 void EnqueueProgram(
-    CommandQueue& cq, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program, bool blocking) {
+    CommandQueue& cq, std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program, bool blocking) {
     detail::DispatchStateCheck(true);
     cq.run_command(
         CommandInterface{.type = EnqueueCommandType::ENQUEUE_PROGRAM, .blocking = blocking, .program = program});
 }
 
 void EnqueueProgramImpl(
-    CommandQueue& cq, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program, bool blocking) {
+    CommandQueue& cq, std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program, bool blocking) {
     ZoneScoped;
     std::visit(
         [&cq, blocking](auto&& program) {
             ZoneScoped;
             using T = std::decay_t<decltype(program)>;
             Device* device = cq.device();
-            if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
+            if constexpr (std::is_same_v<T, std::reference_wrapper<MetalProgram>>) {
                 detail::CompileProgram(device, program);
                 program.get().allocate_circular_buffers();
                 program.get().validate_circular_buffer_region(device);
                 cq.hw_command_queue().enqueue_program(program, blocking);
-                // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
+                // MetalProgram relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
                 // leaks on device.
                 program.get().release_buffers();
-            } else if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
+            } else if constexpr (std::is_same_v<T, std::shared_ptr<MetalProgram>>) {
                 detail::CompileProgram(device, *program);
                 program->allocate_circular_buffers();
                 program->validate_circular_buffer_region(device);
                 cq.hw_command_queue().enqueue_program(*program, blocking);
-                // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
+                // MetalProgram relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
                 // leaks on device.
                 program->release_buffers();
             }

@@ -25,13 +25,13 @@ typedef enum e_data_collector_t {
  *      transaction_size - size in bytes of this transaction.
  *      riscv - riscv core that this transaction is used for, only relevant for DISPATCH_DATA_BINARY transactions.
  */
-void RecordDispatchData(Program &program, data_collector_t type, uint32_t transaction_size, RISCV riscv = RISCV::MAX);
+void RecordDispatchData(MetalProgram &program, data_collector_t type, uint32_t transaction_size, RISCV riscv = RISCV::MAX);
 
 // Record the KernelGroups present in this program (per core type). Should only be called per program created, not
 // program enqueued.
-void RecordKernelGroups(Program &program, CoreType core_type, std::vector<KernelGroup> &kernel_groups);
+void RecordKernelGroups(MetalProgram &program, CoreType core_type, std::vector<KernelGroup> &kernel_groups);
 
 // Update stats with an enqueue of given program.
-void RecordProgramRun(Program &program);
+void RecordProgramRun(MetalProgram &program);
 
 } // end namespace tt

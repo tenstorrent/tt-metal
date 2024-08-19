@@ -150,7 +150,7 @@ static void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) 
 static void tracy_frame() { FrameMark; }
 
 #if defined(TRACY_ENABLE)
-static inline json get_kernels_json(const Program& program) {
+static inline json get_kernels_json(const MetalProgram& program) {
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {

@@ -100,7 +100,7 @@ void populate_reports(const Device *device, std::ofstream &memory_usage_summary_
     write_memory_usage(device, BufferType::L1, memory_usage_summary_report, detailed_memory_usage_report, l1_usage_summary_report);
 }
 
-void MemoryReporter::flush_program_memory_usage(const Program &program, const Device *device) {
+void MemoryReporter::flush_program_memory_usage(const MetalProgram &program, const Device *device) {
     if (not this->program_memory_usage_summary_report_.is_open()) {
         this->init_reports();
     }

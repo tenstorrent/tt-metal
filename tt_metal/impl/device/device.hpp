@@ -28,18 +28,18 @@ namespace tt_metal {
 // Fwd declares
 enum class BufferType;
 class Buffer;
-class Program;
+class MetalProgram;
 class JitBuildEnv;
 class HWCommandQueue;
 class CommandQueue;
 
 namespace detail {
 // TODO(agrebenisan): Need device to hold onto command queue programs,
-// but the Program type is incomplete by this point. I can have
+// but the MetalProgram type is incomplete by this point. I can have
 // a unique_ptr of incomplete type as long as I override the default
 // delete function.
 struct ProgramDeleter {
-    void operator()(Program* p);
+    void operator()(MetalProgram* p);
 };
 
 class TraceDescriptor;
@@ -228,7 +228,7 @@ class Device {
     void init_command_queue_host();
     void init_command_queue_device();
     void initialize_synchronous_sw_cmd_queue();
-    void configure_kernel_variant(Program& program, string path, std::vector<uint32_t> compile_args, CoreCoord kernel_core, CoreCoord Kernel_physical_core,
+    void configure_kernel_variant(MetalProgram& program, string path, std::vector<uint32_t> compile_args, CoreCoord kernel_core, CoreCoord Kernel_physical_core,
                                   CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false);
     void compile_command_queue_programs();
     void configure_command_queue_programs();
@@ -251,9 +251,9 @@ class Device {
     WorkExecutorMode get_worker_mode() { return work_executor.get_worker_mode(); }
     void set_worker_queue_mode(const WorkerQueueMode& mode) { this->work_executor.set_worker_queue_mode(mode); }
     WorkerQueueMode get_worker_queue_mode() { return this->work_executor.get_worker_queue_mode(); }
-    // TODO: Uplift usage of friends. Buffer and Program just need access to allocator
+    // TODO: Uplift usage of friends. Buffer and MetalProgram just need access to allocator
     friend class Buffer;
-    friend class Program;
+    friend class MetalProgram;
     friend class SystemMemoryManager;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
@@ -282,11 +282,11 @@ class Device {
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_;
 
-    vector<std::unique_ptr<Program, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;
+    vector<std::unique_ptr<MetalProgram, tt::tt_metal::detail::ProgramDeleter>> command_queue_programs;
     bool using_fast_dispatch;
     program_cache::detail::ProgramCache program_cache;
 
-    // Program cache interface. Syncrhonize with worker worker threads before querying or
+    // MetalProgram cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache() {
         log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);

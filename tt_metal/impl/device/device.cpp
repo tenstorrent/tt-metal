@@ -27,7 +27,7 @@ namespace tt {
 
 namespace tt_metal {
 
-void ::detail::ProgramDeleter::operator()(Program *p) {
+void ::detail::ProgramDeleter::operator()(MetalProgram *p) {
     delete p;
 }
 
@@ -493,7 +493,7 @@ void Device::clear_l1_state() {
 }
 
 void Device::configure_kernel_variant(
-    Program& program,
+    MetalProgram& program,
     string path,
     std::vector<uint32_t> compile_args,
     CoreCoord kernel_core,
@@ -1342,8 +1342,8 @@ void Device::setup_tunnel_for_remote_devices() {
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
-    std::unique_ptr<Program, detail::ProgramDeleter> command_queue_program_ptr(new Program);
-    std::unique_ptr<Program, detail::ProgramDeleter> mmio_command_queue_program_ptr(new Program);
+    std::unique_ptr<MetalProgram, detail::ProgramDeleter> command_queue_program_ptr(new MetalProgram);
+    std::unique_ptr<MetalProgram, detail::ProgramDeleter> mmio_command_queue_program_ptr(new MetalProgram);
 
     std::string prefetch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
     std::string dispatch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
@@ -1784,7 +1784,7 @@ void Device::configure_command_queue_programs() {
         TT_ASSERT(this->command_queue_programs.size() == program_size);
     }
 
-    Program& command_queue_program = *this->command_queue_programs[0];
+    MetalProgram& command_queue_program = *this->command_queue_programs[0];
     uint8_t num_hw_cqs = this->num_hw_cqs();
 
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
@@ -1845,7 +1845,7 @@ void Device::configure_command_queue_programs() {
     if (device_id != mmio_device_id) {
         if (tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1) {
             //first or only remote device on the tunnel, launch fd2 kernels on mmio device for all remote devices.
-            Program& mmio_command_queue_program = *this->command_queue_programs[1];
+            MetalProgram& mmio_command_queue_program = *this->command_queue_programs[1];
             detail::ConfigureDeviceWithProgram(mmio_device, mmio_command_queue_program, true);
             tt::Cluster::instance().l1_barrier(mmio_device_id);
         }
@@ -1892,7 +1892,7 @@ void Device::init_command_queue_device() {
         TT_ASSERT(this->command_queue_programs.size() == program_size);
     }
     this->configure_command_queue_programs();
-    Program& command_queue_program = *this->command_queue_programs[0];
+    MetalProgram& command_queue_program = *this->command_queue_programs[0];
 
     // TODO: should get a const ref
     std::vector<std::vector<CoreCoord>>logical_cores = command_queue_program.logical_cores();
@@ -1910,7 +1910,7 @@ void Device::init_command_queue_device() {
         if (tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1) {
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
             Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
-            Program& mmio_command_queue_program = *this->command_queue_programs[1];
+            MetalProgram& mmio_command_queue_program = *this->command_queue_programs[1];
             std::vector<std::vector<CoreCoord>>logical_cores = mmio_command_queue_program.logical_cores();
             for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
                 const auto& logical_dispatch_cores = logical_cores[index];
@@ -1939,7 +1939,7 @@ void Device::initialize_synchronous_sw_cmd_queue() {
 
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal) {
     ZoneScoped;
-    log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
+    log_info(tt::LogMetal, "Initializing device {}. MetalProgram cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
     hal.initialize(this->arch());

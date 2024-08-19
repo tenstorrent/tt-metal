@@ -23,7 +23,7 @@ class Buffer;
 class Kernel;
 class CircularBuffer;
 class Device;
-class Program;
+class MetalProgram;
 class JitBuildOptions;
 class CircularBufferConfig;
 
@@ -39,7 +39,7 @@ struct KernelGroup {
 
     KernelGroup();
     KernelGroup(
-        const Program &program,
+        const MetalProgram &program,
         uint32_t programmable_core_type_index,
         kernel_id_array_t kernel_ids,
         bool erisc_is_idle,
@@ -60,20 +60,20 @@ struct ProgramConfig {
     uint32_t sem_size;
 };
 
-class Program {
+class MetalProgram {
     friend class KernelGroup;
 
    public:
-    Program();
+    MetalProgram();
 
-    Program(const Program &other) = delete;
-    Program& operator=(const Program &other) = delete;
+    MetalProgram(const MetalProgram &other) = delete;
+    MetalProgram& operator=(const MetalProgram &other) = delete;
 
-    Program(Program &&other) = default;
-    Program& operator=(Program &&other) = default;
+    MetalProgram(MetalProgram &&other) = default;
+    MetalProgram& operator=(MetalProgram &&other) = default;
 
     void set_runtime_id(uint64_t id);
-    ~Program();
+    ~MetalProgram();
 
     void construct_core_range_set_for_worker_cores();
 
@@ -213,9 +213,9 @@ class Program {
     std::vector<ProgramConfig> program_configs_;
     std::vector<uint32_t> program_config_sizes_;
     bool capture_multi_device_dependencies_ = false;
-    friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
+    friend CBHandle CreateCircularBuffer(MetalProgram &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
 
-    friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
+    friend uint32_t CreateSemaphore(MetalProgram &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
 

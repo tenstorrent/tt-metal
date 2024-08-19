@@ -22,7 +22,7 @@ namespace tt_metal {
 
 // TODO: Can remove this when device changes come through as well
 namespace detail {
-void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_metal::Program> &sync_program, bool doHeader);
+void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_metal::MetalProgram> &sync_program, bool doHeader);
 }
 
 std::map <uint32_t, DeviceProfiler> tt_metal_device_profiler_map;
@@ -214,7 +214,7 @@ void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
 #endif
 }
 
-void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_metal::Program> &sync_program, bool doHeader)
+void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_metal::MetalProgram> &sync_program, bool doHeader)
 {
     if (!tt::llrt::OptionsG.get_profiler_sync_enabled()) return;
     ZoneScopedC(tracy::Color::Tomato3);
@@ -226,7 +226,7 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
 
     constexpr uint16_t sampleCount = 249;
     if (sync_program == nullptr) {
-        sync_program = std::make_shared<tt_metal::Program>();
+        sync_program = std::make_shared<tt_metal::MetalProgram>();
 
         std::map<string, string> kernel_defines = {
             {"SAMPLE_COUNT", std::to_string(sampleCount)},

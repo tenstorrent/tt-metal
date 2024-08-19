@@ -284,7 +284,7 @@ class EnqueueProgramCommand : public Command {
     uint32_t command_queue_id;
     Device* device;
     NOC noc_index;
-    Program& program;
+    MetalProgram& program;
     SystemMemoryManager& manager;
     CoreCoord dispatch_core;
     CoreType dispatch_core_type;
@@ -308,7 +308,7 @@ class EnqueueProgramCommand : public Command {
         uint32_t command_queue_id,
         Device* device,
         NOC noc_index,
-        Program& program,
+        MetalProgram& program,
         CoreCoord& dispatch_core,
         SystemMemoryManager& manager,
         uint32_t expected_num_workers_completed);
@@ -544,7 +544,7 @@ class HWCommandQueue {
         HostDataType src,
         bool blocking);
     void enqueue_write_buffer(const Buffer& buffer, const void* src, bool blocking);
-    void enqueue_program(Program& program, bool blocking);
+    void enqueue_program(MetalProgram& program, bool blocking);
     void enqueue_record_event(std::shared_ptr<Event> event, bool clear_count = false);
     void enqueue_wait_for_event(std::shared_ptr<Event> sync_event, bool clear_count = false);
     void enqueue_trace(const uint32_t trace_id, bool blocking);
@@ -555,7 +555,7 @@ class HWCommandQueue {
     friend void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking);
     friend void EnqueueProgramImpl(
         CommandQueue& cq,
-        std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program,
+        std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program,
         bool blocking);
     friend void EnqueueReadBufferImpl(
         CommandQueue& cq,
@@ -583,7 +583,7 @@ struct CommandInterface {
     EnqueueCommandType type;
     std::optional<bool> blocking;
     std::optional<std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>> buffer;
-    std::optional<std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>>> program;
+    std::optional<std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>>> program;
     std::optional<AllocBufferMetadata> alloc_md;
     std::optional<RuntimeArgsMetadata> runtime_args_md;
     std::optional<const Buffer*> shadow_buffer;
@@ -695,7 +695,7 @@ void EnqueueSetRuntimeArgs(
 void EnqueueAddBufferToProgram(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program,
+    std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program,
     bool blocking);
 
 }  // namespace tt::tt_metal

@@ -79,7 +79,7 @@ std::string kernel_attributes_str(std::shared_ptr<Kernel> kernel) {
     return attr_str;
 }
 
-void CompilationReporter::add_kernel_compile_stats(const Program &program, std::shared_ptr<Kernel> kernel, bool cache_hit, size_t kernel_hash) {
+void CompilationReporter::add_kernel_compile_stats(const MetalProgram &program, std::shared_ptr<Kernel> kernel, bool cache_hit, size_t kernel_hash) {
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (cache_hit) {
@@ -102,7 +102,7 @@ void CompilationReporter::add_kernel_compile_stats(const Program &program, std::
     this->program_id_to_kernel_stats_[program.get_id()].push_back(kernel_stats);
 }
 
-void CompilationReporter::flush_program_entry(const Program &program, bool persistent_compilation_cache_enabled) {
+void CompilationReporter::flush_program_entry(const MetalProgram &program, bool persistent_compilation_cache_enabled) {
     std::unique_lock<std::mutex> lock(mutex_);
     auto num_cache_misses = this->program_id_to_cache_hit_counter_.at(program.get_id()).misses;
     auto num_cache_hits = this->program_id_to_cache_hit_counter_.at(program.get_id()).hits;

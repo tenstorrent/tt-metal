@@ -10,7 +10,7 @@
 #include <string>
 namespace tt::tt_metal {
 
-class Program;
+class MetalProgram;
 class Device;
 namespace detail {
 
@@ -57,7 +57,7 @@ class MemoryReporter {
     MemoryReporter(const MemoryReporter&) = delete;
     MemoryReporter(MemoryReporter&& other) noexcept = delete;
 
-    void flush_program_memory_usage(const Program &program, const Device *device);
+    void flush_program_memory_usage(const MetalProgram &program, const Device *device);
 
     void dump_memory_usage_state(const Device *device, std::string prefix="") const;
 
