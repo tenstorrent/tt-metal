@@ -71,7 +71,7 @@ operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, const
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    Program program = Program();
+    Program program = CreateProgram();
 
     // create circular buffers
     auto data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());

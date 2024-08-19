@@ -66,7 +66,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto *device = output_grad.device();
-    auto program = Program();
+    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

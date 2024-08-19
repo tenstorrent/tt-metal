@@ -16,7 +16,7 @@ namespace operations {
 namespace primary {
 
 operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &output_grad, const Tensor &bias_grad, const DeviceComputeKernelConfig &compute_kernel_config) {
-    Program program{};
+    Program program = CreateProgram();
 
     DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     uint32_t single_tile_size = detail::TileSize(cb_data_format);

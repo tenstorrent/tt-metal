@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks moreh_arange_(
 
     auto element_size = output.element_size();
 
-    Program program = Program();
+    Program program = CreateProgram();
 
     // create circular buffers
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());

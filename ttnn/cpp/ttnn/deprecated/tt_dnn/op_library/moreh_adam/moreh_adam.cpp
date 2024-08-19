@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks moreh_adam_(
     const DeviceComputeKernelConfig compute_kernel_config) {
     uint32_t num_tiles = param_in.volume() / TILE_HW;
 
-    Program program{};
+    Program program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup

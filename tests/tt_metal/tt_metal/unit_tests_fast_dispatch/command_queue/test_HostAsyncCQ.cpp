@@ -203,7 +203,7 @@ TEST_F(CommandQueueFixture, TestAsyncCommandQueueSanityAndProfile) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    Program program;
+    Program program = CreateProgram();
 
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
@@ -225,7 +225,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    Program program; /* Dummy program that helps keep track of buffers */
+    Program program = CreateProgram(); /* Dummy program that helps keep track of buffers */
     std::vector<Buffer> buffer_objects;
     for (int j = 0; j < 10; j++) {
         // Asynchronously initialize a buffer on device
@@ -284,7 +284,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncCBAllocation) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    Program program;
+    Program program = CreateProgram();
 
     const uint32_t num_pages = 1;
     const uint32_t page_size = detail::TileSize(tt::DataFormat::Float16_b);
@@ -326,7 +326,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncAssertForDeprecatedAPI) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    Program program;
+    Program program = CreateProgram();
     CoreCoord core = {0, 0};
     uint32_t buf_size = 4096;
     uint32_t page_size = 4096;

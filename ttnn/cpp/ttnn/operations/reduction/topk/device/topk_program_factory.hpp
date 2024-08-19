@@ -11,7 +11,7 @@
 namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks topk_single_core_interleaved(const Tensor &input_tensor, const uint16_t k, const int8_t dim, Tensor &value_tensor, Tensor &index_tensor) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     CoreRange core({0, 0}, {0, 0});
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.get_dtype());
@@ -204,7 +204,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
  *
 */
 operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_tensor, const uint16_t k, const int8_t dim, Tensor &value_tensor, Tensor &index_tensor) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());

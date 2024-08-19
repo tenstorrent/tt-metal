@@ -16,7 +16,7 @@ namespace primary {
     operation::ProgramWithCallbacks prod_single_core(const Tensor &a, const Tensor& output)
     {
 
-        Program program{};
+        Program program = CreateProgram();
 
         CoreRange core({0, 0}, {0, 0});
 

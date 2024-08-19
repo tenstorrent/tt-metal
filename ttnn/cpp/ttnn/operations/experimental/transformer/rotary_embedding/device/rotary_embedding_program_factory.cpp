@@ -27,7 +27,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     std::optional<uint32_t> token_idx,
     DeviceComputeKernelConfig compute_kernel_config
 ) {
-    Program program{};
+    Program program = CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);

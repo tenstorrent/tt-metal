@@ -40,7 +40,7 @@ void validate_cb_address(Program &program, Device *device, const CoreRangeSet &c
 
 TEST_F(DeviceFixture, TestCircularBuffersSequentiallyPlaced) {
   for (unsigned int id = 0; id < num_devices_; id++) {
-    Program program;
+    Program program = CreateProgram();
     CBConfig cb_config;
     CoreCoord core(0, 0);
     CoreRange cr(core, core);
@@ -67,7 +67,7 @@ TEST_F(DeviceFixture, TestCircularBuffersSequentiallyPlaced) {
 
 TEST_F(DeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
   for (unsigned int id = 0; id < num_devices_; id++) {
-    Program program;
+    Program program = CreateProgram();
     CBConfig cb_config;
 
     CoreCoord core0(0, 0);
@@ -109,7 +109,7 @@ TEST_F(DeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
 
 TEST_F(DeviceFixture, TestValidCircularBufferAddress) {
   for (unsigned int id = 0; id < num_devices_; id++) {
-    Program program;
+    Program program = CreateProgram();
     CBConfig cb_config;
 
     auto buffer_size = cb_config.page_size;
@@ -150,7 +150,7 @@ TEST_F(DeviceFixture, TestValidCircularBufferAddress) {
 
 TEST_F(DeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
   for (unsigned int id = 0; id < num_devices_; id++) {
-    Program program;
+    Program program = CreateProgram();
     uint32_t page_size = TileSize(tt::DataFormat::Float16_b);
 
     auto buffer_size = page_size * 128;
@@ -182,7 +182,7 @@ TEST_F(DeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
 
 TEST_F(DeviceFixture, TestValidUpdateCircularBufferSize) {
   for (unsigned int id = 0; id < num_devices_; id++) {
-    Program program;
+    Program program = CreateProgram();
     CBConfig cb_config;
     CoreCoord core0(0, 0);
     CoreRange cr(core0, core0);
@@ -215,7 +215,7 @@ TEST_F(DeviceFixture, TestValidUpdateCircularBufferSize) {
 
 TEST_F(DeviceFixture, TestInvalidUpdateCircularBufferSize) {
   for (unsigned int id = 0; id < num_devices_; id++) {
-    Program program;
+    Program program = CreateProgram();
     CBConfig cb_config;
     CoreCoord core0(0, 0);
     CoreRange cr(core0, core0);
@@ -245,7 +245,7 @@ TEST_F(DeviceFixture, TestInvalidUpdateCircularBufferSize) {
 
 TEST_F(DeviceFixture, TestUpdateCircularBufferAddress) {
   for (unsigned int id = 0; id < num_devices_; id++) {
-    Program program;
+    Program program = CreateProgram();
     CBConfig cb_config;
     CoreCoord core0(0, 0);
     CoreRange cr(core0, core0);
@@ -284,7 +284,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferAddress) {
 
 TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
   for (unsigned int id = 0; id < num_devices_; id++) {
-    Program program;
+    Program program = CreateProgram();
     CBConfig cb_config;
     CoreCoord core0(0, 0);
     CoreRange cr(core0, core0);
@@ -359,7 +359,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
 
 TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
   for (unsigned int id = 0; id < num_devices_; id++) {
-    Program program;
+    Program program = CreateProgram();
     CoreCoord core(0, 0);
 
     uint32_t single_tile_size = 2 * 1024;

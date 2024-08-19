@@ -17,7 +17,7 @@ namespace operations {
 namespace primary {
 
 operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Tensor &b, Tensor &output) {
-    Program program{};
+    Program program = CreateProgram();
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 

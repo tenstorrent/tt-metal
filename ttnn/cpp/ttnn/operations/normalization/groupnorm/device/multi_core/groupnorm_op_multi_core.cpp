@@ -334,7 +334,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = Program();
+    Program program = CreateProgram();
     // define core ranges
     bool use_mcast = num_cores_per_batch > 1 or num_cores_per_group > 1;
     uint32_t start_core_x = 0;

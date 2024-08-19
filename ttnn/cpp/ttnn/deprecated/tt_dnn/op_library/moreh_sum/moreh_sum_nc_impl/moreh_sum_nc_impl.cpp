@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto *device = input.device();
-    auto program = Program();
+    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

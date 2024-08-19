@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, con
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto *device = input.device();
-    auto program = Program();
+    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

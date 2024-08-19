@@ -57,7 +57,7 @@ std::vector<CoreRange> get_multicast_regions(const Device *device, const CoreRan
 // This variant of move is invoked when the input buffer and output buffer overlap, which is possible because input buffer is deallocated before the op runs.
 // In this case, data in each core needs to be moved to a temporary local location before being copied into the output buffer
 operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input, Tensor &output) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
 

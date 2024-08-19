@@ -50,7 +50,7 @@ TEST_F(DeviceFixture, TestCreateCircularBufferAtValidIndices) {
     CoreRange cr({0, 0}, {0, 1});
     CoreRangeSet cr_set({cr});
 
-    Program program;
+    Program program = CreateProgram();
     initialize_program(program, cr_set);
 
     std::map<uint8_t, std::vector<uint32_t>> golden_cb_config = {
@@ -84,14 +84,14 @@ TEST_F(DeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
 }
 
 TEST_F(DeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
-    Program program;
+    Program program = CreateProgram();
     CBConfig cb_config;
 
     EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}}).set_page_size(1, cb_config.page_size));
 }
 
 TEST_F(DeviceFixture, TestCreateCircularBufferAtOverlappingIndex) {
-    Program program;
+    Program program = CreateProgram();
     CBConfig cb_config;
 
     CoreRange cr({0, 0}, {1, 1});

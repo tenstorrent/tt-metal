@@ -366,7 +366,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     log_debug("M: {}, K: {}, N: {}", M, K, N);
     log_debug("per_core_M: {}, per_core_N_storage: {}", per_core_M, per_core_N_storage);
 
-    tt_metal::Program program{};
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     // get the dram readers
     CoreRangeSet all_worker_cores = CoreRangeSet{{}};

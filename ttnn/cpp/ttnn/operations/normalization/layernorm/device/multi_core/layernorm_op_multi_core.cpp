@@ -577,7 +577,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = Program();
+    Program program = CreateProgram();
     // define core ranges
     bool use_mcast = num_blocks > 1;
 

@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
             ////////////////////////////////////////////////////////////////////////////
             //                      Application Setup
             ////////////////////////////////////////////////////////////////////////////
-            programs.push_back(Program());
+            programs.push_back(CreateProgram());
             Program& program = programs.back();
 
             uint32_t single_tile_size = 2 * 1024;

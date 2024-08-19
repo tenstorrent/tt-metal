@@ -14,7 +14,7 @@ using namespace tt;
 using namespace tt::constants;
 
 operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Tensor &output) {
-    Program program{};
+    Program program = CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 

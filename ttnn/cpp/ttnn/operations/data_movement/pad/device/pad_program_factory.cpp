@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
                                                      const tt::tt_metal::Shape &output_tensor_shape,
                                                      const tt::tt_metal::Shape &input_tensor_start,
                                                      const float pad_value) {
-    Program program{};
+    Program program = CreateProgram();
 
     auto output_shape = output_tensor_shape;
 
@@ -172,7 +172,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
                                            const Shape &output_tensor_shape,
                                            const Shape &input_tensor_start,
                                            const float pad_value) {
-    Program program{};
+    Program program = CreateProgram();
 
     auto output_shape = output_tensor_shape;
 
@@ -286,7 +286,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
 
 operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value) {
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -390,7 +390,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
 
 operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const tt::tt_metal::Shape &output_tensor_shape, const tt::tt_metal::Shape &input_tensor_start, const float pad_value) {
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -640,7 +640,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
                                                                 const tt::tt_metal::Shape &output_tensor_shape,
                                                                 const tt::tt_metal::Shape &input_tensor_start,
                                                                 const float pad_value) {
-    Program program{};
+    Program program = CreateProgram();
 
     auto output_shape = output_tensor_shape;
 
@@ -972,7 +972,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
                                                                 const tt::tt_metal::Shape &output_tensor_shape,
                                                                 const tt::tt_metal::Shape &input_tensor_start,
                                                                 const float pad_value) {
-    Program program{};
+    Program program = CreateProgram();
 
     auto output_shape = output_tensor_shape;
     uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
@@ -1298,7 +1298,7 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
                                                                 const tt::tt_metal::Shape &output_tensor_shape,
                                                                 const tt::tt_metal::Shape &input_tensor_start,
                                                                 const float pad_value) {
-    Program program{};
+    Program program = CreateProgram();
 
     auto output_shape = output_tensor_shape;
     uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];

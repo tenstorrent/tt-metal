@@ -18,7 +18,7 @@ using namespace tt::constants;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& output) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -313,7 +313,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
 }
 
 operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, Tensor& output) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);

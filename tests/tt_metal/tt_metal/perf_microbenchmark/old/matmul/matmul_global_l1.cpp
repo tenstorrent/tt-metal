@@ -41,7 +41,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     std::shared_ptr<tt_metal::Buffer> out_buffer, tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format, tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format) {
-  tt_metal::Program program{};
+  tt_metal::Program program = tt_metal::CreateProgram();
 
   uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
   uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);

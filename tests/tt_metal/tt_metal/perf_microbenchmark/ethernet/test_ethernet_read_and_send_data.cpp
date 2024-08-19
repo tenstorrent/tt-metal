@@ -170,7 +170,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::Program();
+    tt_metal::Program sender_program = tt_metal::CreateProgram();
 
     uint32_t num_pages_per_l1_buffer = num_bytes_per_send / input_buffer_page_size;
     TT_ASSERT(num_messages_to_send * num_pages_per_l1_buffer >= num_pages);
@@ -209,7 +209,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                           Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::Program();
+    tt_metal::Program receiver_program = tt_metal::CreateProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,

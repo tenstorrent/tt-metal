@@ -60,7 +60,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Device* device = input.device();
-    Program program = Program();
+    Program program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

@@ -107,7 +107,7 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
 }
 
 bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
-    Program program;
+    Program program = CreateProgram();
 
     initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
@@ -119,7 +119,7 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyP
 }
 
 bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
-    Program program;
+    Program program = CreateProgram();
 
     const std::vector<CBHandle>& cb_handles = initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
@@ -181,7 +181,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Progr
 }
 
 bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
-    Program program;
+    Program program = CreateProgram();
     vector<uint32_t> expected_semaphore_values;
 
     for (uint32_t initial_sem_value = 0; initial_sem_value < program_config.num_sems; initial_sem_value++) {
@@ -193,7 +193,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config, uint32_t num_runtime_args_dm0, uint32_t num_runtime_args_dm1, uint32_t num_runtime_args_compute, uint32_t num_iterations) {
-    Program program;
+    Program program = CreateProgram();
     bool pass = true;
 
     CoreRangeSet cr_set = program_config.cr_set;
@@ -289,7 +289,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     uint32_t num_runtime_args_for_cr0,
     uint32_t num_runtime_args_for_cr1,
     uint32_t num_iterations) {
-    Program program;
+    Program program = CreateProgram();
     bool pass = true;
 
     // TODO: this test would be better if it varied args across core ranges and kernel type
@@ -528,7 +528,7 @@ bool verify_rt_args(bool unique, Device* device, CoreCoord logical_core, const t
 // Write unique and common RT args, increment in kernel, and verify correctness via readback.
 bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig& program_config, uint32_t num_unique_rt_args, uint32_t num_common_rt_args, const tt::RISCV &riscv, bool idle_eth = false) {
 
-    Program program;
+    Program program = CreateProgram();
     bool pass = true;
     CoreRangeSet cr_set = program_config.cr_set;
 
@@ -679,7 +679,7 @@ namespace compiler_workaround_hardware_bug_tests {
 
 TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
     for (Device *device : devices_) {
-        Program program;
+        Program program = CreateProgram();
 
         CoreRange cr({0, 0}, {0, 0});
         CoreRangeSet cr_set({cr});
@@ -761,7 +761,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCor
     CoreCoord core_coord(0,0);
 
     for (Device *device : devices_) {
-        Program program;
+        Program program = CreateProgram();
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
             .set_page_size(intermediate_cb, single_tile_size)
             .set_page_size(out_cb, single_tile_size);
@@ -821,7 +821,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSing
 
 TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
     for (Device *device : devices_) {
-        Program program;
+        Program program = CreateProgram();
 
         CoreRange cr({0, 0}, {0, 0});
         CoreRangeSet cr_set({cr});
@@ -1050,7 +1050,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllSemaphoreConfigsCorrectlySentMultip
 
         CoreRangeSet cr_set({first_cr, second_cr});
 
-        Program program;
+        Program program = CreateProgram();
         DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
         vector<vector<uint32_t>> expected_semaphore_vals;
@@ -1242,7 +1242,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
     vector<Program> programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        programs.push_back(Program());
+        programs.push_back(CreateProgram());
         Program& program = programs.back();
 
         std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};

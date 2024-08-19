@@ -38,7 +38,7 @@ using OverrideRuntimeArgumentsCallback = std::function<void(
 
 template <typename OutputTensors = Tensors>
 struct CacheableProgram {
-    Program program{};
+    Program program = CreateProgram();
     std::optional<OverrideAddressesCallback> override_addresses_callback = std::nullopt;
     std::optional<OverrideRuntimeArgumentsCallback<OutputTensors>> override_runtime_arguments_callback = std::nullopt;
 

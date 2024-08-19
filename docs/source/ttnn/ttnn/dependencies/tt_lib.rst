@@ -149,7 +149,7 @@ In order for an op to be cachable, it needs to implement the following:
         // i.e.:
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor> &input_tensors) const {
 
-            Program program{};
+            Program program = CreateProgram();
 
             // ...
 

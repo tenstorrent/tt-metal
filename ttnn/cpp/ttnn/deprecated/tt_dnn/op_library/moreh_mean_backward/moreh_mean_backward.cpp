@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks moreh_mean_backward_program(const Tensor &output
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto *device = output_grad.device();
-    auto program = Program();
+    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

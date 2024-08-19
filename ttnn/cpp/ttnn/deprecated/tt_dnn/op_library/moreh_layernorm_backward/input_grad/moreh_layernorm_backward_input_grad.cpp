@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Device* device = output_grad.device();
-    Program program = Program();
+    Program program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

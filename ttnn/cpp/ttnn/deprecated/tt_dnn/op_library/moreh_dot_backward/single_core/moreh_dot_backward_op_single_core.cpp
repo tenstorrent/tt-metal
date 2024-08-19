@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
     const Tensor &other,
     const std::optional<const Tensor> &input_grad,
     const std::optional<const Tensor> &other_grad) {
-    Program program{};
+    Program program = CreateProgram();
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 
