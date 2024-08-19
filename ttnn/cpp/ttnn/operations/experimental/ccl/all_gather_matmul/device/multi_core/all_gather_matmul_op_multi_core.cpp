@@ -22,7 +22,7 @@
 
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_op_fusion.hpp"
-
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt::constants;
 
@@ -49,10 +49,12 @@ DatacopyParams setup_datacopy(
     const uint32_t ring_index,
     all_gather_op::Topology topology,
 
-    CoreCoord datacopy_core_coord
+    CoreCoord datacopy_core_coord,
+    ttnn::experimental::ccl::MatmulFusedOpSignaler matmul_signal_info
 ) {
 
     std::size_t num_edm_buffers_per_channel = 2;
+    const auto& device = input_tensor.device();
     auto const& all_gather_config = ttnn::AllGatherConfig(input_tensor, all_gather_output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, true);
     const uint32_t num_transfers = 4; // ring_size - 1;
 
@@ -110,6 +112,8 @@ DatacopyParams setup_datacopy(
         static_cast<uint32_t>(datacopy_signal_semaphore_id_dir0),
         static_cast<uint32_t>(datacopy_signal_semaphore_id_dir1),
         static_cast<uint32_t>(datacopy_buffer_size),
+        static_cast<uint32_t>(matmul_signal_info.num_matmul_cores_to_signal),
+        static_cast<uint32_t>(matmul_signal_info.matmul_signal_sem_addrs[0])
     };
 
     uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -124,6 +128,12 @@ DatacopyParams setup_datacopy(
         static_cast<uint32_t>(all_gather_output_buffer->address()),
         static_cast<uint32_t>(datacopy_output_buffer->address()),
     };
+
+    // Push the matmul core NOC coordinates
+    for (auto coord : matmul_signal_info.matmul_cores_noc_coords) {
+        datacopy_rt_args.push_back(coord.x);
+        datacopy_rt_args.push_back(coord.y);
+    }
 
     std::map<string, string> kernel_defines = {
         {"TILED_LAYOUT", "1"},
@@ -180,18 +190,99 @@ DatacopyParams setup_datacopy(
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
-operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_workers(const Tensor& input_tensor, Tensor& all_gather_output_tensor, Tensor& datacopy_output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology, const CoreCoord core_grid_offset) {
+operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_workers(
+    const Tensor& input_tensor,
+    Tensor& all_gather_output_tensor,
+    Tensor& datacopy_output_tensor,
+    const Tensor& weight_tensor,
+    Tensor& matmul_output_tensor,
 
+    /* All Gather Params */
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    const std::optional<chip_id_t> receiver_device_id,
+    const std::optional<chip_id_t> sender_device_id,
+    all_gather_op::Topology topology,
+    const CoreCoord core_grid_offset,
+
+
+    /* Matmul Params */
+    const std::optional<const Tensor> bias,
+    bool bcast_batch,
+    CoreCoord compute_with_storage_grid_size,
+    DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t in0_block_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool fuse_batch,
+    bool transpose_mcast,
+    std::optional<operations::matmul::UnaryWithParam> fused_activation,
+    bool untilize_out
+
+) {
     tt::tt_metal::Program program{};
 
-    DatacopyParams datacopy_params = setup_datacopy(program, input_tensor, all_gather_output_tensor, datacopy_output_tensor, dim, num_links, ring_size, ring_index, topology, {0, 0});
+    // Create a matmul signal info object that gets populated by the matmul kernel
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_signal_info = ttnn::experimental::ccl::MatmulFusedOpSignaler();
+
+    // Matmul
+    auto matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+        program,
+        datacopy_output_tensor,
+        weight_tensor,
+        bias,
+        matmul_output_tensor,
+        bcast_batch,
+        compute_with_storage_grid_size,
+        compute_kernel_config,
+        in0_block_w,
+        out_subblock_h,
+        out_subblock_w,
+        per_core_M,
+        per_core_N,
+        fuse_batch,
+        transpose_mcast,
+        fused_activation,
+        untilize_out,
+        matmul_signal_info
+    );
+
+    DatacopyParams datacopy_params = setup_datacopy(
+        matmul_program_with_callbacks.program,
+        input_tensor,
+        all_gather_output_tensor,
+        datacopy_output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        topology,
+        {0, 5},
+        matmul_signal_info.value()
+    );
     const auto& datacopy_override_runtime_arguments_callback = datacopy_params.datacopy_override_runtime_arguments_callback;
 
     std::optional<AllGatherFusedOpSignaler> fused_op_signaler = AllGatherFusedOpSignaler(datacopy_params.datacopy_cores, datacopy_params.datacopy_signal_semaphore_ids);
 
     // Pass in the datacopy cores and sempahore address (Using optional arguments)
-    operation::ProgramWithCallbacks program_with_callbacks = ttnn::all_gather_multi_core_with_workers_helper(program, input_tensor, all_gather_output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, fused_op_signaler, core_grid_offset);
-    auto all_gather_override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback;
+    operation::ProgramWithCallbacks program_with_callbacks = ttnn::all_gather_multi_core_with_workers_helper(
+        matmul_program_with_callbacks.program,
+        input_tensor,
+        all_gather_output_tensor,
+        dim,
+        num_links,
+        ring_size,
+        ring_index,
+        receiver_device_id,
+        sender_device_id,
+        topology,
+        fused_op_signaler,
+        core_grid_offset);
+    const auto all_gather_override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback;
 
     // Fuse the datacopy and all-gather overriden runtime arguments callbacks
     auto override_runtime_arguments_callback = [all_gather_override_runtime_arguments_callback, datacopy_override_runtime_arguments_callback] (

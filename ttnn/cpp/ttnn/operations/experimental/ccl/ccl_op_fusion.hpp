@@ -111,6 +111,13 @@ struct AllGatherFusedOpSignaler {
 
 };
 
+// Used to propagate semaphore information from matmul to all_gather in all_gather_matmul op
+struct MatmulFusedOpSignaler {
+    uint32_t num_matmul_cores_to_signal;
+    std::vector<uint32_t> matmul_signal_sem_addrs;
+    std::vector<CoreCoord> matmul_cores_noc_coords;
+};
+
 
 }  // namespace ccl
 }  // namespace experimental

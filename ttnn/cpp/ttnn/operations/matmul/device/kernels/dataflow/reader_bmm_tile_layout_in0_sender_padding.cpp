@@ -6,6 +6,8 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "debug/dprint.h"
+
 
 void kernel_main() {
     // in0 tensor args
@@ -45,6 +47,14 @@ void kernel_main() {
     // batch args
     constexpr uint32_t MtKt = get_compile_time_arg_val(15);  // if 0
     constexpr uint32_t batch = get_compile_time_arg_val(16);
+
+#ifdef MATMUL_SIGNAL
+    /* Overlapped all-gather with matmul params */
+    const uint32_t all_gather_signal_semaphore_addr = get_semaphore(get_compile_time_arg_val(17));
+
+    volatile tt_l1_ptr uint32_t* all_gather_signal_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(all_gather_signal_semaphore_addr);
+#endif
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
@@ -93,6 +103,18 @@ void kernel_main() {
 #ifdef IN0_SHARDED
     uint32_t in0_start_address = get_write_ptr(cb_id_in0);
 #endif
+#endif
+
+#ifdef MATMUL_SIGNAL
+    /*
+
+        Connect to all-gather
+
+    */
+
+    DPRINT << "Waiting for all-gather signal" << ENDL();
+    noc_semaphore_wait(all_gather_signal_semaphore_addr_ptr, VALID);
+    DPRINT << "Received all-gather signal" << ENDL();
 #endif
 
     for (uint32_t b = 0; b < batch; ++b) {

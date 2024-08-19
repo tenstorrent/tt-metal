@@ -24,6 +24,7 @@ using namespace tt;
 using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
+    tt_metal::Program& program,
     tt_metal::Device* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -49,9 +50,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::DataFormat in1_data_format,
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
-    bool untilize_out) {
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &matmul_signal_info) {
     TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
-    tt_metal::Program program{};
+    // tt_metal::Program program{};
 
     uint32_t num_blocks = K / in0_block_w;
 
@@ -490,6 +492,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
     }
 
+    if (matmul_signal_info.has_value()) {
+        mm_kernel_in0_sender_interleaved_defines["MATMUL_SIGNAL"] = "1";
+    }
+
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
@@ -524,6 +530,16 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     .defines = mm_kernel_in0_sender_sharded_defines});
         }
     } else {
+
+        if (matmul_signal_info.has_value()) {
+            auto& matmul_signal_info_struct = matmul_signal_info.value();
+            matmul_signal_info_struct.matmul_signal_sem_addrs.push_back(
+                CreateSemaphore(program, in0_sender_interleaved, 0)
+            );
+
+            // Push back the all gather signal semaphore
+            in0_sender_compile_time_args.push_back((std::uint32_t)matmul_signal_info_struct.matmul_signal_sem_addrs[0]);
+        }
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
@@ -806,6 +822,16 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             in0_receiver_in1_receiver_interleaved_other_cores.value().start_coord,
             in0_receiver_in1_receiver_interleaved_other_cores.value().end_coord,
             true);
+    }
+
+    // Add the matmul core noc coords
+    if (matmul_signal_info.has_value()) {
+        auto& matmul_signal_info_struct = matmul_signal_info.value();
+
+        matmul_signal_info_struct.num_matmul_cores_to_signal = in0_sender_interleaved_cores.size();
+        for (auto& core : in0_sender_interleaved_cores) {
+            matmul_signal_info_struct.matmul_cores_noc_coords.push_back(device->worker_core_from_logical_core(core));
+        }
     }
 
     for (const auto& core : cores) {
@@ -1198,6 +1224,7 @@ namespace operations {
 namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
+    tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor> bias,
@@ -1213,7 +1240,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     bool fuse_batch,
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
-    bool untilize_out) {
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &matmul_signal_info) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // CB dataformats
@@ -1333,6 +1361,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
+        program,
         device,
         math_fidelity,
         fp32_dest_acc_en,
@@ -1358,7 +1387,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
         in1_data_format,
         bias_data_format,
         output_data_format,
-        untilize_out);
+        untilize_out,
+        matmul_signal_info);
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
@@ -1378,7 +1408,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out) {
+
+    tt_metal::Program program{}; /* Create a program */
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_matmul_signal_info;
+
     return matmul_multi_core_reuse_mcast_2d_optimized_(
+        program,
         a,
         b,
         bias,
@@ -1394,7 +1429,48 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
         fuse_batch,
         transpose_mcast,
         fused_activation,
-        untilize_out);
+        untilize_out,
+        empty_matmul_signal_info);
+}
+
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    tt_metal::Program& program, /* Take programa as input by reference */
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<const Tensor> bias,
+    Tensor& output_tensor,
+    bool broadcast_batch,
+    CoreCoord compute_with_storage_grid_size,
+    DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t in0_block_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool fuse_batch,
+    bool transpose_mcast,
+    std::optional<UnaryWithParam> fused_activation,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &matmul_signal_info) {
+    return matmul_multi_core_reuse_mcast_2d_optimized_(
+        program,
+        a,
+        b,
+        bias,
+        output_tensor,
+        broadcast_batch,
+        compute_with_storage_grid_size,
+        compute_kernel_config,
+        in0_block_w,
+        out_subblock_h,
+        out_subblock_w,
+        per_core_M,
+        per_core_N,
+        fuse_batch,
+        transpose_mcast,
+        fused_activation,
+        untilize_out,
+        matmul_signal_info);
 }
 
 }  // namespace matmul

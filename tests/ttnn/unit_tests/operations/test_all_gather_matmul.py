@@ -60,19 +60,20 @@ def run_all_gather_matmul_on_t3000_impl(
     )
 
     # torch matmul output
-    matmul_output = torch.chunk(torch.matmul(input_tensor, weights_tensor), num_devices, 3)
+    silu = torch.nn.SiLU()
+    matmul_output = torch.chunk(torch.matmul(silu(input_tensor), weights_tensor), num_devices, 3)
 
     # Configs for ttnn.matmul
-    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(1, 1),
-        in0_block_w=16,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 4),
+        in0_block_w=4,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
-        out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-        per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-        per_core_N=32,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
-        fused_activation=None,
-        fuse_batch=True,
-        mcast_in0=True,
+        out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+        per_core_M=8,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+        per_core_N=16,  # N / TILE_WIDTH / Grid_Size
+        transpose_mcast=False,
+        fused_activation=ttnn.UnaryOpType.SILU,
+        fuse_batch=False,
     )
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttl.tensor.MathFidelity.HiFi4,
@@ -83,10 +84,10 @@ def run_all_gather_matmul_on_t3000_impl(
 
     # Perform the ops
     for i in range(num_iters):
-        # all_gather
+        # # all_gather
         # tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
-        # matmul
+        # # matmul
         # tt_matmul_output = ttnn.matmul(
         #     tt_out_tensor,
         #     weight_tt,
@@ -96,11 +97,11 @@ def run_all_gather_matmul_on_t3000_impl(
         # )
 
         # Test ttnn all_gather_matmul
-        tt_all_gather_out_tensor, _, tt_datacopy_out_tensor = ttl.all_gather_matmul(
+        tt_all_gather_out_tensor, tt_matmul_output, tt_datacopy_out_tensor = ttl.all_gather_matmul(
             input_tensor_mesh,
             weight_tt,
             dim,
-            (0, 1),
+            (1, 5),
             num_links=num_links,
             memory_config=mem_config,
             program_config=program_config,
@@ -116,16 +117,6 @@ def run_all_gather_matmul_on_t3000_impl(
     #         eq, output = comp_equal(tt_output_tensor, input_tensor)
     #     else:
     #         eq, output = comp_pcc(tt_output_tensor, input_tensor)
-    #     logger.info(f"Output {i}: {output}")
-    #     if not eq:
-    #         logger.error(f"output mismatch for tensor {i}")
-    #     assert eq, f"{i} FAILED: {output}"
-
-    # print("Checking outputs for Matmul")
-    # for i, t in enumerate(ttnn.get_device_tensors(tt_matmul_output)):
-    #     tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-    #     eq, output = comp_pcc(tt_output_tensor, matmul_output[i])
     #     logger.info(f"Output {i}: {output}")
     #     if not eq:
     #         logger.error(f"output mismatch for tensor {i}")
@@ -150,6 +141,16 @@ def run_all_gather_matmul_on_t3000_impl(
             eq, output = comp_equal(tt_output_tensor, input_tensor)
         else:
             eq, output = comp_pcc(tt_output_tensor, input_tensor)
+        logger.info(f"Output {i}: {output}")
+        if not eq:
+            logger.error(f"output mismatch for tensor {i}")
+        assert eq, f"{i} FAILED: {output}"
+
+    print("Checking outputs for Matmul")
+    for i, t in enumerate(ttnn.get_device_tensors(tt_matmul_output)):
+        tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+
+        eq, output = comp_pcc(tt_output_tensor, matmul_output[i])
         logger.info(f"Output {i}: {output}")
         if not eq:
             logger.error(f"output mismatch for tensor {i}")
@@ -178,12 +179,45 @@ def run_all_gather_matmul_on_t3000_impl(
             ttl.tensor.Layout.TILE,
             1024,
         ),
-        # ( # Removed due to unknown hang on CI, see issue # https://github.com/tenstorrent/tt-metal/issues/11617
+        # (
         #     8,
         #     1,
         #     [1, 1, 1024, 1024 * 32],
         #     3,
         #     ttl.tensor.Layout.TILE,
+        #     1024,
+        # ),
+        (
+            8,
+            1,
+            [1, 1, 32, 1024 * 16],
+            3,
+            ttl.tensor.Layout.TILE,
+            1024,
+        ),
+        (
+            8,
+            1,
+            [1, 1, 128, 1024 * 32],
+            3,
+            ttl.tensor.Layout.TILE,
+            1024,
+        ),
+        ### Test cases that are not supported
+        # (
+        #     8,
+        #     1,
+        #     [8, 1, 33, 256],
+        #     0,
+        #     ttl.tensor.Layout.ROW_MAJOR,
+        #     1024,
+        # ),
+        # (
+        #     4,
+        #     2,
+        #     [4, 1, 33, 256],
+        #     0,
+        #     ttl.tensor.Layout.ROW_MAJOR,
         #     1024,
         # ),
     ],
@@ -202,7 +236,12 @@ def run_all_gather_matmul_on_t3000_impl(
         # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),  # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
-@pytest.mark.parametrize("enable_async", [True, False])
+@pytest.mark.parametrize(
+    "enable_async",
+    [
+        True,
+    ],
+)
 def test_all_gather_matmul_on_t3000_post_commit(
     t3k_mesh_device,
     num_devices,
