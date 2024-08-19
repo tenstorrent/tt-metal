@@ -187,7 +187,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         )
         profiler.end("prepare_rot_mat_for_prefill")
 
-        num_users_generated_prefill = batch_size
+        num_users_generated_prefill = batch_size - 1  # First user is used for compile time
         profiler.start(f"inference_prefill")
         for batch_id in range(batch_size):
             if batch_id == 0:  # First user prefill also accounts for compile time
