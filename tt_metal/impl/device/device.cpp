@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -2374,11 +2374,11 @@ std::shared_ptr<TraceBuffer> Device::get_trace(const uint32_t tid) {
     }
 }
 
-void Device::DisableAllocs() { 
-    tt::tt_metal::allocator::disable_allocs(*(this->allocator_)); 
+void Device::DisableAllocs() {
+    tt::tt_metal::allocator::disable_allocs(*(this->allocator_));
 }
 
-void Device::EnableAllocs() { 
+void Device::EnableAllocs() {
     tt::tt_metal::allocator::enable_allocs(*(this->allocator_));
 }
 

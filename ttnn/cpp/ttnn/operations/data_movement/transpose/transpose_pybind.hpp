@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ void bind_transpose(py::module& module) {
         R"doc(
             transpose(input_tensor: ttnn.Tensor, dim1: int, dim2: int, *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
 
-            Returns a tensor that is transposed along dims dim1 and dim2 
+            Returns a tensor that is transposed along dims dim1 and dim2
 
             Equivalent pytorch code:
 

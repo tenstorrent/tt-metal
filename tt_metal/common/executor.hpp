@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ namespace tt::tt_metal::detail {
             std::bind(std::forward<F>(func), std::forward<Args>(args)...));
         std::shared_future<return_type> res( std::move( task->get_future() ) );
         GetExecutorMutex().lock();
-        
+
         if (GetExecutor().num_topologies() >= GetExecutor().num_workers()) {
             GetExecutorMutex().unlock();
             (*task)();

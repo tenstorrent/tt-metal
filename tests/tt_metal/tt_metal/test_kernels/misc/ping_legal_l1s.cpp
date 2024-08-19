@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@ void kernel_main() {
 #else
         bank_id = id & (NUM_L1_BANKS - 1);
 #endif
-        uint32_t l1_address = base_l1_address + bank_to_l1_offset[bank_id];  
+        uint32_t l1_address = base_l1_address + bank_to_l1_offset[bank_id];
         uint32_t noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
         uint64_t noc_addr = get_noc_addr_helper(noc_xy, l1_address);
 
