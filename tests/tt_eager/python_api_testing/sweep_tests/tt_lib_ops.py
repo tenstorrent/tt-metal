@@ -774,25 +774,6 @@ def eltwise_fmod(
 
 
 @setup_host_and_device
-def eltwise_remainder(
-    x,
-    y,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttnn.remainder(t0, t1, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
 def eltwise_floor_div(
     x,
     y,
@@ -1813,23 +1794,6 @@ def untilize_with_unpadding(
         )
 
     t1 = ttnn.untilize_with_unpadding(t0, output_tensor_end=output_tensor_end, memory_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def eltwise_identity(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.identity(t0, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
