@@ -937,7 +937,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         }
 
                         if (fuse_op) {
-                            fused_op_signaler->emit_all_gather_fused_op_ct_args(worker_writer_receiver_ct_args, global_num_workers, b);
+                            uint32_t global_num_workers_per_direction = global_num_workers / num_full_send_directions;
+                            fused_op_signaler->emit_all_gather_fused_op_ct_args(worker_writer_receiver_ct_args, global_num_workers_per_direction, b);
                         } else {
                             // Push dummy args so that kernel doesn't error out at compile time from the lack of args when fuse_op=false
                             for (uint32_t w = 0; w < experimental::ccl::AllGatherFusedOpSignaler::get_num_ct_args(); ++w) {

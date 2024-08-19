@@ -52,7 +52,8 @@ DatacopyParams setup_datacopy(
     CoreCoord datacopy_core_coord
 ) {
 
-    auto const& all_gather_config = ttnn::AllGatherConfig(input_tensor, all_gather_output_tensor, dim, ring_size, num_links, topology, true);
+    std::size_t num_edm_buffers_per_channel = 1;
+    auto const& all_gather_config = ttnn::AllGatherConfig(input_tensor, all_gather_output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, true);
     const uint32_t num_transfers = 4; // ring_size - 1;
 
     auto tensor_slicer = ttnn::ccl::InterleavedRingAllGatherTensorSlicer (
@@ -114,7 +115,7 @@ DatacopyParams setup_datacopy(
     uint32_t cb_id_in0 = tt::CB::c_in0;
     tt::tt_metal::CircularBufferConfig cb_in0_config =
         tt::tt_metal::CircularBufferConfig(
-            page_size * datacopy_buffer_size /* TODO: Update to be actual number */, {{cb_id_in0, cb_data_format}})
+            page_size * datacopy_buffer_size, {{cb_id_in0, cb_data_format}})
             .set_page_size(cb_id_in0, page_size);
     auto cb_input = tt::tt_metal::CreateCircularBuffer(program, datacopy_workers, cb_in0_config);
 
