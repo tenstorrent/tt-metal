@@ -136,8 +136,8 @@ auto preprocess_inputs(
 
 }  // namespace detail
 
-template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperation<binary_op_type, in_place>::invoke(
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperation<binary_op_type>::invoke(
     uint8_t queue_id,
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg,
@@ -154,7 +154,6 @@ Tensor BinaryOperation<binary_op_type, in_place>::invoke(
         input_tensor_a,
         input_tensor_b,
         binary_op_type,
-        in_place,
         output_dtype,
         memory_config,
         optional_output_tensor,
@@ -162,8 +161,8 @@ Tensor BinaryOperation<binary_op_type, in_place>::invoke(
         input_tensor_a_activation);
 }
 
-template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperation<binary_op_type, in_place>::invoke(
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperation<binary_op_type>::invoke(
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg,
     const std::optional<const DataType> &output_dtype,
@@ -184,8 +183,8 @@ Tensor BinaryOperation<binary_op_type, in_place>::invoke(
 
 // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
 // Currently, this is exactly how tt::tt_metal::add_unary works
-template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperation<binary_op_type, in_place>::invoke(
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperation<binary_op_type>::invoke(
     const ttnn::Tensor &input_tensor_a,
     const float scalar,
     const std::optional<const DataType> &dtype,
@@ -204,8 +203,8 @@ Tensor BinaryOperation<binary_op_type, in_place>::invoke(
         input_tensor_a_activation);
 }
 
-template <BinaryOpType binary_op_type, bool in_place>
-Tensor BinaryOperation<binary_op_type, in_place>::invoke(
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperation<binary_op_type>::invoke(
     uint8_t queue_id,
     const ttnn::Tensor &input_tensor_a,
     const float scalar,
@@ -233,7 +232,6 @@ Tensor BinaryOperation<binary_op_type, in_place>::invoke(
         activations,
         input_tensor_a_activation);
 }
-
 
 template <BinaryOpType binary_op_type>
 Tensor RelationalBinary<binary_op_type>::invoke(
@@ -264,7 +262,6 @@ Tensor RelationalBinary<binary_op_type>::invoke(
         input_tensor_a,
         input_tensor_b,
         binary_op_type,
-        false,
         dtype,
         output_memory_config,
         optional_output_tensor,
@@ -351,23 +348,42 @@ Tensor InplaceLogicalBinary<binary_op_type>::invoke(
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg) {
 
-    return BinaryOperation<binary_op_type, false>::invoke(input_tensor_a_arg, input_tensor_b_arg, std::nullopt, std::nullopt, input_tensor_a_arg, std::nullopt, std::nullopt);
+    return BinaryOperation<binary_op_type>::invoke(input_tensor_a_arg, input_tensor_b_arg, std::nullopt, std::nullopt, input_tensor_a_arg, std::nullopt, std::nullopt);
 }
 
-template struct BinaryOperation<BinaryOpType::ADD, false>;
-template struct BinaryOperation<BinaryOpType::ADD, true>;
-template struct BinaryOperation<BinaryOpType::SUB, false>;
-template struct BinaryOperation<BinaryOpType::SUB, true>;
-template struct BinaryOperation<BinaryOpType::MUL, false>;
-template struct BinaryOperation<BinaryOpType::MUL, true>;
-template struct BinaryOperation<BinaryOpType::LOGICAL_AND, false>;
-template struct BinaryOperation<BinaryOpType::LOGICAL_OR, false>;
-template struct BinaryOperation<BinaryOpType::LDEXP, false>;
-template struct BinaryOperation<BinaryOpType::LOGADDEXP, false>;
-template struct BinaryOperation<BinaryOpType::LOGADDEXP2, false>;
-template struct BinaryOperation<BinaryOpType::SQUARED_DIFFERENCE, false>;
-template struct BinaryOperation<BinaryOpType::DIV_FAST, false>;
-template struct BinaryOperation<BinaryOpType::BIAS_GELU, false>;
+template <BinaryOpType binary_op_type>
+Tensor InplaceBinaryOperation<binary_op_type>::invoke(
+    const Tensor &input_tensor_a_arg,
+    const Tensor &input_tensor_b_arg,
+    std::optional<unary::FusedActivations> activations,
+    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+
+    return BinaryOperation<binary_op_type>::invoke(input_tensor_a_arg, input_tensor_b_arg, std::nullopt, std::nullopt, input_tensor_a_arg, activations, input_tensor_a_activation);
+}
+
+template <BinaryOpType binary_op_type>
+Tensor InplaceBinaryOperation<binary_op_type>::invoke(
+    const ttnn::Tensor &input_tensor_a,
+    const float scalar,
+    std::optional<unary::FusedActivations> activations,
+    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    return BinaryOperation<binary_op_type>::invoke(input_tensor_a, scalar, std::nullopt, std::nullopt, input_tensor_a, activations, input_tensor_a_activation);
+}
+
+template struct BinaryOperation<BinaryOpType::ADD>;
+template struct InplaceBinaryOperation<BinaryOpType::ADD>;
+template struct BinaryOperation<BinaryOpType::SUB>;
+template struct InplaceBinaryOperation<BinaryOpType::SUB>;
+template struct BinaryOperation<BinaryOpType::MUL>;
+template struct InplaceBinaryOperation<BinaryOpType::MUL>;
+template struct BinaryOperation<BinaryOpType::LOGICAL_AND>;
+template struct BinaryOperation<BinaryOpType::LOGICAL_OR>;
+template struct BinaryOperation<BinaryOpType::LDEXP>;
+template struct BinaryOperation<BinaryOpType::LOGADDEXP>;
+template struct BinaryOperation<BinaryOpType::LOGADDEXP2>;
+template struct BinaryOperation<BinaryOpType::SQUARED_DIFFERENCE>;
+template struct BinaryOperationOverload<BinaryOpType::DIV_FAST>;
+template struct BinaryOperation<BinaryOpType::BIAS_GELU>;
 
 template struct RelationalBinary<BinaryOpType::EQ>;
 template struct RelationalBinary<BinaryOpType::NE>;
