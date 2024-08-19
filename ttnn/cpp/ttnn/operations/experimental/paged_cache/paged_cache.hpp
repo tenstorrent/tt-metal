@@ -14,12 +14,12 @@ namespace ttnn {
 namespace operations::experimental::paged_cache {
 
 struct PagedUpdateCacheOperation {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const Tensor& cache_tensor, const Tensor& input_tensor, const std::vector<uint32_t> update_idxs, const std::optional<const Tensor> update_idxs_tensor, const std::optional<const Tensor> page_table, const uint32_t batch_offset, std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
 };
 
 struct PagedFillCacheOperation {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const Tensor& cache_tensor, const Tensor& input_tensor, const Tensor& page_table, const uint32_t batch_idx, std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
 };
 
