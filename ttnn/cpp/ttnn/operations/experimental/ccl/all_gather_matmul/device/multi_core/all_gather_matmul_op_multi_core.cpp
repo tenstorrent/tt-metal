@@ -52,7 +52,7 @@ DatacopyParams setup_datacopy(
     CoreCoord datacopy_core_coord
 ) {
 
-    std::size_t num_edm_buffers_per_channel = 1;
+    std::size_t num_edm_buffers_per_channel = 2;
     auto const& all_gather_config = ttnn::AllGatherConfig(input_tensor, all_gather_output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, true);
     const uint32_t num_transfers = 4; // ring_size - 1;
 
