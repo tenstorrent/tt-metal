@@ -26,4 +26,5 @@ def test_graph_capture(device, scalar, size, mode):
     assert captured_graph[0]["name"] == "capture_start"
     assert captured_graph[1]["name"] == "begin_function"
     assert captured_graph[1]["params"]["name"] == "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor"
-    assert captured_graph[-1]["name"] == "buffer_deallocate"
+    assert captured_graph[-2]["name"] == "buffer_deallocate"
+    assert captured_graph[-1]["name"] == "capture_end"
