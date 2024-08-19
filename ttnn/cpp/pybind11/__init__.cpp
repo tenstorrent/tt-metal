@@ -18,10 +18,15 @@
 #include "ttnn/deprecated/tt_lib/csrc/tt_lib_bindings.hpp"
 #include "operations/__init__.hpp"
 
+#include "ttnn/graph_processor_pybind.hpp"
+
 namespace py = pybind11;
 
 PYBIND11_MODULE(_ttnn, module) {
     module.doc() = "Python bindings for TTNN";
+
+    auto m_graph = module.def_submodule("graph", "Contains graph capture functions");
+    ttnn::py_graph_module(m_graph);
 
     auto m_deprecated = module.def_submodule("deprecated", "Contains deprecated tt_lib bindings for tensor, device, profiler");
     tt::bind_deprecated(m_deprecated);
