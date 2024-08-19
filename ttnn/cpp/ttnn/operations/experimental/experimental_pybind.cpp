@@ -21,6 +21,7 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_pybind.hpp"
+#include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.hpp"
@@ -59,6 +60,7 @@ void py_module(py::module& module) {
 
     copy::detail::py_bind_typecast(module);
 
+    paged_cache::detail::bind_experimental_paged_cache_operations(module);
     matmul::detail::bind_attn_matmul(module);
     matmul::detail::bind_attn_matmul_from_cache(module);
     matmul::detail::bind_group_attn_matmul(module);
