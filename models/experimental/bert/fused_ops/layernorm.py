@@ -114,7 +114,7 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
             H_ = overrideH
 
         # first compute the mean (m)
-        means = tensor.sum(x, 3, scalar=1.0 / W)  # -> NCH1
+        means = ttnn.sum(x, 3, scalar=1.0 / W)  # -> NCH1
         x_minus_mean = ttnn.subtract(x, means)  # need to blank out the H for non-multiple of 32
         if False and refx is not None:
             ry, rmean, rvar, rstd, rinvstd, ry1 = ref_ln(refx, refgamma, refbeta)
