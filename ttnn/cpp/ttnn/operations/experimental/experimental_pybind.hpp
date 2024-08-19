@@ -5,8 +5,8 @@
 #pragma once
 
 #include "pybind11/pybind_fwd.hpp"
-namespace ttnn::operations::experimental {
 
+namespace ttnn::operations::experimental {
 void py_module(pybind11::module& module);
 
 }  // namespace ttnn::operations::experimental

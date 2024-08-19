@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "tt_metal/host_api.hpp"
 
 namespace tt::tt_metal {
