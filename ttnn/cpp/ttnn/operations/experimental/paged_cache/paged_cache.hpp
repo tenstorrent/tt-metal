@@ -4,10 +4,7 @@
 
 #pragma once
 
-#include "device/paged_cache_operation.hpp" // TODO: not right!
-#include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
-#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn {
