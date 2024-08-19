@@ -150,90 +150,88 @@ void py_module(py::module& module) {
         module,
         ::ttnn::matmul,
         R"doc(
-    matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, program_config: Optional[MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, transpose_a[boolean] = False, transpose_b[boolean] = False) -> ttnn.Tensor
+        Returns the matrix product of two tensors.
 
-    Returns the matrix product of two tensors.
+        The behavior depends on the dimensionality of the tensors as follows:
 
-    The behavior depends on the dimensionality of the tensors as follows:
+        - If both arguments are 2-dimensional, the matrix-matrix product is returned.
+        - If the first argument is 1-dimensional and the second argument is 2-dimensional,
+        a 1 is prepended to its dimension for the purpose of the matrix multiply.
+        After the matrix multiply, the prepended dimension is removed.
+        - If the first argument is 2-dimensional and the second argument is 1-dimensional,
+        the matrix-vector product is returned in 2 dimensions.
+        - If both arguments are at least 1-dimensional and at least one argument is
+        N-dimensional (where N > 2), then a batched matrix multiply is returned.  If the first
+        argument is 1-dimensional, a 1 is prepended to its dimension for the purpose of the
+        batched matrix multiply.  If the second argument is 1-dimensional, a
+        1 is appended to its dimension for the purpose of the batched matrix multiple.
+        The non-matrix (i.e. batch) dimensions must be broadcastable.
+        The behaviour is the same as PyTorch, with the exception of two cases of batch dimensions:
 
-    - If both arguments are 2-dimensional, the matrix-matrix product is returned.
-    - If the first argument is 1-dimensional and the second argument is 2-dimensional,
-      a 1 is prepended to its dimension for the purpose of the matrix multiply.
-      After the matrix multiply, the prepended dimension is removed.
-    - If the first argument is 2-dimensional and the second argument is 1-dimensional,
-      the matrix-vector product is returned in 2 dimensions.
-    - If both arguments are at least 1-dimensional and at least one argument is
-      N-dimensional (where N > 2), then a batched matrix multiply is returned.  If the first
-      argument is 1-dimensional, a 1 is prepended to its dimension for the purpose of the
-      batched matrix multiply.  If the second argument is 1-dimensional, a
-      1 is appended to its dimension for the purpose of the batched matrix multiple.
-      The non-matrix (i.e. batch) dimensions must be broadcastable.
-      The behaviour is the same as PyTorch, with the exception of two cases of batch dimensions:
+            - The two batch dimensions are swapped. E.g. :math:`(j \times 1)` and :math:`(1 \times j)`
+                or :math:`(1 \times j)` and :math:`(j \times 1)`
+            - When a batch dimension is implicitly extended then the two patch dimensions are swapped.
+                E.g.  :math:`(j \times 1)` and :math:`(j)` which is treated as
+                :math:`(j \times 1)` and :math:`(1 \times j)`
 
-          - The two batch dimensions are swapped. E.g. :math:`(j \\times 1)` and :math:`(1 \\times j)`
-            or :math:`(1 \\times j)` and :math:`(j \\times 1)`
-          - When a batch dimension is implicitly extended then the two patch dimensions are swapped.
-            E.g.  :math:`(j \\times 1)` and :math:`(j)` which is treated as
-            :math:`(j \\times 1)` and :math:`(1 \\times j)`
+        - In order to leverage sharded matmul implementations we can shard both :attr:`input_tensor_a` and :attr:`input_tensor_b`. The sharding strategy used will be according
+        to the sharding strategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be block sharded.
 
-    - In order to leverage sharded matmul implementations we can shard both input_tensor_a and input_tensor_b. The sharding strategy used will be according
-      to the sharding strategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be block sharded.
+        Note that the broadcasting logic only looks at the batch dimensions when determining if the inputs
+        are broadcastable, and not the matrix dimensions. For example, if :attr:`input_tensor_a` is a
+        :math:`(j \times 1 \times n \times m)` tensor and :attr:`input_tensor_b` is a :math:`(k \times m \times p)`
+        tensor, these inputs are valid for broadcasting even though the final two dimensions (i.e. the
+        matrix dimensions) are different. The operation will return a :math:`(j \times k \times n \times p)` tensor.
 
-      Note that the broadcasting logic only looks at the batch dimensions when determining if the inputs
-      are broadcastable, and not the matrix dimensions. For example, if :attr:`input_tensor_a` is a
-      :math:`(j \\times 1 \\times n\_size \\times m\_size)` tensor and :attr:`input_tensor_b` is a :math:`(k\_size \\times m\_size \\times p)`
-      tensor, these inputs are valid for broadcasting even though the final two dimensions (i.e. the
-      matrix dimensions) are different. The operation will return a :math:`(j \\times k\_size \\times n\_size \\times p)` tensor.
+        Note:
+            The 1-dimensional dot product version of this function is currently returning the Tensor with a non-empty shape. This is expected to be fixed in an upcoming release.
 
+        Args:
+            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
+            input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
 
-    .. note::
+        Keyword Args:
+            memory_config(ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG
+            dtype (ttnn.DataType): the data type of the output tensor. Defaults to `None`.
+            core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
+            program_config (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to `None`.
+            activation (str, optional): the activation function to be applied. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
 
-        The 1-dimensional dot product version of this function is currently returning the Tensor with a non-empty shape. This is expected to be fixed in an upcoming release.
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-    Arguments:
-        * :attr:`input_tensor_a` (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
-        * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
-
-    Keyword Arguments:
-        * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): the memory configuration of the output tensor. Defaults to None, which will result in using ttnn.DRAM_MEMORY_CONFIG
-        * :attr:`dtype` (ttnn.DataType): the data type of the output tensor. Defaults to None
-        * :attr:`core_grid` (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
-        * :attr:`program_config` (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to None
-        * :attr:`activation` (Optional[str]): the activation function to be applied. Defaults to None
-        * :attr:`compute_kernel_config` (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to None
-
-    Example::
-
-        >>> # vector x vector
-        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((32), dtype=torch.bfloat16)), device)
-        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((32), dtype=torch.bfloat16)), device)
-        >>> output = tensor1 @ tensor2
-        >>> print(output.shape)
-        [32]
-        >>> # matrix x vector
-        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((64, 32), dtype=torch.bfloat16)), device)
-        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((32), dtype=torch.bfloat16)), device)
-        >>> output = tensor1 @ tensor2
-        >>> print(output.shape)
-        [64, 1]
-        >>> # batched matrix x broadcasted vector
-        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((32), dtype=torch.bfloat16)), device)
-        >>> output = tensor1 @ tensor2
-        >>> print(output.shape)
-        [10, 64, 1]
-        >>> # batched matrix x batched matrix
-        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 32, 128), dtype=torch.bfloat16)), device)
-        >>> output = tensor1 @ tensor2
-        >>> print(output.shape)
-        [10, 64, 128]
-        >>> # batched matrix x broadcasted matrix
-        >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-        >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((32, 128), dtype=torch.bfloat16)), device)
-        >>> output = tensor1 @ tensor2
-        >>> print(output.shape)
-        [10, 64, 128]
+        Example:
+            >>> # vector x vector
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((32), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((32), dtype=torch.bfloat16)), device)
+            >>> output = tensor1 @ tensor2
+            >>> print(output.shape)
+            [32]
+            >>> # matrix x vector
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((64, 32), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((32), dtype=torch.bfloat16)), device)
+            >>> output = tensor1 @ tensor2
+            >>> print(output.shape)
+            [64, 1]
+            >>> # batched matrix x broadcasted vector
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((32), dtype=torch.bfloat16)), device)
+            >>> output = tensor1 @ tensor2
+            >>> print(output.shape)
+            [10, 64, 1]
+            >>> # batched matrix x batched matrix
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 32, 128), dtype=torch.bfloat16)), device)
+            >>> output = tensor1 @ tensor2
+            >>> print(output.shape)
+            [10, 64, 128]
+            >>> # batched matrix x broadcasted matrix
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((32, 128), dtype=torch.bfloat16)), device)
+            >>> output = tensor1 @ tensor2
+            >>> print(output.shape)
+            [10, 64, 128]
         )doc",
         ttnn::pybind_overload_t{
             [](decltype(::ttnn::matmul)& self,
@@ -276,31 +274,32 @@ void py_module(py::module& module) {
         module,
         ::ttnn::linear,
         R"doc(
-    linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, program_config: Optional[MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, transpose_a[boolean] = False, transpose_b[boolean] = False) -> ttnn.Tensor
+        Returns the linear transformation of the inputs.
 
-    Returns the linear transformation of the inputs
+        Args:
+            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
+            input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
 
-    Arguments:
-        * :attr:`input_tensor_a` (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
-        * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
+        Keyword Args:
+            bias (ttnn.Tensor, optional): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
+            dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
+            core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
+            program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
+            activation (str, optional): the activation function to be applied. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
 
-    Keyword Arguments:
-        * :attr:`bias` (Optional[ttnn.Tensor]): the bias tensor to be added. If specified, needs to be on the device. Defaults to None
-        * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): the memory configuration of the output tensor. Defaults to None, which will result in using ttnn.DRAM_MEMORY_CONFIG
-        * :attr:`dtype` (Optional[ttnn.DataType]): the data type of the output tensor. Defaults to None
-        * :attr:`core_grid` (Optional[ttnn.CoreGrid]): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
-        * :attr:`program_config` (Optional[MatmulProgramConfig]): the program configuration for the matmul operation. Defaults to None
-        * :attr:`activation` (Optional[str]): the activation function to be applied. Defaults to None
-        * :attr:`compute_kernel_config` (Optional[ttnn.DeviceComputeKernelConfig]): the compute kernel configuration for the matmul operation. Defaults to None
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-    Example::
-        >>> # batched matrix x broadcasted matrix
-        >>> activations = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-        >>> weight = ttnn.to_device(ttnn.from_torch(torch.randn((32, 128), dtype=torch.bfloat16)), device)
-        >>> bias = ttnn.to_device(ttnn.from_torch(torch.randn((128,), dtype=torch.bfloat16)), device)
-        >>> output = ttnn.linear(activations, weight, bias=bias)
-        >>> print(output.shape)
-        [10, 64, 128]
+        Example:
+            >>> # batched matrix x broadcasted matrix
+            >>> activations = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+            >>> weight = ttnn.to_device(ttnn.from_torch(torch.randn((32, 128), dtype=torch.bfloat16)), device)
+            >>> bias = ttnn.to_device(ttnn.from_torch(torch.randn((128,), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.linear(activations, weight, bias=bias)
+            >>> print(output.shape)
+            [10, 64, 128]
         )doc",
         ttnn::pybind_overload_t{
             [](decltype(::ttnn::linear)& self,

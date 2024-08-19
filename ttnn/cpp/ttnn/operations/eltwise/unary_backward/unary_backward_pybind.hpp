@@ -24,8 +24,7 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward_two_float(
     py::module& module, const unary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, min: float, max: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {2}
 
         Args:
@@ -75,8 +74,7 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward_op(
     py::module& module, const unary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {2}
 
         Args:
@@ -120,8 +118,7 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward_op_reciprocal(
     py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor], *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor or ComplexTensor
-
+        R"doc(
         {2}
 
         Args:
@@ -174,8 +171,7 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward_op_overload_abs(
     py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: Union[ttnn.Tensor, ComplexTensor], *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor or ComplexTensor
-
+        R"doc(
         {2}
 
         Args:
@@ -227,8 +223,7 @@ void bind_unary_backward_op_overload_abs(
 template <typename unary_backward_operation_t>
 void bind_unary_backward_float(py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, scalar: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {2}
 
         Args:
@@ -282,8 +277,7 @@ void bind_unary_backward_two_float_with_default(
     float parameter_b_value,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: float, {5}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {8}
 
         Args:
@@ -341,8 +335,7 @@ void bind_unary_backward_float_with_default(
     float parameter_a_value,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {5}
 
         Args:
@@ -397,8 +390,7 @@ void bind_unary_backward_optional_float_params_with_default(
     std::optional<float> parameter_b_value,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: float, {5}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {8}
 
         Args:
@@ -458,8 +450,7 @@ void bind_unary_backward_float_string_default(
     string parameter_b_value,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, ( input_tensor: ttnn.Tensor, {2}: float ) or  ( input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor ), {4}: string, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {7}
 
         Args:
@@ -516,8 +507,7 @@ void bind_unary_backward_string_default(
     string parameter_a_value,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: string, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {5}
 
         Args:
@@ -568,8 +558,7 @@ void bind_unary_backward_unary_optional_float(
     const std::string& parameter_doc,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, exponent: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<std::optional<Tensor>>
-
+        R"doc(
         {4}
 
         Args:
@@ -629,8 +618,7 @@ void bind_unary_backward_shape(
     const std::string& parameter_a_doc,
     std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, {2}: shape, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {4}
 
         Args:
@@ -676,8 +664,7 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward_unary_optional(
     py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<std::optional<Tensor>>
-
+        R"doc(
         {2}
 
         Args:
@@ -726,8 +713,7 @@ void bind_unary_backward_unary_optional(
 template <typename unary_backward_operation_t>
 void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, all_dimensions: bool, dim: int64_t, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         Performs backward operations for prod on input along `all_dimensions` or a particular `dim`.
 
         Args:
@@ -773,23 +759,22 @@ void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operat
 template <typename unary_backward_operation_t>
 void bind_unary_backward_opt(py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
     auto doc = fmt::format(
-R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        R"doc(
+        {2}
 
-{2}
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor`
 
-Args:
-    * :attr:`grad_tensor`
-    * :attr:`input_tensor`
+        Keyword args:
+            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
 
-Keyword args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+        Example:
 
-Example:
-
-    >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> output = {1}(grad_tensor, input)
-)doc",
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, input)
+        )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description);
@@ -820,23 +805,22 @@ template <typename unary_backward_operation_t>
 void bind_unary_backward(
     py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
     auto doc = fmt::format(
-        R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
+        R"doc(
+        {2}
 
-{2}
+        Args:
+            * :attr:`grad_tensor`
+            * :attr:`input_tensor`
 
-Args:
-    * :attr:`grad_tensor`
-    * :attr:`input_tensor`
+        Keyword args:
+            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
 
-Keyword args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+        Example:
 
-Example:
-
-    >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> output = {1}(grad_tensor, input)
-)doc",
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = {1}(grad_tensor, input)
+        )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description);

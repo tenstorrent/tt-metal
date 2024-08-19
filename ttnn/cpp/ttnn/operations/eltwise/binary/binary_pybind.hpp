@@ -26,8 +26,7 @@ namespace detail {
 template <typename binary_operation_t>
 void bind_primitive_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, activations: Optional[List[str]] = None) -> ttnn.Tensor
-
+        R"doc(
         {2}
 
         Supports broadcasting (except with scalar)
@@ -84,8 +83,7 @@ void bind_primitive_binary_operation(py::module& module, const binary_operation_
 template <typename binary_operation_t>
 void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: Union[ttnn.Tensor, int, float], *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, activations: Optional[List[str]] = None) -> ttnn.Tensor
-
+        R"doc(
         {2}
 
         Supports broadcasting.
@@ -165,7 +163,8 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
 template <typename binary_operation_t>
 void bind_binary_composite(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+            {2}
 
             Args:
                 * :attr:`input_tensor_a`
@@ -204,7 +203,8 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
 template <typename binary_operation_t>
 void bind_binary_composite_with_alpha(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+            {2}
 
             Args:
                 * :attr:`input_tensor_a`
@@ -246,7 +246,8 @@ void bind_binary_composite_with_alpha(py::module& module, const binary_operation
 template <typename binary_operation_t>
 void bind_binary_composite_with_rtol_atol(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+            {2}
 
             Args:
                 * :attr:`input_tensor_a`
@@ -294,7 +295,8 @@ void bind_binary_composite_with_rtol_atol(py::module& module, const binary_opera
 template <typename binary_operation_t>
 void bind_div_like_ops(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+            {2}
 
             Args:
                 * :attr:`input_tensor_a`
@@ -345,7 +347,8 @@ void bind_div_like_ops(py::module& module, const binary_operation_t& operation, 
 template <typename binary_operation_t>
 void bind_div(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+            {2}
 
             Args:
                 * :attr:`input_tensor_a`
@@ -407,7 +410,8 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
 template <typename binary_operation_t>
 void bind_polyval(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor_a: ttnn.Tensor, coeffs: Vector of floats, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+            {2}
 
             Args:
                 * :attr:`input_tensor_a`
@@ -445,9 +449,8 @@ void bind_polyval(py::module& module, const binary_operation_t& operation, const
 template <typename binary_operation_t>
 void bind_binary_overload_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_a: ttnn.Tensor, input_b:Union[ttnn.Tensor, float], *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
-        {2}
+        R"doc(
+            {2}
 
             Args:
                 * :attr:`input_a` (ttnn.Tensor)
@@ -497,9 +500,8 @@ void bind_binary_overload_operation(py::module& module, const binary_operation_t
 template <typename binary_operation_t>
 void bind_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_a: ttnn.Tensor, input_b:Union[ttnn.Tensor, float]) -> ttnn.Tensor
-
-        {2}
+        R"doc(
+            {2}
 
             Args:
                 * :attr:`input_a` (ttnn.Tensor)
@@ -540,9 +542,8 @@ void bind_inplace_operation(py::module& module, const binary_operation_t& operat
 template <typename binary_operation_t>
 void bind_logical_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_a: ttnn.Tensor, input_b: ttnn.Tensor) -> ttnn.Tensor
-
-        {2}
+        R"doc(
+            {2}
 
             Args:
                 * :attr:`input_a` (ttnn.Tensor)
@@ -574,8 +575,9 @@ void bind_logical_inplace_operation(py::module& module, const binary_operation_t
 template <typename binary_operation_t>
 void bind_binary_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_a: ttnn.Tensor, input_b:Union[ttnn.Tensor, float]) -> ttnn.Tensor
-        {2}
+        R"doc(
+            {2}
+
             Args:
                 * :attr:`input_a` (ttnn.Tensor)
                 * :attr:`input_b` (ttnn.Tensor or Number)

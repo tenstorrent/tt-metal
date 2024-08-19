@@ -16,6 +16,7 @@ DOCS_VERSION       	?= latest
 
 GITHUB_TOKEN    ?= INSERT_TOKEN_HERE
 TTNN_SWEEPS_DIR = source/ttnn/ttnn_sweeps
+TTNN_API_DIR    = source/ttnn/ttnn/api
 
 # Put it first so that "make" without argument is like "make help".
 help:
@@ -30,6 +31,7 @@ all: clean html server
 clean:
 	@rm -rf $(BUILDDIR)
 	@rm -rf $(DOXYGENDIR)
+	@rm -rf $(TTNN_API_DIR)
 
 build_doxygen: clean
 	@cd .. && doxygen
@@ -38,10 +40,10 @@ sphinx_build_dir: clean
 	@mkdir -p $(BUILDDIR)
 
 html/tt-metalium: build_doxygen sphinx_build_dir
-	@DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=tt-metalium $(SPHINXBUILD) "$(SOURCEDIR)/tt-metalium" "$(TT_METALIUM_BUILDDIR)" $(SPHINXOPTS) $(O)
+	@DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=tt-metalium $(SPHINXBUILD) "$(SOURCEDIR)/tt-metalium" "$(TT_METALIUM_BUILDDIR)"
 
 html/ttnn: build_doxygen sphinx_build_dir
-	@DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=ttnn $(SPHINXBUILD) "$(SOURCEDIR)/ttnn" "$(TTNN_BUILDDIR)" $(SPHINXOPTS) $(O)
+	@DOCS_VERSION=$(DOCS_VERSION) REQUESTED_DOCS_PKG=ttnn $(SPHINXBUILD) "$(SOURCEDIR)/ttnn" "$(TTNN_BUILDDIR)"
 
 html: html/tt-metalium html/ttnn
 	mkdir -p $(HTMLDIR)

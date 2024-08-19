@@ -40,7 +40,6 @@ void py_module_types(py::module& module) {
         .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
         .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc);
-
 }
 
 void py_module(py::module& module) {
@@ -110,9 +109,35 @@ void py_module(py::module& module) {
         py::arg("device"),
         py::arg("memory_config") = std::nullopt);
 
-    module.def("from_device", &ttnn::operations::core::from_device, py::arg("tensor"), py::arg("blocking") = true, py::kw_only(), py::arg("cq_id") = ttnn::DefaultQueueId);
+    module.def(
+        "from_device",
+        &ttnn::operations::core::from_device,
+        py::arg("tensor"),
+        py::arg("blocking") = true,
+        py::kw_only(),
+        py::arg("cq_id") = ttnn::DefaultQueueId,
+        R"doc(
+            Copy tensor from device to host.
 
-    module.def("deallocate", &ttnn::operations::core::deallocate, py::arg("tensor"), py::arg("force") = true);
+            Args:
+                tensor (ttnn.Tensor): The tensor to be copied from device to host.
+                blocking (bool, optional): Whether the operation should block until the copy is complete. Defaults to `True`.
+
+            Keyword args:
+                cq_id (int, optional): The command queue ID to use. Defaults to `0`.
+
+            Returns:
+                ttnn.Tensor: The host tensor copy.
+        )doc");
+
+    module.def("deallocate", &ttnn::operations::core::deallocate, py::arg("tensor"), py::arg("force") = true,
+    R"doc(
+        Deallocates device tensor.
+
+        Args:
+            tensor (ttnn.Tensor): Input tensor
+            force (bool, optional): Force deallocation. Defaults to `True`.
+    )doc");
 
     module.def(
         "reallocate",
@@ -124,27 +149,32 @@ void py_module(py::module& module) {
             Deallocates device tensor and returns a reallocated tensor
 
             Args:
-                * :attr:`input_tensor`: Input Tensor
+                tensor (ttnn.Tensor): Input tensor
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the reallocated tensor. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: The reallocated tensor.
         )doc");
 
     bind_registered_operation(
         module,
         ttnn::to_memory_config,
-        R"doc(to_memory_config(tensor: ttnn.Tensor, memory_config: MemoryConfig, dtype: Optional[DataType] = None) -> ttnn.Tensor
+        R"doc(
+        Converts a tensor to the desired memory configuration. Used for converting tensors to sharded tensors, interleaved tensors, or converting between DRAM and L1 memory.
 
-            Converts a tensor to the desired mem_config, used for converting tensors to sharded tensors or interleaved, and to convert DRAM to L1 and vice versa
+        Args:
+            tensor (ttnn.Tensor): The tensor to be converted.
+            memory_config (ttnn.MemoryConfig): The desired memory configuration for the tensor.
+            dtype (ttnn.DataType, optional): The optional `ttnn` data type.
 
+        Returns:
+            ttnn.Tensor: The converted tensor.
 
-            Args:
-                * :attr:`tensor`: the ttnn.Tensor
-                * :attr:`memory_config`: the desired MemoryConfig
-                * :attr:`dtype`: the optional `ttnn` data type.
-
-
-                >>> device_id = 0
-                >>> device = ttnn.open_device(device_id=device_id)
-                >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-                >>> tensor = ttnn.to_memory_config(tensor, memory_config)
+        Example:
+            >>> device_id = 0
+            >>> device = ttnn.open_device(device_id=device_id)
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+            >>> tensor = ttnn.to_memory_config(tensor, memory_config)
         )doc",
         ttnn::pybind_arguments_t{py::arg("tensor"), py::arg("memory_config"), py::arg("dtype") = std::nullopt});
 
@@ -264,27 +294,32 @@ void py_module(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::to_layout,
-        R"doc(to_layout(tensor: ttnn.Tensor, layout: Layout, dtype: Optional[DataType] = None, memory_config: Optional[MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Organizes the `ttnn.Tensor` :attr:`tensor` into either `ttnn.ROW_MAJOR_LAYOUT` or `ttnn.TILE_LAYOUT`.
 
-    Organizes the `ttnn.Tensor` :attr:`tensor` into either ROW_MAJOR_LAYOUT or TILE_LAYOUT.  When requesting ROW_MAJOR_LAYOUT
-    the tensor will be returned unpadded in the last two dimensions.   When requesting TILE_LAYOUT the tensor will be automatically
-    padded where the width and height become multiples of 32.
-    In the case where the layout is the same, the operation simply pad or unpad the last two dimensions depending on layout requested.
+        When requesting `ttnn.ROW_MAJOR_LAYOUT` the tensor will be returned unpadded in the last two dimensions.
+        When requesting `ttnn.TILE_LAYOUT` the tensor will be automatically padded where the width and height
+        become multiples of 32. In the case where the layout is the same, the operation simply pad or unpad
+        the last two dimensions depending on layout requested.
 
-    Args:
-        * :attr:`tensor`: the ttnn.Tensor
-        * :attr:`layout`: the layout of either ttnn.ROW_MAJOR_LAYOUT or ttnn.TILE_LAYOUT.
-        * :attr:`dtype`: the optional output data type.
-        * :attr:`memory_config`: the optional output memory configuration.
-        * :attr:`device`: Device/MeshDevice whose worker thread on host should be used for the layout conversion
+        Args:
+            tensor (ttnn.Tensor): The input tensor to be organized.
+            layout (ttnn.Layout): The layout, either `ttnn.ROW_MAJOR_LAYOUT` or `ttnn.TILE_LAYOUT`.
+            dtype (ttnn.DataType, optional): The optional output data type.
+            memory_config (ttnn.MemoryConfig, optional): The optional output memory configuration.
+            device (ttnn.Device | ttnn.MeshDevice): The device/mesh device whose worker thread on the host should be used for the layout conversion.
 
-    Example:
-        >>> device_id = 0
-        >>> device = ttnn.open_device(device_id=device_id)
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-        >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-        >>> print(tensor[0,0,:3])
-        Tensor([ 1.42188, -1.25, -0.398438], dtype=bfloat16 ))doc",
+        Returns:
+            ttnn.Tensor: The tensor with the requested layout.
+
+        Example:
+            >>> device_id = 0
+            >>> device = ttnn.open_device(device_id=device_id)
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+            >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
+            >>> print(tensor[0,0,:3])
+            Tensor([ 1.42188, -1.25, -0.398438], dtype=bfloat16)
+        )doc",
         ttnn::pybind_overload_t{
             [](const std::decay_t<decltype(ttnn::to_layout)> self,
                const ttnn::Tensor& tensor,
@@ -309,7 +344,6 @@ void py_module(py::module& module) {
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("device") = nullptr});
-
 }
 
 }  // namespace core

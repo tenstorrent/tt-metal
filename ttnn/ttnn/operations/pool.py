@@ -301,7 +301,8 @@ class TTPyMaxPool(TTPyOp):
             input_padded_width = input_w + 2 * pad_w
 
             pad_metadata, data_top_left_indices = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
-                (1, 1, window_h, window_w, stride_h, stride_w, pad_h, pad_w, 1, 1), input_nchw_shape
+                (1, 1, window_h, window_w, stride_h, stride_w, pad_h, pad_w, 1, 1),
+                input_nchw_shape,
             )
 
             req_conv_input_shard_start_end, tensor_metadata = decompose_conv_into_shards_and_generate_tensor_metadata(
@@ -317,7 +318,10 @@ class TTPyMaxPool(TTPyOp):
 
             sliding_window_op_sharded_input_top_left_indices = (
                 generate_sliding_window_op_sharded_input_top_left_indices(
-                    data_top_left_indices, req_conv_input_shard_start_end, pad_tile=True, pad_last_core=True
+                    data_top_left_indices,
+                    req_conv_input_shard_start_end,
+                    pad_tile=True,
+                    pad_last_core=True,
                 )
             )
 
@@ -336,7 +340,10 @@ class TTPyMaxPool(TTPyOp):
             shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
             shard_halo = False
             shard_spec = ttnn.ShardSpec(
-                self.shard_grid, [1, reader_indices_tt_tensor.get_legacy_shape()[-1]], shard_orientation, shard_halo
+                self.shard_grid,
+                [1, reader_indices_tt_tensor.get_legacy_shape()[-1]],
+                shard_orientation,
+                shard_halo,
             )
             mem_config = ttnn.MemoryConfig(self.shard_layout, ttnn.BufferType.L1_SMALL, shard_spec)
             reader_indices_sharded_tensor = reader_indices_tt_tensor.to(self.device, mem_config)
