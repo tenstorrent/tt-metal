@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -35,9 +35,7 @@ class TtWhisperModel(nn.Module):
     The bare Whisper Model outputting raw hidden-states without any specific head on top."
     """
 
-    def __init__(
-        self, state_dict, device, base_address: str = "", config: WhisperConfig = None
-    ):
+    def __init__(self, state_dict, device, base_address: str = "", config: WhisperConfig = None):
         super().__init__()
 
         self.state_dict = state_dict
@@ -114,9 +112,7 @@ class TtWhisperModel(nn.Module):
                 attention_mask=attention_mask,
                 min_masks=self.config.mask_time_min_masks,
             )
-            mask_time_indices = torch.tensor(
-                mask_time_indices, device=input_features.device, dtype=torch.bool
-            )
+            mask_time_indices = torch.tensor(mask_time_indices, device=input_features.device, dtype=torch.bool)
             mask_time_indices = mask_time_indices[:, None].expand(-1, hidden_size, -1)
             input_features[mask_time_indices] = 0
 
@@ -128,9 +124,7 @@ class TtWhisperModel(nn.Module):
                 mask_length=self.config.mask_feature_length,
                 min_masks=self.config.mask_feature_min_masks,
             )
-            mask_feature_indices = torch.tensor(
-                mask_feature_indices, device=input_features.device, dtype=torch.bool
-            )
+            mask_feature_indices = torch.tensor(mask_feature_indices, device=input_features.device, dtype=torch.bool)
             input_features[mask_feature_indices] = 0
 
         return input_features
@@ -172,25 +166,15 @@ class TtWhisperModel(nn.Module):
          [1, 2, 512]
          ```"""
 
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if encoder_outputs is None:
-            input_features = self._mask_input_features(
-                input_features, attention_mask=attention_mask
-            )
+            input_features = self._mask_input_features(input_features, attention_mask=attention_mask)
 
             encoder_outputs = self.encoder(
                 input_features,

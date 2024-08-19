@@ -440,7 +440,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   scripts. For Python files, we are to use this convention:
 
   ```
-  # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+  # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
   # SPDX-License-Identifier: Apache-2.0
   ```
@@ -449,7 +449,7 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
   convention:
 
   ```
-  // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+  // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
   //
   // SPDX-License-Identifier: Apache-2.0
   ```

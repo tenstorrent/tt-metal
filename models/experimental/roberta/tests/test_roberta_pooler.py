@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@ from models.utility_functions import (
     comp_pcc,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
+
 
 def test_roberta_pooler_inference(device):
     torch.manual_seed(1234)

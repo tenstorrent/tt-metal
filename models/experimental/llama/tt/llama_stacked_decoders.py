@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -61,9 +61,7 @@ class TtLlamaDecoderModelStacked(torch.nn.Module):
         )
 
         # if it is CausalLM Llama model
-        self.weight = torch_to_tt_tensor_rm(
-            self.state_dict[f"lm_head.weight"], self.device
-        )
+        self.weight = torch_to_tt_tensor_rm(self.state_dict[f"lm_head.weight"], self.device)
         self.bias = None
 
     def forward(

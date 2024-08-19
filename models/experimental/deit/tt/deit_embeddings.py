@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@ import tt_lib
 from models.experimental.deit.tt.deit_patch_embeddings import DeiTPatchEmbeddings
 from models.experimental.deit.tt.deit_config import DeiTConfig
 
+
 class DeiTEmbeddings(nn.Module):
     def __init__(
         self,
@@ -23,14 +24,8 @@ class DeiTEmbeddings(nn.Module):
         super().__init__()
 
         self.cls_token = nn.Parameter(state_dict[f"{base_address}.cls_token"])
-        self.distillation_token = nn.Parameter(
-            state_dict[f"{base_address}.distillation_token"]
-        )
-        self.mask_token = (
-            nn.Parameter(state_dict[f"{base_address}.mask_token"])
-            if use_mask_token
-            else None
-        )
+        self.distillation_token = nn.Parameter(state_dict[f"{base_address}.distillation_token"])
+        self.mask_token = nn.Parameter(state_dict[f"{base_address}.mask_token"]) if use_mask_token else None
 
         self.patch_embeddings = DeiTPatchEmbeddings(
             config,
@@ -39,9 +34,7 @@ class DeiTEmbeddings(nn.Module):
         )
 
         num_patches = self.patch_embeddings.num_patches
-        self.position_embeddings = nn.Parameter(
-            state_dict[f"{base_address}.position_embeddings"]
-        )
+        self.position_embeddings = nn.Parameter(state_dict[f"{base_address}.position_embeddings"])
 
     def forward(
         self,

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -47,17 +47,13 @@ def run_test_llama_decoder_inference(
 
     # Load Pytorch model ===================================================================
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_version)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        model_version, torch_dtype=torch.float32
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(model_version, torch_dtype=torch.float32)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
 
     # PyTorch output =========================================================================
-    pytorch_LlamaDecoder_model = PytorchLlamaDecoderModelStacked(
-        hugging_face_reference_model, decoder_stack_list
-    )
+    pytorch_LlamaDecoder_model = PytorchLlamaDecoderModelStacked(hugging_face_reference_model, decoder_stack_list)
     logger.info(f"inputs: {llama_input}")
     logger.info(f"shape: {llama_input.shape}")
     logger.info(f"positions: {position_ids}")

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@ from models.utility_functions import (
     tt2torch_tensor,
     comp_pcc,
 )
+
 
 def run_whisper_decoder_layer(layer, device):
     model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
@@ -41,9 +42,7 @@ def run_whisper_decoder_layer(layer, device):
     seq_len = 32
 
     # Similary to what Decoder's method self._prepare_decoder_attention_mask returns
-    attention_mask_input_tensor = (
-        torch.rand(size=(1, 1, tgt_len, seq_len)) < 0.25
-    ).int().float() * -3.4028e38
+    attention_mask_input_tensor = (torch.rand(size=(1, 1, tgt_len, seq_len)) < 0.25).int().float() * -3.4028e38
 
     hidden_state_input_tensor = torch.rand(batch, seq_len, embed_dim)
     encoder_hidden_states = torch.rand(batch, enc_seq_len, embed_dim)
@@ -82,23 +81,15 @@ def run_whisper_decoder_layer(layer, device):
             )
 
     """ TTM Whisper Decoder Layer """
-    ttm_encoder_hidden_states = torch2tt_tensor(
-        encoder_hidden_states, device, tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    ttm_encoder_hidden_states = torch2tt_tensor(encoder_hidden_states, device, tt_lib.tensor.Layout.ROW_MAJOR)
 
     if encoder_attention_mask:
-        ttm_encoder_attention_mask = torch2tt_tensor(
-            encoder_attention_mask, device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        ttm_encoder_attention_mask = torch2tt_tensor(encoder_attention_mask, device, tt_lib.tensor.Layout.ROW_MAJOR)
     else:
         ttm_encoder_attention_mask = None
 
-    ttm_tensor_hidden_state = torch2tt_tensor(
-        hidden_state_input_tensor, device, tt_lib.tensor.Layout.ROW_MAJOR
-    )
-    ttm_tensor_attention_mask = torch2tt_tensor(
-        attention_mask_input_tensor, device, tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device, tt_lib.tensor.Layout.ROW_MAJOR)
+    ttm_tensor_attention_mask = torch2tt_tensor(attention_mask_input_tensor, device, tt_lib.tensor.Layout.ROW_MAJOR)
 
     # TODO: Support this parameter as tt tensor with padding
     # layer_head_mask_input_tensor has size [6] and is equal to number of encoder_attention_heads
@@ -107,13 +98,9 @@ def run_whisper_decoder_layer(layer, device):
     # same for cross_attn_layer_head_mask
 
     layer_head_mask_input_tensor = layer_head_mask_input_tensor.view(1, 1, 1, num_heads)
-    layer_head_mask_input_tensor = torch2tt_tensor(
-        layer_head_mask_input_tensor, device, tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    layer_head_mask_input_tensor = torch2tt_tensor(layer_head_mask_input_tensor, device, tt_lib.tensor.Layout.ROW_MAJOR)
     cross_attn_layer_head_mask = cross_attn_layer_head_mask.view(1, 1, 1, num_heads)
-    cross_attn_layer_head_mask = torch2tt_tensor(
-        cross_attn_layer_head_mask, device, tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    cross_attn_layer_head_mask = torch2tt_tensor(cross_attn_layer_head_mask, device, tt_lib.tensor.Layout.ROW_MAJOR)
 
     tt_whisper_decoder_layer = TtWhisperDecoderLayer(
         base_address=base_address,

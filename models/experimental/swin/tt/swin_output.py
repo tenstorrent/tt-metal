@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -19,12 +19,8 @@ class TtSwinOutput(nn.Module):
         super().__init__()
         self.device = device
 
-        self.dense_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.dense.weight"], self.device
-        )
-        self.dense_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.dense.bias"], self.device
-        )
+        self.dense_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.weight"], self.device)
+        self.dense_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.bias"], self.device)
 
     def forward(self, hidden_states: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         hidden_states = TtLinear(hidden_states, self.dense_weight, self.dense_bias)

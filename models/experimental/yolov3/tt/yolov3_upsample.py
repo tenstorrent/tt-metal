@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -22,9 +22,7 @@ class TtUpsample(torch.nn.Module):
     ):
         super().__init__()
         self.device = device
-        self.upsample = torch.nn.Upsample(
-            size=size, scale_factor=scale_factor, mode=mode
-        )
+        self.upsample = torch.nn.Upsample(size=size, scale_factor=scale_factor, mode=mode)
 
     def forward(self, x):
         x = tt2torch_tensor(x)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -38,14 +38,10 @@ class TtSSDLiteFeatureExtractorMobileNet(nn.Module):
         expand_channels = [256, 128, 128, 64]
 
         self.backbone_features = nn.ModuleList()
-        self.features_1 = TtMobileNetV3Features(
-            self.config, state_dict, f"{base_address}.features", self.device
-        )
+        self.features_1 = TtMobileNetV3Features(self.config, state_dict, f"{base_address}.features", self.device)
 
         self.backbone_features.append(self.features_1)
-        self.features_2 = TtMobileNetV3extract(
-            self.config, state_dict, f"{base_address}.features", self.device
-        )
+        self.features_2 = TtMobileNetV3extract(self.config, state_dict, f"{base_address}.features", self.device)
 
         self.backbone_features.append(self.features_2)
         for i in range(4):

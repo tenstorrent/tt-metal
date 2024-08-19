@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -44,9 +44,7 @@ class TtMobileNetV3InvertedResidual(nn.Module):
             use_activation=use_activation,
             activation=activation,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.0"
-            if not self.extractor
-            else f"{base_address}.0",
+            base_address=f"{base_address}.block.0" if not self.extractor else f"{base_address}.0",
             device=device,
         )
 
@@ -62,9 +60,7 @@ class TtMobileNetV3InvertedResidual(nn.Module):
             use_activation=use_activation,
             activation=activation,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.1"
-            if not self.extractor
-            else f"{base_address}.1",
+            base_address=f"{base_address}.block.1" if not self.extractor else f"{base_address}.1",
             device=device,
         )
 
@@ -77,9 +73,7 @@ class TtMobileNetV3InvertedResidual(nn.Module):
             padding=0,
             use_activation=False if not self.extractor else True,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.2"
-            if not self.extractor
-            else f"{base_address}.2",
+            base_address=f"{base_address}.block.2" if not self.extractor else f"{base_address}.2",
             device=device,
         )
 

@@ -1,6 +1,6 @@
 #! /usr/bin/env python3
 
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ GOLDEN_OUTPUTS_DIR = TT_METAL_PATH / "third_party/lfs/profiler/tests/golden/devi
 GOLDEN_LOGS_DIR = TT_METAL_PATH / "third_party/lfs/profiler/tests/golden/device/logs"
 TEST_DEVICE_LOGS_PATH = TT_METAL_HOME / "tests/tt_metal/tools/profiler/test_device_logs.py"
 
-TEST_FILE_IMPORTS = """# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+TEST_FILE_IMPORTS = """# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 

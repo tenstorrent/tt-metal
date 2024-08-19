@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -32,9 +32,7 @@ def test_cpu_demo(model_name):
         answer_start_index = torch_output.start_logits.argmax()
         answer_end_index = torch_output.end_logits.argmax()
 
-        predict_answer_tokens = inputs.input_ids[
-            0, answer_start_index : answer_end_index + 1
-        ]
+        predict_answer_tokens = inputs.input_ids[0, answer_start_index : answer_end_index + 1]
 
         answer = tokenizer.decode(predict_answer_tokens, skip_special_tokens=True)
 

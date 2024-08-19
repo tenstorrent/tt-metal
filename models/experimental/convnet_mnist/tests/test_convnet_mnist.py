@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -22,9 +22,7 @@ def test_mnist_inference(device):
     with torch.no_grad():
         pt_output = pt_convnet(test_input).unsqueeze(1).unsqueeze(1)
 
-        tt_input = torch2tt_tensor(
-            test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        tt_input = torch2tt_tensor(test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
         tt_output = tt_convnet(tt_input)
         tt_output = tt2torch_tensor(tt_output)
 

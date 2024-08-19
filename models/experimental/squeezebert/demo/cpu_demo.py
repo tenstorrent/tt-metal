@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,7 @@ from transformers import SqueezeBertForQuestionAnswering, AutoTokenizer
 
 def test_cpu_demo():
     tokenizer = AutoTokenizer.from_pretrained("squeezebert/squeezebert-uncased")
-    HF_model = SqueezeBertForQuestionAnswering.from_pretrained(
-        "squeezebert/squeezebert-uncased"
-    )
+    HF_model = SqueezeBertForQuestionAnswering.from_pretrained("squeezebert/squeezebert-uncased")
 
     question, context = (
         "Where do I live?",

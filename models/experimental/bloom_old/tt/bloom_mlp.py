@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,8 +12,6 @@ import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.bloom_gelu_forward as bloom_gelu_forward
 
 
-
-
 class TtBloomMLP(torch.nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
@@ -22,19 +20,11 @@ class TtBloomMLP(torch.nn.Module):
         self.hidden_dropout = config.hidden_dropout
         self.training = False
 
-        self.tt_weight_mlp_h4h = bloom_utils.tt_load_layer_weights(
-            f"{base_address}.dense_h_to_4h.weight", state_dict
-        )
-        self.tt_bias_mlp_h4h = bloom_utils.tt_load_layer_weights(
-            f"{base_address}.dense_h_to_4h.bias", state_dict
-        )
+        self.tt_weight_mlp_h4h = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_h_to_4h.weight", state_dict)
+        self.tt_bias_mlp_h4h = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_h_to_4h.bias", state_dict)
 
-        self.tt_weight_mlp_4hh = bloom_utils.tt_load_layer_weights(
-            f"{base_address}.dense_4h_to_h.weight", state_dict
-        )
-        self.tt_bias_mlp_4hh = bloom_utils.tt_load_layer_weights(
-            f"{base_address}.dense_4h_to_h.bias", state_dict
-        )
+        self.tt_weight_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_4h_to_h.weight", state_dict)
+        self.tt_bias_mlp_4hh = bloom_utils.tt_load_layer_weights(f"{base_address}.dense_4h_to_h.bias", state_dict)
 
         self.dense_h_to_4h = TtLinear(
             self.hidden_size,

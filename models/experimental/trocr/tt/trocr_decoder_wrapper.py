@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,9 +15,7 @@ class TtTrOCRDecoderWrapper(nn.Module):
 
     def __init__(self, config, base_address=None, state_dict=None, device=None):
         super().__init__()
-        self.decoder = TtTrOCRDecoder(
-            config, state_dict=state_dict, base_address=base_address, device=device
-        )
+        self.decoder = TtTrOCRDecoder(config, state_dict=state_dict, base_address=base_address, device=device)
 
     def forward(self, *args, **kwargs):
         return self.decoder(*args, **kwargs)

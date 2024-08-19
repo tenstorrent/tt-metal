@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -22,9 +22,7 @@ def test_Yolov5_sppf(device):
     data = None
     half = False
 
-    refence_model = DetectMultiBackend(
-        weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half
-    )
+    refence_model = DetectMultiBackend(weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half)
     refence_module = refence_model.model.model[9]
 
     in_channels = refence_module.cv1.conv.in_channels

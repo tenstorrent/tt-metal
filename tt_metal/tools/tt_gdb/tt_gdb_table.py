@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,10 +20,8 @@ from rich.live import Live
 from rich.style import Style
 from curtsies import Input
 
-from debugger_screen import (
-    DebugLayout,
-    update_split_screen_layout
-)
+from debugger_screen import DebugLayout, update_split_screen_layout
+
 
 def get_functional_workers(path="tt_metal/soc_descriptors/grayskull_120_arch.yaml"):
     with open(path, "r") as f:
@@ -51,16 +49,16 @@ def get_functional_workers(path="tt_metal/soc_descriptors/grayskull_120_arch.yam
 
     return functional_worker_arr
 
+
 def highlight_exact_core(
     text,
     core: str,
     style: Union[str, Style],
 ) -> int:
-
     def get_matches():
         for match in re.finditer(core, text.plain):
             start, end = match.span()
-            end = end - 1 # To make it inclusive
+            end = end - 1  # To make it inclusive
             actual_match = True
             if start != 0:
                 actual_match &= not text.plain[start - 1].isnumeric()
@@ -82,6 +80,7 @@ def highlight_exact_core(
         count += 1
     return count
 
+
 class ChipGrid:
     MIN_WIDTH = 150
     DEFAULT_COLOR = "gray"
@@ -91,7 +90,6 @@ class ChipGrid:
     ARCH_YAML = "tt_metal/soc_descriptors/grayskull_120_arch.yaml"
 
     def __init__(self, cores_with_breakpoint: list = [], start_index: tuple = (0, 0)):
-
         self.functional_workers = get_functional_workers()
 
         # Where our cursor starts at within the chip grid
@@ -107,14 +105,9 @@ class ChipGrid:
 
         s = [[str(e) for e in row] for row in self.functional_workers]
         lens = [max(map(len, col)) for col in zip(*s)]
-        fmt = '\t'.join('{{:{}}}'.format(x) for x in lens)
+        fmt = "\t".join("{{:{}}}".format(x) for x in lens)
         t = [fmt.format(*row) for row in s]
-        t = [
-            Text(
-                text=text
-            )
-            for text in t
-        ]
+        t = [Text(text=text) for text in t]
 
         self.text_rows = t
 
@@ -160,7 +153,10 @@ class ChipGrid:
 
         physical_row, physical_col = self.get_physical_coord_from_row_and_col(row, col)
 
-        if physical_row in self.cores_with_breakpoint.keys() and physical_col in self.cores_with_breakpoint[physical_row]:
+        if (
+            physical_row in self.cores_with_breakpoint.keys()
+            and physical_col in self.cores_with_breakpoint[physical_row]
+        ):
             color = ChipGrid.BREAKPOINT_HIGHLIGHT_COLOR_ON_TOP_OF_HIGHLIGHT_COLOR
         else:
             color = ChipGrid.HIGHLIGHT_COLOR
@@ -168,7 +164,6 @@ class ChipGrid:
         self.highlight_index(row, physical_row, physical_col, color)
 
     def render(self, key):
-
         # Reset old row back to default color
         old_row = self.highlight_row
 
@@ -192,9 +187,11 @@ class ChipGrid:
     def table_view(self):
         return Align.center(self.table)
 
+
 def enter_core(op: str = "", text: list = [], current_risc: str = "trisc0"):
     layout = DebugLayout(op, text, current_risc)
     return update_split_screen_layout(layout)
+
 
 def core_grid(c, console, input_generator):
     with Live(screen=True, auto_refresh=False) as live:
@@ -227,9 +224,11 @@ def prepare_core_text(c: ChipGrid, cores_with_breakpoint: list = [], breakpoint_
 
     return text
 
+
 def write_core_debug_info(core_debug_info):
     with open("core_debug_info.json", "w") as j:
         j.write(json.dumps(core_debug_info, indent=4))
+
 
 def debugger(
     cores_with_breakpoint: list = [],
@@ -237,16 +236,17 @@ def debugger(
     breakpoint_lines: list = [],
     start_index: tuple = (0, 0),
     current_risc: str = "trisc0",
-    reenter: bool = False
+    reenter: bool = False,
 ):
-    assert len(cores_with_breakpoint) == len(breakpoint_lines) == len(ops), "The lengths of all arguments to 'debugger' must be equal"
+    assert (
+        len(cores_with_breakpoint) == len(breakpoint_lines) == len(ops)
+    ), "The lengths of all arguments to 'debugger' must be equal"
 
     c = ChipGrid(cores_with_breakpoint=cores_with_breakpoint, start_index=start_index)
     console = Console()
 
     with Input(keynames="curses") as input_generator:
         while True:
-
             if not reenter:
                 special_char = core_grid(c, console, input_generator)
 
@@ -259,7 +259,10 @@ def debugger(
 
                 op = ""
                 physical_row, physical_col = c.get_physical_coord_from_row_and_col(c.highlight_row, c.highlight_col)
-                if physical_row in c.cores_with_breakpoint.keys() and physical_col in c.cores_with_breakpoint[physical_row]:
+                if (
+                    physical_row in c.cores_with_breakpoint.keys()
+                    and physical_col in c.cores_with_breakpoint[physical_row]
+                ):
                     current_core = f"{physical_row}-{physical_col}"
                     index_of_core_in_list = cores_with_breakpoint.index(current_core)
                     op = ops[index_of_core_in_list]
@@ -268,25 +271,26 @@ def debugger(
 
                 # User wants to enter the debugger for a particular core
                 if ret_vals is not None:
-                    write_core_debug_info({
-                        "op": op,
-                        "current_core_x": physical_row,
-                        "current_core_y": physical_col,
-                        "current_risc": ret_vals.current_risc,
-                        "reenter": True,
-                    })
+                    write_core_debug_info(
+                        {
+                            "op": op,
+                            "current_core_x": physical_row,
+                            "current_core_y": physical_col,
+                            "current_risc": ret_vals.current_risc,
+                            "reenter": True,
+                        }
+                    )
                     return
 
             elif special_char == repr("q"):
-                write_core_debug_info({
-                    "exit": True
-                })
+                write_core_debug_info({"exit": True})
                 return
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        prog = "tt-gdb-table.py",
-        description = "Creates a terminal grid of cores with information on which cores hit breakpoints, and allows users to enter the debugger",
+        prog="tt-gdb-table.py",
+        description="Creates a terminal grid of cores with information on which cores hit breakpoints, and allows users to enter the debugger",
     )
 
     parser.add_argument("--cores_with_breakpoint", required=True, type=str, nargs="+")
@@ -301,9 +305,8 @@ if __name__ == "__main__":
         cores_with_breakpoint=args.cores_with_breakpoint,
         breakpoint_lines=args.breakpoint_lines,
         ops=args.ops,
-
         # Optional arguments
         start_index=args.start_index if args.start_index is not None else (0, 0),
         current_risc=args.current_risc if args.current_risc is not None else "trisc0",
-        reenter=args.reenter if args.reenter is not None else False
+        reenter=args.reenter if args.reenter is not None else False,
     )

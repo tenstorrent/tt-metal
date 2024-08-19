@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,9 +25,7 @@ from models.experimental.whisper.tt.whisper_common import linear
 from models.experimental.whisper.tt.whisper_model import TtWhisperModel
 
 
-def shift_tokens_right(
-    input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int
-):
+def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int):
     """
     Shift input ids one token to the right.
     """
@@ -151,9 +149,7 @@ class TtWhisperForConditionalGeneration(nn.Module):
         >>> transcription
         ' Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.'
         ```"""
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         """TODO: Used in training mode"""
         if labels is not None:
@@ -185,9 +181,7 @@ class TtWhisperForConditionalGeneration(nn.Module):
         if labels is not None:
             # TODO: Not supporting Training in TTM for the moment
             loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(
-                logits_to_torch.view(-1, self.config.vocab_size), labels.reshape(-1)
-            )
+            loss = loss_fct(logits_to_torch.view(-1, self.config.vocab_size), labels.reshape(-1))
 
         if not return_dict:
             output = (logits_to_torch,) + outputs[1:]
@@ -230,9 +224,5 @@ class TtWhisperForConditionalGeneration(nn.Module):
     def _reorder_cache(past_key_values, beam_idx):
         reordered_past = ()
         for layer_past in past_key_values:
-            reordered_past += (
-                tuple(
-                    past_state.index_select(0, beam_idx) for past_state in layer_past
-                ),
-            )
+            reordered_past += (tuple(past_state.index_select(0, beam_idx) for past_state in layer_past),)
         return reordered_past

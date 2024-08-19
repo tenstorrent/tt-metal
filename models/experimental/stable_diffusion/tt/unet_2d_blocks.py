@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -53,9 +53,7 @@ class TtUNetMidBlock2DCrossAttn(nn.Module):
         self.attn_num_head_channels = attn_num_head_channels
         self.device = device
         self.host = host
-        resnet_groups = (
-            resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
-        )
+        resnet_groups = resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
 
         # there is always at least one resnet
         resnets = [
@@ -250,10 +248,15 @@ class TtCrossAttnUpBlock2D(nn.Module):
         for resnet, attn in zip(self.resnets, self.attentions):
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
-            if isinstance(res_hidden_states,(ttl.tensor.Tensor,)):
+            if isinstance(res_hidden_states, (ttl.tensor.Tensor,)):
                 on_dev_res_hidden_states = res_hidden_states
             else:
-                on_dev_res_hidden_states = ttl.tensor.Tensor(res_hidden_states.reshape(-1).tolist(),res_hidden_states.shape,ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.ROW_MAJOR).to(device)
+                on_dev_res_hidden_states = ttl.tensor.Tensor(
+                    res_hidden_states.reshape(-1).tolist(),
+                    res_hidden_states.shape,
+                    ttl.tensor.DataType.BFLOAT16,
+                    ttl.tensor.Layout.ROW_MAJOR,
+                ).to(device)
 
             hidden_states = concat([hidden_states, on_dev_res_hidden_states], dim=1)
             if self.training and self.gradient_checkpointing:
@@ -436,9 +439,7 @@ class TtCrossAttnDownBlock2D(nn.Module):
 
                     return custom_forward
 
-                hidden_states = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(resnet), hidden_states, temb
-                )
+                hidden_states = torch.utils.checkpoint.checkpoint(create_custom_forward(resnet), hidden_states, temb)
                 hidden_states = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(attn, return_dict=False),
                     hidden_states,

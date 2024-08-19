@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,9 +17,9 @@ if __name__ == "__main__":
     command = executable.split(" ")
 
     parser = argparse.ArgumentParser(
-        prog = "memset.py",
-        description = "Launches a program that blasts either chip DRAM"
-        "or L1 with a user-specified value for a certain range"
+        prog="memset.py",
+        description="Launches a program that blasts either chip DRAM"
+        "or L1 with a user-specified value for a certain range",
     )
 
     parser.add_argument("--mem_type", required=True, type=str, help="Either dram or l1")
@@ -36,13 +36,7 @@ if __name__ == "__main__":
     assert args.size >= 0, "Cannot have a negative size"
     assert args.val >= 0, "Cannot write a negative value"
 
-    command.extend([
-        args.mem_type,
-        args.chip_id,
-        args.start_addr,
-        args.size,
-        args.val
-    ])
+    command.extend([args.mem_type, args.chip_id, args.start_addr, args.size, args.val])
 
     # We kept the types before so that argparse can do type checking, but
     # we need to convert to string here so that we can pass the command

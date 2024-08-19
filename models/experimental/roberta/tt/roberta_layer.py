@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -29,16 +29,12 @@ class TtRobertaLayer(nn.Module):
         self.seq_len_dim = 1
         self.is_decoder = config.is_decoder
 
-        self.attention = TtRobertaAttention(
-            config, state_dict, f"{base_address}.attention", device
-        )
+        self.attention = TtRobertaAttention(config, state_dict, f"{base_address}.attention", device)
 
         self.add_cross_attention = config.add_cross_attention
         if self.add_cross_attention:
             if not self.is_decoder:
-                raise ValueError(
-                    f"{self} should be used as a decoder model if cross attention is added"
-                )
+                raise ValueError(f"{self} should be used as a decoder model if cross attention is added")
             self.crossattention = TtRobertaAttention(
                 config,
                 state_dict,
@@ -47,12 +43,8 @@ class TtRobertaLayer(nn.Module):
                 position_embedding_type="absolute",
             )
 
-        self.intermediate = TtRobertaIntermediate(
-            config, state_dict, f"{base_address}.intermediate", device
-        )
-        self.output = TtRobertaOutput(
-            config, state_dict, f"{base_address}.output", device
-        )
+        self.intermediate = TtRobertaIntermediate(config, state_dict, f"{base_address}.intermediate", device)
+        self.output = TtRobertaOutput(config, state_dict, f"{base_address}.output", device)
 
     def forward(
         self,
@@ -65,9 +57,7 @@ class TtRobertaLayer(nn.Module):
         output_attentions: Optional[bool] = False,
     ) -> Tuple[tt_lib.tensor.Tensor]:
         # decoder uni-directional self-attention cached key/values tuple is at positions 1,2
-        self_attn_past_key_value = (
-            past_key_value[:2] if past_key_value is not None else None
-        )
+        self_attn_past_key_value = past_key_value[:2] if past_key_value is not None else None
         self_attention_outputs = self.attention(
             hidden_states,
             attention_mask,
@@ -82,9 +72,7 @@ class TtRobertaLayer(nn.Module):
             outputs = self_attention_outputs[1:-1]
             present_key_value = self_attention_outputs[-1]
         else:
-            outputs = self_attention_outputs[
-                1:
-            ]  # add self attentions if we output attention weights
+            outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 
         cross_attn_present_key_value = None
         if self.is_decoder and encoder_hidden_states is not None:
@@ -95,9 +83,7 @@ class TtRobertaLayer(nn.Module):
                 )
 
             # cross_attn cached key/values tuple is at positions 3,4 of past_key_value tuple
-            cross_attn_past_key_value = (
-                past_key_value[-2:] if past_key_value is not None else None
-            )
+            cross_attn_past_key_value = past_key_value[-2:] if past_key_value is not None else None
             cross_attention_outputs = self.crossattention(
                 attention_output,
                 attention_mask,
@@ -108,9 +94,7 @@ class TtRobertaLayer(nn.Module):
                 output_attentions,
             )
             attention_output = cross_attention_outputs[0]
-            outputs = (
-                outputs + cross_attention_outputs[1:-1]
-            )  # add cross attentions if we output attention weights
+            outputs = outputs + cross_attention_outputs[1:-1]  # add cross attentions if we output attention weights
 
             # add cross-attn cache to positions 3,4 of present_key_value tuple
             cross_attn_present_key_value = cross_attention_outputs[-1]

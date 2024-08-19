@@ -1,7 +1,6 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-
 
 
 import tt_lib
@@ -22,9 +21,7 @@ def test_Yolov5_detect(device):
     data = None
     half = False
 
-    refence_model = DetectMultiBackend(
-        weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half
-    )
+    refence_model = DetectMultiBackend(weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half)
     refence_module = refence_model.model.model[24]
 
     torch.manual_seed(0)
@@ -58,15 +55,9 @@ def test_Yolov5_detect(device):
     tt_module.anchors = refence_module.anchors
     tt_module.stride = torch.tensor([8.0, 16.0, 32.0])
 
-    tt_a = torch2tt_tensor(
-        a, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-    )
-    tt_b = torch2tt_tensor(
-        b, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-    )
-    tt_c = torch2tt_tensor(
-        c, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    tt_a = torch2tt_tensor(a, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_b = torch2tt_tensor(b, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_c = torch2tt_tensor(c, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
     test_input = [tt_a, tt_b, tt_c]
 
     with torch.no_grad():

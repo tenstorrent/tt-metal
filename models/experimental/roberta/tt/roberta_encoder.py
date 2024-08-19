@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import tt_lib
 
 from models.experimental.roberta.tt.roberta_layer import TtRobertaLayer
+
 
 @dataclass
 class TtBaseModelOutputWithPastAndCrossAttentions:
@@ -54,14 +55,10 @@ class TtRobertaEncoder(nn.Module):
         output_attentions: Optional[bool] = False,
         output_hidden_states: Optional[bool] = False,
         return_dict: Optional[bool] = True,
-    ) -> Union[
-        Tuple[tt_lib.tensor.Tensor], TtBaseModelOutputWithPastAndCrossAttentions
-    ]:
+    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtBaseModelOutputWithPastAndCrossAttentions]:
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
-        all_cross_attentions = (
-            () if output_attentions and self.config.add_cross_attention else None
-        )
+        all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
 
         if self.gradient_checkpointing and self.training:
             if use_cache:

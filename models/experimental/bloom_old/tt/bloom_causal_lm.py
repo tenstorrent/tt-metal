@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,16 +15,10 @@ from typing import Optional, Tuple, Union
 class TtBloomForCausalLM:
     def __init__(self, config, state_dict, device):
         self.use_return_dict = False
-        self.transformer = bloom_model.TtBloomModel(
-            config, state_dict, f"transformer", device
-        )
+        self.transformer = bloom_model.TtBloomModel(config, state_dict, f"transformer", device)
 
-        self.lm_head_weight = bloom_utils.tt_load_layer_weights(
-            "lm_head.weight", state_dict
-        )
-        self.lm_head = TtLinear(
-            config.hidden_size, config.vocab_size, self.lm_head_weight, None, device
-        )
+        self.lm_head_weight = bloom_utils.tt_load_layer_weights("lm_head.weight", state_dict)
+        self.lm_head = TtLinear(config.hidden_size, config.vocab_size, self.lm_head_weight, None, device)
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -155,15 +149,11 @@ class TtBloomForCausalLM:
         beam_idx at every generation step.
         Output shares the same memory storage as `past`.
         """
-        standardized_past = self._convert_to_standard_cache(
-            past, batch_size=len(beam_idx)
-        )
+        standardized_past = self._convert_to_standard_cache(past, batch_size=len(beam_idx))
 
         # Get a copy of `beam_idx` on all the devices where we need those indices.
         device_to_beam_idx = {
-            past_state.device: beam_idx.to(past_state.device)
-            for layer_past in past
-            for past_state in layer_past
+            past_state.device: beam_idx.to(past_state.device) for layer_past in past for past_state in layer_past
         }
         reordered_past = tuple(
             (

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,9 +14,7 @@ from models.experimental.roberta.tt.roberta_self_output import TtRobertaSelfOutp
 
 # Copied from transformers.models.bert.modeling_bert.BertAttention with Bert->Roberta
 class TtRobertaAttention(nn.Module):
-    def __init__(
-        self, config, state_dict, base_address, device, position_embedding_type=None
-    ):
+    def __init__(self, config, state_dict, base_address, device, position_embedding_type=None):
         super().__init__()
         self.device = device
 
@@ -28,9 +26,7 @@ class TtRobertaAttention(nn.Module):
             position_embedding_type=position_embedding_type,
         )
 
-        self.output = TtRobertaSelfOutput(
-            config, state_dict, f"{base_address}.output", device
-        )
+        self.output = TtRobertaSelfOutput(config, state_dict, f"{base_address}.output", device)
         self.pruned_heads = set()
 
     """
@@ -75,7 +71,5 @@ class TtRobertaAttention(nn.Module):
             output_attentions,
         )
         attention_output = self.output(self_outputs[0], hidden_states)
-        outputs = (attention_output,) + self_outputs[
-            1:
-        ]  # add attentions if we output them
+        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
         return outputs

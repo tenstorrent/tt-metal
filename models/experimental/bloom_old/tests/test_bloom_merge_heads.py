@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -19,12 +19,8 @@ def run_bloom_merge_heads_test(device, num_heads, hidden_size, num_attention_hea
     torch.manual_seed(0)
     test_in = torch.rand(4096, 128, 32)
 
-    pt_out = bloom_attention_merge_heads.merge_heads(
-        test_in, num_heads, hidden_size, num_attention_heads
-    )
-    tt_out = bloom_attention_merge_heads.tt_merge_heads(
-        test_in, num_heads, hidden_size, num_attention_heads, device
-    )
+    pt_out = bloom_attention_merge_heads.merge_heads(test_in, num_heads, hidden_size, num_attention_heads)
+    tt_out = bloom_attention_merge_heads.tt_merge_heads(test_in, num_heads, hidden_size, num_attention_heads, device)
 
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
 

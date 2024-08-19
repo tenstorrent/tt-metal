@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,9 +20,7 @@ import models.experimental.bloom_old.tt.bloom_block as bloom_block
 
 
 def run_bloom_block_test(device):
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
-        "bigscience/bloom-560m", torchscript=False
-    )
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()
 
     do_all_blocks_pass = True
@@ -34,9 +32,7 @@ def run_bloom_block_test(device):
         hidden_size = config.hidden_size
         n_head = config.n_head
 
-        tt_bloom_block = bloom_block.TtBloomBlock(
-            config, state_dict, base_address, device
-        )
+        tt_bloom_block = bloom_block.TtBloomBlock(config, state_dict, base_address, device)
         pt_bloom_block = hugging_bloom_reference_model.transformer.h[block]
 
         torch.manual_seed(0)

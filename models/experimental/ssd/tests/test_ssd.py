@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -52,15 +52,9 @@ def test_ssd_inference(device, pcc, imagenet_sample_input, reset_seeds):
     tt_output = tt_model(tt_input)
 
     # Compare outputs
-    score_pass, pcc_scores = comp_pcc(
-        torch_output[0]["scores"], tt_output[0]["scores"], pcc
-    )
-    labels_pass, pcc_labels = comp_pcc(
-        torch_output[0]["labels"], tt_output[0]["labels"], pcc
-    )
-    boxes_pass, pcc_boxes = comp_pcc(
-        torch_output[0]["boxes"], tt_output[0]["boxes"], pcc
-    )
+    score_pass, pcc_scores = comp_pcc(torch_output[0]["scores"], tt_output[0]["scores"], pcc)
+    labels_pass, pcc_labels = comp_pcc(torch_output[0]["labels"], tt_output[0]["labels"], pcc)
+    boxes_pass, pcc_boxes = comp_pcc(torch_output[0]["boxes"], tt_output[0]["boxes"], pcc)
 
     logger.info(comp_allclose(torch_output[0]["scores"], tt_output[0]["scores"]))
     logger.info(pcc_scores)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -44,9 +44,7 @@ def run_llama_split_inference(
             num_decoders_start,
             num_decoders,
         )
-        tt_out = tt_llama_model(
-            input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids
-        )
+        tt_out = tt_llama_model(input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids)
     else:
         logger.debug("Second pass through TT model")
         tt_llama_model = llama_second_half(
@@ -58,9 +56,7 @@ def run_llama_split_inference(
             num_decoders_start,
             num_decoders,
         )
-        tt_out = tt_llama_model(
-            input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids
-        )
+        tt_out = tt_llama_model(input_ids=x_inputs, attention_mask=att_mask, position_ids=position_ids)
 
     # returned type from the model is tuple
     tt_output = tt_to_torch_tensor(tt_out[0])
@@ -86,9 +82,7 @@ def call_tt_llama_forward_func(
     for i in range(num_words):
         # pad input tensors
         input_ids_padded = pad_input_32_left(input_ids, configuration.pad_token_id)
-        attention_mask_padded = pad_input_32_left(
-            attention_mask, configuration.pad_token_id
-        )
+        attention_mask_padded = pad_input_32_left(attention_mask, configuration.pad_token_id)
         position_ids_padded = gen_position_ids(input_ids_padded)
 
         logger.debug(f"The first call started: loop {i+1}")
@@ -138,9 +132,7 @@ def call_tt_llama_forward_func(
         tt_out = tt_out.squeeze(1)
 
         # Get next token
-        next_tokens = get_next_llama_output_token(
-            logits_processor, input_ids_padded, tt_out, i, "Tenstorrent"
-        )
+        next_tokens = get_next_llama_output_token(logits_processor, input_ids_padded, tt_out, i, "Tenstorrent")
 
         # save output words
         s = tokenizer.decode(next_tokens.item(), skip_special_tokens=True)
@@ -205,9 +197,7 @@ def test_gs_demo(prompt, num_words):
 
     # load llama pytorch model ================================================
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        llama_model_name
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(llama_model_name)
 
     hugging_face_reference_model.eval()
     # get configurations
@@ -226,9 +216,7 @@ def test_gs_demo(prompt, num_words):
     seq_length = input_ids.shape[1]
     position_ids = gen_position_ids(input_ids)
 
-    logits_processor = get_logits_processor(
-        input_ids, hugging_face_reference_model.config
-    )
+    logits_processor = get_logits_processor(input_ids, hugging_face_reference_model.config)
 
     # TT output: call forward() function several times ========================
     tt_generated_ids = call_tt_llama_forward_func(

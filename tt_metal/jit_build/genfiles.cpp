@@ -407,7 +407,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     bool is_dram_pow2 = ceil(log2(dram_bank_map.size())) == log2(dram_bank_map.size());
     bool is_l1_pow2 = ceil(log2(l1_bank_map.size())) == log2(l1_bank_map.size());
 
-    ss << "// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc." << endl;
+    ss << "// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc." << endl;
     ss << "//" << endl;
     ss << "// SPDX-License-Identifier: Apache-2.0" << endl;
     ss << endl;
@@ -603,7 +603,7 @@ static string generate_noc_addr_ranges_string(
 
     stringstream ss;
 
-    ss << "// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc." << endl;
+    ss << "// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc." << endl;
     ss << "//" << endl;
     ss << "// SPDX-License-Identifier: Apache-2.0" << endl;
     ss << endl;

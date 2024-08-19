@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 
 from loguru import logger
 import models.experimental.bloom_old.bloom_utils as bloom_utils
-import models.experimental.bloom_old.tt..baddbmm as baddbmm
+import models.experimental.bloom_old.tt.baddbmm as baddbmm
 
 
 def run_baddbmm_test(device):
@@ -40,9 +40,7 @@ def run_baddbmm_test(device):
     batch1 = bloom_utils.torch2tt_tensor(batch1, device)
     batch2 = bloom_utils.torch2tt_tensor(batch2, device)
 
-    tt_out = baddbmm.tt_baddbmm(
-        device, input, batch1, batch2, beta=tt_beta, alpha=tt_alpha
-    )
+    tt_out = baddbmm.tt_baddbmm(device, input, batch1, batch2, beta=tt_beta, alpha=tt_alpha)
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
 
     print_diff_argmax(pt_out, tt_out_converted)

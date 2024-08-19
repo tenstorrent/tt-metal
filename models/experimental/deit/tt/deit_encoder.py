@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,9 +13,7 @@ from models.experimental.deit.tt.deit_layer import TtDeiTLayer
 
 
 class TtDeiTEncoder(nn.Module):
-    def __init__(
-        self, config: DeiTConfig(), device, state_dict=None, base_address=""
-    ) -> None:
+    def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
         self.config = config
         self.layer = nn.ModuleList(
@@ -47,9 +45,7 @@ class TtDeiTEncoder(nn.Module):
             if self.gradient_checkpointing and self.training:
                 assert False, "No support for training yet!"
             else:
-                layer_outputs = layer_module(
-                    hidden_states, layer_head_mask, output_attentions
-                )
+                layer_outputs = layer_module(hidden_states, layer_head_mask, output_attentions)
 
             hidden_states = layer_outputs[0]
 
@@ -59,10 +55,6 @@ class TtDeiTEncoder(nn.Module):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
-        output = tuple(
-            v
-            for v in [hidden_states, all_hidden_states, all_self_attentions]
-            if v is not None
-        )
+        output = tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
 
         return output

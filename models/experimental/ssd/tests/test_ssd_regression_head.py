@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -74,9 +74,7 @@ def test_ssd_backbone_inference(device, pcc, reset_seeds):
     tt_tensor.append(input_tensor6)
     for i in range(len(tt_tensor)):
         if i == 2 or i == 3 or i == 5:
-            tt_tensor[i] = torch_to_tt_tensor_rm(
-                tt_tensor[i], device, put_on_device=False
-            )
+            tt_tensor[i] = torch_to_tt_tensor_rm(tt_tensor[i], device, put_on_device=False)
         else:
             tt_tensor[i] = torch_to_tt_tensor_rm(tt_tensor[i], device)
 

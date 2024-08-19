@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,9 +8,7 @@ from transformers import VisionEncoderDecoderModel
 
 
 def _trocr(model, config, state_dict, device):
-    return GenerationMixin(
-        model=model, device=device, config=config, state_dict=state_dict
-    )
+    return GenerationMixin(model=model, device=device, config=config, state_dict=state_dict)
 
 
 def trocr_causal_llm(device) -> GenerationMixin:

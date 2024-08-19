@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -42,9 +42,7 @@ def run_baddbmm_test(device):
     batch1 = bloom_utils.torch2tt_tensor(batch1, device)
     batch2 = bloom_utils.torch2tt_tensor(batch2, device)
 
-    tt_out = baddbmm.tt_baddbmm(
-        device, input, batch1, batch2, beta=tt_beta, alpha=tt_alpha
-    )
+    tt_out = baddbmm.tt_baddbmm(device, input, batch1, batch2, beta=tt_beta, alpha=tt_alpha)
     tt_out_converted = bloom_utils.tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out_converted, 0.99)

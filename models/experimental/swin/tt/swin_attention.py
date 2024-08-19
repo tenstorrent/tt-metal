@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -35,9 +35,7 @@ class TtSwinAttention(nn.Module):
             base_address=f"{base_address}.self",
             device=device,
         )
-        self.output = TtSwinSelfOutput(
-            config, dim, state_dict, f"{base_address}.output", device
-        )
+        self.output = TtSwinSelfOutput(config, dim, state_dict, f"{base_address}.output", device)
         self.pruned_heads = set()
 
     def forward(
@@ -47,11 +45,7 @@ class TtSwinAttention(nn.Module):
         head_mask: Optional[tt_lib.tensor.Tensor] = None,
         output_attentions: Optional[bool] = False,
     ) -> Tuple[tt_lib.tensor.Tensor]:
-        self_outputs = self.self(
-            hidden_states, attention_mask, head_mask, output_attentions
-        )
+        self_outputs = self.self(hidden_states, attention_mask, head_mask, output_attentions)
         attention_output = self.output(self_outputs[0], hidden_states)
-        outputs = (attention_output,) + self_outputs[
-            1:
-        ]  # add attentions if we output them
+        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
         return outputs
