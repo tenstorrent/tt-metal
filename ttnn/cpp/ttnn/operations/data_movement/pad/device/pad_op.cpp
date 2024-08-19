@@ -38,10 +38,6 @@ void Pad::validate_with_output_tensors(
 
         TT_FATAL(this->output_mem_config.is_sharded());
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-
-        const auto shard_spec = input_tensor.shard_spec().value();
-        TT_FATAL(shard_spec.shape[1] == input_tensor.get_legacy_shape()[-1]);
-        TT_FATAL(shard_spec.shape[0] == input_tensor.get_legacy_shape()[-2]);
     }
 }
 
