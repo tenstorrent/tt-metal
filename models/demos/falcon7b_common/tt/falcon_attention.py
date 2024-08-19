@@ -786,9 +786,7 @@ class TtFalconAttentionDecode(nn.Module):
             )
 
             # Get batch in dim 1
-            attn_output = ttnn.reshape_on_device(
-                attn_output, 1, batch, self.padded_local_heads, self.head_dim
-            )
+            attn_output = ttnn.reshape_on_device(attn_output, 1, batch, self.padded_local_heads, self.head_dim)
 
             # Get batch in dim 2
             attn_output = ttnn.transpose(
