@@ -13,6 +13,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/device_operation.hpp"
+#include "tt_metal/graph/graph_tracking.hpp"
 
 namespace ttnn {
 namespace decorators {
@@ -210,7 +211,7 @@ struct registered_operation_t {
         ZoneScopedN("Run primitive ttnn operation");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
-        return ttnn::device_operation::run<operation_t>(queue_id, operation_attributes, tensors_args);
+        return ttnn::device_operation::detail::invoke<operation_t>(queue_id, operation_attributes, tensors_args);
     }
 
     template <typename... args_t>
@@ -297,7 +298,9 @@ struct registered_operation_t {
     template <typename... args_t>
     auto operator()(args_t&&... args) const {
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        GraphTracker::instance().track_begin_function(cpp_fully_qualified_name, args...);
         auto output = invoke(std::forward<args_t>(args)...);
+        GraphTracker::instance().track_end_function(output);
         tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
     }

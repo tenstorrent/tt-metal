@@ -288,6 +288,7 @@ from ttnn.operations.conv1d import Conv1d, Conv1dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
 
+import ttnn._ttnn.graph as graph
 
 if importlib.util.find_spec("torch") is not None:
     import ttnn.tracer
