@@ -16,6 +16,7 @@
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "type_caster.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
 namespace py = pybind11;
 

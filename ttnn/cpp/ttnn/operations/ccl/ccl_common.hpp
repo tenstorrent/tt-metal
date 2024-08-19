@@ -11,8 +11,11 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/program/program.hpp"
 #include "ttnn/tensor/types.hpp"
+
+namespace tt::tt_metal {
+    class Program;
+}
 
 namespace ttnn {
 namespace ccl {

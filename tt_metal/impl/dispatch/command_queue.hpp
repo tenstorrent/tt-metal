@@ -17,13 +17,15 @@
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/lock_free_queue.hpp"
-#include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/trace/trace_buffer.hpp"
-
+#include "tt_metal/impl/kernels/data_types.hpp"
 namespace tt::tt_metal {
 
 class Event;
 class Trace;
+class Program;
+class Kernel;
+class CircularBuffer;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 
 // Only contains the types of commands which are enqueued onto the device

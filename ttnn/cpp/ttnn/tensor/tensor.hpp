@@ -18,13 +18,14 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/device_mesh.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+
+class Device;
 
 struct Tensor {
     struct TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {

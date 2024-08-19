@@ -14,7 +14,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_stl/concepts.hpp"
 
@@ -22,6 +21,7 @@ namespace tt {
 
 namespace tt_metal {
 
+class CommandQueue;
 namespace tensor_impl {
 
 std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape);

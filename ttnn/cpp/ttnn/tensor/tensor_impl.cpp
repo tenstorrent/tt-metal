@@ -5,6 +5,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
 namespace tt {
 

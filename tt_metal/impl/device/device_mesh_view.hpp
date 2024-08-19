@@ -10,11 +10,11 @@
 #include <unordered_map>
 #include <optional>
 #include <functional>
-
-#include "tt_metal/impl/device/device.hpp"
-
+#include <ostream>
+#include "tt_metal/third_party/umd/device/tt_cluster_descriptor_types.h"
 namespace tt::tt_metal {
 
+class Device;
 // Forward declaration of DeviceMesh
 class DeviceMesh;
 using DeviceGrid = std::pair<size_t, size_t>;

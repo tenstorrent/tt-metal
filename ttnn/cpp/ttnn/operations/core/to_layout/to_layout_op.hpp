@@ -14,7 +14,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/types.hpp"
 

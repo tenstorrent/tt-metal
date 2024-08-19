@@ -15,6 +15,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
 using namespace tt::constants;
 

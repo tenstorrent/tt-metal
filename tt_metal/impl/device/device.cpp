@@ -21,6 +21,7 @@
 #include "noc/noc_parameters.h"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "llrt/hal.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
 namespace tt {
 
