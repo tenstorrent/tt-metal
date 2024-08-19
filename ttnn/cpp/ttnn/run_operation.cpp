@@ -55,7 +55,7 @@ void override_addresses(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OutputTensors& output_tensors) {
-    std::vector<Buffer*> input_buffers;
+    std::vector<tt::tt_metal::Buffer*> input_buffers;
     for (auto& tensor : input_tensors) {
         input_buffers.push_back(tensor.buffer());
     }
@@ -64,7 +64,7 @@ void override_addresses(
         input_buffers.push_back(buffer);
     }
 
-    std::vector<Buffer*> output_buffers;
+    std::vector<tt::tt_metal::Buffer*> output_buffers;
     for (auto& tensor : output_tensors) {
         if constexpr (std::is_same_v<OptionalTensors, OutputTensors>) {
             auto buffer = tensor.has_value() ? tensor.value().buffer() : nullptr;

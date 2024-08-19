@@ -1450,7 +1450,7 @@ struct from_json_t<T> {
 template <typename T>
 struct to_json_t {
     nlohmann::json operator()(const T& optional) noexcept {
-        return fmt::format("Unsupported type: {}", get_type_name<T>());
+        return fmt::format("tt::stl::json::to_json_t: Unsupported type {}", get_type_name<T>());
     }
 };
 

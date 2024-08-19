@@ -68,7 +68,7 @@ dram_bank_size:
   4278190080
 
 eth_l1_size:
-  262144
+  524288
 
 arch_name: BLACKHOLE
 

@@ -7,7 +7,6 @@ import torch
 from torch import nn
 
 import ttnn
-import tt_lib
 
 from loguru import logger
 from models.utility_functions import (
@@ -317,9 +316,7 @@ class TtT5Attention(nn.Module):
         self.dropout = config["dropout_rate"]
         self.inner_dim = self.n_heads * self.key_value_proj_dim
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
 
         self.q_weights = torch2tt_tensor(state_dict[f"{base_address}.q.weight"], device)
         self.k_weights = torch2tt_tensor(state_dict[f"{base_address}.k.weight"], device)

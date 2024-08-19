@@ -25,6 +25,8 @@
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
+#include "tt_metal/graph/graph_tracking.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -630,6 +632,7 @@ void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_u
     LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
 }
 
+
 void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
         ZoneScoped;
@@ -805,10 +808,19 @@ void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
 }
 
 void AllocateBuffer(Buffer *buffer, bool bottom_up) {
+    if(GraphTracker::instance().hook_allocate(buffer, bottom_up)) {
+        GraphTracker::instance().track_allocate(buffer, bottom_up);
+        return;
+    }
     EnqueueAllocateBuffer(buffer->device()->command_queue(), buffer, bottom_up, false);
+    GraphTracker::instance().track_allocate(buffer, bottom_up);
 }
 
 void DeallocateBuffer(Buffer *buffer) {
+    GraphTracker::instance().track_deallocate(buffer);
+    if(GraphTracker::instance().hook_deallocate(buffer)) {
+        return;
+    }
     EnqueueDeallocateBuffer(
         buffer->device()->command_queue(),
         *(buffer->device()->allocator_),

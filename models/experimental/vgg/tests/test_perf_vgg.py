@@ -9,7 +9,7 @@ from torchvision import models
 from loguru import logger
 
 
-import tt_lib
+import ttnn
 
 from models.experimental.vgg.tt.vgg import *
 from models.utility_functions import (
@@ -48,14 +48,14 @@ def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compil
 
         profiler.start(first_key)
         tt_output = tt_vgg(tt_image)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
 
         enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_vgg(tt_image)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
 
     first_iter_time = profiler.get(first_key)

@@ -124,16 +124,8 @@ def run_falcon_matmul_test(
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
 
-    a_t = (
-        ttnn.experimental.tensor.Tensor(A, in0_dtype)
-        .to(ttnn.experimental.tensor.Layout.TILE)
-        .to(device, in0_mem_config)
-    )
-    b_t = (
-        ttnn.experimental.tensor.Tensor(B, in1_dtype)
-        .to(ttnn.experimental.tensor.Layout.TILE)
-        .to(device, in1_mem_config)
-    )
+    a_t = ttnn.Tensor(A, in0_dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in0_mem_config)
+    b_t = ttnn.Tensor(B, in1_dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in1_mem_config)
 
     default_core_grid = get_falcon_default_core_grid(device)
     if falcon_op in (MatmulOpEnum.FALCON_FUSED_QKV_MATMUL, MatmulOpEnum.FALCON_SELFOUT_MATMUL):

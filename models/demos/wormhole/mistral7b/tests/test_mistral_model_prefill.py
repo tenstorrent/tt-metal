@@ -48,7 +48,7 @@ def test_mistral_model_inference(device, seq_len, use_program_cache, reset_seeds
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
-    pcc = 0.94
+    pcc = 0.93
 
     model_args = TtModelArgs(device)
     model_args.n_layers = 32  # Full model

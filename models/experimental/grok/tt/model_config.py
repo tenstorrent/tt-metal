@@ -182,7 +182,7 @@ class TtModelArgs:
 
         self.model_config["SHARDED_NORM_OUTPUT_MEMCFG"] = self.model_config["SHARDED_NORM_INPUT_MEMCFG"]
 
-        # Create program configs for the different ttlib matmul ops
+        # Create program configs for the different ttnn matmul ops
         # TODO: update for 6144 not 4096?
         self.model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 4),

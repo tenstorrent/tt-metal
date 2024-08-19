@@ -4,7 +4,6 @@
 
 import torch
 import json
-import tt_lib
 import pytest
 from loguru import logger
 

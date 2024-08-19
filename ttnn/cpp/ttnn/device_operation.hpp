@@ -15,7 +15,8 @@
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_stl/unique_any.hpp"
-
+#include "tt_metal/graph/graph_tracking.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 namespace ttnn {
 
 namespace device_operation {
@@ -190,7 +191,7 @@ struct CheckDeviceBufferIsAllocated {
 constexpr auto OPERATION_TYPE = "DeviceOperation";
 
 template <typename device_operation_t>
-auto get_type_name(const typename device_operation_t::operation_attributes_t& operation_attributes) {
+auto get_operation_name(const typename device_operation_t::operation_attributes_t& operation_attributes) {
     if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
         // TODO: remove this if statement once OldInfraDeviceOperation is removed
         return device_operation_t::get_type_name(operation_attributes);
@@ -216,7 +217,7 @@ static void append_operation_to_operation_history(
     operation_history::append(operation_history::OperationRecord{
         ttnn_operation_id,
         std::string(OPERATION_TYPE),
-        std::string{get_type_name<device_operation_t>(operation_attributes)},
+        std::string{get_operation_name<device_operation_t>(operation_attributes)},
         tt::stl::reflection::get_attributes(operation_attributes),
         input_tensor_records,
         program_cache_hit,
@@ -232,7 +233,7 @@ inline void log_operation(
     bool program_cache_hit) {
     tt::log_debug(
         tt::LogOp, "Launching Operation: \"{}\" ({})",
-        get_type_name<device_operation_t>(operation_attributes), OPERATION_TYPE);
+        get_operation_name<device_operation_t>(operation_attributes), OPERATION_TYPE);
 
     tt::log_debug(tt::LogOp, "Program Hash: {}", program_hash);
     tt::log_debug(tt::LogOp, "Program Cache Hit: {}", program_cache_hit);
@@ -300,6 +301,11 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
 
         program.set_runtime_id(operation_id);
 
+        GraphTracker::instance().track_program(&program);
+        if(GraphTracker::instance().hook_program(&program)) {
+            return;
+        }
+
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
             auto& queue = device->command_queue(cq_id);
@@ -324,32 +330,38 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
 
         tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
 
-        auto program = device_operation_t::select_program_factory(operation_attributes, tensor_args);
+        auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
 
-        auto program_ptr = std::visit(
+        auto program = std::visit(
             [&operation_attributes, &tensor_args, &tensor_return_value](auto&& program_factory) {
                 using program_factory_t = std::decay_t<decltype(program_factory)>;
                 return std::make_shared<tt::tt_metal::Program>(
                     program_factory_t::create(operation_attributes, tensor_args, tensor_return_value).program);
             },
-            program);
+            program_factory
+        );
 
-        program_ptr->set_runtime_id(operation_id);
+        program->set_runtime_id(operation_id);
+
+        GraphTracker::instance().track_program(program.get());
+        if(GraphTracker::instance().hook_program(program.get())) {
+            return;
+        }
 
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
             auto& queue = device->command_queue(cq_id);
-            tt::tt_metal::EnqueueProgram(queue, program_ptr, false);
+            tt::tt_metal::EnqueueProgram(queue, program, false);
         } else {
             ZoneScopedN("LaunchProgram");
-            ::detail::LaunchProgram(device, program_ptr);
+            ::detail::LaunchProgram(device, program);
         }
 
         TracyOpTTNNDevice(
             device_operation_t{},
             operation_id,
             device->id(),
-            *program_ptr,
+            *program,
             operation_attributes,
             tensor_args,
             tensor_return_value);
@@ -482,14 +494,17 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
     return make_tensor_return_value_from_shards(storage, outputs);
 }
 
-}  // namespace detail
-
 template <DeviceOperationConcept device_operation_t>
-typename device_operation_t::tensor_return_value_t run(
+typename device_operation_t::tensor_return_value_t invoke(
     uint8_t cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Run Device Operation");
+
+    // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
+    // TODO: re-enable the line below
+    // GraphTracker::instance().track_begin_function(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
+    GraphTracker::instance().track_begin_function("Device Operation", operation_attributes, tensor_args);
 
     using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
     static_assert(not std::same_as<tensor_return_value_t, void>, "Operation return type cannot be \"void\"");
@@ -498,7 +513,7 @@ typename device_operation_t::tensor_return_value_t run(
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     const auto& storage = first_tensor.get_storage();
 
-    return std::visit(
+    auto tensor_return_value = std::visit(
         [&cq_id, &operation_attributes, &tensor_args](auto&& storage) -> tensor_return_value_t {
             using storage_t = std::remove_cvref_t<decltype(storage)>;
             if constexpr (std::is_same_v<storage_t, tt::tt_metal::DeviceStorage>) {
@@ -511,7 +526,12 @@ typename device_operation_t::tensor_return_value_t run(
             }
         },
         storage);
+
+    GraphTracker::instance().track_end_function(tensor_return_value);
+    return tensor_return_value;
 }
+
+}  // namespace detail
 
 }  // namespace device_operation
 

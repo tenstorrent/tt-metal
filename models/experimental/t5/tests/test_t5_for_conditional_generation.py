@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
 from loguru import logger
 from transformers import AutoTokenizer
 
@@ -85,18 +84,12 @@ def run_T5ForConditionalGeneration(device, model_constructor, model_name):
 
 
 def test_T5ForConditionalGeneration_t5_small(device):
-    run_T5ForConditionalGeneration(
-        device, t5_small_for_conditional_generation, "t5-small"
-    )
+    run_T5ForConditionalGeneration(device, t5_small_for_conditional_generation, "t5-small")
 
 
 def test_T5ForConditionalGeneration_flan_t5_small(device):
-    run_T5ForConditionalGeneration(
-        device, flan_t5_small_for_conditional_generation, "google/flan-t5-small"
-    )
+    run_T5ForConditionalGeneration(device, flan_t5_small_for_conditional_generation, "google/flan-t5-small")
 
 
 def test_T5ForConditionalGeneration_t5_base(device):
-    run_T5ForConditionalGeneration(
-        device, t5_base_for_conditional_generation, "t5-base"
-    )
+    run_T5ForConditionalGeneration(device, t5_base_for_conditional_generation, "t5-base")
