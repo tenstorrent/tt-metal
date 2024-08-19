@@ -77,3 +77,8 @@ jobs:
         with:
           name: TTMetal_build_${{ matrix.arch }}${{ (inputs.tracy && '_profiler') || '' }}
           path: ttm_${{ matrix.arch }}.tar
+      - name: Remove files for incremental builds
+        run: |
+          find build/ -type f -name "*hxx*"
+          rm -rf $(find build/ -type f -name "*hxx*")
+          rm build/CMakeCache.txt
