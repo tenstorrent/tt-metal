@@ -11,28 +11,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-using namespace tt::constants;
+#include "layernorm_types.hpp"
 
 namespace ttnn::operations::normalization {
-
-enum class LayerNormType {
-    LAYERNORM, RMSNORM
-};
-
-struct LayerNormDefaultProgramConfig{
-};
-struct LayerNormShardedMultiCoreProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
-    std::size_t subblock_w;
-    std::size_t block_h;
-    std::size_t block_w;
-    bool inplace;
-};
-
-using LayerNormProgramConfig = std::variant<
-    LayerNormDefaultProgramConfig,
-    LayerNormShardedMultiCoreProgramConfig
->;
 
 operation::ProgramWithCallbacks layernorm_multi_core(
     const Tensor &a,

@@ -13,21 +13,9 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 
+#include "softmax_types.hpp"
+
 namespace ttnn::operations::normalization {
-
-struct SoftmaxDefaultProgramConfig{
-};
-struct SoftmaxShardedMultiCoreProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
-    std::size_t subblock_w;
-    std::size_t block_h;
-    std::size_t block_w;
-};
-
-using SoftmaxProgramConfig = std::variant<
-    SoftmaxDefaultProgramConfig,
-    SoftmaxShardedMultiCoreProgramConfig
->;
 
 struct Softmax {
     const std::optional<float> scale;
