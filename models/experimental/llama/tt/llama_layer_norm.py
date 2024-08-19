@@ -4,7 +4,6 @@
 
 import torch
 from torch import nn
-import ttnn
 from models.utility_functions import pad_by_zero
 
 import ttnn

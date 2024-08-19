@@ -5,7 +5,6 @@
 import torch
 import ttnn
 
-from loguru import logger
 from ttnn.model_preprocessing import preprocess_model, preprocess_conv2d, fold_batch_norm2d_into_conv2d
 
 from models.experimental.functional_unet.tt import unet_shallow_torch
