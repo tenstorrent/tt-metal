@@ -9,7 +9,6 @@ from loguru import logger
 from PIL import Image
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
-import tt_lib
 from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,

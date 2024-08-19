@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 from transformers import AutoImageProcessor, ViTForImageClassification
 
-import tt_lib
+import ttnn
 
 from models.experimental.vit.tt.modeling_vit import vit_for_image_classification
 from models.utility_functions import (
@@ -48,15 +48,13 @@ def run_perf_vit(
 
     tt_inputs = torch_to_tt_tensor_rm(inputs["pixel_values"], device, put_on_device=False)
 
-    tt_inputs = tt_inputs.to(
-        device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
-    )
+    tt_inputs = tt_inputs.to(device, ttnn.L1_MEMORY_CONFIG)
     tt_model = vit_for_image_classification(device)
 
     with torch.no_grad():
         profiler.start(cpu_key)
         logits = HF_model(**inputs).logits
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
@@ -67,7 +65,7 @@ def run_perf_vit(
 
         profiler.start(second_key)
         tt_output = tt_model(tt_inputs)[0]
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
 
         input_loc = str(model_location_generator("ImageNet_data"))
@@ -81,7 +79,7 @@ def run_perf_vit(
 
             tt_inputs = tt_inputs.to(
                 device,
-                tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
+                ttnn.L1_MEMORY_CONFIG,
             )
             tt_output = tt_model(tt_inputs)[0]
             tt_output = tt_output.cpu().to_torch().to(torch.float)

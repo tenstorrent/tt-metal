@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 
 from torchvision import models
 from loguru import logger
@@ -18,7 +18,7 @@ _batch_size = 1
 
 @pytest.mark.parametrize(
     "dtype",
-    ((tt_lib.tensor.DataType.BFLOAT16),),
+    ((ttnn.bfloat16),),
 )
 @pytest.mark.parametrize(
     "pcc",

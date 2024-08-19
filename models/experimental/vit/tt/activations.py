@@ -18,7 +18,6 @@
 
 from collections import OrderedDict
 
-import tt_lib
 import ttnn
 from torch import nn
 
@@ -27,11 +26,9 @@ class GELUActivation(nn.Module):
     def __init__(self):
         super().__init__()
         self.act = ttnn.gelu
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
-    def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         return self.act(input, memory_config=self.out_mem_config_l1)
 
 

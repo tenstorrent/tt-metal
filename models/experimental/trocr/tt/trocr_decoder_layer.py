@@ -6,7 +6,6 @@ import torch.nn as nn
 from typing import Optional, Tuple
 
 import ttnn
-import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm
 from models.helper_funcs import Linear
 from models.experimental.trocr.tt.trocr_attention import TtTrOCRAttention
@@ -108,16 +107,16 @@ class TtTrOCRDecoderLayer(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        layer_head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        cross_attn_layer_head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_value: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        hidden_states: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        encoder_hidden_states: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
+        layer_head_mask: Optional[ttnn.Tensor] = None,
+        cross_attn_layer_head_mask: Optional[ttnn.Tensor] = None,
+        past_key_value: Optional[Tuple[ttnn.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = True,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         residual = hidden_states
 
         # Self Attention

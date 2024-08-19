@@ -8,7 +8,6 @@ import pytest
 from loguru import logger
 from transformers import VisionEncoderDecoderModel
 
-import tt_lib
 
 from models.experimental.trocr.tt.trocr_learned_positional_embeddings import TtTrOCRLearnedPositionalEmbedding
 from models.utility_functions import (
@@ -24,9 +23,7 @@ from models.utility_functions import (
 )
 def test_trocr_attention_inference(device, pcc, reset_seeds):
     with torch.no_grad():
-        model = VisionEncoderDecoderModel.from_pretrained(
-            "microsoft/trocr-base-handwritten"
-        )
+        model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-handwritten")
 
         config = model.decoder.config
 
@@ -65,6 +62,4 @@ def test_trocr_attention_inference(device, pcc, reset_seeds):
         else:
             logger.warning("TrOCRLearnedPositionalEmbeddings Failed!")
 
-        assert (
-            passing
-        ), f"TrOCRLearnedPositionalEmbeddings output does not meet PCC requirement {pcc}."
+        assert passing, f"TrOCRLearnedPositionalEmbeddings output does not meet PCC requirement {pcc}."
