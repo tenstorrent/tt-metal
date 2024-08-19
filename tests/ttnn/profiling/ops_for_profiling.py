@@ -1202,8 +1202,28 @@ def reshape(x):
     ttnn.reshape(x, [shape[-4], shape[-3], shape[-1], shape[-2]])
 
 
-def transpose(x):
-    ttnn.transpose(x, dim0=2, dim1=3)
+def transpose_01(x):
+    ttnn.transpose(x, 0, 1)
+
+
+def transpose_02(x):
+    ttnn.transpose(x, 0, 2)
+
+
+def transpose_03(x):
+    ttnn.transpose(x, 0, 3)
+
+
+def transpose_12(x):
+    ttnn.transpose(x, 1, 2)
+
+
+def transpose_13(x):
+    ttnn.transpose(x, 1, 3)
+
+
+def transpose_23(x):
+    ttnn.transpose(x, 2, 3)
 
 
 def permute(x):
@@ -1338,11 +1358,11 @@ def rdiv(x):
 
 
 def sum_0(x):
-    tt_lib.tensor.sum(x, 0)
+    ttnn.sum(x, 0)
 
 
 def sum_1(x):
-    tt_lib.tensor.sum(x, 1)
+    ttnn.sum(x, 1)
 
 
 def sum_2(x):
@@ -1556,7 +1576,7 @@ def primary_moreh_norm_3(x):
 
 
 def clone(x):
-    ttnn.clone(x, ttnn.get_memory_config(x), x.dtype)
+    ttnn.clone(x, ttnn.get_memory_config(x), dtype=x.dtype)
 
 
 from tt_lib.fused_ops.softmax import softmax as fused_softmax
@@ -1857,8 +1877,28 @@ all_unary_ops = [
         "name": "ttnn.reshape",
     },
     {
-        "op": transpose,
-        "name": "ttnn.transpose",
+        "op": transpose_01,
+        "name": "ttnn.transpose_01",
+    },
+    {
+        "op": transpose_02,
+        "name": "ttnn.transpose_02",
+    },
+    {
+        "op": transpose_03,
+        "name": "ttnn.transpose_03",
+    },
+    {
+        "op": transpose_12,
+        "name": "ttnn.transpose_12",
+    },
+    {
+        "op": transpose_13,
+        "name": "ttnn.transpose_13",
+    },
+    {
+        "op": transpose_23,
+        "name": "ttnn.transpose_23",
     },
     {
         "op": permute,
@@ -1986,20 +2026,20 @@ all_unary_ops = [
         "name": "ttnn.max_dim_23",
     },
     {
-        "op": tt_lib.tensor.global_min,
-        "name": "tt_lib.tensor.global_min",
+        "op": ttnn.min,
+        "name": "ttnn.min",
     },
     {
-        "op": tt_lib.tensor.global_max,
-        "name": "tt_lib.tensor.global_max",
+        "op": ttnn.max,
+        "name": "ttnn.max",
     },
     {
-        "op": tt_lib.tensor.global_sum,
-        "name": "tt_lib.tensor.global_sum",
+        "op": ttnn.sum,
+        "name": "ttnn.sum",
     },
     {
-        "op": tt_lib.tensor.global_mean,
-        "name": "tt_lib.tensor.global_mean",
+        "op": ttnn.mean,
+        "name": "ttnn.mean",
     },
     {
         "op": rpow,
@@ -2051,12 +2091,12 @@ all_unary_ops = [
     },
     {
         "op": sum_0,
-        "name": "tt_lib.tensor.sum_dim_0",
+        "name": "ttnn.sum_dim_0",
         "num_repeats": 2,
     },
     {
         "op": sum_1,
-        "name": "tt_lib.tensor.sum_dim_1",
+        "name": "ttnn.sum_dim_1",
     },
     {
         "op": ttnn.log_sigmoid,
@@ -2111,7 +2151,7 @@ all_unary_ops = [
         "name": "tt_lib.tensor.fill_ones_rm",
     },
     {
-        "op": tt_lib.tensor.mean_hw,
+        "op": ttnn.mean,
         "name": "tt_lib.tensor.mean_hw",
     },
     {

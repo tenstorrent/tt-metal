@@ -87,17 +87,6 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         # For num_dims==1 var_scaler_ is implemented using dynamic mask
         assert num_dims == 1
 
-    # tensor.DataType.BFLOAT16
-    RSUM = tensor.ReduceOpMath.SUM
-    RW = tensor.ReduceOpDim.W
-    RH = tensor.ReduceOpDim.H
-    BCW = tensor.BcastOpDim.W
-    BCH = tensor.BcastOpDim.H
-    BCHW = tensor.BcastOpDim.HW
-    BCMUL = tensor.BcastOpMath.MUL
-    BCSUB = tensor.BcastOpMath.SUB
-    BCADD = tensor.BcastOpMath.ADD
-
     # 1D variant
     # TODO(AP): merge with 2d? refactor.
     def layernorm_1d_(x, overrideH=None, refx=None, refgamma=None, refbeta=None):
@@ -111,34 +100,34 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
             H_ = overrideH
 
         # first compute the mean (m)
-        means = tensor.reduce(x, RSUM, RW, 1.0 / W)  # -> NCH1
-        x_minus_mean = tensor.bcast(x, means, BCSUB, BCW)  # need to blank out the H for non-multiple of 32
+        means = ttnn.sum(x, 3, scalar=1.0 / W)  # -> NCH1
+        x_minus_mean = ttnn.subtract(x, means, BCSUB, BCW)  # need to blank out the H for non-multiple of 32
         if False and refx is not None:
             ry, rmean, rvar, rstd, rinvstd, ry1 = ref_ln(refx, refgamma, refbeta)
 
         var = ttnn.multiply(x_minus_mean, x_minus_mean)  # (x-m)^2
-        var_redW = tensor.reduce(var, RSUM, RW, 1.0)  # sum[(x-m)^2]
+        var_redW = ttnn.sum(var, 3)  # sum[(x-m)^2]
 
         scaler = 1 / W
         var_scaler_ = ttnn.fill_rm(1, 1, roundup32(H), 32, H_, 1, epsilon_, scaler, 0)
         var_scaler_ = ttnn.tilize(var_scaler_)
 
-        var_div_n1 = tensor.bcast(var_redW, var_scaler_, BCMUL, BCW)
-        var_plus_eps = tensor.bcast(var_div_n1, epsilon_, BCADD, BCHW)
+        var_div_n1 = ttnn.multiply(var_redW, var_scaler_)
+        var_plus_eps = ttnn.add(var_div_n1, epsilon_)
 
         var_sqrt = ttnn.sqrt(var_plus_eps)
         inv_sqrt = ttnn.reciprocal(var_sqrt)
         if False and refx is not None:
             qq = t2t(inv_sqrt)[0, 0, 0:9, 0]
 
-        x_div_sqrt = tensor.bcast(x_minus_mean, inv_sqrt, BCMUL, BCW)
+        x_div_sqrt = ttnn.multiply(x_minus_mean, inv_sqrt)
 
         if False and refx is not None:
             qq1 = t2t(x_div_sqrt)[0, 0, 0:9, :]
 
-        x_gamma = tensor.bcast(x_div_sqrt, gamma_, BCMUL, BCH)
+        x_gamma = ttnn.multiply(x_div_sqrt, gamma_)
         if beta_ is not None:
-            x_beta = tensor.bcast(x_gamma, beta_, BCADD, BCH)
+            x_beta = ttnn.add(x_gamma, beta_)
             return x_beta
         else:
             return x_gamma
@@ -150,26 +139,26 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
         W = x.get_legacy_shape()[3]
 
         # first compute the mean (m)
-        redW = tensor.reduce(x, RSUM, RW, 1.0 / W)  # -> NCH1
-        mean = tensor.reduce(redW, RSUM, RH, 1.0)  # -> NC11 (HW reduce doesn't behave well with small scaler)
-        x_minus_mean0 = tensor.bcast(x, mean, BCSUB, BCHW)  # need to blank out the H for non-multiple of 32
+        redW = ttnn.sum(x, 3, scalar=1.0 / W)  # -> NCH1
+        mean = ttnn.sum(redW, 2)  # -> NC11 (HW reduce doesn't behave well with small scaler)
+        x_minus_mean0 = ttnn.subtract(x, mean)  # need to blank out the H for non-multiple of 32
         hmasku = ttnn.fill_ones_rm(N, C, H, 32, 1, 1, x)  # generate a H-mask with mask[h, w] = 1.0 where h,w < 1
         hmaskt = ttnn.tilize(hmasku)  # tilize the mask
-        x_minus_mean = tensor.bcast(x_minus_mean0, hmaskt, BCMUL, BCW)  # zero out (x-m) for h>=H_, h<H
+        x_minus_mean = ttnn.multiply(x_minus_mean0, hmaskt)  # zero out (x-m) for h>=H_, h<H
 
         var = ttnn.multiply(x_minus_mean, x_minus_mean)  # (x-m)^2
-        var_redW = tensor.reduce(var, RSUM, RW, 1.0)  # sum[(x-m)^2]
-        var_redHW = tensor.reduce(var_redW, RSUM, RH, 1.0)  # sum[(x-m)^2]
-        var_div_n1 = tensor.bcast(var_redHW, var_scaler_, BCMUL, BCHW)  # *= 1/(everything not batch)
-        var_plus_eps = tensor.bcast(var_div_n1, epsilon_, BCADD, BCHW)
+        var_redW = ttnn.sum(var, 3)  # sum[(x-m)^2]
+        var_redHW = ttnn.sum(var_redW, 2)  # sum[(x-m)^2]
+        var_div_n1 = ttnn.multiply(var_redHW, var_scaler_)  # *= 1/(everything not batch)
+        var_plus_eps = ttnn.add(var_div_n1, epsilon_)
 
         var_sqrt = ttnn.sqrt(var_plus_eps)
         inv_sqrt = ttnn.reciprocal(var_sqrt)
 
-        x_div_sqrt = tensor.bcast(x_minus_mean, inv_sqrt, BCMUL, BCHW)
-        x_gamma = ttnn.multiply(x_div_sqrt, gamma_, BCMUL, BCH)
+        x_div_sqrt = ttnn.multiply(x_minus_mean, inv_sqrt)
+        x_gamma = ttnn.multiply(x_div_sqrt, gamma_)
         if beta_ is not None:
-            x_beta = ttnn.add(x_gamma, beta_, BCADD, BCH)
+            x_beta = ttnn.add(x_gamma, beta_)
             return x_beta
         else:
             return x_gamma

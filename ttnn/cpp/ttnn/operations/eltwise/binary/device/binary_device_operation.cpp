@@ -29,6 +29,15 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
         if (height_b == 1 and width_b == 1) {
             return BroadcastHeightAndWidthMultiCore{};
         } else if (height_b == 1) {
+            if(tensor_args.input_tensor_a.is_sharded()){
+                if (tensor_args.input_tensor_a.get_legacy_shape()[0] == tensor_args.input_tensor_b.get_legacy_shape()[0]
+                        || tensor_args.input_tensor_a.get_legacy_shape()[0] > 1
+                        and tensor_args.input_tensor_b.get_legacy_shape()[0] == 1){
+                        return BroadcastHeightMultiCoreShardedOptimized{};
+                } else {
+                        return BroadcastHeightMultiCoreSharded{};
+                }
+            }
             return BroadcastHeightMultiCore{};
         } else if (width_b == 1) {
             return BroadcastWidthMultiCore{};
@@ -291,7 +300,7 @@ operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model
 
 
 
-std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t> BinaryDeviceOperation::operator()(
+std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t> BinaryDeviceOperation::invoke(
     const Tensor &input_tensor_a_arg,
     const Tensor &input_tensor_b_arg,
     BinaryOpType binary_op_type,

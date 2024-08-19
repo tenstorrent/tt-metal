@@ -8,7 +8,7 @@
 
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape/reshape.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
 
 #include "fold.hpp"
@@ -58,7 +58,7 @@ std::vector<Tensor> fold_with_transpose_(
 
     // reshape
     n = transpose_hc_output.shape()[0], w = transpose_hc_output.shape()[1], c = transpose_hc_output.shape()[2], h = transpose_hc_output.shape()[3];
-    auto reshape_hc_output = tt::tt_metal::reshape(transpose_hc_output, n, (w / stride_w), (c * stride_w), h, L1_mem_config);
+    auto reshape_hc_output = ttnn::reshape_on_device(transpose_hc_output, n, (w / stride_w), (c * stride_w), h, L1_mem_config);
 
     tt::log_debug("reshape_hc_output: {}", reshape_hc_output.shape());
 
@@ -69,7 +69,7 @@ std::vector<Tensor> fold_with_transpose_(
 
     // reshape
     n = transpose_hw_output2.shape()[0], w = transpose_hw_output2.shape()[1], h = transpose_hw_output2.shape()[2], c = transpose_hw_output2.shape()[3];
-    auto reshape_hw_output = tt::tt_metal::reshape(transpose_hw_output2, n, w, (h / stride_h), (c * stride_h), L1_mem_config);
+    auto reshape_hw_output = ttnn::reshape_on_device(transpose_hw_output2, n, w, (h / stride_h), (c * stride_h), L1_mem_config);
 
     tt::log_debug("reshape_hw_output: {}", reshape_hw_output.shape());
 
@@ -96,24 +96,7 @@ std::vector<Tensor> fold_with_transpose_(
     return output_tensors;
 }
 
-Tensor fold(uint8_t queue_id,
-            const ttnn::Tensor &input_tensor,
-            uint8_t stride_h,
-            uint8_t stride_w,
-            bool use_transpose_as_fold,
-            const std::optional<const tt::tt_metal::Shape> &output_shape,
-            uint8_t pad_c,
-            uint8_t pad_h,
-            uint8_t pad_w) {
-    if (use_transpose_as_fold) {
-        return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w, queue_id).at(0);
-    }
-    bool is_sharded = input_tensor.is_sharded();
-    Fold::operation_attributes_t op_attr = {.stride_h = stride_h, .stride_w = stride_w, .is_sharded = is_sharded};
-    return ttnn::device_operation::run<Fold>(queue_id, op_attr, Fold::tensor_args_t{.input_tensor = input_tensor});
-}
-
-Tensor FoldOperation::operator()(uint8_t queue_id,
+Tensor FoldOperation::invoke(uint8_t queue_id,
                                  const ttnn::Tensor &input_tensor,
                                  uint8_t stride_h,
                                  uint8_t stride_w,
@@ -122,10 +105,13 @@ Tensor FoldOperation::operator()(uint8_t queue_id,
                                  uint8_t pad_c,
                                  uint8_t pad_h,
                                  uint8_t pad_w) {
-    return fold(queue_id, input_tensor, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w);
+    if (use_transpose_as_fold) {
+        return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w, queue_id).at(0);
+    }
+    return ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }
 
-Tensor FoldOperation::operator()(const ttnn::Tensor &input_tensor,
+Tensor FoldOperation::invoke(const ttnn::Tensor &input_tensor,
                                  uint8_t stride_h,
                                  uint8_t stride_w,
                                  bool use_transpose_as_fold,
@@ -134,6 +120,6 @@ Tensor FoldOperation::operator()(const ttnn::Tensor &input_tensor,
                                  uint8_t pad_h,
                                  uint8_t pad_w) {
     uint8_t queue_id = 0;
-    return fold(queue_id, input_tensor, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w);
+    return invoke(queue_id, input_tensor, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w);
 }
 } // namespace ttnn::operations::data_movement

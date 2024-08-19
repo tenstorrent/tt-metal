@@ -11,7 +11,6 @@ from models.utility_functions import (
 )
 
 import ttnn
-import tt_lib
 
 
 class TtDistilBert_Embeddings(nn.Module):
@@ -50,8 +49,8 @@ class TtDistilBert_Embeddings(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        input_embeds: Optional[tt_lib.tensor.Tensor] = None,
-    ) -> tt_lib.tensor.Tensor:
+        input_embeds: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
         """
         Torch tensor is passed as input for embedding to address low pcc
         """

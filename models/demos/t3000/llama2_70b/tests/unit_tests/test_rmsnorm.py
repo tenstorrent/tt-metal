@@ -8,7 +8,6 @@ from loguru import logger
 
 import ttnn
 
-import tt_lib
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
@@ -47,13 +46,13 @@ class TtLlamaRMSNorm(torch.nn.Module):
 
         # Must create weight like this to ensure it is in row-major order
         # or we get an error that weight.shape[3] doesn't match inp.shape[3]
-        attn_norm = tt_lib.tensor.Tensor(
+        attn_norm = ttnn.Tensor(
             self.state_dict[attn_norm_str].reshape([1, 1, -1, 32]), self.model_config["LN_ATTN_WEIGHTS_DTYPE"]
         )
         self.attn_norm = attn_norm.to(device, self.model_config["LN_ATTN_WEIGHTS_MEMCFG"])
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        x = tt_lib.tensor.interleaved_to_sharded(
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x = ttnn.experimental.tensor.interleaved_to_sharded(
             x, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
         )
         x_attn_norm = ttnn.rms_norm(

@@ -200,12 +200,7 @@ class TtWhisperAttention(nn.Module):
 
             layer_head_mask_reshaped = fallback_ops.reshape(layer_head_mask, 1, -1, 1, 1)
             attn_weights = fallback_ops.reshape(attn_weights, bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = tt_lib.tensor.bcast(
-                attn_weights,
-                layer_head_mask_reshaped,
-                tt_lib.tensor.BcastOpMath.MUL,
-                tt_lib.tensor.BcastOpDim.HW,
-            )
+            attn_weights = ttnn.multiply(attn_weights, layer_head_mask_reshaped)
             attn_weights = fallback_ops.reshape(attn_weights, 1, bsz * self.num_heads, tgt_len, src_len)
 
         if output_attentions:
@@ -236,7 +231,7 @@ class TtWhisperAttention(nn.Module):
                 f"`attn_output` should be of size {(bsz * self.num_heads, tgt_len, self.head_dim)}, but is"
                 f" {attn_output.get_legacy_shape()}"
             )
-        attn_output = tt_lib.tensor.reshape(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)
+        attn_output = ttnn.reshape_on_device(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)
         attn_output = ttnn.transpose(attn_output, 1, -2)
 
         attn_output = fallback_ops.reshape(attn_output, 1, bsz, tgt_len, self.embed_dim)

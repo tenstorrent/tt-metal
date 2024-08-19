@@ -4,6 +4,8 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/llrt/rtoptions.hpp"
 #include "common/bfloat16.hpp"
 #include <chrono>
 
@@ -33,7 +35,10 @@ int main(int argc, char **argv) {
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
-    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+
+
+    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+    tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
 
     for (int device_id = 0; device_id < num_devices; device_id++) {

@@ -4,7 +4,6 @@
 import os
 import torch
 import json
-import tt_lib as ttl
 import pytest
 from loguru import logger
 from time import time

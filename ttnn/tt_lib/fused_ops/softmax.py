@@ -11,27 +11,20 @@ from tt_lib import tensor, device
 from tt_lib.utils import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax
 
 
-def softmax(x: tensor.Tensor, stable=False):
+def softmax(x: ttnn.Tensor, stable=False):
     """
-    Performs Softmax on a ``tt_lib.tensor.Tensor``.
+    Performs Softmax on a ``ttnn.Tensor``.
     """
-
-    RMAX = tensor.ReduceOpMath.MAX
-    RSUM = tensor.ReduceOpMath.SUM
-    RW = tensor.ReduceOpDim.W
-    BCW = tensor.BcastOpDim.W
-    BCMUL = tensor.BcastOpMath.MUL
-    BCSUB = tensor.BcastOpMath.SUB
 
     if stable:
-        sumsW = tensor.reduce(x, RMAX, RW, 1.0)
-        z = tensor.bcast(x, sumsW, BCSUB, BCW)  # x-max(x)
+        sumsW = ttnn.max(x, 3)
+        z = ttnn.subtract(x, sumsW)  # x-max(x)
     else:
         z = x
     numerator = ttnn.exp(z)  # exp(z)
-    denom1 = tensor.reduce(numerator, RSUM, RW, 1.0)  # torch.sum(x, 3)
+    denom1 = ttnn.sum(numerator, 3)  # torch.sum(x, 3)
     denom = ttnn.reciprocal(denom1)
-    output = tensor.bcast(numerator, denom, BCMUL, BCW)
+    output = ttnn.multiply(numerator, denom)
 
     return output
 
@@ -50,7 +43,7 @@ def ref_stable_softmax(x):
 
 
 if __name__ == "__main__":
-    device = device.CreateDevice(0)
+    device = ttnn.open_device(0)
 
     H, W = 64, 96
     torch.manual_seed(123)
@@ -59,7 +52,7 @@ if __name__ == "__main__":
     ref_sm = ref_stable_softmax(x)
 
     x_t = tilize_to_list(x)
-    t0 = tensor.Tensor(x_t, [1, 1, H, W], tensor.DataType.BFLOAT16, tensor.Layout.TILE, device)
+    t0 = ttnn.Tensor(x_t, [1, 1, H, W], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
     func = softmax
     t1 = func(t0)
 
@@ -69,4 +62,4 @@ if __name__ == "__main__":
     print("Max diff=")
     print_diff_argmax(tt_got_back, ref_sm)
 
-    device.CloseDevice(device)
+    ttnn.close_device(device)

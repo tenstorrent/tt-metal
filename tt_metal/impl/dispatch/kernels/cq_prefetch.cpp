@@ -48,6 +48,7 @@ constexpr uint32_t cmddat_q_blocks = get_compile_time_arg_val(20);
 constexpr uint32_t is_d_variant = get_compile_time_arg_val(21);
 constexpr uint32_t is_h_variant = get_compile_time_arg_val(22);
 
+constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
@@ -74,6 +75,8 @@ constexpr uint32_t cmddat_q_pages_per_block = cmddat_q_pages / cmddat_q_blocks;
 static uint32_t block_next_start_addr[cmddat_q_blocks];
 static uint32_t block_noc_writes_to_clear[cmddat_q_blocks];
 static uint32_t rd_block_idx;
+
+static uint32_t upstream_total_acquired_page_count;
 
 // Currently capping the same as dispatch
 constexpr uint32_t max_read_packed_cmd =
@@ -348,7 +351,7 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr,
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     noc_async_writes_flushed();
-    cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
+    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
     return cmd->relay_inline.stride;
 }
@@ -441,8 +444,17 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-    noc_async_read(noc_addr, scratch_read_addr, scratch_db_half_size);
-    uint32_t amt_read = scratch_db_half_size;
+    uint32_t write_length = pages * page_size - length_adjust;
+    uint32_t read_length;
+    uint32_t amt_read;
+    if (scratch_db_half_size >= write_length) {
+        amt_read = write_length;
+        read_length = 0;
+    } else {
+        amt_read = scratch_db_half_size;
+        read_length = write_length - amt_read;
+    }
+    noc_async_read(noc_addr, scratch_read_addr, amt_read);
     uint32_t page_length = page_size - amt_read;
     uint32_t page_offset = amt_read;
 
@@ -450,8 +462,6 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
     // Writes are fast, reads are slow
     uint32_t db_toggle = 0;
     uint32_t scratch_write_addr;
-    uint32_t read_length = pages * page_size - amt_read;
-    uint32_t write_length = pages * page_size - length_adjust;
 
     noc_async_read_barrier();
     while (read_length != 0) {
@@ -491,14 +501,15 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
         // Third step - write from DB
         if (write_length < amt_to_write) {
             amt_to_write = write_length;
+            read_length = 0;
+        } else {
+            read_length -= amt_read;
         }
 
         write_length -= amt_to_write;
         uint32_t npages = write_pages_to_dispatcher<0, false>
             (downstream_data_ptr, scratch_write_addr, amt_to_write);
-        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
-
-        read_length -= amt_read;
+        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
         // TODO(pgk); we can do better on WH w/ tagging
         noc_async_read_barrier();
@@ -512,9 +523,9 @@ uint32_t process_relay_paged_cmd_large(uint32_t cmd_ptr,
             (downstream_data_ptr, scratch_write_addr, amt_to_write);
 
         // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
     } else {
-        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(1);
+        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(1);
     }
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
@@ -612,7 +623,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
         // Third step - write from DB
         uint32_t npages = write_pages_to_dispatcher<0, false>
             (downstream_data_ptr, scratch_write_addr, amt_to_write);
-        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
+        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
         read_length -= amt_read;
 
@@ -632,7 +643,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr,
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-    cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -731,7 +742,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length) {
         // Third step - write from DB
         uint32_t npages = write_pages_to_dispatcher<0, false>
             (downstream_data_ptr, scratch_write_addr, amt_to_write);
-        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
+        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
         total_length -= amt_read;
 
@@ -748,7 +759,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length) {
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-    cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
 }
 
 template<bool cmddat_wrap_enable>
@@ -830,7 +841,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr,
         // Third step - write from DB
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
-        cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
+        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
         read_length -= amt_to_read;
 
@@ -847,7 +858,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr,
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
-    cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -942,7 +953,7 @@ static uint32_t process_exec_buf_relay_inline_cmd(uint32_t& cmd_ptr,
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     noc_async_writes_flushed();
-    cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
+    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
     return stride;
 }
@@ -1230,7 +1241,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
     }
 
     noc_async_writes_flushed();
-    cb_release_pages<downstream_noc_xy, downstream_cb_sem_id>(npages);
+    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
 
     return fence;
 }
@@ -1253,7 +1264,8 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
                                    fence,
                                    block_noc_writes_to_clear,
                                    block_next_start_addr,
-                                   rd_block_idx);
+                                   rd_block_idx,
+                                   upstream_total_acquired_page_count);
     }
 
     volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader *cmd_ptr =
@@ -1279,7 +1291,8 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
                                    fence,
                                    block_noc_writes_to_clear,
                                    block_next_start_addr,
-                                   rd_block_idx);
+                                   rd_block_idx,
+                                   upstream_total_acquired_page_count);
         IDLE_ERISC_RETURN(length - sizeof(CQPrefetchHToPrefetchDHeader));
     }
 
@@ -1365,7 +1378,7 @@ void kernel_main_d() {
         // TODO: evaluate less costly free pattern (blocks?)
         uint32_t total_length = length + sizeof(CQPrefetchHToPrefetchDHeader);
         uint32_t pages_to_free = (total_length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
-        cb_release_pages<upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
+        cb_release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, cmddat_q_page_size);
@@ -1401,6 +1414,7 @@ void kernel_main_hd() {
 
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    upstream_total_acquired_page_count = 0;
 
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(my_downstream_cb_sem_id));

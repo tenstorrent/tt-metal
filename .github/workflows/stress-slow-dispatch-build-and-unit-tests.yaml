@@ -31,6 +31,7 @@ jobs:
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       TT_METAL_SLOW_DISPATCH_MODE: 1
       TT_METAL_WATCHER: 60
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:

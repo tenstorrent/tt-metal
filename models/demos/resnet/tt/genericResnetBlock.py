@@ -5,7 +5,6 @@
 from typing import Type, Union, Optional, List, Callable
 
 import ttnn
-import tt_lib
 import torch
 import torch.nn as nn
 import math
@@ -32,8 +31,8 @@ def unpad_from_zero(x, desired_shape):
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
-        if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-            x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            x = x.to(ttnn.ROW_MAJOR_LAYOUT)
         x = x.unpad(
             (0, 0, 0, 0),
             (
@@ -496,19 +495,19 @@ class ResNet(nn.Module):
         self.avgpool = TtAvgPool(self.device)
 
         fc_weight = pad_weight(state_dict[f"{self.base_address_with_dot}fc.weight"])
-        fc_weight = tt_lib.tensor.Tensor(
+        fc_weight = ttnn.Tensor(
             fc_weight.reshape(-1).tolist(),
             fc_weight.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        ).to(tt_lib.tensor.Layout.TILE)
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+        ).to(ttnn.TILE_LAYOUT)
         fc_bias = pad_weight(state_dict[f"{self.base_address_with_dot}fc.bias"])
-        fc_bias = tt_lib.tensor.Tensor(
+        fc_bias = ttnn.Tensor(
             fc_bias.reshape(-1).tolist(),
             fc_bias.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        ).to(tt_lib.tensor.Layout.TILE)
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+        ).to(ttnn.TILE_LAYOUT)
 
         self.fc = TtLinear(512 * block.expansion, 1024, fc_weight, fc_bias, self.device)  # num_classes = 1000
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
@@ -629,7 +628,7 @@ class ResNet(nn.Module):
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         x = torch.permute(x, (0, 2, 3, 1))
-        x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
+        x = ttnn.Tensor(x, ttnn.bfloat16)
         x = x.pad(
             (
                 x.get_legacy_shape()[0],

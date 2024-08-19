@@ -25,7 +25,7 @@ struct ExecuteTernaryBackward {
 
      //Type 0: 3 inputs, 1 grad tensor, 1 float
 
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -48,7 +48,7 @@ struct ExecuteTernaryBackwardFloat {
 
     //Type 1: 3 inputs, 1 grad tensor, 1 float
 
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -72,7 +72,7 @@ struct ExecuteTernaryBackwardOptional {
 
     //Q_ID, type1 args, optional output tensor for inputs based on are_required_outputs value
 
-    static std::vector<OptionalTensor> operator()(
+    static std::vector<OptionalTensor> invoke(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
@@ -88,7 +88,7 @@ struct ExecuteTernaryBackwardOptional {
 
     //type1 args, optional output tensor for inputs based on are_required_outputs value
 
-    static std::vector<OptionalTensor> operator()(
+    static std::vector<OptionalTensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
@@ -103,14 +103,14 @@ struct ExecuteTernaryBackwardOptional {
 };
 
 struct ExecuteTernaryBackwardLerp {
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
         const Tensor &input_tensor_c_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 
-    static std::vector<Tensor> operator()(
+    static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,

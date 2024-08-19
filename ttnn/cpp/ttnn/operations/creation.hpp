@@ -80,16 +80,16 @@ template <class T>
 struct boxed {
     T value;
     consteval boxed(T value) noexcept : value(value) {}
-    consteval auto operator()() const noexcept -> T { return value; }
+    consteval auto invoke() const noexcept -> T { return value; }
 };
 
 } // namespace detail
 
 template <detail::boxed FillValue>
 struct FullWith {
-    static constexpr auto fill_value = FillValue();
+    static constexpr auto fill_value = FillValue.invoke();
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Shape& shape,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
@@ -136,9 +136,9 @@ inline ttnn::Tensor full_like(
 
 template <detail::boxed FillValue>
 struct FullLikeWith {
-    static constexpr auto fill_value = FillValue();
+    static constexpr auto fill_value = FillValue.invoke();
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& tensor,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
@@ -157,7 +157,7 @@ inline constexpr OnesLike ones_like{};
 inline constexpr EmptyLike empty_like{};
 
 struct Full {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Shape& shape,
         const float fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -167,7 +167,7 @@ struct Full {
         return full(shape, fill_value, dtype, layout, device, memory_config);
     }
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Shape& shape,
         const int fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -179,7 +179,7 @@ struct Full {
 };
 
 struct FullLike {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& tensor,
         const float fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -189,7 +189,7 @@ struct FullLike {
         return full_like(tensor, fill_value, dtype, layout, device, memory_config);
     }
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const ttnn::Tensor& tensor,
         const int fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -201,15 +201,15 @@ struct FullLike {
 };
 
 struct Arange {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const int64_t stop,
         const DataType dtype = ttnn::bfloat16,
         const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
         const MemoryConfig& memory_config = ttnn::DRAM_MEMORY_CONFIG) {
-        return Arange::operator()(0, stop, 1, dtype, device, memory_config);
+        return Arange::invoke(0, stop, 1, dtype, device, memory_config);
     }
 
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const int64_t start,
         const int64_t stop,
         const int64_t step = 1,

@@ -6,9 +6,7 @@
 
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/move/move_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
 
 namespace ttnn::operations::core {
@@ -138,16 +136,12 @@ void copy_host_to_device_tensor(ttnn::Tensor host_tensor, ttnn::Tensor device_te
     tt::tt_metal::write_tensor(host_tensor, device_tensor, cq_id);
 }
 
-ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking) { return tensor.cpu(blocking); }
+ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, uint8_t cq_id) { return tensor.cpu(blocking, cq_id); }
 
 void deallocate(Tensor& tensor, bool force) { tensor.deallocate(force); }
 
 Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
-    if (input_tensor.is_sharded()) {
-        return move_sharded(input_tensor, memory_config);
-    } else {
-        return move(input_tensor, memory_config);
-    }
+    return ttnn::move(input_tensor, memory_config);
 }
 
 // Trace APIs - Single Device

@@ -27,7 +27,7 @@ def shape_tt(
     n_heads: int,
     head_dim: int,
 ):
-    tt_out = tt_lib.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
+    tt_out = ttnn.reshape_on_device(states, batch_size, seq_len, n_heads, head_dim)
     tt_out = ttnn.transpose(tt_out, 1, -2)
 
     return tt_out
@@ -248,7 +248,7 @@ class TtLlamaAttention(nn.Module):
         mul = ttnn.matmul(query_states_tt, key_states_tt_transposed)
 
         # TODO: Fuse into softmax
-        attn_weights = tt_lib.tensor.bcast(mul, self.scalar, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        attn_weights = ttnn.multiply(mul, self.scalar)
 
         if attn_weights.get_legacy_shape() != [bsz, self.num_heads, q_len, kv_seq_len]:
             raise ValueError(
@@ -284,7 +284,7 @@ class TtLlamaAttention(nn.Module):
             )
 
         attn_output = ttnn.transpose(attn_output, 1, -2)
-        attn_output = tt_lib.tensor.reshape(attn_output, bsz, 1, q_len, self.hidden_size)
+        attn_output = ttnn.reshape_on_device(attn_output, bsz, 1, q_len, self.hidden_size)
         attn_output = self.attn_linear(attn_output)
 
         if not output_attentions:

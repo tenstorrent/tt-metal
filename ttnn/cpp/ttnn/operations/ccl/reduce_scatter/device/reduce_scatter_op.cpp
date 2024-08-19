@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -54,11 +54,11 @@ operation::ProgramWithCallbacks ReduceScatter::create_program(
         this->topology);
 }
 
-static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ReduceOpMath reduce_op) {
+static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ttnn::operations::reduction::ReduceType reduce_op) {
     switch (reduce_op) {
-        case ReduceOpMath::SUM: return ttnn::operations::binary::BinaryOpType::ADD;
+        case ttnn::operations::reduction::ReduceType::Sum: return ttnn::operations::binary::BinaryOpType::ADD;
 
-        default: TT_FATAL("Reduce scatter only support reduce_op_type SUM"); return ttnn::operations::binary::BinaryOpType::ADD;
+        default: TT_FATAL("Reduce scatter only support reduce_type Sum"); return ttnn::operations::binary::BinaryOpType::ADD;
     }
 }
 
@@ -67,7 +67,7 @@ namespace ccl{
 Tensor reduce_scatter(
     const Tensor& input_tensor,
     const uint32_t scatter_dim,
-    ReduceOpMath math_op,
+    ttnn::operations::reduction::ReduceType math_op,
     const uint32_t num_links,
     const MemoryConfig& output_mem_config) {
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);

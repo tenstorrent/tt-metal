@@ -41,13 +41,13 @@ class AllGatherConfig {
     static AllGatherBidirectionalMode choose_bidirectional_mode(Tensor const& input_tensor);
 
    public:
-    AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology);
+    AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology, std::size_t num_buffers_per_worker);
 
     uint32_t get_erisc_handshake_address() const { return this->erisc_handshake_address; }
 
-    uint32_t get_semaphores_offset() const { return this->semaphore_offset; }
     uint32_t get_num_eth_buffers_per_edm() const { return this->num_eth_buffers; }
     uint32_t get_num_workers_per_link() const { return this->num_workers_per_link; }
+    uint32_t get_num_buffers_per_worker() const { return this->num_buffers_per_worker; }
     uint32_t get_num_workers() const { return this->num_workers_per_link * this->num_links; }
 
     uint32_t get_eth_buffer_size() const { return this->eth_buffer_size; }
@@ -57,6 +57,7 @@ class AllGatherConfig {
     uint32_t get_eth_buffers_l1_base_byte_address() const { return this->eth_buffers_l1_base_byte_address; }
 
     uint32_t get_semaphore_size() const { return this->semaphore_size; }
+    std::size_t get_num_buffers_per_channel() const { return this->num_buffers_per_worker; }
 
     uint32_t get_num_edm_channels_in_clockwise_direction() const {
         return this->enable_bidirectional ?
@@ -64,6 +65,7 @@ class AllGatherConfig {
             this->num_workers_per_link;
     }
     uint32_t get_ring_size() const { return this->ring_size; }
+    bool is_payload_and_channel_sync_merged() const { return enable_merged_payload_and_channel_sync;}
     bool is_buffer_in_clockwise_ring(const uint32_t buffer_index) const {
         // For now we split it as lower half => clockwise, upper half => counter-clockwise
         // This is slightly suboptimal since the non-full-chunks go to the upper half.
@@ -89,6 +91,7 @@ class AllGatherConfig {
         log_trace(tt::LogOp, "\terisc_handshake_address: {}", erisc_handshake_address);
         log_trace(tt::LogOp, "\tnum_buffers: {}", num_eth_buffers);
         log_trace(tt::LogOp, "\tnum_workers_per_link: {}", num_workers_per_link);
+        log_trace(tt::LogOp, "\tnum_buffers_per_worker: {}", num_buffers_per_worker);
         log_trace(tt::LogOp, "\teth_buffer_size: {}", eth_buffer_size);
         log_trace(tt::LogOp, "\tsemaphore_size: {}", semaphore_size);
         log_trace(tt::LogOp, "\tsemaphore_offset: {}", semaphore_offset);
@@ -104,6 +107,7 @@ class AllGatherConfig {
     uint32_t num_links;
     uint32_t num_eth_buffers;
     uint32_t num_workers_per_link;
+    uint32_t num_buffers_per_worker;
     uint32_t eth_buffer_size;
     uint32_t semaphore_size;
     uint32_t semaphore_offset;
@@ -115,6 +119,7 @@ class AllGatherConfig {
     bool enable_bidirectional;
     const bool input_is_dram;
     const bool output_is_dram;
+    const bool enable_merged_payload_and_channel_sync;
 };
 
 struct AllGather {

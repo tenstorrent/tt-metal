@@ -7,7 +7,6 @@ from loguru import logger
 from transformers import AutoImageProcessor
 import pytest
 import ttnn
-import tt_lib
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
@@ -36,32 +35,6 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-def create_event(device):
-    event = []
-    if isinstance(device, ttnn.Device):
-        event.append(tt_lib.device.CreateEvent())
-    else:
-        for dev in device.get_device_ids():
-            event.append(tt_lib.device.CreateEvent())
-    return event
-
-
-def wait_for_event(device, cq_id, event):
-    if isinstance(device, ttnn.Device):
-        tt_lib.device.WaitForEvent(device, cq_id, event)
-    else:
-        for dev, eve in zip(device.get_device_ids(), event):
-            tt_lib.device.WaitForEvent(device.get_device(dev), cq_id, eve)
-
-
-def record_event(device, cq_id, event):
-    if isinstance(device, ttnn.Device):
-        tt_lib.device.RecordEvent(device, cq_id, event)
-    else:
-        for dev, eve in zip(device.get_device_ids(), event):
-            tt_lib.device.RecordEvent(device.get_device(dev), cq_id, eve)
-
-
 def buffer_address(tensor):
     addr = []
     for ten in ttnn.get_device_tensors(tensor):
@@ -71,17 +44,13 @@ def buffer_address(tensor):
 
 def dump_device_profiler(device):
     if isinstance(device, ttnn.Device):
-        tt_lib.device.DumpDeviceProfiler(device)
+        ttnn.experimental.device.DumpDeviceProfiler(device)
     else:
         for dev in device.get_device_ids():
-            tt_lib.device.DumpDeviceProfiler(device.get_device(dev))
+            ttnn.experimental.device.DumpDeviceProfiler(device.get_device(dev))
 
 
-# TODO: Create ttnn apis for these
-ttnn.create_event = create_event
-ttnn.wait_for_event = wait_for_event
-ttnn.record_event = record_event
-ttnn.buffer_address = buffer_address
+# TODO: Create ttnn apis for this
 ttnn.dump_device_profiler = dump_device_profiler
 
 model_config = {
@@ -141,37 +110,37 @@ def run_2cq_model(
     op_event = ttnn.create_event(device)
     write_event = ttnn.create_event(device)
     # Initialize the op event so we can write
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
     profiler.start("compile")
-    ttnn.wait_for_event(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(device, 1, write_event)
-    ttnn.wait_for_event(device, 0, write_event)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("compile")
     ttnn.dump_device_profiler(device)
 
     profiler.start("cache")
-    ttnn.wait_for_event(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(device, 1, write_event)
-    ttnn.wait_for_event(device, 0, write_event)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("cache")
     ttnn.dump_device_profiler(device)
 
     for iter in range(0, num_warmup_iterations):
-        ttnn.wait_for_event(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(device, 1, write_event)
-        ttnn.wait_for_event(device, 0, write_event)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
         reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-        ttnn.record_event(device, 0, op_event)
+        ttnn.record_event(0, op_event)
         _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
         ttnn.dump_device_profiler(device)
 
@@ -181,12 +150,12 @@ def run_2cq_model(
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
-        ttnn.wait_for_event(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(device, 1, write_event)
-        ttnn.wait_for_event(device, 0, write_event)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
         reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-        ttnn.record_event(device, 0, op_event)
+        ttnn.record_event(0, op_event)
         outputs.append(ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=False))
     ttnn.synchronize_devices(device)
     profiler.end(f"run")
@@ -260,39 +229,39 @@ def run_trace_2cq_model(
     op_event = ttnn.create_event(device)
     write_event = ttnn.create_event(device)
     # Initialize the op event so we can write
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
     profiler.start("compile")
-    ttnn.wait_for_event(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(device, 1, write_event)
-    ttnn.wait_for_event(device, 0, write_event)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("compile")
     ttnn.dump_device_profiler(device)
 
     profiler.start("cache")
-    ttnn.wait_for_event(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(device, 1, write_event)
-    ttnn.wait_for_event(device, 0, write_event)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
     first_out_addr = ttnn.buffer_address(reshard_out)
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("cache")
     ttnn.dump_device_profiler(device)
 
     # Capture
-    ttnn.wait_for_event(device, 1, op_event)
+    ttnn.wait_for_event(1, op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    ttnn.record_event(device, 1, write_event)
+    ttnn.record_event(1, write_event)
 
-    ttnn.wait_for_event(device, 0, write_event)
+    ttnn.wait_for_event(0, write_event)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    ttnn.record_event(device, 0, op_event)
+    ttnn.record_event(0, op_event)
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = tt_resnet50(reshard_out, device, ops_parallel_config)
@@ -304,12 +273,12 @@ def run_trace_2cq_model(
     ttnn.dump_device_profiler(device)
 
     for iter in range(0, num_warmup_iterations):
-        ttnn.wait_for_event(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(device, 1, write_event)
-        ttnn.wait_for_event(device, 0, write_event)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
         reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, input_mem_config, reshard_out)
-        ttnn.record_event(device, 0, op_event)
+        ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
         ttnn.dump_device_profiler(device)
 
@@ -319,13 +288,13 @@ def run_trace_2cq_model(
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
-        ttnn.wait_for_event(device, 1, op_event)
+        ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        ttnn.record_event(device, 1, write_event)
-        ttnn.wait_for_event(device, 0, write_event)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
         # TODO: Add in place support to ttnn to_memory_config
         reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, input_mem_config, reshard_out)
-        ttnn.record_event(device, 0, op_event)
+        ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(tt_output_res.cpu(blocking=False))
     ttnn.synchronize_devices(device)
@@ -470,10 +439,7 @@ def run_perf_resnet(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    (
-        (16, True, 0.0094, 60),
-        (16, False, 0.0230, 60),
-    ),
+    ((16, True, 0.0094, 60),),
     indirect=["enable_async_mode"],
 )
 def test_perf_t3000(
@@ -503,10 +469,7 @@ def test_perf_t3000(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    (
-        (16, True, 0.0068, 60),
-        (16, False, 0.0111, 60),
-    ),
+    ((16, True, 0.0068, 60),),
     indirect=["enable_async_mode"],
 )
 def test_perf_trace_t3000(
@@ -536,10 +499,7 @@ def test_perf_trace_t3000(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    (
-        (16, True, 0.0110, 60),
-        (16, False, 0.0220, 60),
-    ),
+    ((16, True, 0.0110, 60),),
     indirect=["enable_async_mode"],
 )
 def test_perf_2cqs_t3000(
@@ -571,10 +531,7 @@ def test_perf_2cqs_t3000(
 )
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    (
-        (16, True, 0.0043, 60),
-        (16, False, 0.009, 60),
-    ),
+    ((16, True, 0.0043, 60),),
     indirect=["enable_async_mode"],
 )
 def test_perf_trace_2cqs_t3000(

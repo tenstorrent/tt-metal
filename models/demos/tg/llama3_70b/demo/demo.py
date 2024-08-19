@@ -58,6 +58,8 @@ class DataArgs:
     chat: bool = False
     sample_len: int = None
     ground_truth: str = None
+    print_output_as_generated: bool = True
+    print_output_at_end: bool = False
 
 
 @dataclass
@@ -74,7 +76,7 @@ def construct_arg(**kwargs):
     return DemoArgs(model=model_args, tt=tt_args, data=data_args)
 
 
-def main(args):
+def run_demo(args):
     # Set random reproducible seed
     torch.manual_seed(0)
 
@@ -115,6 +117,9 @@ def main(args):
             ) as f:  # Open a file for writing
                 output_json = json.dumps(all_text, indent=4)
                 f.write(output_json)
+            if data_args.print_output_at_end:
+                for idx, text in enumerate(all_text):
+                    print(f"User {idx}: \n\tOutput: {text}")
 
     # Check against ground truth
     if data_args.ground_truth:
@@ -264,7 +269,8 @@ def run_decode(
         # Decode the entire sequence generated so far and log it
         for user_id in range(max(0, bsz - 3), bsz):
             text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
-            logger.info(f"Loop {cur_pos} user {user_id}: {text}\n")
+            if data_args.print_output_as_generated:
+                logger.info(f"Loop {cur_pos} user {user_id}: {text}\n")
 
         if return_full_logits:
             full_logits.append(logits.clone().detach())
@@ -348,7 +354,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 )
 @pytest.mark.parametrize(
     "llama_version",
-    (("llama3"),),
+    (("llama3-tg"),),
 )
 @pytest.mark.parametrize(
     "chat, prompts_file",
@@ -430,10 +436,9 @@ def test_LlamaModel_demo(
 
     check_device_mesh(device_mesh, model_config)
 
-    # TODO: Renable when issue #11089 is resolved
-    # for i in device_mesh.get_device_ids():
-    #     device = device_mesh.get_device(i)
-    #     device.enable_async(True)
+    for i in device_mesh.get_device_ids():
+        device = device_mesh.get_device(i)
+        device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,
@@ -458,4 +463,4 @@ def test_LlamaModel_demo(
         decode_only=decode_only,
         ground_truth=ground_truth,
     )
-    main(args)
+    run_demo(args)

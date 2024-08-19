@@ -149,7 +149,6 @@ void eth_send_bytes_over_channel_payload_only(
     uint32_t src_addr,
     uint32_t dst_addr,
     uint32_t num_bytes,
-    uint32_t channel,
     uint32_t num_bytes_per_send = 16,
     uint32_t num_bytes_per_send_word_size = 1) {
     // assert(channel < 4);

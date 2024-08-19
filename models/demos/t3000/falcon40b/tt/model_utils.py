@@ -27,9 +27,9 @@ def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=F
                 not input_memory_layout.is_sharded() and not output_memory_layout.is_sharded()
             ):  # interleaved to interleaved with different memory location
                 if clone:
-                    tensor = ttnn.experimental.tensor.clone(tensor, output_mem_config=output_memory_layout)
+                    tensor = ttnn.clone(tensor, memory_config=output_memory_layout)
                 else:
-                    tensor = ttnn.experimental.tensor.move(tensor, output_mem_config=output_memory_layout)
+                    tensor = ttnn.move(tensor, memory_config=output_memory_layout)
             else:  # reshard
                 tensor = ttnn.experimental.tensor.sharded_to_interleaved(
                     tensor,
@@ -375,7 +375,7 @@ def partial_layernorm(
             program_config=pgmconfig,
         )
         xs = convert_to_layout(xs, memconfig, get_dram_memcfg())
-        xs_output_cat = ttnn.experimental.tensor.typecast(xs, dtype)
+        xs_output_cat = ttnn.experimental.typecast(xs, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     return xs_output_cat
 

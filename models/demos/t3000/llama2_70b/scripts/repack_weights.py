@@ -14,6 +14,7 @@ import torch
 from tqdm import tqdm
 from collections import defaultdict
 import argparse
+import shutil
 
 
 def layer_num(key):
@@ -65,9 +66,13 @@ def repack(in_dir, out_dir, chunk_size, num_layers, hidden_size):
         chunk_id = chunk_key(key, chunk_size)
         chunks[chunk_id][key] = val
 
-    # save chunks
+    # save chunks and copy params.json
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    params_file = Path(in_dir) / "params.json"
+    if params_file.exists():
+        shutil.copy(params_file, out_dir)
+        print(f"Copied params.json to {out_dir}")
     for i, chunk in enumerate(chunks):
         # each chunk file name should tell which layers are in it
         start_layer = i * chunk_size

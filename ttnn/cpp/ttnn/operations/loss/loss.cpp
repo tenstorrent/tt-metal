@@ -6,7 +6,7 @@
 
 #include "loss.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
@@ -44,9 +44,9 @@ Tensor loss_function(
 
     switch(reduce_mode) {
         case LossReductionMode::SUM:
-            return tt::tt_metal::global_sum(result, memory_config.value_or(ref.memory_config()));
+            return ttnn::sum(result, std::nullopt, true, memory_config.value_or(ref.memory_config()));
         case LossReductionMode::MEAN:
-            return tt::tt_metal::global_mean(result, memory_config.value_or(ref.memory_config()));
+            return ttnn::mean(result, std::nullopt, true, memory_config.value_or(ref.memory_config()));
         case LossReductionMode::NONE:
         default:
             TT_FATAL("unsupported loss reduce function");
@@ -57,7 +57,7 @@ Tensor loss_function(
 
 } // loss_utils
 
-Tensor MseLossOperation::operator() (
+Tensor MseLossOperation::invoke (
     uint8_t queue_id,
     const Tensor& ref,
     const Tensor& prediction,
@@ -68,7 +68,7 @@ Tensor MseLossOperation::operator() (
     return loss_utils::loss_function(queue_id, ref, prediction, LossFunction::MSE, mode, memory_config, optional_output_tensor);
 }
 
-Tensor MaeLossOperation::operator() (
+Tensor MaeLossOperation::invoke (
     uint8_t queue_id,
     const Tensor& ref,
     const Tensor& prediction,

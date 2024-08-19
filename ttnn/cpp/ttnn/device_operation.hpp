@@ -31,7 +31,7 @@ struct CachedProgram {
 };
 
 struct CachedProgramFactory {
-    static constexpr auto MAX_SIZE = 896;
+    static constexpr auto MAX_SIZE = 4096;
     static constexpr auto ALIGNMENT = 32;
 
     tt::stl::unique_any<MAX_SIZE, ALIGNMENT> cached_program;
@@ -298,6 +298,8 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
         auto& program = create_or_get_program_from_cache<device_operation_t>(
             program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
 
+        program.set_runtime_id(operation_id);
+
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
             auto& queue = device->command_queue(cq_id);
@@ -312,7 +314,6 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
             operation_id,
             device->id(),
             program,
-            program_hash,
             operation_attributes,
             tensor_args,
             tensor_return_value);
@@ -333,6 +334,8 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
             },
             program);
 
+        program_ptr->set_runtime_id(operation_id);
+
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
             auto& queue = device->command_queue(cq_id);
@@ -347,7 +350,6 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
             operation_id,
             device->id(),
             *program_ptr,
-            program_hash,
             operation_attributes,
             tensor_args,
             tensor_return_value);

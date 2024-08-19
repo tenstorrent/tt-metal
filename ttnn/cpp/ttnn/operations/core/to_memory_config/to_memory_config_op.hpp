@@ -7,10 +7,10 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
 namespace ttnn {
 
@@ -21,7 +21,7 @@ namespace core {
 struct ToMemoryConfig {
 
     // TODO: Move to cpp once we merge with tt_eager
-    static Tensor operator()(
+    static Tensor invoke(
         const ttnn::Tensor& tensor, const ttnn::MemoryConfig& memory_config, std::optional<ttnn::DataType> dtype) {
         // Temporary until we see why buffer data not being populated
         const auto original_shape = tensor.get_shape();
@@ -96,7 +96,7 @@ struct ToMemoryConfig {
                     .at(0);
             } else {
                 // L1 to DRAM or DRAM to L1
-                return operation::run(Copy{memory_config, dtype.value_or(tensor.get_dtype())}, {tensor}).at(0);
+                return operation::run(ttnn::operations::data_movement::CopyDeviceOperation{memory_config, dtype.value_or(tensor.get_dtype())}, {tensor}).at(0);
             }
         }
 

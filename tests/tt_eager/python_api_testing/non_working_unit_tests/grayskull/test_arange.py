@@ -6,7 +6,7 @@ import random
 from loguru import logger
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import arange as tt_arange
@@ -35,7 +35,7 @@ def run_arange_tests(input_shape, dtype, dlayout, buffer_type, output_mem_config
         device=device,
         dtype=[dtype],
         layout=[dlayout],
-        input_mem_config=[ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, buffer_type)],
+        input_mem_config=[ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)],
         output_mem_config=output_mem_config,
     )
 
@@ -49,10 +49,10 @@ def run_arange_tests(input_shape, dtype, dlayout, buffer_type, output_mem_config
 test_sweep_args = [
     (
         (7, 14, 32, 160),
-        ttl.tensor.DataType.BFLOAT8_B,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        ttnn.BufferType.L1,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         15991940,
         -75,
         -56,
@@ -60,10 +60,10 @@ test_sweep_args = [
     ),
     (
         (2, 20, 416, 160),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.BufferType.L1,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         18784230,
         41,
         46,
@@ -71,10 +71,10 @@ test_sweep_args = [
     ),
     (
         (10, 21, 480, 128),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.BufferType.L1,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         16005792,
         30,
         94,
@@ -82,10 +82,10 @@ test_sweep_args = [
     ),
     (
         (10, 21, 480, 128),
-        ttl.tensor.DataType.BFLOAT8_B,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.BufferType.DRAM,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        ttnn.BufferType.DRAM,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         17493725,
         34,
         71,
@@ -93,10 +93,10 @@ test_sweep_args = [
     ),
     (
         (10, 21, 480, 128),
-        ttl.tensor.DataType.BFLOAT8_B,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.BufferType.L1,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        ttnn.BufferType.L1,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         8740671,
         38,
         51,

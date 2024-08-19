@@ -869,6 +869,96 @@ def reshape(
     return ttnn_tensor_to_torch(t1)
 
 
+def transpose_01(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 0, 1)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def transpose_02(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 0, 2)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def transpose_03(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 0, 3)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def transpose_12(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 1, 2)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def transpose_13(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 1, 3)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
+def transpose_23(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.transpose(t0, 2, 3)  # , memory_config=memory_config_to_ttnn(output_mem_config))
+    return ttnn_tensor_to_torch(t1)
+
+
 def gelu(
     x,
     *args,
@@ -2126,7 +2216,7 @@ def clone(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.clone(t0, memory_config_to_ttnn(output_mem_config), dtype[0])
+    t1 = ttnn.clone(t0, memory_config_to_ttnn(output_mem_config), dtype=dtype[0])
 
     return ttnn_tensor_to_torch(t1)
 
@@ -3137,7 +3227,7 @@ def eltwise_mac(x, y, z, *args, device, dtype, layout, input_mem_config, output_
 
 def mean(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.mean(t0, dim, keepdim=True)
+    t1 = ttnn.mean(t0, dim)
 
     return ttnn_tensor_to_torch(t1)
 
@@ -3383,7 +3473,7 @@ def unary_add_bw(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
-    t3 = ttnn.add_bw(t0, t1, alpha=scalar, memory_config=output_mem_config)
+    t3 = ttnn.add_bw(t0, t1, scalar, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t3[0])
 
@@ -3509,7 +3599,7 @@ def addalpha_bw(
     y,  # input_tensor
     z,  # other_tensor1
     *args,
-    scalar,
+    alpha,
     device,
     dtype,
     layout,
@@ -3521,7 +3611,7 @@ def addalpha_bw(
     t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_ttnn_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
 
-    t3 = ttnn.addalpha_bw(t0, t1, t2, scalar, memory_config=output_mem_config)
+    t3 = ttnn.addalpha_bw(t0, t1, t2, alpha, memory_config=output_mem_config)
 
     return [ttnn_tensor_to_torch(t3[0]), ttnn_tensor_to_torch(t3[1])]
 
@@ -4619,3 +4709,44 @@ def complex_add_bw(
             ttnn_tensor_to_torch(t3[1].real).to(torch.float32), ttnn_tensor_to_torch(t3[1].imag).to(torch.float32)
         ),
     ]
+
+
+def complex_angle(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+
+    t1 = ttnn.angle(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def complex_conj_bw(
+    x,  # grad_tensor
+    y,  # input_tensor
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    if dtype[0] == tt_lib.tensor.DataType.BFLOAT8_B:
+        dtype[0] = tt_lib.tensor.DataType.BFLOAT16
+
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+    t1 = ttnn.complex_tensor(
+        setup_ttnn_tensor(y.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(y.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+
+    t2 = ttnn.conj_bw(t0, t1, memory_config=output_mem_config)[0]
+
+    return torch.complex(
+        ttnn_tensor_to_torch(t2.real).to(torch.float32), ttnn_tensor_to_torch(t2.imag).to(torch.float32)
+    )

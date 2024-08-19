@@ -4,24 +4,13 @@
 
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/move/move_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
-
 
 namespace tt::tt_metal::detail{
 
     void TensorModuleDMOPs( py::module & m_tensor)
     {
-
-        // reduce enums
-        detail::export_enum<ReduceOpMath>(m_tensor);
-
-        detail::export_enum<ReduceOpDim>(m_tensor);
-
         // bcast enums
         detail::export_enum<BcastOpMath>(m_tensor);
         /** TODO: add these to bcast ops - good to have not required
@@ -34,49 +23,6 @@ namespace tt::tt_metal::detail{
         */
 
         detail::export_enum<BcastOpDim>(m_tensor);
-
-        detail::bind_unary_op<true, true>(m_tensor, "clone", &clone, R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
-        detail::bind_binary_op<false, false, false, false>(m_tensor, "copy", &copy, R"doc(  Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
-
-        // *** tensor manipulation ***
-        m_tensor.def("typecast", &typecast,
-            py::arg("input_tensors").noconvert(), py::arg("dtype"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-                Returns a new tensor which is a typecast of input tensor with new datatype``{0}``.
-
-                Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
-
-                Datatype must be one of the following types BFLOAT16, BFLOAT8_B, BFLOAT4_B, UINT32, INT32, UINT16 and UINT8.
-
-                Output tensor will be on device, in same layout, and have the given data type.
-
-                .. csv-table::
-                    :header: "Argument", "Description", "Data type", "Required"
-
-                    "input_tensors", "Input tensors to typecast", "List of Tensors", "Yes"
-                    "dtype", "datatype of typecast", "Datatype", "Yes"
-                    "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "No"
-            )doc"
-        );
-
-        m_tensor.def("reshape", &reshape,
-            py::arg("input").noconvert(), py::arg("W"), py::arg("Z"), py::arg("Y"), py::arg("X"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Returns a tensor with the new shape of ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
-
-            Input tensor must be on host device, in TILE layout, and have BFLOAT16 data type.
-
-            Output tensor will be on host device, in TILE layout, and have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "W", "W dim of output tensor", "int", "", "Yes"
-                "Z", "Z dim of output tensor", "int", "", "Yes"
-                "Y", "Y dim of output tensor", "int", "", "Yes"
-                "X", "X dim of output tensor", "int", "", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
         // *** broadcast and reduce ***
         m_tensor.def("bcast",
         [](const Tensor &input_tensor_a,
@@ -120,60 +66,6 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_tensor", "Optional output tensor", "Tensor", "Default is None", "No"
                 "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-        )doc");
-
-        m_tensor.def("reduce", &reduce,
-            py::arg("input").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("scaler"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("compute_kernel_config").noconvert() = std::nullopt, R"doc(
-            Perform a reduction of input tensor ``input`` using mathematical operation ``math_op`` on dimension ``dim``.
-
-            For ``arg2=ReduceOpDim::W`` reduce is done on dimension X.
-
-            For ``arg2=ReduceOpDim::H`` reduce is done on dimension Y.
-
-            For ``arg2=ReduceOpDim::HW`` reduce is done on dimensions X and Y.
-
-            Input tensors must have BFLOAT16 data type.
-
-            Output tensor will have BFLOAT16 data type.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "math_op", "Aggregating math operation", " ReduceOpMath", "SUM, MAX, MIN", "Yes"
-                "dim", "Dimension on which reduction is performed", "ReduceOpDim", "W, H, HW", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_dtype", "DataType of output tensor", "DataType", "Default is None (use input dtype)", "No"
-        )doc");
-
-        m_tensor.def("move", &move,
-            py::arg().noconvert(), py::arg("output_mem_config").noconvert() = std::nullopt, R"doc(
-            Moves the elements of the input tensor ``arg0`` to a location in memory with specified memory layout.
-
-            If no memory layout is specified, output memory will be the same as the input tensor memory config.
-
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | Argument | Description                | Data type                  | Valid range                     | Required |
-            +==========+============================+============================+=================================+==========+
-            | arg0     | Tensor to move             | Tensor                     | Tensor of shape [W, Z, Y, X]    | Yes      |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | arg1     | MemoryConfig of tensor of  | tt_lib.tensor.MemoryConfig | Default is same as input tensor | No       |
-            |          | TT accelerator device      |                            |                                 |          |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-        )doc");
-
-        m_tensor.def("move_sharded", &move_sharded,
-            py::arg().noconvert(), py::arg("output_mem_config").noconvert() = std::nullopt, R"doc(
-            Moves the elements of the sharded input tensor ``arg0`` to a location in local L1.
-
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | Argument | Description                | Data type                  | Valid range                     | Required |
-            +==========+============================+============================+=================================+==========+
-            | arg0     | Tensor to move             | Tensor                     | Tensor of shape [W, Z, Y, X]    | Yes      |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
-            | arg1     | MemoryConfig of tensor of  | tt_lib.tensor.MemoryConfig | Default is same as input tensor | No       |
-            |          | TT accelerator device      |                            |                                 |          |
-            +----------+----------------------------+----------------------------+---------------------------------+----------+
         )doc");
 
         // Sharding ops

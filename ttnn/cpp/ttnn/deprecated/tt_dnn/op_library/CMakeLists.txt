@@ -2,18 +2,10 @@
 # We do not use GLOB here since build system won't be able to pick up changes to the file list generated
 set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sharding_utilities.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute_kernel_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/sharded_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharded/multi_core/sharded_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/copy/copy_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/copy/multi_core/copy_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/move/move_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_overlap.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/move/multi_core/move_op_multi_core_sharded.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/reduce_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/single_core_hw/reduce_op_single_core_hw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_h/reduce_op_multi_core_h.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reduce/multi_core_w/reduce_op_multi_core_w.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/bcast_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_multi_core_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h.cpp
@@ -104,11 +96,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_cumsum/moreh_cumsum_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/reshape/reshape_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/transformer_tms.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_attn_matmul/multi_core_attn_matmul.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_group_attn_matmul/multi_core_group_attn_matmul.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/transformer_tms/multi_core_ssm_1d_sum_reduce/multi_core_ssm_1d_sum_reduce.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/multi_core/update_cache_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_op.cpp

@@ -6,7 +6,6 @@ import torch
 import typing
 import pytest
 import ttnn
-import tt_lib
 import tempfile
 from loguru import logger
 import os
@@ -14,32 +13,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
 
 NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
-
-
-def create_event(device):
-    event = []
-    if isinstance(device, ttnn.Device):
-        return tt_lib.device.CreateEvent()
-    else:
-        for dev in device.get_device_ids():
-            event.append(tt_lib.device.CreateEvent())
-    return event
-
-
-def wait_for_event(device, cq_id, event):
-    if isinstance(device, ttnn.Device):
-        tt_lib.device.WaitForEvent(device, cq_id, event)
-    else:
-        for dev, eve in zip(device.get_device_ids(), event):
-            tt_lib.device.WaitForEvent(device.get_device(dev), cq_id, eve)
-
-
-def record_event(device, cq_id, event):
-    if isinstance(device, ttnn.Device):
-        tt_lib.device.RecordEvent(device, cq_id, event)
-    else:
-        for dev, eve in zip(device.get_device_ids(), event):
-            tt_lib.device.RecordEvent(device.get_device(dev), cq_id, eve)
 
 
 @pytest.mark.parametrize(
@@ -74,8 +47,8 @@ def test_multi_device_single_trace(t3k_device_mesh, shape, use_all_gather, enabl
         data_movement_cq = 1
 
         def event_sync(event, record_cq, wait_cq):
-            record_event(t3k_device_mesh, record_cq, event)
-            wait_for_event(t3k_device_mesh, wait_cq, event)
+            ttnn.record_event(record_cq, event)
+            ttnn.wait_for_event(wait_cq, event)
 
     else:
         trace_cq = 0
@@ -96,7 +69,8 @@ def test_multi_device_single_trace(t3k_device_mesh, shape, use_all_gather, enabl
     logger.info("Done Trace Capture")
 
     for i in range(NUM_TRACE_LOOPS):
-        write_event = create_event(t3k_device_mesh)
+        write_event = ttnn.create_event(t3k_device_mesh)
+        trace_event = ttnn.create_event(t3k_device_mesh)
         # Create torch inputs
         torch_input_tensor_0 = torch.rand(
             (t3k_device_mesh.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
@@ -127,12 +101,13 @@ def test_multi_device_single_trace(t3k_device_mesh, shape, use_all_gather, enabl
         logger.info("Execute Trace")
         # Execute trace
         ttnn.execute_trace(t3k_device_mesh, tid, cq_id=trace_cq, blocking=False)
+        event_sync(trace_event, trace_cq, data_movement_cq)
         if use_all_gather:
             # Device All-Gather: Iterate through tensors on all devices. Ensure they match the full tensor
             logger.info("Read Back Trace Outputs with All Gather")
             device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(output_tensor)
             for device_tensor in device_tensors:
-                device_tensor_torch = ttnn.to_torch(device_tensor)
+                device_tensor_torch = ttnn.to_torch(device_tensor, cq_id=data_movement_cq)
                 assert_with_pcc(device_tensor_torch, torch_output_golden, pcc=0.99)
 
         else:
@@ -142,6 +117,7 @@ def test_multi_device_single_trace(t3k_device_mesh, shape, use_all_gather, enabl
                 output_tensor,
                 mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0),
                 device=t3k_device_mesh,
+                cq_id=data_movement_cq,
             )
             assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.96)
 
@@ -201,8 +177,8 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
         data_movement_cq = 1
 
         def event_sync(event, record_cq, wait_cq):
-            record_event(t3k_device_mesh, record_cq, event)
-            wait_for_event(t3k_device_mesh, wait_cq, event)
+            ttnn.record_event(record_cq, event)
+            ttnn.wait_for_event(wait_cq, event)
 
     else:
         trace_cq = 0
@@ -243,7 +219,8 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
         num_trace_loops = 5
 
     for i in range(num_trace_loops):
-        write_event = create_event(t3k_device_mesh)
+        write_event = ttnn.create_event(t3k_device_mesh)
+        trace_event = ttnn.create_event(t3k_device_mesh)
         # Create torch inputs
         torch_input_tensor_0 = torch.rand(
             (t3k_device_mesh.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
@@ -292,24 +269,25 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
         ttnn.execute_trace(t3k_device_mesh, tid_1, cq_id=trace_cq, blocking=False)
         logger.info("Execute Trace 2")
         ttnn.execute_trace(t3k_device_mesh, tid_2, cq_id=trace_cq, blocking=False)
+        event_sync(trace_event, trace_cq, data_movement_cq)
         if use_all_gather:
             # Device All-Gather: Iterate through tensors on all devices. Ensure they match the full tensor
             logger.info("Read Back Trace 0 Outputs")
             device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(output_tensor)
             for device_tensor in device_tensors:
-                device_tensor_torch = ttnn.to_torch(device_tensor)
+                device_tensor_torch = ttnn.to_torch(device_tensor, cq_id=data_movement_cq)
                 assert_with_pcc(device_tensor_torch, torch_output_golden, pcc=0.96)
 
             logger.info("Read Back Trace 1 Outputs")
             device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(output_tensor_1)
             for device_tensor in device_tensors:
-                device_tensor_torch = ttnn.to_torch(device_tensor)
+                device_tensor_torch = ttnn.to_torch(device_tensor, cq_id=data_movement_cq)
                 assert_with_pcc(device_tensor_torch, torch_output_golden_1, pcc=0.96)
 
             logger.info("Read Back Trace 2 Outputs")
             device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(output_tensor_2)
             for device_tensor in device_tensors:
-                device_tensor_torch = ttnn.to_torch(device_tensor)
+                device_tensor_torch = ttnn.to_torch(device_tensor, cq_id=data_movement_cq)
                 assert_with_pcc(device_tensor_torch, torch_output_golden_2, pcc=0.96)
         else:
             # Perform host All-Gather
@@ -318,6 +296,7 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
                 output_tensor,
                 mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0),
                 device=t3k_device_mesh,
+                cq_id=data_movement_cq,
             )
             assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.96)
 
@@ -326,6 +305,7 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
                 output_tensor_1,
                 mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0),
                 device=t3k_device_mesh,
+                cq_id=data_movement_cq,
             )
             assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden_1, pcc=0.96)
 
@@ -334,6 +314,7 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
                 output_tensor_2,
                 mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0),
                 device=t3k_device_mesh,
+                cq_id=data_movement_cq,
             )
             assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden_2, pcc=0.96)
 

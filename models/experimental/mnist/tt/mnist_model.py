@@ -33,20 +33,20 @@ class TtMnistModel(torch.nn.Module):
         self.fc3_weight = ttnn.transpose(self.fc3_weight, -2, -1)
 
     def forward(self, x):
-        # tt_lib.tensor.reshape throws an assertion RuntimeError: TT_ASSERT @ tt_eager/tt_dnn/op_library/reshape/reshape_op.cpp:295: input_tensor_a.get_legacy_shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0 info:
+        # ttnn.reshape_on_device throws an assertion RuntimeError: TT_ASSERT @ tt_eager/tt_dnn/op_library/reshape/reshape_op.cpp:295: input_tensor_a.get_legacy_shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0 info:
         # Operand/target width must be a multiple of 32. So using fallback_ops.reshape.
         x = tt_lib.fallback_ops.reshape(x, x.get_legacy_shape()[0], 1, 1, 784)
 
         x = ttnn.matmul(x, self.fc1_weight)
-        x = tt_lib.tensor.bcast(x, self.fc1_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
+        x = ttnn.add(x, self.fc1_bias)
         x = ttnn.relu(x)
 
         x = ttnn.matmul(x, self.fc2_weight)
-        x = tt_lib.tensor.bcast(x, self.fc2_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
+        x = ttnn.add(x, self.fc2_bias)
         x = ttnn.relu(x)
 
         x = ttnn.matmul(x, self.fc3_weight)
-        x = tt_lib.tensor.bcast(x, self.fc3_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
+        x = ttnn.add(x, self.fc3_bias)
         x = ttnn.relu(x)
 
         x = tt_lib.fused_ops.softmax.softmax(x)

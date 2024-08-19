@@ -95,6 +95,8 @@ def manage_config(name, value):
 
 from ttnn._ttnn.multi_device import get_device_tensor, get_device_tensors, aggregate_as_tensor
 
+from ttnn._ttnn.events import create_event, record_event, wait_for_event
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
@@ -141,6 +143,7 @@ from ttnn.types import (
 
 from ttnn.device import (
     Device,
+    DispatchCoreType,
     open_device,
     close_device,
     enable_program_cache,
@@ -152,6 +155,7 @@ from ttnn.device import (
 
 from ttnn.multi_device import (
     DeviceMesh,
+    DispatchCoreType,
     open_device_mesh,
     close_device_mesh,
     get_num_pcie_devices,
@@ -272,6 +276,10 @@ from ttnn.operations.embedding import (
 
 from ttnn.operations.losses import (
     LossReductionMode,
+)
+
+from ttnn.operations.reduction import (
+    ReduceType,
 )
 
 from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config

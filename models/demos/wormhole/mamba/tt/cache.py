@@ -4,7 +4,6 @@
 
 import ttnn
 import torch
-import tt_lib as ttl
 
 
 class TensorCache:
@@ -44,7 +43,7 @@ class TensorCache:
         if self.on_host:
             self.cache[entry_idx][user_idx] = value.cpu()
         else:
-            ttl.tensor.copy(value, self.cache[entry_idx][user_idx])
+            ttnn.copy(value, self.cache[entry_idx][user_idx])
 
     def get(self, user_idx: int, entry_idx: int) -> ttnn.Tensor:
         assert entry_idx < len(self.cache), f"Expected key {entry_idx} to exist in cache"

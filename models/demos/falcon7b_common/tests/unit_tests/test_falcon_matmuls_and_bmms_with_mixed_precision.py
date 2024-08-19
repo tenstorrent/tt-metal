@@ -407,14 +407,9 @@ def test_falcon7b_attnention_sliced(
             compute_kernel_config=compute_kernel_config,
         )
 
-        mm_slice = ttnn.experimental.operations.primary.bcast(
-            mm_slice,
-            reference_scalar,
-            ttnn.experimental.tensor.BcastOpMath.MUL,
-            ttnn.experimental.tensor.BcastOpDim.HW,
-            output_mem_config=height_sharded_memory_config,
-            in_place=True,
-        )
+        # This should be done in-place.  This will be done by using an optional output tensor passed to multiply
+        # but this feature is being done on a separate effort.
+        mm_slice = ttnn.multiply(mm_slice, reference_scalar, memory_config=height_sharded_memory_config)
 
         # Deallocating here causes pcc to drop - issue #6638
         # So we have to move it after the entire sequence is finished
@@ -496,12 +491,10 @@ def test_falcon7b_attnention_sliced(
         reference_query_layer, reference_key_layer_transposed, memory_config=dram_interleaved_memory_config
     )
 
-    attn_weights = ttnn.experimental.operations.primary.bcast(
+    attn_weights = ttnn.multiply(
         attn_weights,
         reference_scalar,
-        ttnn.experimental.tensor.BcastOpMath.MUL,
-        ttnn.experimental.tensor.BcastOpDim.HW,
-        output_mem_config=dram_interleaved_memory_config,
+        memory_config=dram_interleaved_memory_config,
     )
     attn_weights = ttnn.add(attn_weights, attention_mask, memory_config=dram_interleaved_memory_config)
     attn_weights = ttnn.softmax_in_place(attn_weights, compute_kernel_config=compute_kernel_config)
@@ -936,13 +929,7 @@ def test_softmax(device, num_cores, seq_len):
         )
         input_slice.deallocate()
 
-    out = ttnn.experimental.operations.primary.bcast(
-        tt_input,
-        tt_scalar,
-        ttnn.experimental.tensor.BcastOpMath.MUL,
-        ttnn.experimental.tensor.BcastOpDim.HW,
-        output_mem_config=dram_interleaved_memory_config,
-    )
+    out = ttnn.multiply(tt_input, tt_scalar, memory_config=dram_interleaved_memory_config)
 
     out = ttnn.add(
         out,

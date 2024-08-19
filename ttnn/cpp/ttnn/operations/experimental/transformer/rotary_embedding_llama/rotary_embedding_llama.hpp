@@ -12,7 +12,7 @@ namespace ttnn {
 namespace operations::experimental::transformer {
 
  struct RotaryEmbeddingLlamaOperation {
-    static ttnn::Tensor operator()(
+    static ttnn::Tensor invoke(
         const Tensor& input_tensor,
         const Tensor& cos_cache,
         const Tensor& sin_cache,

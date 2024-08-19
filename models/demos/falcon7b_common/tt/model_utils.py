@@ -37,7 +37,7 @@ def get_weights_cached(
         weights = weights_dict[str(path)]
     elif not overwrite and path.exists():
         # Load cached weights
-        weights_host = ttnn.experimental.tensor.load_tensor(str(path))
+        weights_host = ttnn.load_tensor(str(path))
         # Duplicate weights on all devices
         weights = [weights_host.to(device, model_config[f"{weight_config_str}_MEMCFG"]) for device in devices]
         # Add to weights_dict
@@ -122,19 +122,11 @@ def layernorm(ln_input, ln_eps, ln_gamma, ln_betta, num_devices, model_config):
                 )
             )
         for i in range(num_devices):
-            ln_output[i] = ttnn.experimental.tensor.bcast(
-                ln_output[i],
-                ln_gamma[i],
-                ttnn.experimental.tensor.BcastOpMath.MUL,
-                ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=model_config["LN_F_OUTPUT_MEMCFG"],
-            )
+            ln_output[i] = ttnn.multiply(ln_output[i], ln_gamma[i], memory_config=model_config["LN_F_OUTPUT_MEMCFG"])
         for i in range(num_devices):
-            ln_output[i] = ttnn.experimental.tensor.bcast(
+            ln_output[i] = ttnn.add(
                 ln_output[i],
                 ln_betta[i],
-                ttnn.experimental.tensor.BcastOpMath.ADD,
-                ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=model_config["LN_F_OUTPUT_MEMCFG"],
+                memory_config=model_config["LN_F_OUTPUT_MEMCFG"],
             )
     return ln_output

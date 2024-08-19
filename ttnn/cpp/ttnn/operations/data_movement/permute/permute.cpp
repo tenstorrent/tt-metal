@@ -6,7 +6,6 @@
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -145,7 +144,7 @@ Tensor composite_invoke(
 
 } // detail namespace
 
-ttnn::Tensor ExecutePermute::operator()(
+ttnn::Tensor ExecutePermute::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const std::vector<int64_t>& dims,
@@ -209,15 +208,15 @@ ttnn::Tensor ExecutePermute::operator()(
     return output_tensor;
 }
 
-ttnn::Tensor ExecutePermute::operator()(
+ttnn::Tensor ExecutePermute::invoke(
     const ttnn::Tensor& input_tensor,
     const std::vector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
-    return operator()(DefaultQueueId, input_tensor, dims, memory_config);
+    return invoke(DefaultQueueId, input_tensor, dims, memory_config);
 }
 
-ttnn::Tensor ExecutePermute::operator()(const ttnn::Tensor& input_tensor, const std::vector<int64_t>& dims) {
-    return operator()(input_tensor, dims, std::nullopt);
+ttnn::Tensor ExecutePermute::invoke(const ttnn::Tensor& input_tensor, const std::vector<int64_t>& dims) {
+    return invoke(input_tensor, dims, std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace

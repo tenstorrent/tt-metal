@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import is_wormhole_b0
 import copy
 
@@ -26,22 +26,22 @@ def get_compute_kernel_options(compute_kernel_options):
     if is_wormhole_b0():
         fp32_dest_acc_en = compute_kernel_options
         packer_l1_acc = False
-        compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=packer_l1_acc,
         )
     else:
         # Grayskull doesn't support fp32 but test passing a GS config is ok
-        compute_kernel_config = ttl.tensor.GrayskullComputeKernelConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4,
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
         )
     return compute_kernel_config
 
 
-def to_cpu(npu_tensor, shape, *, cpu_layout=ttl.tensor.Layout.ROW_MAJOR):
+def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.ROW_MAJOR_LAYOUT):
     if npu_tensor is None:
         return None
 
@@ -64,8 +64,8 @@ def to_npu(
     cpu_tensor,
     device,
     *,
-    npu_layout=ttl.tensor.Layout.TILE,
-    npu_dtype=ttl.tensor.DataType.BFLOAT16,
+    npu_layout=ttnn.TILE_LAYOUT,
+    npu_dtype=ttnn.bfloat16,
     shape=None,
 ):
     if cpu_tensor is None:
@@ -80,7 +80,7 @@ def to_npu(
     if len(cpu_tensor.shape) == 0:
         cpu_tensor = cpu_tensor.reshape([1, 1])
 
-    npu_tensor = ttl.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    npu_tensor = ttnn.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     return npu_tensor
 
 

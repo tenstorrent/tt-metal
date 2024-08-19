@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import tt_lib
+import ttnn
 import torch
 from loguru import logger
 import torchvision
@@ -75,7 +75,7 @@ def run_efficientnet_model_test(
 
     tt_model = tt_model_class(device)
 
-    test_input = torch2tt_tensor(test_input, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    test_input = torch2tt_tensor(test_input, tt_device=device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
     with torch.no_grad():
         tt_model.eval()
@@ -185,7 +185,7 @@ def test_efficientnet_v2_s_model_synt(device, imagenet_sample_input):
 
 
 @pytest.mark.skip(reason="Not tested")
-def test_efficientnet_v2_m_model_synt(imagenet_sample_input):
+def test_efficientnet_v2_m_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
         torchvision.models.efficientnet_v2_m,

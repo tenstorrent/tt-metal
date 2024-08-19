@@ -12,6 +12,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 #include "common/bfloat16.hpp"
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -84,7 +85,7 @@ bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
             page_size = dram_buffer_size;
         }
 
-        BufferType buffType = (use_DRAM) ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
+        tt_metal::BufferType buffType = (use_DRAM) ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
         tt_metal::InterleavedBufferConfig buff_config{
                                         .device=device,
                                         .size = dram_buffer_size,
