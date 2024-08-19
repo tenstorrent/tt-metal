@@ -7,6 +7,8 @@
 #include "debug/assert.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+
 
 using ttnn::ccl::ShardType;
 using ttnn::ccl::UNINITIALIZED_VALUE_U16;
@@ -14,9 +16,8 @@ using ttnn::ccl::UNINITIALIZED_VALUE_U32;
 using ttnn::ccl::WorkerXY;
 
 
-
 template <typename AddrGen>
-FORCE_INLINE void write_and_send_chunk(
+FORCE_INLINE void write_and_send_chunk_write_to_tensor_segment(
     uint32_t& output_page_idx,
     uint32_t& col_idx,
     uint32_t& row_idx,
@@ -28,12 +29,7 @@ FORCE_INLINE void write_and_send_chunk(
     const uint32_t& row_offset,
     const uint32_t& num_pages,
     const uint32_t& page_size,
-    uint64_t remote_l1_write_addr,
-    uint64_t eth_l1_sender_semaphore_addr) {
-    cb_wait_front(cb_id, num_pages);
-    uint32_t l1_read_addr = get_read_ptr(cb_id);
-    noc_async_write(l1_read_addr, remote_l1_write_addr, page_size * num_pages);
-    noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
+    uint32_t l1_read_addr) {
 
     for (uint32_t i = 0; i < num_pages; ++i) {
 #ifdef ROW_MAJOR_LAYOUT
@@ -77,6 +73,76 @@ FORCE_INLINE void write_and_send_chunk(
     }
     noc_async_write_barrier();
     cb_pop_front(cb_id, num_pages);
+}
+
+
+template <typename AddrGen, ttnn::ccl::EriscDataMoverTerminationMode termination_mode>
+FORCE_INLINE void write_and_send_chunk(
+    uint32_t& output_page_idx,
+    uint32_t& col_idx,
+    uint32_t& row_idx,
+    const uint32_t& cb_id,
+    const AddrGen& d,
+    const uint32_t num_cols,
+    const uint32_t num_rows,
+    const uint32_t& col_offset,
+    const uint32_t& row_offset,
+    const uint32_t& num_pages,
+    const uint32_t& page_size,
+    ccl::edm::WorkerToEdmSender<termination_mode> &sender_adapter) {
+    cb_wait_front(cb_id, num_pages);
+    uint32_t l1_read_addr = get_read_ptr(cb_id);
+    sender_adapter.send_payload_non_blocking(cb_id, num_pages, page_size);
+
+    write_and_send_chunk_write_to_tensor_segment(
+        output_page_idx,
+        col_idx,
+        row_idx,
+        cb_id,
+        d,
+        num_cols,
+        num_rows,
+        col_offset,
+        row_offset,
+        num_pages,
+        page_size,
+        l1_read_addr);
+
+}
+
+template <typename AddrGen>
+FORCE_INLINE void write_and_send_chunk(
+    uint32_t& output_page_idx,
+    uint32_t& col_idx,
+    uint32_t& row_idx,
+    const uint32_t& cb_id,
+    const AddrGen& d,
+    const uint32_t num_cols,
+    const uint32_t num_rows,
+    const uint32_t& col_offset,
+    const uint32_t& row_offset,
+    const uint32_t& num_pages,
+    const uint32_t& page_size,
+    uint64_t remote_l1_write_addr,
+    uint64_t eth_l1_sender_semaphore_addr) {
+    cb_wait_front(cb_id, num_pages);
+    uint32_t l1_read_addr = get_read_ptr(cb_id);
+    noc_async_write(l1_read_addr, remote_l1_write_addr, page_size * num_pages);
+    noc_semaphore_inc(eth_l1_sender_semaphore_addr, 1);
+
+    write_and_send_chunk_write_to_tensor_segment(
+        output_page_idx,
+        col_idx,
+        row_idx,
+        cb_id,
+        d,
+        num_cols,
+        num_rows,
+        col_offset,
+        row_offset,
+        num_pages,
+        page_size,
+        l1_read_addr);
 }
 
 template <typename AddrGen>

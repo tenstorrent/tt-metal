@@ -177,7 +177,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
     std::unique_ptr<ccl::CclOpTensorConfig> input_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
     std::unique_ptr<ccl::CclOpTensorConfig> output_tensor_config = ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
 
-    std::size_t num_edm_buffers_per_channel = 1;
+    std::size_t num_edm_buffers_per_channel = 2;
     tt::tt_metal::Program program{};
     // Issue #10978: CCLs need to be tagged as having multi-device dependencies, when running on Galaxy.
     program.capture_multi_device_dependencies();
@@ -693,6 +693,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).x),
                             static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).y),
                             static_cast<uint32_t>(cb_num_pages / 2),
+                            static_cast<uint32_t>(num_edm_buffers_per_channel)
                         };
 
                         if (is_sharded) {
@@ -823,7 +824,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
                             static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_receiver_core).y),
                             static_cast<uint32_t>(receiver_eth_sem_addrs.at(b)),
                             static_cast<uint32_t>(receiver_worker_semaphore_id),
-                            static_cast<uint32_t>(cb_num_pages / 2)
+                            static_cast<uint32_t>(cb_num_pages / 2),
+                            static_cast<uint32_t>(num_edm_buffers_per_channel)
                         };
 
                         log_trace(tt::LogOp, "Worker {} RR ct args", b);
@@ -1003,7 +1005,6 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor&
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
     ) {
-        bool is_sharded = input_tensors[0].is_sharded();
         const auto& input = input_tensors[0];
         const auto& output = output_tensors[0];
         for (auto const& [kernel_id, core] : receive_writer_kernel_core_list) {

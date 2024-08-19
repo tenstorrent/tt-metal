@@ -47,7 +47,6 @@ class AllGatherConfig {
 
     uint32_t get_num_eth_buffers_per_edm() const { return this->num_eth_buffers; }
     uint32_t get_num_workers_per_link() const { return this->num_workers_per_link; }
-    uint32_t get_num_buffers_per_worker() const { return this->num_buffers_per_worker; }
     uint32_t get_num_workers() const { return this->num_workers_per_link * this->num_links; }
 
     uint32_t get_eth_buffer_size() const { return this->eth_buffer_size; }
@@ -57,7 +56,7 @@ class AllGatherConfig {
     uint32_t get_eth_buffers_l1_base_byte_address() const { return this->eth_buffers_l1_base_byte_address; }
 
     uint32_t get_semaphore_size() const { return this->semaphore_size; }
-    std::size_t get_num_buffers_per_channel() const { return this->num_buffers_per_worker; }
+    std::size_t get_num_buffers_per_channel() const { return this->num_edm_buffers_per_channel; }
 
     uint32_t get_num_edm_channels_in_clockwise_direction() const {
         return this->enable_bidirectional ?
@@ -91,7 +90,7 @@ class AllGatherConfig {
         log_trace(tt::LogOp, "\terisc_handshake_address: {}", erisc_handshake_address);
         log_trace(tt::LogOp, "\tnum_buffers: {}", num_eth_buffers);
         log_trace(tt::LogOp, "\tnum_workers_per_link: {}", num_workers_per_link);
-        log_trace(tt::LogOp, "\tnum_buffers_per_worker: {}", num_buffers_per_worker);
+        log_trace(tt::LogOp, "\tnum_edm_buffers_per_channel: {}", num_edm_buffers_per_channel);
         log_trace(tt::LogOp, "\teth_buffer_size: {}", eth_buffer_size);
         log_trace(tt::LogOp, "\tsemaphore_size: {}", semaphore_size);
         log_trace(tt::LogOp, "\tsemaphore_offset: {}", semaphore_offset);
@@ -107,7 +106,7 @@ class AllGatherConfig {
     uint32_t num_links;
     uint32_t num_eth_buffers;
     uint32_t num_workers_per_link;
-    uint32_t num_buffers_per_worker;
+    uint32_t num_edm_buffers_per_channel;
     uint32_t eth_buffer_size;
     uint32_t semaphore_size;
     uint32_t semaphore_offset;
