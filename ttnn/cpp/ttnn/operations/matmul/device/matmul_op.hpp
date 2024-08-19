@@ -180,6 +180,12 @@ struct Matmul {
         std::vector<Tensor> &output_tensors) const;
 };
 
+Matmul create_matmul_struct(
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    const struct Matmul &parameters
+);
+
 Tensor matmul(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
