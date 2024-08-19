@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 
 
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(
-    const Tensor& a, Tensor& output, const float pad_value); 
+    const Tensor& a, Tensor& output, const float pad_value);
 
 }  // namespace ttnn::operations::data_movement::detail
