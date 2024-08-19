@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "debug/dprint.h"
@@ -81,10 +82,6 @@ void kernel_main() {
     uint32_t start_page_idx_dir0 = ring_index_dir0 * output_page_offset;
     uint32_t start_page_idx_dir1 = ring_index_dir1 * output_page_offset;
 
-    uint32_t cb_write_addr = get_write_ptr(cb_id_in0);
-    uint32_t cb_read_addr = get_read_ptr(cb_id_in0);
-
-
     volatile tt_l1_ptr uint32_t* signal_op_semaphore_ptrs[2] = {signal_op_semaphore_addr_ptr_dir0, signal_op_semaphore_addr_ptr_dir1};
     uint32_t start_page_idxs[2] = {start_page_idx_dir0, start_page_idx_dir1};
     uint32_t ring_idxs[2] = {ring_index_dir0, ring_index_dir1};
@@ -123,7 +120,7 @@ void kernel_main() {
             // DPRINT << "num_pages_to_transfer: " << num_pages_to_transfer << ENDL();
 
             // Read the data from DRAM into cb0
-            datacopy_read_wrapped_chunk( // Use this function assuming that the worker slice is the same as the tensor slice
+            read_wrapped_chunk_from_output_tensor( // Use this function assuming that the worker slice is the same as the tensor slice
                 curr_page_in_idx,
                 offset_into_in_tensor_slice, // Viewing this as offset into the entire tensor slice since there's only one worker
                 offset_worker_slice, // offset_worker_slice is always 0 since there's only one worker
@@ -135,12 +132,11 @@ void kernel_main() {
                 d_in,
                 num_pages_to_transfer,
                 page_size,
-                last_page_of_in_tensor_slice,
-                cb_write_addr);
+                last_page_of_in_tensor_slice);
 
 
             // Write the data from cb0 to DRAM
-            datacopy_write_wrapped_chunk(
+            write_wrapped_chunk(
                 curr_page_out_idx,
                 offset_into_out_tensor_slice, // Viewing this as offset into the entire tensor slice since there's only one worker
                 offset_worker_slice, // offset_worker_slice is always 0 since there's only one worker
@@ -152,10 +148,15 @@ void kernel_main() {
                 d_out,
                 num_pages_to_transfer,
                 page_size,
-                last_page_of_out_tensor_slice,
-                cb_read_addr);
+                last_page_of_out_tensor_slice);
 
             pages += num_pages_to_transfer;
+
+            // Push and pop filler pages if needed to align CB ptr
+            if (num_pages_to_transfer < max_buffer_size) {
+                push_filler_pages_to_cb(cb_id_in0, max_buffer_size - num_pages_to_transfer);
+                pop_filler_pages_from_cb(cb_id_in0, max_buffer_size - num_pages_to_transfer);
+            }
         }
 
     }
