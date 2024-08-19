@@ -9,8 +9,7 @@ from ttnn import experimental as ttl
 import ttnn
 from ttnn import ShardTensorToMesh
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
-import itertools
+from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.test_all_gather import is_unsupported_case
 
 
@@ -24,7 +23,6 @@ def run_all_gather_matmul_on_t3000_impl(
     layout,
     matmul_output_dim,
     mem_config,
-    function_level_defaults,
     num_iters=1,
 ):
     # Skip unsupported cases
@@ -41,7 +39,7 @@ def run_all_gather_matmul_on_t3000_impl(
 
     # Create input tensor for the all gather
     _, _, _, hidden_dim = input_shape
-    input_tensor = torch.rand(input_shape).bfloat16()
+    input_tensor = torch.randn(input_shape).bfloat16().float()
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
@@ -49,27 +47,28 @@ def run_all_gather_matmul_on_t3000_impl(
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
     # Create the weight matrix for the matmul
-    weights_tensor = torch.rand([1, 1, hidden_dim, matmul_output_dim * num_devices]).bfloat16()
+    weights_tensor = torch.randn([1, 1, hidden_dim, matmul_output_dim * num_devices]).bfloat16().float()
     weight_tt = ttnn.as_tensor(
         weights_tensor,
         dtype=input_dtype,
-        layout=ttnn.TILE_LAYOUT,
+        layout=layout,
         device=t3k_mesh_device,
         memory_config=mem_config,
-        mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=3),
+        mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim),
     )
 
     # torch matmul output
-    matmul_output = torch.chunk(torch.matmul(input_tensor, weights_tensor), num_devices, 3)
+    matmul_output = torch.chunk(torch.matmul(input_tensor, weights_tensor), num_devices, dim)
 
     # Configs for ttnn.matmul
+    core_grid = (8, 4)
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        compute_with_storage_grid_size=core_grid,
         in0_block_w=1,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-        per_core_M=max(1, input_shape[2] // 32 // 4),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-        per_core_N=max(1, matmul_output_dim // 32 // 8),  # N / TILE_WIDTH / Grid_Size
+        per_core_M=max(1, input_shape[2] // 32 // core_grid[1]),  # M / TILE_HEIGHT / Grid_Size
+        per_core_N=max(1, matmul_output_dim // 32 // core_grid[0]),  # N / TILE_WIDTH / Grid_Size
         transpose_mcast=False,
         fused_activation=None,  # ttnn.UnaryOpType.SILU,
         fuse_batch=False,
@@ -100,7 +99,7 @@ def run_all_gather_matmul_on_t3000_impl(
             input_tensor_mesh,
             weight_tt,
             dim,
-            (1, 5),
+            (0, 5),
             num_links=num_links,
             memory_config=mem_config,
             program_config=program_config,
@@ -161,7 +160,6 @@ def run_all_gather_matmul_on_t3000_impl(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout, matmul_output_dim",
     [
-        # (8, 1, [1, 1, 32, 512], 3, ttl.tensor.Layout.TILE, 1024),  # https://github.com/tenstorrent/tt-metal/issues/9686
         (
             8,
             1,
@@ -178,14 +176,6 @@ def run_all_gather_matmul_on_t3000_impl(
             ttl.tensor.Layout.TILE,
             1024,
         ),
-        # (
-        #     8,
-        #     1,
-        #     [1, 1, 1024, 1024 * 32],
-        #     3,
-        #     ttl.tensor.Layout.TILE,
-        #     1024,
-        # ),
         (
             8,
             1,
@@ -225,20 +215,19 @@ def run_all_gather_matmul_on_t3000_impl(
     "input_dtype",
     [
         ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B,          # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),  # https://github.com/tenstorrent/tt-metal/issues/9686
     ],
 )
 @pytest.mark.parametrize(
     "enable_async",
     [
         True,
+        False,
     ],
 )
 def test_all_gather_matmul_on_t3000_post_commit(
@@ -265,5 +254,4 @@ def test_all_gather_matmul_on_t3000_post_commit(
         layout,
         matmul_output_dim,
         mem_config,
-        function_level_defaults,
     )
