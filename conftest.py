@@ -573,7 +573,7 @@ def pytest_timeout_set_timer(item, settings):
                 timeout -= 5
                 parent_status = get_parent_status()
             if parent_status != "already dead":
-                logger.info(f"Timing out test case")
+                logger.warning(f"This test seems to have hung... Timing out test case")
                 os.kill(parent_pid, signal.SIGKILL)
             logger.info(f"Killing timer")
             os._exit(1)
