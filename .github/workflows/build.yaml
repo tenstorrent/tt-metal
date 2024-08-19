@@ -15,7 +15,7 @@ jobs:
           # {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
           # {type: Release,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
           # {type: Debug, cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04, os: ubuntu-22.04},
-          {type: RelWithDebInfo,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04, os: ubuntu-22.04},
+          # {type: RelWithDebInfo,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04, os: ubuntu-22.04},
           {type: Release,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04, os: ubuntu-22.04},
         ]
         arch: [grayskull, wormhole_b0, blackhole]
