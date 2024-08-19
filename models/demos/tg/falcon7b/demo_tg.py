@@ -32,7 +32,7 @@ from models.utility_functions import is_wormhole_b0
         "default_mode_1024_stochastic",
     ],
 )
-@pytest.mark.parametrize("async_mode", (True,))  # Option to run Falcon in Async mode
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)  # Option to run Falcon in Async mode
 @pytest.mark.parametrize(
     "device_mesh",
     (
@@ -53,12 +53,11 @@ def test_demo_multichip(
     get_tt_cache_path,
     device_mesh,
     use_program_cache,
-    async_mode,
+    enable_async_mode,
     is_ci_env,
 ):
     assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
-    devices = device_mesh.get_devices()
-    num_devices = len(devices)
+    num_devices = device_mesh.get_num_devices()
 
     if is_ci_env:
         if num_devices != 32 or (not expected_greedy_output_path and not expected_perf_metrics):
@@ -69,9 +68,6 @@ def test_demo_multichip(
             pytest.skip("Skipping test in CI due to Issue #11258")
     elif expected_greedy_output_path or expected_perf_metrics:
         assert num_devices == 32, "32 devices are expected for perf and greedy output verification"
-
-    for device in devices:
-        device.enable_async(async_mode)
 
     batch_size = 32
     if perf_mode:
@@ -90,7 +86,7 @@ def test_demo_multichip(
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        devices=devices,
+        device_mesh=device_mesh,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,
         expected_perf_metrics=expected_perf_metrics,
