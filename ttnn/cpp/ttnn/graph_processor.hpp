@@ -36,6 +36,7 @@ namespace ttnn {
 
     public:
         GraphProcessor(tt::tt_metal::IGraphProcessor::RunMode mode);
+        ~GraphProcessor() override;
 
         void track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) override;
 
@@ -96,6 +97,8 @@ namespace ttnn {
         void end_function_process_optional_tensor(const std::any& any_val);
 
         void track_end_function_impl();
+
+        void clean_hooks();
 
     public:
         static void begin_graph_capture(RunMode mode);

@@ -9,7 +9,6 @@ import torch
 import ttnn
 
 
-@pytest.mark.skip(reason="Graph capture is causing other tests to fail")
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("size", [64])
 @pytest.mark.parametrize("mode", [ttnn.graph.GraphRunMode.FAKE, ttnn.graph.GraphRunMode.REAL])

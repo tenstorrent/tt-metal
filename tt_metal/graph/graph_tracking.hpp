@@ -120,9 +120,11 @@ namespace tt::tt_metal {
 
         const std::vector<std::shared_ptr<IGraphProcessor>>& get_processors() const;
 
-        const std::shared_ptr<IGraphHooks>& get_hooks() const;
+        const std::shared_ptr<IGraphHooks>& get_hook() const;
 
         void clear();
+
+        void clear_hook();
 
        private:
         GraphTracker() = default;

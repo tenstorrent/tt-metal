@@ -427,14 +427,44 @@ namespace ttnn {
             .params = {},
             .connections = {}
         });
-        hooks = std::make_shared<ProcessorHooks>();
-        tt::tt_metal::GraphTracker::instance().add_hook(hooks);
-        hooks->set_block(mode == RunMode::FAKE);
+
+        if (!tt::tt_metal::GraphTracker::instance().get_hook()) {
+            hooks = std::make_shared<ProcessorHooks>();
+            tt::tt_metal::GraphTracker::instance().add_hook(hooks);
+            hooks->set_block(mode == RunMode::FAKE);
+        }
         current_op_id.push(0);
     }
     nlohmann::json GraphProcessor::end_capture() {
         const std::lock_guard<std::mutex> lock(mutex);
+        int counter = graph.size();
+        graph.push_back(Vertex{
+            .counter = 0,
+            .name = "capture_end",
+            .params = {},
+            .connections = {}
+        });
+        if ( last_finished_op_id != -1 ) {
+            graph[last_finished_op_id].connections.push_back(counter);
+        } else {
+            // lets connect capture_start with capture_end
+            // it means we didn't capture any functions
+            graph[0].connections.push_back(counter);
+        }
+        clean_hooks();
         return to_json(graph);
+    }
+
+    void GraphProcessor::clean_hooks() {
+        if (hooks) {
+            /* If we installed hooks then we must clean*/
+            hooks = nullptr;
+            tt::tt_metal::GraphTracker::instance().clear_hook();
+        }
+    }
+
+    GraphProcessor::~GraphProcessor() {
+        clean_hooks();
     }
 
     void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::REAL) {
