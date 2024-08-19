@@ -22,7 +22,7 @@ namespace py = pybind11;
 namespace {
     inline void DumpDeviceProfiler(Device * device, bool last_dump)
     {
-        tt::tt_metal::detail::DumpDeviceProfileResults(device, last_dump);
+        tt::tt_metal::DumpDeviceProfileResults(device, last_dump);
     }
 }
 

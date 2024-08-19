@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
 
         // Run 1
         RunCustomCycle(device, PROFILER_OP_SUPPORT_COUNT);
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        tt_metal::DumpDeviceProfileResults(device);
 
         // Run 2
         RunCustomCycle(device, PROFILER_OP_SUPPORT_COUNT);

@@ -170,8 +170,8 @@ void run(
         tt_metal::Finish(device0->command_queue());
         tt_metal::Finish(device1->command_queue());
     }
-    tt::tt_metal::detail::DumpDeviceProfileResults(device0);
-    tt::tt_metal::detail::DumpDeviceProfileResults(device1);
+    tt::tt_metal::DumpDeviceProfileResults(device0);
+    tt::tt_metal::DumpDeviceProfileResults(device1);
 }
 
 

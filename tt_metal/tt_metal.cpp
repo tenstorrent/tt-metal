@@ -672,7 +672,7 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done,
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
-        DumpDeviceProfileResults(device, program);
+        DumpDeviceProfileResults(device);
     }
 }
 
@@ -690,7 +690,7 @@ void WaitProgramDone(Device *device, Program &program) {
     }
     // Wait for all cores to be done
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
-    DumpDeviceProfileResults(device, program);
+    DumpDeviceProfileResults(device);
 }
 
 bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootloader_mode) {

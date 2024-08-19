@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
         constexpr int device_loop_count = 150;
 
         RunFillUpAllBuffers(device, device_loop_count, USE_FAST_DISPATCH);
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        tt_metal::DumpDeviceProfileResults(device);
 
         pass &= tt_metal::CloseDevice(device);
 

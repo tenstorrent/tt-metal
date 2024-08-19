@@ -44,7 +44,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count)
     );
 
     EnqueueProgram(device->command_queue(), program, false);
-    tt_metal::DumpDeviceProfileResults(device, program);
+    tt_metal::DumpDeviceProfileResults(device);
 
     return pass;
 }

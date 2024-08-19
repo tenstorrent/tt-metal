@@ -224,7 +224,7 @@ int main(int argc, char **argv) {
         auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
         log_info(LogTest, "Total bytes transfered: {} Bytes", total_tiles_size_bytes);
         log_info(LogTest, "Read local to L1: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
-        tt_metal::DumpDeviceProfileResults(device, program);
+        tt_metal::DumpDeviceProfileResults(device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

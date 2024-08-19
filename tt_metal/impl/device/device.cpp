@@ -1974,7 +1974,7 @@ bool Device::close() {
         hw_command_queue->terminate();
     }
     this->work_executor.reset();
-    tt_metal::detail::DumpDeviceProfileResults(this, true);
+    tt_metal::DumpDeviceProfileResults(this, true);
 
     this->trace_buffer_pool_.clear();
     this->EnableAllocs();

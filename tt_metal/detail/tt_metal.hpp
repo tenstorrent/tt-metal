@@ -143,31 +143,6 @@ namespace tt::tt_metal {
 	    void InitDeviceProfiler(Device *device);
 
         /**
-         * Read device side profiler data and dump results into device side CSV log
-         *
-         * Return value: void
-         *
-         * | Argument      | Description                                       | Type                                                         | Valid Range               | Required |
-         * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
-         * | device        | The device holding the program being profiled.    | Device *                                                     |                           | True     |
-         * | core_coords   | The logical core coordinates being profiled.      | const std::unordered_map<CoreType, std::vector<CoreCoord>> & |                           | True     |
-         * | last_dump     | Last dump before process dies                     | bool                                                         |                           | False    |
-         * */
-        void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cores, bool last_dump = false);
-
-        /**
-         * Traverse all cores and read device side profiler data and dump results into device side CSV log
-         *
-         * Return value: void
-         *
-         * | Argument      | Description                                       | Type                                                         | Valid Range               | Required |
-         * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
-         * | device        | The device holding the program being profiled.    | Device *                                                     |                           | True     |
-         * | last_dump     | Last dump before process dies                     | bool                                                         |                           | False    |
-         * */
-        void DumpDeviceProfileResults(Device *device, bool last_dump = false);
-
-        /**
          * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
          *
          * Return value: void

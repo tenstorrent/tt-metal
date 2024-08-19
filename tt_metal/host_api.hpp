@@ -530,18 +530,16 @@ void ReleaseTrace(Device *device, const uint32_t tid);
 void EnqueueTrace(CommandQueue &cq, uint32_t trace_id, bool blocking);
 
 /**
- * Read device side profiler data and dump results into device side CSV log
- *
- * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
+ * Traverse all cores and read device side profiler data and dump results into device side CSV log
  *
  * Return value: void
  *
- * | Argument      | Description                                       | Type            | Valid Range               | Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | Device *        |                           | True     |
- * | program       | The program being profiled.                       | const Program & |                           | True     |
+ * | Argument      | Description                                       | Type | Valid Range               | Required |
+ * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
+ * | device        | The device holding the program being profiled.    | Device * |                           | True |
+ * | last_dump     | Last dump before process dies                     | bool |                           | False    |
  * */
-void DumpDeviceProfileResults(Device *device, const Program &program);
+void DumpDeviceProfileResults(Device *device, bool last_dump = false);
 
 /**
  * Enqueues a command to record an Event on the device for a given CQ, and updates the Event object for the user.
