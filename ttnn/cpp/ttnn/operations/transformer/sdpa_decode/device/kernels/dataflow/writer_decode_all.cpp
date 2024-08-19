@@ -34,10 +34,11 @@ void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
         noc_async_read_barrier();
     }
     else {
-        const uint16_t scalar_val = val>>16;
-        volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
-        for (int k = 0; k < 1024; k++) {
-            ptr[k] = scalar_val;
+        // Fill 2 uint16 datums in each writes to optimize for performance
+        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
+        constexpr int num_uint32_datums_tile = (32 * 32) / 2;
+        for (int k = 0; k < num_uint32_datums_tile; k++) {
+            ptr[k] = val;
         }
     }
 }
@@ -54,31 +55,46 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
         return;
     }
     // DPRINT << "Fill partial tile" << ENDL();
-    const uint16_t scalar_val = partial_val>>16;
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
-    int phase_start = (cur_pos_in_tile < 15) ? 0:1;
-    uint32_t fill_pos_in_phase = (cur_pos_in_tile+1) % 16;
-    // DPRINT << "phase_start: " << phase_start << ENDL();
-    // DPRINT << "fill_pos_in_phase: " << fill_pos_in_phase << ENDL();
-    if (phase_start == 0) {
-        // DPRINT << "Fill second and fourth phase" << ENDL();
+    const uint16_t datum_val = partial_val>>16;
+    volatile tt_l1_ptr uint16_t* uint16_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
+    volatile tt_l1_ptr uint32_t* uint32_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
+    int face_start = (cur_pos_in_tile < 15) ? 0:1;
+    uint32_t fill_pos_in_face = (cur_pos_in_tile+1) % 16;
+    // DPRINT << "face_start: " << face_start << ENDL();
+    // DPRINT << "fill_pos_in_face: " << fill_pos_in_face << ENDL();
+    if (face_start == 0) {
+        // DPRINT << "Fill second and fourth face" << ENDL();
+        // Fill 2 datums in each writes to optimize for performance
+        constexpr int num_uint32_datums_tile_face = (16 * 16) / 2;
         for (int k = 1; k < 4; k+=2) {
-            uint32_t idx = k << 8;
-            // DPRINT << "k: " << k << ENDL();
-            // DPRINT << "idx: " << idx << ENDL();
-            for (int j = 0; j < 256; j++) {
-                ptr[idx + j] = scalar_val;
+            uint32_t uint32_face_idx = k << 7;
+            for (int j = 0; j < num_uint32_datums_tile_face; j++) {
+                uint32_ptr[uint32_face_idx + j] = partial_val;
             }
         }
     }
-    // DPRINT << "Fill phase" << ENDL();
-    for (int k = phase_start; k < 4; k+=2) {
-        uint32_t idx = k << 8;
-        // DPRINT << "k: " << k << ENDL();
-        // DPRINT << "idx: " << idx << ENDL();
-        for (int j_start_pos = fill_pos_in_phase; j_start_pos < 16; j_start_pos++) {
-            for (int j = j_start_pos; j < 256; j+=16) {
-                ptr[idx + j] = scalar_val;
+
+    // Again, optimizing performance by filling 2 uint16 datums in each write.
+    // If the fill_pos_in_face is odd then we fill that pos with single datum,
+    // otherwise we fill 2 datums in each write
+    bool is_odd_pos_filled = fill_pos_in_face % 2 == 1;
+    uint32_t fill_pos_in_uint32_face = (fill_pos_in_face + 1) >> 1;
+    constexpr uint32_t num_cols_in_face = 16;
+    constexpr uint32_t num_rows_in_face = 16;
+    constexpr uint32_t num_cols_in_uint32_face = num_cols_in_face>>1;
+    for (int k = face_start; k < 4; k+=2) {
+        uint32_t uint16_face_idx = k << 8;
+        uint32_t uint32_face_idx = k << 7;
+
+        for (uint32_t face_row_idx = 0; face_row_idx < num_rows_in_face; face_row_idx++) {
+            // Here, if the fill_pos_in_face is odd then we fill that pos with single uint16 value
+            if(is_odd_pos_filled){
+                uint16_ptr[uint16_face_idx + (fill_pos_in_face + num_cols_in_face * face_row_idx)] = datum_val;
+            }
+
+            for (uint32_t uint32_face_col_idx = fill_pos_in_uint32_face; uint32_face_col_idx < num_cols_in_uint32_face; uint32_face_col_idx++) {
+
+                uint32_ptr[uint32_face_idx + (uint32_face_col_idx + num_cols_in_uint32_face * face_row_idx)] = partial_val;
             }
         }
     }
