@@ -528,8 +528,8 @@ all_binary_ops = [
         "name": "ttnn.matmul",
     },
     {
-        "op": tt_lib.tensor.copy,
-        "name": "tt_lib.tensor.copy",
+        "op": ttnn.copy,
+        "name": "ttnn.copy",
     },
     {
         "op": bcast_add_h,
@@ -1282,7 +1282,7 @@ def ttnn_slice(x):
 
 
 def typecast(x):
-    tt_lib.tensor.typecast(x, tt_lib.tensor.DataType.BFLOAT8_B)
+    ttnn.typecast(x, tt_lib.tensor.DataType.BFLOAT8_B)
 
 
 def arange(x):
@@ -1879,18 +1879,21 @@ all_unary_ops = [
     {
         "op": transpose_02,
         "name": "ttnn.transpose_02",
+        "num_repeats": 3,
     },
-    {
-        "op": transpose_03,
-        "name": "ttnn.transpose_03",
-    },
+    # {
+    #     "op": transpose_03,
+    #     "name": "ttnn.transpose_03",
+    # },
     {
         "op": transpose_12,
         "name": "ttnn.transpose_12",
+        "num_repeats": 3,
     },
     {
         "op": transpose_13,
         "name": "ttnn.transpose_13",
+        "num_repeats": 3,
     },
     {
         "op": transpose_23,
@@ -1937,7 +1940,7 @@ all_unary_ops = [
     },
     {
         "op": typecast,
-        "name": "tt_lib.tensor.typecast",
+        "name": "ttnn.typecast",
     },
     {
         "op": arange,
