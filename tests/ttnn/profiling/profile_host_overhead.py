@@ -5,7 +5,6 @@
 import os
 import pytest
 import torch
-import tt_lib
 import ttnn
 import time
 import statistics
@@ -19,17 +18,17 @@ from tracy import signpost
 test_sweep_args = [
     # (
     #     (1, 2, 1024, 1024),
-    #     tt_lib.tensor.DataType.BFLOAT16,
-    #     tt_lib.tensor.Layout.TILE,
-    #     tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    #     tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+    #     ttnn.bfloat16,
+    #     ttnn.TILE_LAYOUT,
+    #     ttnn.DRAM_MEMORY_CONFIG,
+    #     ttnn.DRAM_MEMORY_CONFIG,
     # ),
     (
         (1, 4, 1024, 1024),
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG
     ),
 ]
 
@@ -38,7 +37,7 @@ NUM_REPEATS = 5
 
 
 # def torch2tt_tensor(x, device, dlayout, in_mem_config, dtype):
-#     return tt_lib.tensor.Tensor(x, dtype).pad_to_tile(float("nan")).to(dlayout).to(device, in_mem_config)
+#     return ttnn.Tensor(x, dtype).pad_to_tile(float("nan")).to(dlayout).to(device, in_mem_config)
 
 
 def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
@@ -240,7 +239,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
         logger.info(f"Profiling op {op['name']} for input shape {input_shape}")
 
         if "layout" in op and op["layout"] == "ROW_MAJOR":
-            dlayout = tt_lib.tensor.Layout.ROW_MAJOR
+            dlayout = ttnn.ROW_MAJOR_LAYOUT
 
         num_repeats = op["num_repeats"] if "num_repeats" in op else NUM_REPEATS
         shape_func = None if "shape_func" not in op else op["shape_func"]
