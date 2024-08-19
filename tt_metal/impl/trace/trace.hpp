@@ -11,11 +11,11 @@
 #include <variant>
 
 #include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/trace/trace_buffer.hpp"
 
 namespace tt::tt_metal {
 
+class CommandQueue;
 class Trace {
    private:
     static std::atomic<uint32_t> global_trace_id;

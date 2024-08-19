@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
-
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 namespace ttnn {
 using DeviceBuffer = std::shared_ptr<Buffer>;
 using queue_id = uint8_t;

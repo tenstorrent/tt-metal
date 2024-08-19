@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include "tt_metal/common/core_coord.h"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

@@ -17,6 +17,7 @@
 
 #include "ttnn/deprecated/tt_lib/csrc/tt_lib_bindings.hpp"
 #include "operations/__init__.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 
 namespace py = pybind11;
 

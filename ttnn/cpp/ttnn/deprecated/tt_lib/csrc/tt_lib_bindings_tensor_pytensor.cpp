@@ -10,7 +10,7 @@
 #include "ttnn/run_operation.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-
+#include "tt_metal/impl/dispatch/command_queue.hpp"
 namespace tt::tt_metal::detail {
 
 template <typename T>

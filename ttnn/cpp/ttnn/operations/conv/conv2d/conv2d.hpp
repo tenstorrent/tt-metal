@@ -12,7 +12,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/common/math.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"

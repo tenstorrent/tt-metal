@@ -6,6 +6,7 @@
 #include "tt_metal/impl/device/device_mesh.hpp"
 #include <algorithm>
 #include <stdexcept>
+#include "tt_metal/impl/device/device.hpp"
 
 namespace tt::tt_metal {
 
