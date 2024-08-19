@@ -126,6 +126,9 @@ def run_test_FalconCausalLM_end_to_end(
     if e2e_perf:
         assert expected_inference_time is not None, "Expected inference time is required for e2e perf test"
 
+    if device_perf:  # Enable tracy signpost support in device perf runs only
+        from tracy import signpost
+
     # Clear global profiler state before starting measurements
     if e2e_perf:
         profiler.clear()
@@ -284,6 +287,9 @@ def run_test_FalconCausalLM_end_to_end(
     )
 
     profiler.start(f"model_run_for_inference")
+    if device_perf:
+        signpost("start")  # start device perf measurement
+
     if llm_mode == "prefill":
         tt_outs = []
         # Device transfer time is included in model run time for prefill
@@ -324,6 +330,9 @@ def run_test_FalconCausalLM_end_to_end(
         tt_out = tt_out_tmp
     elif llm_mode == "decode":
         tt_out = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=2).squeeze(1).transpose(0, 1)
+
+    if device_perf:
+        signpost("stop")  # stop device perf measurement
 
     # check outputs ----------------------------------------------------------------------
     does_pass = True
