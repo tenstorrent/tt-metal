@@ -7,7 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "transformers/module.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
@@ -48,9 +47,6 @@ namespace operations {
 namespace primary {
 
 void py_module(py::module& m_primary) {
-    auto m_transformers = m_primary.def_submodule("transformers", "Primary transformers operations");
-    transformers::py_module(m_transformers);
-
     m_primary.def(
         "layernorm_pre_allgather",
         tt::operations::primary::layernorm_pre_allgather,
