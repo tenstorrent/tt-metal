@@ -6,7 +6,7 @@ from transformers import AutoTokenizer, T5Model
 import torch
 import json
 import pytest
-import tt_lib
+import ttnn
 from loguru import logger
 
 from models.utility_functions import (
@@ -74,7 +74,7 @@ def run_perf_t5(expected_inference_time, expected_compile_time, device):
             attention_mask=attention_mask,
             decoder_attention_mask=decoder_attention_mask,
         )
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_model_outputs
 
@@ -87,7 +87,7 @@ def run_perf_t5(expected_inference_time, expected_compile_time, device):
             attention_mask=attention_mask,
             decoder_attention_mask=decoder_attention_mask,
         )
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
         del tt_model_outputs
 

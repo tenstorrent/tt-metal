@@ -5,7 +5,6 @@
 import pytest
 import torch
 import json
-import tt_lib
 from loguru import logger
 
 from transformers import T5Model
