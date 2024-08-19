@@ -38,15 +38,15 @@ void kernel_main() {
     const uint32_t signal_op_sem_addr_dir1 = get_semaphore(get_compile_time_arg_val(14));
     constexpr uint32_t max_buffer_size = get_compile_time_arg_val(15);
 
-    // Compile time args for matmul signal semaphore
-    constexpr uint32_t num_matmul_cores_to_signal = get_compile_time_arg_val(16);
-    const uint32_t matmul_signal_sem_addr = get_semaphore(get_compile_time_arg_val(17));
+    // // Compile time args for matmul signal semaphore
+    // constexpr uint32_t num_matmul_cores_to_signal = get_compile_time_arg_val(16);
+    // const uint32_t matmul_signal_sem_addr = get_semaphore(get_compile_time_arg_val(17));
 
 
     // Runtime args
     const uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(0);
     const uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(1);
-    const uint32_t* matmul_cores_noc_coords = (uint32_t*)get_arg_addr(2); // Matmul core NOC coordinates [x1, y1, x2, y2...]
+    // const uint32_t* matmul_cores_noc_coords = (uint32_t*)get_arg_addr(2); // Matmul core NOC coordinates [x1, y1, x2, y2...]
 
     // Setup buffers
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -165,12 +165,12 @@ void kernel_main() {
 
     }
 
-    // After datacopy, signal matmul to start
-    for (uint32_t i = 0; i < num_matmul_cores_to_signal; i++) {
-        auto& matmul_core_noc_x = matmul_cores_noc_coords[i * 2];
-        auto& matmul_core_noc_y = matmul_cores_noc_coords[i * 2 + 1];
-        auto remote_matmul_signal_sem_addr = get_noc_addr(matmul_core_noc_x, matmul_core_noc_y, matmul_signal_sem_addr);
-        noc_semaphore_inc(remote_matmul_signal_sem_addr, 1);
-    }
+    // // After datacopy, signal matmul to start
+    // for (uint32_t i = 0; i < num_matmul_cores_to_signal; i++) {
+    //     auto& matmul_core_noc_x = matmul_cores_noc_coords[i * 2];
+    //     auto& matmul_core_noc_y = matmul_cores_noc_coords[i * 2 + 1];
+    //     auto remote_matmul_signal_sem_addr = get_noc_addr(matmul_core_noc_x, matmul_core_noc_y, matmul_signal_sem_addr);
+    //     noc_semaphore_inc(remote_matmul_signal_sem_addr, 1);
+    // }
 
 }

@@ -33,7 +33,7 @@ using Tensors = std::vector<Tensor>;
 
 // Used to hold the return values for setup_datacopy
 struct DatacopyParams {
-    std::vector<CoreCoord> datacopy_cores;
+    std::vector<CoreCoord> datacopy_cores_noc;
     std::vector<uint32_t> datacopy_signal_semaphore_ids;
     std::optional<operation::OverrideRuntimeArgumentsCallback<Tensors>> datacopy_override_runtime_arguments_callback;
 };
@@ -50,7 +50,7 @@ DatacopyParams setup_datacopy(
     all_gather_op::Topology topology,
 
     CoreCoord datacopy_core_coord,
-    ttnn::experimental::ccl::MatmulFusedOpSignaler matmul_signal_info
+    ttnn::experimental::ccl::MatmulFusedOpSignaler matmul_fused_op_signaler
 ) {
 
     std::size_t num_edm_buffers_per_channel = 2;
@@ -69,6 +69,10 @@ DatacopyParams setup_datacopy(
     // Select cores for datacopy (single core for now)
     CoreRangeSet datacopy_workers = CoreRangeSet({CoreRange(datacopy_core_coord)});
     std::vector<CoreCoord> all_datacopy_cores = corerange_to_cores(datacopy_workers, std::nullopt, true);
+    std::vector<CoreCoord> all_datacopy_cores_noc;
+    for (auto core : all_datacopy_cores) {
+        all_datacopy_cores_noc.push_back(device->worker_core_from_logical_core(core));
+    }
 
     // Setup semaphores used to signal datacopy. TODO: instead of datacopy, this should be matmul cores
     // Dir0: first half of all gather (clockwise), Dir1: second half of all gather (counter-clockwise)
@@ -112,8 +116,8 @@ DatacopyParams setup_datacopy(
         static_cast<uint32_t>(datacopy_signal_semaphore_id_dir0),
         static_cast<uint32_t>(datacopy_signal_semaphore_id_dir1),
         static_cast<uint32_t>(datacopy_buffer_size),
-        static_cast<uint32_t>(matmul_signal_info.num_matmul_cores_to_signal),
-        static_cast<uint32_t>(matmul_signal_info.matmul_signal_sem_addrs[0])
+        // static_cast<uint32_t>(matmul_fused_op_signaler.num_fused_op_cores_to_signal),
+        // static_cast<uint32_t>(matmul_fused_op_signaler.fused_op_receiver_signal_semaphores[0])
     };
 
     uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -129,11 +133,11 @@ DatacopyParams setup_datacopy(
         static_cast<uint32_t>(datacopy_output_buffer->address()),
     };
 
-    // Push the matmul core NOC coordinates
-    for (auto coord : matmul_signal_info.matmul_cores_noc_coords) {
-        datacopy_rt_args.push_back(coord.x);
-        datacopy_rt_args.push_back(coord.y);
-    }
+    // // Push the matmul core NOC coordinates
+    // for (auto coord : matmul_fused_op_signaler.fused_op_receiver_cores_noc) {
+    //     datacopy_rt_args.push_back(coord.x);
+    //     datacopy_rt_args.push_back(coord.y);
+    // }
 
     std::map<string, string> kernel_defines = {
         {"TILED_LAYOUT", "1"},
@@ -180,7 +184,7 @@ DatacopyParams setup_datacopy(
 
     // Return the core coordinates and semaphore address
     return {
-        .datacopy_cores = all_datacopy_cores,
+        .datacopy_cores_noc = all_datacopy_cores_noc,
         .datacopy_signal_semaphore_ids = {datacopy_signal_semaphore_id_dir0, datacopy_signal_semaphore_id_dir1},
         .datacopy_override_runtime_arguments_callback = override_runtime_arguments_callback
     };
@@ -226,33 +230,53 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
 ) {
     tt::tt_metal::Program program{};
 
-    // Create a matmul signal info object that gets populated by the matmul kernel
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_signal_info = ttnn::experimental::ccl::MatmulFusedOpSignaler();
+    ////////////// Extra setup for all_gather //////////////
 
-    // Matmul
-    auto matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
-        program,
-        datacopy_output_tensor,
-        weight_tensor,
-        bias,
-        matmul_output_tensor,
-        bcast_batch,
-        compute_with_storage_grid_size,
-        compute_kernel_config,
-        in0_block_w,
-        out_subblock_h,
-        out_subblock_w,
-        per_core_M,
-        per_core_N,
-        fuse_batch,
-        transpose_mcast,
-        fused_activation,
-        untilize_out,
-        matmul_signal_info
+    auto tensor_slicer = ttnn::ccl::InterleavedRingAllGatherTensorSlicer (
+        input_tensor,
+        all_gather_output_tensor,
+        dim,
+        ring_index
+    );
+    bool is_clockwise_direction = true;
+
+    ////////////////////////////////////////////////////////
+
+    // Create a matmul signal info object that gets populated by the matmul kernel
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler = ttnn::experimental::ccl::MatmulFusedOpSignaler();
+    matmul_fused_op_signaler->init_all_gather(
+        4, /* num_transfers */ // TODO: Update to be setup properly
+        ring_size,
+        ring_index,
+        tensor_slicer.num_cols,
+        tensor_slicer.output_page_offset,
+        is_clockwise_direction
     );
 
+    // Matmul
+    // auto matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    //     program,
+    //     datacopy_output_tensor,
+    //     weight_tensor,
+    //     bias,
+    //     matmul_output_tensor,
+    //     bcast_batch,
+    //     compute_with_storage_grid_size,
+    //     compute_kernel_config,
+    //     in0_block_w,
+    //     out_subblock_h,
+    //     out_subblock_w,
+    //     per_core_M,
+    //     per_core_N,
+    //     fuse_batch,
+    //     transpose_mcast,
+    //     fused_activation,
+    //     untilize_out,
+    //     matmul_fused_op_signaler
+    // );
+
     DatacopyParams datacopy_params = setup_datacopy(
-        matmul_program_with_callbacks.program,
+        program, // matmul_program_with_callbacks.program,
         input_tensor,
         all_gather_output_tensor,
         datacopy_output_tensor,
@@ -262,15 +286,16 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         ring_index,
         topology,
         {0, 5},
-        matmul_signal_info.value()
+        matmul_fused_op_signaler.value()
     );
     const auto& datacopy_override_runtime_arguments_callback = datacopy_params.datacopy_override_runtime_arguments_callback;
 
-    std::optional<AllGatherFusedOpSignaler> fused_op_signaler = AllGatherFusedOpSignaler(datacopy_params.datacopy_cores, datacopy_params.datacopy_signal_semaphore_ids);
+    std::optional<AllGatherFusedOpSignaler> all_gather_fused_op_signaler = AllGatherFusedOpSignaler();
+    all_gather_fused_op_signaler->init_fused_op(datacopy_params.datacopy_cores_noc, datacopy_params.datacopy_signal_semaphore_ids);
 
     // Pass in the datacopy cores and sempahore address (Using optional arguments)
     operation::ProgramWithCallbacks program_with_callbacks = ttnn::all_gather_multi_core_with_workers_helper(
-        matmul_program_with_callbacks.program,
+        program, // matmul_program_with_callbacks.program,
         input_tensor,
         all_gather_output_tensor,
         dim,
@@ -280,7 +305,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         receiver_device_id,
         sender_device_id,
         topology,
-        fused_op_signaler,
+        all_gather_fused_op_signaler,
         core_grid_offset);
     const auto all_gather_override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback;
 

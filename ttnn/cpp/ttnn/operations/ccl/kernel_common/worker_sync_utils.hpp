@@ -11,13 +11,16 @@
 
 // Called by the master worker to synchronize with the slave workers
 FORCE_INLINE void master_sync_slaves(
-    const uint32_t num_workers_to_sync,
 
     /* Used to get slave worker's sem addrs */
+    const uint32_t num_workers_to_sync,
     const uint32_t* worker_noc_coords,
     const uint32_t worker_sync_sem_addr,
 
-    const uint64_t remote_op_l1_semaphore_addr) {
+    /* Used to signal the remote op */
+    const uint32_t num_fused_op_cores_to_signal,
+    const uint32_t* fused_op_cores_noc_coords,
+    const uint32_t fused_op_sem_addr) {
 
     // Wait for all the slaves to finish their work
     volatile tt_l1_ptr uint32_t* master_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
@@ -25,7 +28,10 @@ FORCE_INLINE void master_sync_slaves(
     // DPRINT << "MASTER SYNCED WITH SLAVES" << ENDL();
 
     // Send signal to op
-    noc_semaphore_inc(remote_op_l1_semaphore_addr, 1);
+    for (uint32_t i = 0; i < num_fused_op_cores_to_signal; i++) {
+        uint64_t remote_fused_op_l1_semaphore_addr = get_noc_addr(fused_op_cores_noc_coords[i * 2], fused_op_cores_noc_coords[i * 2 + 1], fused_op_sem_addr);
+        noc_semaphore_inc(remote_fused_op_l1_semaphore_addr, 1);
+    }
     // DPRINT << "MASTER SIGNALED REMOTE OP" << ENDL();
 
     // Clear the master semaphore, so that it can be used again
@@ -75,7 +81,10 @@ struct OpSignaler {
     uint32_t num_workers_to_sync;
     uint32_t* workers_noc_coords; // Worker NOC coordinates [x1, y1, x2, y2...], first one is for master
     uint32_t worker_sync_sem_addr;
-    uint64_t signal_op_sem_noc_addr;
+
+    uint32_t num_fused_op_cores_to_signal;
+    uint32_t* signal_op_cores_noc_coords;
+    uint32_t signal_op_sem_addr;
     uint32_t curr_worker_is_master;
     bool initialized = false;
 
@@ -92,12 +101,10 @@ struct OpSignaler {
 
         // Runtime args
         this->workers_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2)); // Skip over the number of workers
-        uint32_t op_worker_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t op_worker_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t signal_op_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
 
-        // Get the remote sem addresses to signal the op
-        this->signal_op_sem_noc_addr = get_noc_addr(op_worker_noc_x, op_worker_noc_y, signal_op_sem_addr);
+        this->num_fused_op_cores_to_signal = get_arg_val<uint32_t>(rt_args_idx++);
+        this->signal_op_cores_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_fused_op_cores_to_signal * 2));
+        this->signal_op_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
 
         uint32_t master_worker_noc_x = this->workers_noc_coords[0];
         uint32_t master_worker_noc_y = this->workers_noc_coords[1];
@@ -112,7 +119,15 @@ struct OpSignaler {
         ASSERT(this->initialized);
 
         if (this->curr_worker_is_master) {
-            master_sync_slaves(this->num_workers_to_sync, this->workers_noc_coords, this->worker_sync_sem_addr, this->signal_op_sem_noc_addr);
+            master_sync_slaves(
+                this->num_workers_to_sync,
+                this->workers_noc_coords,
+                this->worker_sync_sem_addr,
+
+                this->num_fused_op_cores_to_signal,
+                this->signal_op_cores_noc_coords,
+                this->signal_op_sem_addr
+            );
         } else {
             slave_sync_master(this->workers_noc_coords, this->worker_sync_sem_addr);
         }

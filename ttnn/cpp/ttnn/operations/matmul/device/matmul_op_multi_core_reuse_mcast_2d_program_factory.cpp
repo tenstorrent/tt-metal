@@ -51,7 +51,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &matmul_signal_info) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
+
+    bool fuse_op = fused_op_signaler.has_value();
+
     TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
     // tt_metal::Program program{};
 
@@ -492,7 +495,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
     }
 
-    if (matmul_signal_info.has_value()) {
+    if (fuse_op) {
         mm_kernel_in0_sender_interleaved_defines["MATMUL_SIGNAL"] = "1";
     }
 
@@ -531,15 +534,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         }
     } else {
 
-        if (matmul_signal_info.has_value()) {
-            auto& matmul_signal_info_struct = matmul_signal_info.value();
-            matmul_signal_info_struct.matmul_signal_sem_addrs.push_back(
-                CreateSemaphore(program, in0_sender_interleaved, 0)
-            );
-
-            // Push back the all gather signal semaphore
-            in0_sender_compile_time_args.push_back((std::uint32_t)matmul_signal_info_struct.matmul_signal_sem_addrs[0]);
+        if (fuse_op) {
+            // Create semaphores
+            fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
+            fused_op_signaler->emit_matmul_fused_op_ct_args(in0_sender_compile_time_args);
         }
+
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
@@ -822,16 +822,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             in0_receiver_in1_receiver_interleaved_other_cores.value().start_coord,
             in0_receiver_in1_receiver_interleaved_other_cores.value().end_coord,
             true);
-    }
-
-    // Add the matmul core noc coords
-    if (matmul_signal_info.has_value()) {
-        auto& matmul_signal_info_struct = matmul_signal_info.value();
-
-        matmul_signal_info_struct.num_matmul_cores_to_signal = in0_sender_interleaved_cores.size();
-        for (auto& core : in0_sender_interleaved_cores) {
-            matmul_signal_info_struct.matmul_cores_noc_coords.push_back(device->worker_core_from_logical_core(core));
-        }
     }
 
     for (const auto& core : cores) {
@@ -1241,7 +1231,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &matmul_signal_info) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // CB dataformats
@@ -1388,7 +1378,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
         bias_data_format,
         output_data_format,
         untilize_out,
-        matmul_signal_info);
+        fused_op_signaler);
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
@@ -1410,7 +1400,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     bool untilize_out) {
 
     tt_metal::Program program{}; /* Create a program */
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_matmul_signal_info;
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
 
     return matmul_multi_core_reuse_mcast_2d_optimized_(
         program,
@@ -1430,7 +1420,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
         transpose_mcast,
         fused_activation,
         untilize_out,
-        empty_matmul_signal_info);
+        empty_fused_op_signaler);
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
@@ -1451,7 +1441,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helpe
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &matmul_signal_info) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
     return matmul_multi_core_reuse_mcast_2d_optimized_(
         program,
         a,
@@ -1470,7 +1460,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helpe
         transpose_mcast,
         fused_activation,
         untilize_out,
-        matmul_signal_info);
+        fused_op_signaler);
 }
 
 }  // namespace matmul
