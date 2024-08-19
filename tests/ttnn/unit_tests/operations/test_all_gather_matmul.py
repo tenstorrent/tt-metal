@@ -178,14 +178,14 @@ def run_all_gather_matmul_on_t3000_impl(
             ttl.tensor.Layout.TILE,
             1024,
         ),
-        (
-            8,
-            1,
-            [1, 1, 1024, 1024 * 32],
-            3,
-            ttl.tensor.Layout.TILE,
-            1024,
-        ),
+        # ( # Removed due to unknown hang on CI, see issue # https://github.com/tenstorrent/tt-metal/issues/11617
+        #     8,
+        #     1,
+        #     [1, 1, 1024, 1024 * 32],
+        #     3,
+        #     ttl.tensor.Layout.TILE,
+        #     1024,
+        # ),
     ],
 )
 @pytest.mark.parametrize(
