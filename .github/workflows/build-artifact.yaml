@@ -67,7 +67,6 @@ jobs:
       - name: Re-generate CMake project
         run: nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
       - name: Build tt-metal and libs
-        if: ${{ steps.cache-build-artifacts.outputs.cache-hit != 'true' }}
         run: nice -n 19 cmake --build build --target tests
       - name: Install libs
         run: nice -n 19 cmake --build build --target install
