@@ -1103,7 +1103,7 @@ bool process_cmd(uint32_t& cmd_ptr,
                  uint32_t& downstream_data_ptr,
                  uint32_t& stride) {
 
-    DeviceZoneScopedND("PROCESS-CMD", block_noc_writes_to_clear, rd_block_idx );
+    // DeviceZoneScopedND("PROCESS-CMD", block_noc_writes_to_clear, rd_block_idx );
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
     bool done = false;
 
