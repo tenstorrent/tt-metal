@@ -21,7 +21,7 @@ on:
       arch:
         required: false
         type: string
-        default: '["grayskull", "wormhole_b0"]'
+        default: '["wormhole_b0"]'
       build-type:
         required: false
         type: choice
@@ -30,6 +30,7 @@ on:
           - Debug
           - RelWithDebInfo
           - CI
+        default: "Release"
       tracy:
         required: false
         type: boolean
@@ -63,11 +64,11 @@ jobs:
         with:
           path: build/
           key: build-${{ inputs.build-type }}-${{ matrix.arch }}-${{ inputs.tracy && 'tracy' || 'notracy' }}-${{ github.sha }}
+      - name: Re-generate CMake project
+        run: nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
       - name: Build tt-metal and libs
         if: ${{ steps.cache-build-artifacts.outputs.cache-hit != 'true' }}
-        run: |
-          nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
-          nice -n 19 cmake --build build --target tests
+        run: nice -n 19 cmake --build build --target tests
       - name: Install libs
         run: nice -n 19 cmake --build build --target install
       - name: 'Tar files'
