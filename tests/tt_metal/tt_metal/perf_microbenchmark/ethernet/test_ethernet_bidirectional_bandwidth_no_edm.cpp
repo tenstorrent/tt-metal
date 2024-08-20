@@ -74,7 +74,7 @@ struct ChipSenderReceiverEthCore {
     CoreCoord receiver_core;
 };
 
-std::tuple<Program,Program> build(
+std::tuple<Program *, Program *> build(
     Device *device0,
     Device *device1,
     CoreCoord eth_sender_core,
@@ -85,8 +85,8 @@ std::tuple<Program,Program> build(
     KernelHandle &local_kernel,
     KernelHandle &remote_kernel
 ) {
-    Program *program0;
-    Program *program1;
+    Program *program0 = tt_metal::CreateProgram();
+    Program *program1 = tt_metal::CreateProgram();
 
     std::vector<uint32_t> const& ct_args = {};
     constexpr std::size_t num_links = 0;
@@ -127,7 +127,7 @@ std::tuple<Program,Program> build(
         throw e;
     }
 
-    return std::tuple<Program,Program>{std::move(program0),std::move(program1)};
+    return std::tuple<Program *, Program *>{std::move(program0),std::move(program1)};
 }
 
 void run(

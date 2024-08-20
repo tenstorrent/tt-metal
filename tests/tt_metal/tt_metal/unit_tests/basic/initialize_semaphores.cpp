@@ -10,6 +10,7 @@
 
 #include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/api_backdoor.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
@@ -92,7 +93,7 @@ void create_and_read_max_num_semaphores(
 
 void try_creating_more_than_max_num_semaphores(
     tt_metal::Device *device, tt_metal::Program *program, const CoreRange &core_range) {
-    ASSERT_TRUE(program.num_semaphores() == 0);
+    ASSERT_TRUE(detail::GetMetalProgram(program)->num_semaphores() == 0);
     create_and_read_max_num_semaphores(device, program, core_range);
     constexpr static uint32_t val = 5;
     ASSERT_ANY_THROW(tt_metal::CreateSemaphore(program, core_range, val));

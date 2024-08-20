@@ -126,7 +126,7 @@ void prepare_inputs(
     std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
     std::vector<std::vector<float>>& in1_bfp8_unpack_slice);
 
-tt_metal::Program create_program_single_core (
+tt_metal::Program *create_program_single_core (
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -147,7 +147,7 @@ tt_metal::Program create_program_single_core (
     uint32_t interm_cb_dtype
 );
 
-tt_metal::Program create_program(
+tt_metal::Program *create_program(
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -832,7 +832,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
     return {in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr};
 }
 
-tt_metal::Program create_program_single_core (
+tt_metal::Program *create_program_single_core (
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -1041,7 +1041,7 @@ tt_metal::Program create_program_single_core (
 }
 
 
-tt_metal::Program create_program(
+tt_metal::Program *create_program(
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,

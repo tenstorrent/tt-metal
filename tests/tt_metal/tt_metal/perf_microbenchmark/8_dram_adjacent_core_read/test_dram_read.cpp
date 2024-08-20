@@ -73,7 +73,7 @@ void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t tile_size, uin
     num_pages = total_size / page_size;
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
+std::tuple<tt_metal::Program *, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_cores,
     const uint32_t &single_tile_size,

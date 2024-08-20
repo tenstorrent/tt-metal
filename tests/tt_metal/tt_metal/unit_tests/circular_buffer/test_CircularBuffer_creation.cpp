@@ -6,6 +6,7 @@
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/api_backdoor.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 
@@ -22,7 +23,7 @@ bool test_cb_config_written_to_core(Program *program, Device *device, const Core
     vector<uint32_t> cb_config_vector;
     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
-    for (const auto cb: program.circular_buffers()) {
+    for (const auto cb: detail::GetMetalProgram(program)->circular_buffers()) {
         for (const CoreRange &core_range : cb->core_ranges().ranges()) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {

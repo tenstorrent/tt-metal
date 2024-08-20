@@ -11,6 +11,7 @@
 #include "tt_metal/llrt/tt_memory.h"
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/api_backdoor.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "llrt/hal.hpp"
@@ -137,13 +138,13 @@ int main(int argc, char **argv) {
             ////////////////////////////////////////////////////////////////////////////
             // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
             uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-            const KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
+            const KernelGroup* kernel_group = tt_metal::detail::GetMetalProgram(program)->kernels_on_core(core, programmable_core_index);
             TT_FATAL(
                 kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
                 kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value());
-            auto compute_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-            auto riscv0_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-            auto riscv1_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+            auto compute_kernel = tt_metal::detail::GetMetalProgram(program)->get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
+            auto riscv0_kernel = tt_metal::detail::GetMetalProgram(program)->get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
+            auto riscv1_kernel = tt_metal::detail::GetMetalProgram(program)->get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
 
             // Run iteration to get golden
             uint32_t mask = device->build_key();
@@ -166,7 +167,7 @@ int main(int argc, char **argv) {
             }
             tt_metal::ClearKernelCache();
             for (auto& program : programs) {
-                program.invalidate_compile();
+                tt_metal::detail::GetMetalProgram(program)->invalidate_compile();
             }
             std::vector<std::thread> ths;
             ths.reserve(num_devices);
@@ -178,10 +179,10 @@ int main(int argc, char **argv) {
                         uint32_t mask = device->build_key();
                         tt_metal::detail::CompileProgram(device, program);
                         uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-                        const KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
-                        auto compute_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-                        auto riscv0_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-                        auto riscv1_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+                        const KernelGroup* kernel_group = tt_metal::detail::GetMetalProgram(program)->kernels_on_core(core, programmable_core_index);
+                        auto compute_kernel = tt_metal::detail::GetMetalProgram(program)->get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
+                        auto riscv0_kernel = tt_metal::detail::GetMetalProgram(program)->get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
+                        auto riscv1_kernel = tt_metal::detail::GetMetalProgram(program)->get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
                         TT_FATAL(compute_kernel->binaries(mask) == compute_binaries.at(mask));
                         TT_FATAL(riscv0_kernel->binaries(mask) == brisc_binaries.at(mask));
                         TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask));

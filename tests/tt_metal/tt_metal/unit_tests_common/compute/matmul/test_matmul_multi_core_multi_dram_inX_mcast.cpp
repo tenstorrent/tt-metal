@@ -21,7 +21,7 @@ using namespace tt;
 namespace unit_tests_common::matmul::test_matmul_multi_core_multi_dram_inX_mcast {
 
 std::
-    tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle, uint32_t, uint32_t>
+    tuple<tt_metal::Program *, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle, uint32_t, uint32_t>
     create_program(
         tt_metal::Device *device,
         int start_core_x,

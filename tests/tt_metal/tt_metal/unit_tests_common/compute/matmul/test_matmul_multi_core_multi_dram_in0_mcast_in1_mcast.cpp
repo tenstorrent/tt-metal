@@ -20,7 +20,7 @@ using namespace tt;
 namespace unit_tests_common::matmul::test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast {
 
 std::tuple<
-    tt_metal::Program,
+    tt_metal::Program *,
     tt_metal::KernelHandle,
     tt_metal::KernelHandle,
     tt_metal::KernelHandle,

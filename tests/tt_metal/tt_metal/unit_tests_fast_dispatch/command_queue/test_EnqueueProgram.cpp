@@ -12,6 +12,7 @@
 #include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/api_backdoor.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 
 using namespace tt::tt_metal;
@@ -601,7 +602,7 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
         default: TT_THROW("Unsupported {} processor in test.", riscv);
     }
 
-    const auto kernel = program.get_kernel(kernel_id);
+    const auto kernel = detail::GetMetalProgram(program)->get_kernel(kernel_id);
 
     // Unique Runtime Args.
     std::vector<uint32_t> unique_runtime_args;
@@ -1240,7 +1241,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
-    vector<Program> programs;
+    vector<Program *> programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         programs.push_back(CreateProgram());
         Program* program = programs.back();

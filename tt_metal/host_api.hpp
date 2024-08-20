@@ -263,7 +263,7 @@ void DeallocateBuffer(Buffer &buffer);
 *  | buffer   | The buffer that will be owned by the program | std::shared_ptr<Buffer> buffer |             | Yes      |
 *  | program  | The program getting ownership of the buffer  | std::shared_ptr<Buffer> buffer |             | Yes      |
 */
-void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program);
+void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program *program);
 
 // ==================================================
 //           COMPILE & EXECUTE KENRNELS

@@ -9,6 +9,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/api_backdoor.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/buffers/semaphore.hpp"
@@ -26,8 +27,8 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program *program, 
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
-                for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-                    auto kernel = program.get_kernel(kernel_id);
+                for (size_t kernel_id = 0; kernel_id < tt_metal::detail::GetMetalProgram(program)->num_kernels(); kernel_id++) {
+                    auto kernel = tt_metal::detail::GetMetalProgram(program)->get_kernel(kernel_id);
                     TT_FATAL(kernel->is_on_logical_core(logical_core));
                     // Check that compute kernel compile time args are mapped to the correct cores
                     if (kernel->processor() == tt::RISCV::COMPUTE) {
@@ -35,10 +36,10 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program *program, 
                         TT_FATAL(kernel_compile_time_args == compute_kernel_args);
                     }
                 }
-                for (auto cb : program.circular_buffers()) {
+                for (auto cb : tt_metal::detail::GetMetalProgram(program)->circular_buffers()) {
                     TT_FATAL(cb->is_on_logical_core(logical_core));
                 }
-                for (auto semaphore : program.semaphores() ){
+                for (auto semaphore : tt_metal::detail::GetMetalProgram(program)->semaphores() ){
                     TT_FATAL(semaphore.initialized_on_logical_core(logical_core));
                 }
             }

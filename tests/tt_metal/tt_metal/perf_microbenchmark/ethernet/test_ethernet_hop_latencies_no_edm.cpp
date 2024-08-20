@@ -167,7 +167,7 @@ void build_and_run_roundtrip_latency_test(
     std::size_t max_concurrent_samples,
     std::size_t n_hops,
 
-    std::vector<Program> &programs,
+    std::vector<Program *> &programs,
     std::vector<KernelHandle> &receiver_kernel_ids,
     std::vector<KernelHandle> &sender_kernel_ids
 ) {
@@ -183,8 +183,8 @@ void build_and_run_roundtrip_latency_test(
     std::unordered_map<Device*,Program*> device_program_map;
     for (std::size_t i = 0; i < n_hops; i++) {
         if (device_program_map.find(devices.at(i)) == device_program_map.end()) {
-            programs.emplace_back();
-            device_program_map[devices.at(i)] = &programs.back();
+            programs.push_back(tt::tt_metal::CreateProgram());
+            device_program_map[devices.at(i)] = programs.back();
         }
     }
 
@@ -193,7 +193,7 @@ void build_and_run_roundtrip_latency_test(
     for (std::size_t i = 0; i < n_hops; i++) {
         auto previous_hop = i == 0 ? n_hops - 1 : i - 1;
         Device *device = devices.at(i);
-        auto &program = *device_program_map.at(device);
+        auto &program = device_program_map.at(device);
         auto const& eth_sender_core = hop_eth_sockets.at(i).sender_core;
         auto const& eth_receiver_core = hop_eth_sockets.at(previous_hop).receiver_core;
 
@@ -293,7 +293,7 @@ void build_and_run_roundtrip_latency_test(
     }
 
     for (auto [device_ptr, program_ptr] : device_program_map) {
-        tt_metal::EnqueueProgram(device_ptr->command_queue(), *program_ptr, false);
+        tt_metal::EnqueueProgram(device_ptr->command_queue(), program_ptr, false);
     }
 
     for (auto [device_ptr, program_ptr] : device_program_map) {
@@ -456,7 +456,7 @@ int main (int argc, char** argv) {
                     for (auto sample_page_size : page_sizes) {
                         log_trace(tt::LogTest, "Running test with num_devices={}, num_samples={}, sample_page_size={}, max_concurrent_samples={}, n_hops={}",
                             n_hops, num_samples, sample_page_size, max_concurrent_samples, n_hops);
-                        std::vector<Program> programs = {};
+                        std::vector<Program *> programs = {};
                         std::vector<KernelHandle> receiver_kernel_ids;
                         std::vector<KernelHandle> sender_kernel_ids;
                         tt::tt_metal::build_and_run_roundtrip_latency_test(

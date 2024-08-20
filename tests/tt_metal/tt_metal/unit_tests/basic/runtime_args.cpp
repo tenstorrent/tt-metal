@@ -11,6 +11,7 @@
 #include "device_fixture.hpp"
 
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/api_backdoor.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 
@@ -48,7 +49,7 @@ uint32_t get_runtime_arg_addr(tt::RISCV processor, bool is_common) {
     return result_base + offset;
 };
 
-Program initialize_program_data_movement(Device *device, const CoreRangeSet &core_range_set) {
+Program *initialize_program_data_movement(Device *device, const CoreRangeSet &core_range_set) {
     Program *program = tt_metal::CreateProgram();
 
     auto add_two_ints_kernel = tt_metal::CreateKernel(
@@ -62,7 +63,7 @@ Program initialize_program_data_movement(Device *device, const CoreRangeSet &cor
     return program;
 }
 
-Program initialize_program_data_movement_rta(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args,
+Program *initialize_program_data_movement_rta(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args,
                                              bool common_rtas = false) {
     Program *program = tt_metal::CreateProgram();
 
@@ -85,7 +86,7 @@ Program initialize_program_data_movement_rta(Device *device, const CoreRangeSet 
     return program;
 }
 
-Program initialize_program_compute(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args, uint32_t num_common_rt_args) {
+Program *initialize_program_compute(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args, uint32_t num_common_rt_args) {
     Program *program = tt_metal::CreateProgram();
 
     // Tell kernel how many unique and common RT args to expect. Will increment each.
@@ -127,14 +128,14 @@ bool verify_results(
     bool are_args_incremented, Device *device, const Program *program, const std::map<CoreCoord, std::vector<uint32_t>> &core_to_rt_args, const std::vector<uint32_t> &common_rt_args = {}) {
 
     bool pass = true;
-    EXPECT_TRUE(program.num_kernels() == 1);
+    EXPECT_TRUE(detail::GetMetalProgram(program)->num_kernels() == 1);
 
     // These increment amounts model what is done by compute kernel in this test.
     uint32_t unique_arg_incr_val = are_args_incremented ? 10 : 0;
     uint32_t common_arg_incr_val = are_args_incremented ? 100 : 0;
 
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        const auto kernel = program.get_kernel(kernel_id);
+    for (size_t kernel_id = 0; kernel_id < detail::GetMetalProgram(program)->num_kernels(); kernel_id++) {
+        const auto kernel = detail::GetMetalProgram(program)->get_kernel(kernel_id);
         auto rt_args_base_addr = get_runtime_arg_addr(kernel->processor(), false);
 
         // Verify Unique RT Args (per core)
@@ -175,7 +176,7 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsDataMovement) {
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set({first_core_range, second_core_range});
         auto program = unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 2);
-        ASSERT_TRUE(program.num_kernels() == 1);
+        ASSERT_TRUE(detail::GetMetalProgram(program)->num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
 
@@ -383,7 +384,7 @@ TEST_F(DeviceFixture, IllegallyModifyRTArgs) {
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set({first_core_range, second_core_range});
         auto program = unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 2);
-        ASSERT_TRUE(program.num_kernels() == 1);
+        ASSERT_TRUE(detail::GetMetalProgram(program)->num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
 

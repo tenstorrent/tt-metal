@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/api_backdoor.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -124,6 +125,10 @@ inline void SetRuntimeArgs(
 // #define DEBUG_PRINT_SHARD
 
 namespace detail {
+
+MetalProgram *GetMetalProgram(const Program *program) {
+    return program->metal_program;
+}
 
 bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer)
 {

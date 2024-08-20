@@ -12,6 +12,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/api_backdoor.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
@@ -159,13 +160,13 @@ bool flatten(Device *device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5)
 
         SetRuntimeArgs(
             device,
-            program.get_kernel(flatten_kernel),
+            detail::GetMetalProgram(program)->get_kernel(flatten_kernel),
             core,
             compute_runtime_args);
 
         SetRuntimeArgs(
             device,
-            program.get_kernel(unary_writer_kernel),
+            detail::GetMetalProgram(program)->get_kernel(unary_writer_kernel),
             core,
             writer_runtime_args);
         // Async write input
@@ -308,7 +309,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncCBAllocation) {
         .set_page_size(buffer_indices[1], page_size);
     // Asynchronously assign the L1 Buffer to the CB
     auto multi_core_cb = CreateCircularBuffer(program, cr_set, config1);
-    auto cb_ptr = program.get_circular_buffer(multi_core_cb);
+    auto cb_ptr = detail::GetMetalProgram(program)->get_circular_buffer(multi_core_cb);
     Finish(this->device_->command_queue());
     // Addresses should match
     EXPECT_EQ(cb_ptr->address(), l1_buffer->address());

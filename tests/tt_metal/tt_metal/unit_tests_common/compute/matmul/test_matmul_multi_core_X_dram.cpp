@@ -26,7 +26,7 @@ struct MatmulConfig{
     std::string writer_kernel;
 };
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> create_program(
+std::tuple<tt_metal::Program *, tt_metal::KernelHandle , tt_metal::KernelHandle> create_program(
     tt_metal::Device *device,
     const MatmulConfig &cfg,
     int num_cores_r, int num_cores_c,

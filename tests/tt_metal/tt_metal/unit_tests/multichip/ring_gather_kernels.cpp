@@ -183,7 +183,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     std::vector<std::vector<uint32_t>> inputs;
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
-    std::map<chip_id_t, tt_metal::Program> programs;
+    std::map<chip_id_t, tt_metal::Program *> programs;
     std::vector<uint32_t> full_input;
     full_input.reserve(numel * sender_receivers.size());
 
@@ -196,6 +196,10 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         //                      Sender Device
         ////////////////////////////////////////////////////////////////////////////
         const auto& [sender_device, receiver_device, eth_sender_core, eth_receiver_core] = sender_receivers[i];
+        if (programs.find(sender_device->id()) == programs.end())
+            programs[sender_device->id()] = tt_metal::CreateProgram();
+        if (programs.find(receiver_device->id()) == programs.end())
+            programs[receiver_device->id()] = tt_metal::CreateProgram();
         auto& sender_program = programs[sender_device->id()];
         auto& receiver_program = programs[receiver_device->id()];
         CoreCoord sender_receiver_core;
@@ -327,7 +331,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     std::vector<std::vector<uint32_t>> inputs;
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
-    std::map<chip_id_t, tt_metal::Program> programs;
+    std::map<chip_id_t, tt_metal::Program *> programs;
     std::vector<uint32_t> full_input;
     full_input.reserve(numel * sender_receivers.size());
 
@@ -350,6 +354,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             }
         }
 
+        if (programs.find(device->id()) == programs.end())
+            programs[device->id()] = tt_metal::CreateProgram();
         auto& program = programs[device->id()];
 
         auto input_buffer =

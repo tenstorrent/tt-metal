@@ -51,7 +51,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
 template <typename T>
 std::vector<T> slice_vec(std::vector<T> const &v, int m, int n);
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
+std::tuple<tt_metal::Program *, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_cores,
     const uint32_t &num_reqs_at_a_time,
@@ -361,7 +361,7 @@ std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     return vec;
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
+std::tuple<tt_metal::Program *, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_cores,
     const uint32_t &num_reqs_at_a_time,

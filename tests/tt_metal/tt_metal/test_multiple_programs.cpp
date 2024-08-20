@@ -35,7 +35,7 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type){
 }
 
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_one(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
+std::tuple<tt_metal::Program *, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_one(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
     tt_metal::Program *program = tt_metal::CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -88,7 +88,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
     return {program, binary_reader_kernel, unary_writer_kernel};
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_two(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
+std::tuple<tt_metal::Program *, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_two(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
     tt_metal::Program *program = tt_metal::CreateProgram();
 
     uint32_t src0_cb_index = 0;
