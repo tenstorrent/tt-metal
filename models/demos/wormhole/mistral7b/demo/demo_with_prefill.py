@@ -263,6 +263,9 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
                 k_cache, v_cache = layer.attention.layer_past_list[0]
                 k_cache = k_cache * 0
                 v_cache = v_cache * 0
+                # Deallocation is necessary to avoid memory leaks and running out of L1 in later batches
+                layer.attention.layer_past_list[0][0].deallocate(True)
+                layer.attention.layer_past_list[0][1].deallocate(True)
                 layer.attention.layer_past_list[0] = [k_cache, v_cache]
 
         if prefill_seq_len > 0:
