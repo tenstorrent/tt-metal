@@ -45,7 +45,9 @@ BENCHMARK_ENVIRONMENT_CSV_FIELDS = (
     "git_repo_name",
     "git_commit_hash",
     "git_commit_ts",
+    "git_branch_name",
     "github_pipeline_id",
+    "github_pipeline_link",
     "github_job_id",
     "user_name",
     "docker_image",
@@ -328,8 +330,13 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
     logger.warning("Hardcoded null for git_commit_ts")
     git_commit_ts = ""
 
+    assert "GITHUB_REF_NAME" in os.environ
+    git_branch_name = os.environ["GITHUB_REF_NAME"]
+
     assert "GITHUB_RUN_ID" in os.environ
     github_pipeline_id = os.environ["GITHUB_RUN_ID"]
+
+    github_pipeline_link = f"https://github.com/{git_repo_name}/actions/runs/{github_pipeline_id}"
 
     logger.warning("Hardcoded null for github_job_id")
     github_job_id = ""
@@ -364,7 +371,9 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
         "git_repo_name": git_repo_name,
         "git_commit_hash": git_commit_hash,
         "git_commit_ts": git_commit_ts,
+        "git_branch_name": git_branch_name,
         "github_pipeline_id": github_pipeline_id,
+        "github_pipeline_link": github_pipeline_link,
         "github_job_id": github_job_id,
         "user_name": user_name,
         "docker_image": docker_image,
