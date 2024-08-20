@@ -218,12 +218,11 @@ inline void log_operation(
         tt::log_debug(tt::LogOp, "Attributes:");
         reflect::for_each(
             [&operation_attributes](auto I) {
-                // this didnt resolve all issues
-                    tt::log_debug(
-                        tt::LogOp,
-                        "\t{} = {}",
-                        reflect::member_name<I>(operation_attributes),
-                        reflect::get<I>(operation_attributes));
+                tt::log_debug(
+                    tt::LogOp,
+                    "\t{} = {}",
+                    reflect::member_name<I>(operation_attributes),
+                    reflect::get<I>(operation_attributes));
             },
             operation_attributes);
     }
