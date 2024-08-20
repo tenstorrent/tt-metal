@@ -170,7 +170,7 @@ namespace ttnn {
     }
 
     void GraphProcessor::track_program(tt::tt_metal::Program* program) {
-        if (run_mode == RunMode::REAL) {
+        if (run_mode == RunMode::NORMAL) {
             // we will track real buffer allocations during program run
             return;
         }
@@ -427,17 +427,48 @@ namespace ttnn {
             .params = {},
             .connections = {}
         });
-        hooks = std::make_shared<ProcessorHooks>();
-        tt::tt_metal::GraphTracker::instance().add_hook(hooks);
-        hooks->set_block(mode == RunMode::FAKE);
+
+        if (!tt::tt_metal::GraphTracker::instance().get_hook()) {
+            hook = std::make_shared<ProcessorHooks>();
+            tt::tt_metal::GraphTracker::instance().add_hook(hook);
+            hook->set_block(mode == RunMode::NO_DISPATCH);
+        }
         current_op_id.push(0);
     }
     nlohmann::json GraphProcessor::end_capture() {
         const std::lock_guard<std::mutex> lock(mutex);
+        int counter = graph.size();
+        graph.push_back(Vertex{
+            .counter = 0,
+            .name = "capture_end",
+            .params = {},
+            .connections = {}
+        });
+        if ( last_finished_op_id != -1 ) {
+            graph[last_finished_op_id].connections.push_back(counter);
+        } else {
+            // lets connect capture_start with capture_end
+            // it means we didn't capture any functions
+            TT_ASSERT(current_op_id.size(), "Graph size cannot be 0. This means that track_end_function was called more than begin.");
+            graph[0].connections.push_back(counter);
+        }
+        clean_hook();
         return to_json(graph);
     }
 
-    void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::REAL) {
+    void GraphProcessor::clean_hook() {
+        if (hook) {
+            // If we installed hooks then we must clean
+            hook = nullptr;
+            tt::tt_metal::GraphTracker::instance().clear_hook();
+        }
+    }
+
+    GraphProcessor::~GraphProcessor() {
+        clean_hook();
+    }
+
+    void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::NORMAL) {
         tt::tt_metal::GraphTracker::instance().push_processor(std::make_shared<GraphProcessor>(mode));
 
     }

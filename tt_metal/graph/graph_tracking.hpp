@@ -18,8 +18,8 @@ namespace tt::tt_metal {
     class IGraphProcessor{
     public:
         enum class RunMode {
-            REAL,
-            FAKE
+            NORMAL, // running everything as is
+            NO_DISPATCH // don't do memory allocations and program runs.
         };
 
         IGraphProcessor() = default;
@@ -120,9 +120,11 @@ namespace tt::tt_metal {
 
         const std::vector<std::shared_ptr<IGraphProcessor>>& get_processors() const;
 
-        const std::shared_ptr<IGraphHooks>& get_hooks() const;
+        const std::shared_ptr<IGraphHooks>& get_hook() const;
 
         void clear();
+
+        void clear_hook();
 
        private:
         GraphTracker() = default;

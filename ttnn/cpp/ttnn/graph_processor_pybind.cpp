@@ -9,9 +9,9 @@ namespace ttnn {
     namespace py = pybind11;
     using IGraphProcessor = tt::tt_metal::IGraphProcessor;
     void py_graph_module(py::module& m) {
-        py::enum_<IGraphProcessor::RunMode>(m, "GraphRunMode")
-        .value("FAKE", IGraphProcessor::RunMode::FAKE)
-        .value("REAL", IGraphProcessor::RunMode::REAL);
+        py::enum_<IGraphProcessor::RunMode>(m, "RunMode")
+        .value("NORMAL", IGraphProcessor::RunMode::NORMAL)
+        .value("NO_DISPATCH", IGraphProcessor::RunMode::NO_DISPATCH);
         auto doc_begin =
             R"doc(begin_graph_capture()
         )doc";
@@ -21,7 +21,7 @@ namespace ttnn {
         )doc";
 
         m.def("begin_graph_capture", &GraphProcessor::begin_graph_capture, doc_begin,
-        py::arg("run_mode") = IGraphProcessor::RunMode::REAL
+        py::arg("run_mode") = IGraphProcessor::RunMode::NORMAL
         );
         m.def(
             "end_graph_capture",

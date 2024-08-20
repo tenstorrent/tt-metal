@@ -542,7 +542,7 @@ class Operation:
                 if ttnn.CONFIG.enable_comparison_mode:
                     decorated_function = comparison_decorator(decorated_function)
 
-                ttnn.graph.begin_graph_capture(ttnn.graph.GraphRunMode.REAL)
+                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
                 output = decorated_function(*function_args, **function_kwargs)
                 graph_capture = ttnn.graph.end_graph_capture()
 
