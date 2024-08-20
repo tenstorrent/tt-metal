@@ -16,21 +16,18 @@ import torch
 
 from torchvision import transforms, datasets
 from loguru import logger
-import tt_lib
+import ttnn
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.experimental.mnist.tt.mnist_model import mnist_model
 
 
 def test_mnist_inference(model_location_generator):
-    device = tt_lib.device.CreateDevice(0)
-
+    device = ttnn.open_device(0)
 
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
-    test_dataset = datasets.MNIST(
-        root="./data", train=False, transform=None, download=True
-    )
+    test_dataset = datasets.MNIST(root="./data", train=False, transform=None, download=True)
 
     # Load model
     tt_model, _ = mnist_model(device, model_location_generator)
@@ -43,13 +40,11 @@ def test_mnist_inference(model_location_generator):
         logger.info(f"Input image saved to {input_img_path}")
 
         test_input = transforms.ToTensor()(input_img)
-        test_input = torch2tt_tensor(
-            test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        test_input = torch2tt_tensor(test_input, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
         tt_output = tt_model(test_input)
         tt_output = tt2torch_tensor(tt_output)
         tt_output = tt_output.squeeze()
-        tt_lib.device.CloseDevice(device)
+        ttnn.close_device(device)
 
     logger.info(f"Tt prediction: {tt_output.topk(10).indices[0]}")

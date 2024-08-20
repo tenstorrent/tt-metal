@@ -4,11 +4,10 @@
 
 from pathlib import Path
 import torch
-import tt_lib
 import ttnn
 
+from tt_lib.fused_ops.softmax import softmax
 from tt_lib.fallback_ops import fallback_ops
-from tt_lib.fused_ops.softmax import softmax as tt_softmax
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 from models.experimental.mnist.reference.mnist import MnistModel
 
@@ -19,14 +18,14 @@ class TtMnistModel(torch.nn.Module):
         self.device = device
 
         # Extract params from state dict
-        self.fc1_weight = torch2tt_tensor(state_dict["fc1.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-        self.fc1_bias = torch2tt_tensor(state_dict["fc1.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        self.fc1_weight = torch2tt_tensor(state_dict["fc1.weight"], device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.fc1_bias = torch2tt_tensor(state_dict["fc1.bias"], device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        self.fc2_weight = torch2tt_tensor(state_dict["fc2.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-        self.fc2_bias = torch2tt_tensor(state_dict["fc2.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        self.fc2_weight = torch2tt_tensor(state_dict["fc2.weight"], device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.fc2_bias = torch2tt_tensor(state_dict["fc2.bias"], device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        self.fc3_weight = torch2tt_tensor(state_dict["fc3.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
-        self.fc3_bias = torch2tt_tensor(state_dict["fc3.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        self.fc3_weight = torch2tt_tensor(state_dict["fc3.weight"], device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.fc3_bias = torch2tt_tensor(state_dict["fc3.bias"], device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
         self.fc1_weight = ttnn.transpose(self.fc1_weight, -2, -1)
         self.fc2_weight = ttnn.transpose(self.fc2_weight, -2, -1)
@@ -35,7 +34,7 @@ class TtMnistModel(torch.nn.Module):
     def forward(self, x):
         # ttnn.reshape_on_device throws an assertion RuntimeError: TT_ASSERT @ tt_eager/tt_dnn/op_library/reshape/reshape_op.cpp:295: input_tensor_a.get_legacy_shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0 info:
         # Operand/target width must be a multiple of 32. So using fallback_ops.reshape.
-        x = tt_lib.fallback_ops.reshape(x, x.get_legacy_shape()[0], 1, 1, 784)
+        x = fallback_ops.reshape(x, x.get_legacy_shape()[0], 1, 1, 784)
 
         x = ttnn.matmul(x, self.fc1_weight)
         x = ttnn.add(x, self.fc1_bias)
@@ -49,7 +48,7 @@ class TtMnistModel(torch.nn.Module):
         x = ttnn.add(x, self.fc3_bias)
         x = ttnn.relu(x)
 
-        x = tt_lib.fused_ops.softmax.softmax(x)
+        x = softmax(x)
         # x = fallback_ops.softmax(x, -1)
         return x
 

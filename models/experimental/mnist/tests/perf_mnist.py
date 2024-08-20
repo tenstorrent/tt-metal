@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 from loguru import logger
-import tt_lib
+import ttnn
 import pytest
 
 from models.experimental.mnist.tt.mnist_model import mnist_model
@@ -45,16 +45,16 @@ def test_perf(device, expected_inference_time, expected_compile_time, model_loca
 
     with torch.no_grad():
         test_input, _ = next(iter(dataloader))
-        tt_input = torch2tt_tensor(test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        tt_input = torch2tt_tensor(test_input, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
         profiler.start(cpu_key)
         pt_out = pt_model(test_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
         tt_out = tt_model(tt_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_out
 
@@ -62,7 +62,7 @@ def test_perf(device, expected_inference_time, expected_compile_time, model_loca
 
         profiler.start(second_key)
         tt_out = tt_model(tt_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
         del tt_out
 

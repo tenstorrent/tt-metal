@@ -4,7 +4,6 @@
 
 import torch
 import torch.nn as nn
-import tt_lib
 import ttnn
 from models.helper_funcs import Linear
 import tt_lib.fallback_ops as fallback_ops
@@ -31,9 +30,9 @@ class TtGPT(nn.Module):
         base_address = f"transformer"
         self.device = device
 
-        self.beta = tt_lib.tensor.load_tensor(tt_cache_path + base_address + ".ln_f.bias" + str(dtype) + ".bin")
+        self.beta = ttnn.load_tensor(tt_cache_path + base_address + ".ln_f.bias" + str(dtype) + ".bin")
 
-        self.gamma = tt_lib.tensor.load_tensor(tt_cache_path + base_address + ".ln_f.weight" + str(dtype) + ".bin")
+        self.gamma = ttnn.load_tensor(tt_cache_path + base_address + ".ln_f.weight" + str(dtype) + ".bin")
 
         self.wte = nn.Embedding(config.vocab_size, config.n_embd)
         self.wpe = nn.Embedding(self.config.block_size, config.n_embd)
@@ -52,7 +51,7 @@ class TtGPT(nn.Module):
 
         self.ln_f = ttnn.layer_norm
 
-        tt_lm_weight = tt_lib.tensor.load_tensor(tt_cache_path + "lm_head.weight" + str(dtype) + ".bin")
+        tt_lm_weight = ttnn.load_tensor(tt_cache_path + "lm_head.weight" + str(dtype) + ".bin")
 
         weight = unpad_from_zero(tt_lm_weight, (1, 1, self.config.vocab_size, self.config.n_embd))
         weight_torch = weight
@@ -62,7 +61,7 @@ class TtGPT(nn.Module):
 
         self.wte.weight = nn.Parameter(weight_torch.squeeze())  # https://paperswithcode.com/method/weight-tying
 
-    def forward(self, idx: torch.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, idx: torch.Tensor) -> ttnn.Tensor:
         b, t = idx.shape
         assert (
             t <= self.config.block_size
