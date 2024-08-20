@@ -245,7 +245,7 @@ namespace ckernel::packer
       }
       
       //Round to 10 bit mantissa from fp32 dest
-      if(is_fp32_dest_acc_en && (pack_src_format!=(uint)DataFormat::Float32)) {
+      if(is_fp32_dest_acc_en && (pack_src_format == (uint)DataFormat::Float16)) {
          dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
       }
       cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
@@ -354,7 +354,7 @@ namespace ckernel::packer
          dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
       }
       //Round to 10 bit mantissa from fp32 dest
-      if(is_fp32_dest_acc_en && (pack_src_format!=(uint)DataFormat::Float32)) {
+      if(is_fp32_dest_acc_en && (pack_src_format == (uint)DataFormat::Float16)) {
          dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
       }
       cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
