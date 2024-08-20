@@ -14,10 +14,10 @@ from models.utility_functions import nearest_y
 # it also takes in number of slices since this should be determined at the moment of pushing weights,
 # but in general with 512 < seq_len <= 1024 we should use 4 slices, with 1024 < seq_len <= 2048 we should use 8 slices
 def falcon_lm_head_matmul_2d(
-    hidden_states: ttnn.experimental.tensor.Tensor,
-    weights: List[ttnn.experimental.tensor.Tensor],
+    hidden_states: ttnn.Tensor,
+    weights: List[ttnn.Tensor],
     num_slices: int,
-    lm_head_padding: ttnn.experimental.tensor.Tensor,
+    lm_head_padding: ttnn.Tensor,
     out_mem_config: ttnn.experimental.tensor.MemoryConfig,
     out_dtype: ttnn.experimental.tensor.DataType,
 ):
