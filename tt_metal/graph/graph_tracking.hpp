@@ -18,8 +18,8 @@ namespace tt::tt_metal {
     class IGraphProcessor{
     public:
         enum class RunMode {
-            REAL,
-            FAKE
+            NORMAL, // running everything as is
+            NO_DISPATCH // don't do memory allocations and program runs.
         };
 
         IGraphProcessor() = default;

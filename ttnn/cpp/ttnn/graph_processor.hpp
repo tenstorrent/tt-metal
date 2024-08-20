@@ -66,10 +66,10 @@ namespace ttnn {
         using ProcessFunc = std::function<void(const std::any&)>;
 
     private:
-        std::shared_ptr<ProcessorHooks> hooks;
+        std::shared_ptr<ProcessorHooks> hook;
 
         std::mutex mutex;
-        RunMode run_mode = RunMode::REAL;
+        RunMode run_mode = RunMode::NORMAL;
         std::stack<int> current_op_id;
         std::unordered_map<uint64_t, int> id_to_counter;
         int last_finished_op_id = -1;
@@ -98,7 +98,7 @@ namespace ttnn {
 
         void track_end_function_impl();
 
-        void clean_hooks();
+        void clean_hook();
 
     public:
         static void begin_graph_capture(RunMode mode);

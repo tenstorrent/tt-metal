@@ -11,7 +11,7 @@ import ttnn
 
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("size", [64])
-@pytest.mark.parametrize("mode", [ttnn.graph.GraphRunMode.FAKE, ttnn.graph.GraphRunMode.REAL])
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
 def test_graph_capture(device, scalar, size, mode):
     torch.manual_seed(0)
 

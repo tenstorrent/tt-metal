@@ -170,7 +170,7 @@ namespace ttnn {
     }
 
     void GraphProcessor::track_program(tt::tt_metal::Program* program) {
-        if (run_mode == RunMode::REAL) {
+        if (run_mode == RunMode::NORMAL) {
             // we will track real buffer allocations during program run
             return;
         }
@@ -429,9 +429,9 @@ namespace ttnn {
         });
 
         if (!tt::tt_metal::GraphTracker::instance().get_hook()) {
-            hooks = std::make_shared<ProcessorHooks>();
-            tt::tt_metal::GraphTracker::instance().add_hook(hooks);
-            hooks->set_block(mode == RunMode::FAKE);
+            hook = std::make_shared<ProcessorHooks>();
+            tt::tt_metal::GraphTracker::instance().add_hook(hook);
+            hook->set_block(mode == RunMode::NO_DISPATCH);
         }
         current_op_id.push(0);
     }
@@ -452,23 +452,23 @@ namespace ttnn {
             TT_ASSERT(current_op_id.size(), "Graph size could not be 0. It means track_function_end called more then begin.");
             graph[0].connections.push_back(counter);
         }
-        clean_hooks();
+        clean_hook();
         return to_json(graph);
     }
 
-    void GraphProcessor::clean_hooks() {
-        if (hooks) {
+    void GraphProcessor::clean_hook() {
+        if (hook) {
             /* If we installed hooks then we must clean*/
-            hooks = nullptr;
+            hook = nullptr;
             tt::tt_metal::GraphTracker::instance().clear_hook();
         }
     }
 
     GraphProcessor::~GraphProcessor() {
-        clean_hooks();
+        clean_hook();
     }
 
-    void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::REAL) {
+    void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::NORMAL) {
         tt::tt_metal::GraphTracker::instance().push_processor(std::make_shared<GraphProcessor>(mode));
 
     }
