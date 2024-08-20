@@ -155,7 +155,6 @@ inline auto& create_or_get_program_from_cache(
                 auto&& program_factory) -> auto& {
                 using program_factory_t = std::decay_t<decltype(program_factory)>;
 
-                op_profiler::tracy_message("`TT_SIGNPOST: lookup_program_cache_start`");
                 using cached_program_t =
                     decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
 
