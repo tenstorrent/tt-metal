@@ -38,8 +38,14 @@ def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     return output_tensor
 
 
-@ttnn.register_python_operation(name="ttnn.matmul", golden_function=_golden_function)
-def matmul(
+ttnn.attach_golden_function(
+    ttnn.matmul,
+    golden_function=_golden_function,
+)
+
+
+@ttnn.register_python_operation(name="ttnn.matmul2", golden_function=_golden_function)
+def matmul2(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
     *,
@@ -138,7 +144,7 @@ def matmul(
         >>> print(output.shape)
         [10, 64, 128]
     """
-    return ttnn._ttnn.operations.matmul.matmul(
+    return ttnn._ttnn.operations.matmul.matmul2(
         input_tensor_a,
         input_tensor_b,
         transpose_a=transpose_a,
@@ -180,8 +186,14 @@ def _golden_function(input_tensor_a, input_tensor_b, *, bias=None, activation=No
     return output_tensor
 
 
-@ttnn.register_python_operation(name="ttnn.linear", golden_function=_golden_function)
-def linear(
+ttnn.attach_golden_function(
+    ttnn.linear,
+    golden_function=_golden_function,
+)
+
+
+@ttnn.register_python_operation(name="ttnn.linear2", golden_function=_golden_function)
+def linear2(
     input_tensor_a: ttnn.Tensor,
     input_tensor_b: ttnn.Tensor,
     *,
@@ -223,7 +235,7 @@ def linear(
         [10, 64, 128]
     """
     # FIXME: passing an fp32 compute_kernel_config will cause the underlying C++ function to fail
-    return ttnn._ttnn.operations.matmul.linear(
+    return ttnn._ttnn.operations.matmul.linear2(
         input_tensor_a,
         input_tensor_b,
         bias=bias,

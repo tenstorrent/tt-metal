@@ -35,10 +35,35 @@ ttnn::Tensor bound_matmul(
     const struct Matmul& parameters,
     const uint8_t& queue_id);
 
+struct MatmulOperation {
+        static Tensor invoke(const Tensor& input_tensor_a,
+           const Tensor& input_tensor_b,
+           const bool transpose_a,
+           const bool transpose_b,
+           const MemoryConfig& memory_config,
+           const std::optional<const DataType> dtype,
+           const std::optional<const MatmulProgramConfig> program_config,
+           const std::optional<const std::string>& activation,
+           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+           const std::optional<const CoreGrid> core_grid);
+};
+
+struct LinearOperation {
+        static Tensor invoke(const Tensor& input_tensor_a,
+           const Tensor& input_tensor_b,
+           const std::optional<const Tensor>& bias,
+           const bool transpose_a,
+           const bool transpose_b,
+           const MemoryConfig& memory_config,
+           const std::optional<const DataType> dtype,
+           const std::optional<const MatmulProgramConfig> program_config,
+           const std::optional<const std::string>& activation,
+           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+           const std::optional<const CoreGrid> core_grid);
+};
+
 }  // namespace matmul
 }  // namespace operations
+    constexpr auto composite_matmul = ttnn::register_operation<"ttnn::matmul", operations::matmul::MatmulOperation>();
+    constexpr auto composite_linear = ttnn::register_operation<"ttnn::linear", operations::matmul::LinearOperation>();
 }  // namespace ttnn
-
-namespace ttnn {
-    using ttnn::operations::matmul::matmul;
-}

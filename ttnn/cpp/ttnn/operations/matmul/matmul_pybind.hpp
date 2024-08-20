@@ -137,7 +137,7 @@ void py_module(py::module& module) {
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::fused_activation);
 
     module.def(
-        "matmul",
+        "matmul2",
         [](const ttnn::Tensor& input_tensor_a,
            const ttnn::Tensor& input_tensor_b,
            const bool transpose_a = false,
@@ -186,7 +186,7 @@ void py_module(py::module& module) {
         py::arg("queue_id") = 0);
 
     module.def(
-        "linear",
+        "linear2",
         [](const ttnn::Tensor& input_tensor_a,
            const ttnn::Tensor& input_tensor_b,
            const std::optional<const ttnn::Tensor>& bias = std::nullopt,
@@ -239,6 +239,66 @@ void py_module(py::module& module) {
         py::arg("compute_kernel_config") = std::nullopt,
         py::arg("core_grid") = std::nullopt,
         py::arg("queue_id") = 0);
+
+        bind_registered_operation(
+        module,
+        ::ttnn::matmul,
+        R"doc(matmul)doc",
+        ttnn::pybind_overload_t{
+            [](decltype(::ttnn::matmul)& self, const ttnn::Tensor& input_tensor_a,
+           const ttnn::Tensor& input_tensor_b,
+           const bool transpose_a,
+           const bool transpose_b,
+           const ttnn::MemoryConfig& memory_config,
+           const std::optional<const DataType> dtype,
+           const std::optional<const MatmulProgramConfig> program_config,
+           const std::optional<const std::string>& activation,
+           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+           const std::optional<const ttnn::CoreGrid> core_grid)
+                -> ttnn::Tensor { return self(input_tensor_a, input_tensor_b, transpose_a, transpose_b, memory_config, dtype, program_config, activation, compute_kernel_config, core_grid); },
+            py::arg("input_tensor_a"),
+        py::arg("input_tensor_b"),
+        py::kw_only(),
+        py::arg("transpose_a") = false,
+        py::arg("transpose_b") = false,
+        py::arg("memory_config") = DRAM_MEMORY_CONFIG,
+        py::arg("dtype") = std::nullopt,
+        py::arg("program_config") = std::nullopt,
+        py::arg("activation") = std::nullopt,
+        py::arg("compute_kernel_config") = std::nullopt,
+        py::arg("core_grid") = std::nullopt,
+            });
+
+        bind_registered_operation(
+        module,
+        ::ttnn::linear,
+        R"doc(linear)doc",
+        ttnn::pybind_overload_t{
+            [](decltype(::ttnn::linear)& self, const ttnn::Tensor& input_tensor_a,
+           const ttnn::Tensor& input_tensor_b,
+           const std::optional<const ttnn::Tensor>& bias,
+           const bool transpose_a,
+           const bool transpose_b,
+           const ttnn::MemoryConfig& memory_config,
+           const std::optional<const DataType> dtype,
+           const std::optional<const MatmulProgramConfig> program_config,
+           const std::optional<const std::string>& activation,
+           const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+           const std::optional<const ttnn::CoreGrid> core_grid)
+                -> ttnn::Tensor { return self(input_tensor_a, input_tensor_b, transpose_a, transpose_b, memory_config, dtype, program_config, activation, compute_kernel_config, core_grid); },
+            py::arg("input_tensor_a"),
+        py::arg("input_tensor_b"),
+        py::kw_only(),
+        py::arg("bias") = std::nullopt,
+        py::arg("transpose_a") = false,
+        py::arg("transpose_b") = false,
+        py::arg("memory_config") = DRAM_MEMORY_CONFIG,
+        py::arg("dtype") = std::nullopt,
+        py::arg("program_config") = std::nullopt,
+        py::arg("activation") = std::nullopt,
+        py::arg("compute_kernel_config") = std::nullopt,
+        py::arg("core_grid") = std::nullopt,
+            });
 }
 
 }  // namespace matmul
