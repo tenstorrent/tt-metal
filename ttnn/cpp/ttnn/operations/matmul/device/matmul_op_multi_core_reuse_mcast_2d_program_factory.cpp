@@ -542,8 +542,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
             // Switch the offesets for the weights
             fused_op_signaler->output_page_offset = fused_op_signaler->tensor_slice_shape_width * fused_op_signaler->weight_tensor_width;
-            fused_op_signaler->last_output_page_offset = (fused_op_signaler->ring_size - 1) * fused_op_signaler->output_page_offset;
-
             fused_op_signaler->emit_matmul_fused_op_ct_args(in1_sender_writer_compile_time_args);
         }
 

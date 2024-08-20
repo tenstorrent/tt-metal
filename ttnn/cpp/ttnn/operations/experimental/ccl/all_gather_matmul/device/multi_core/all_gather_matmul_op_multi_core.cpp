@@ -231,7 +231,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
 ) {
     tt::tt_metal::Program program{};
 
-    ////////////// Extra setup for all_gather //////////////
+    ////////////// Params for fused op signalers //////////////
 
     auto tensor_slicer = ttnn::ccl::InterleavedRingAllGatherTensorSlicer (
         input_tensor,
@@ -240,19 +240,21 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         ring_index
     );
     bool is_clockwise_direction = true;
+    const uint32_t num_transfers = 4;
+    const uint32_t weight_tensor_width = weight_tensor.get_legacy_shape()[3] / 32;
 
     ////////////////////////////////////////////////////////
 
     // Create a matmul signal info object that gets populated by the matmul kernel
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler = ttnn::experimental::ccl::MatmulFusedOpSignaler();
     matmul_fused_op_signaler->init_all_gather(
-        4, /* num_transfers */ // TODO: Update to be setup properly
+        num_transfers,
         ring_size,
         ring_index,
         tensor_slicer.num_cols,
         tensor_slicer.output_page_offset,
         is_clockwise_direction,
-        weight_tensor.get_legacy_shape()[3] / 32 // weight tensor width
+        weight_tensor_width
     );
 
     // Matmul
@@ -276,6 +278,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         untilize_out,
         matmul_fused_op_signaler
     );
+    const auto matmul_override_runtime_arguments_callback = matmul_program_with_callbacks.override_runtime_arguments_callback;
 
     // DatacopyParams datacopy_params = setup_datacopy(
     //     matmul_program_with_callbacks.program,
@@ -296,8 +299,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     // all_gather_fused_op_signaler->init_fused_op(datacopy_params.datacopy_cores_noc, datacopy_params.datacopy_signal_semaphore_ids);
     all_gather_fused_op_signaler->init_fused_op(
         matmul_fused_op_signaler->fused_op_receiver_cores_noc,
-        {matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[0],
-            matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[1]}
+        matmul_fused_op_signaler->fused_op_receiver_signal_semaphores
     );
 
     // Pass in the datacopy cores and sempahore address (Using optional arguments)
@@ -317,17 +319,27 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     const auto all_gather_override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback;
 
     // Fuse the datacopy and all-gather overriden runtime arguments callbacks
-    auto override_runtime_arguments_callback = [all_gather_override_runtime_arguments_callback] ( // , datacopy_override_runtime_arguments_callback] (
+    auto override_runtime_arguments_callback = [all_gather_override_runtime_arguments_callback, matmul_override_runtime_arguments_callback] ( // , datacopy_override_runtime_arguments_callback] (
         const void* operation,
         Program& program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
     ) {
+        if (matmul_override_runtime_arguments_callback.has_value()) {
+            matmul_override_runtime_arguments_callback.value()(
+                operation,
+                program,
+                {input_tensors[1], input_tensors[2]}, /* all gather output tensor, weight tensor */
+                optional_input_tensors,
+                {output_tensors[1]} /* matmul output tensor */
+            );
+        }
 
         if (all_gather_override_runtime_arguments_callback.has_value()) {
             all_gather_override_runtime_arguments_callback.value()(operation, program, input_tensors, optional_input_tensors, output_tensors);
         }
+
 
         // if (datacopy_override_runtime_arguments_callback.has_value()) {
         //     datacopy_override_runtime_arguments_callback.value()(operation, program, input_tensors, optional_input_tensors, output_tensors);
