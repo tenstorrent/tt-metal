@@ -52,7 +52,7 @@ def test_reproduce_matmul_2d_hang(
     else:
         devices = all_devices
 
-    logger.info("Running on ", num_devices, " devices")
+    print("Running on ", num_devices, " devices")
     torch.manual_seed(1234)
 
     in0_mem_config = ttl.tensor.MemoryConfig(
@@ -159,29 +159,29 @@ def test_reproduce_matmul_2d_hang(
         for device_idx in range(num_devices):
             if num_devices != 1:
                 if num_devices == 2:
-                    logger.info("Start sync device id: ", device_idx)
+                    print("Start sync device id: ", device_idx)
                 if num_devices == 8:
-                    logger.info(
+                    print(
                         "Start sync device id: ",
                         device_idx,
                         " eth coordinates: ",
                         CHIP_ID_TO_COORDINATES_T3K[device_idx],
                     )
             else:
-                logger.info("Start single device sync:")
+                print("Start single device sync:")
             ttl.device.Synchronize(all_devices[device_idx])
             if num_devices != 1:
                 if num_devices == 2:
-                    logger.info("End sync device id: ", device_idx)
+                    print("End sync device id: ", device_idx)
                 if num_devices == 8:
-                    logger.info(
+                    print(
                         "End sync device id: ",
                         device_idx,
                         " eth coordinates: ",
                         CHIP_ID_TO_COORDINATES_T3K[device_idx],
                     )
             else:
-                logger.info("End single device sync")
+                print("End single device sync")
 
         # check if the output matches the first run output
         if determinism_check_enabled and i % determinism_check_iterations == 0:
@@ -224,7 +224,7 @@ def test_specific_chip_reproduce_matmul_2d_hang_t3000(all_devices, logical_chip_
     if len(all_devices) != num_devices_t3000:
         pytest.skip("Test is only valid for t3000 machines")
 
-    logger.info(
+    print(
         "Selecting device id: ",
         logical_chip_index,
         " eth coordinates: ",
@@ -316,7 +316,7 @@ def test_determinism_specific_chip(
     if len(all_devices) != num_devices_t3000:
         pytest.skip("Test is only valid for t3000 machines")
 
-    logger.info(
+    print(
         "Selecting device id: ",
         logical_chip_index,
         " eth coordinates: ",
