@@ -176,25 +176,27 @@ def run_line_all_gather_instances(
     input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_device_mesh)
 
     result_mesh_tensors = []
-    for i, devices in enumerate(t3000_device_rows):
-        tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
-        result_mesh_tensors.append(tt_out_tensor)
+    for loop in range(num_iters):
+        for i, devices in enumerate(t3000_device_rows):
+            tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
+            result_mesh_tensors.append(tt_out_tensor)
 
-    ## Wait for completion
-    for i, devices in enumerate(t3000_device_rows):
-        for d in devices:
-            ttnn.synchronize_device(d)
+    for loop in range(num_iters):
+        ## Wait for completion
+        for i, devices in enumerate(t3000_device_rows):
+            for d in devices:
+                ttnn.synchronize_device(d)
 
-    for tt_out_tensor in result_mesh_tensors:
-        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-            if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_output_tensor, input_tensor)
-            else:
-                eq, output = comp_pcc(tt_output_tensor, input_tensor)
-            if not eq:
-                logger.error(f"output mismatch for tensor {i}")
-            assert eq, f"{i} FAILED: {output}"
+        for tt_out_tensor in result_mesh_tensors:
+            for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+                tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+                if input_dtype == ttnn.bfloat16:
+                    eq, output = comp_equal(tt_output_tensor, input_tensor)
+                else:
+                    eq, output = comp_pcc(tt_output_tensor, input_tensor)
+                if not eq:
+                    logger.error(f"output mismatch for tensor {i}")
+                assert eq, f"{i} FAILED: {output}"
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
