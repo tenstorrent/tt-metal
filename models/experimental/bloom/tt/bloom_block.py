@@ -10,8 +10,6 @@ from torch.nn import LayerNorm
 import ttnn
 
 from functools import partial
-import tt_lib as ttl
-from tt_lib.fallback_ops import fallback_ops
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_attention as bloom_attention
 import models.experimental.bloom.tt.bloom_mlp as bloom_mlp

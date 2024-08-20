@@ -7,7 +7,6 @@ import math
 from torch.nn import functional as F
 from torch.nn import LayerNorm
 
-import tt_lib as ttm
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.bloom_attention as bloom_attention
 import models.experimental.bloom_old.tt.bloom_mlp as bloom_mlp

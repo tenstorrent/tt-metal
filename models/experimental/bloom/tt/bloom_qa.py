@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 import ttnn
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_model as bloom_model
@@ -12,9 +11,7 @@ from typing import Optional
 
 class TtBloomForQuestionAnswering:
     def __init__(self, config, state_dict, device):
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
         self.transformer = bloom_model.TtBloomModel(config, state_dict, "transformer", device)
         self.qa_outputs_weight = bloom_utils.torch2tt_tensor(state_dict["qa_outputs.weight"], device)
         self.qa_outputs_bias = bloom_utils.torch2tt_tensor(state_dict["qa_outputs.bias"], device)
