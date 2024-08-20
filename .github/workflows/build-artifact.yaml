@@ -60,8 +60,8 @@ jobs:
         run: |
           git submodule update --init --recursive
       - name: Cache build artifacts
-        id: cache-build-artifacts
-        uses: actions/cache@v4
+        id: restore-cache-build-artifacts
+        uses: actions/cache/restore@v4
         with:
           path: build/
           key: build-${{ inputs.build-type }}-${{ matrix.arch }}-${{ inputs.tracy && 'tracy' || 'notracy' }}-${{ github.sha }}
@@ -87,3 +87,10 @@ jobs:
           find build/ -type f -name "*hxx*"
           rm -rf $(find build/ -type f -name "*hxx*")
           rm build/CMakeCache.txt
+      - name: Save build artifacts to cache for incremental builds
+        if: ${{ github.ref == 'refs/heads/main' }}
+        id: save-cache-build-artifacts
+        uses: actions/cache/save@v4
+        with:
+          path: build/
+          key: ${{ steps.restore-cache-build-artifacts.outputs.cache-primary-key }}
