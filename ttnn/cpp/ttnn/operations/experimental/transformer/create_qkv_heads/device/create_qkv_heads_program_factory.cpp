@@ -61,7 +61,7 @@ namespace ttnn::operations::experimental::transformer {
             num_tiles_per_group.push_back(heads * head_dim / TILE_WIDTH);
         }
 
-        Program program = CreateProgram();
+        Program *program = CreateProgram();
         std::vector<uint32_t> reader_compile_time_args = {
 
             (std::uint32_t) heads_per_group[0], // q heads in group
@@ -143,7 +143,7 @@ namespace ttnn::operations::experimental::transformer {
             ]
         (
             const void* operation,
-            Program& program,
+            Program* program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors
@@ -159,7 +159,7 @@ namespace ttnn::operations::experimental::transformer {
             UpdateDynamicCircularBufferAddress(program, cb_out2_id, *out2_buffer);
         };
 
-        return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+        return {.program = program, .override_runtime_arguments_callback = override_runtime_args_callback};
     }
 
     /**

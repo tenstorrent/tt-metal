@@ -52,7 +52,7 @@ bool reader_kernel_no_send(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,
@@ -123,7 +123,7 @@ bool writer_kernel_no_receive(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,
@@ -285,7 +285,7 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::CreateProgram();
+    tt_metal::Program *sender_program = tt_metal::CreateProgram();
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -308,7 +308,7 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::CreateProgram();
+    tt_metal::Program *receiver_program = tt_metal::CreateProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,

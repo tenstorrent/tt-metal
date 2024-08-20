@@ -54,7 +54,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_4d(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     // create circular buffers
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_grad.get_dtype());
@@ -188,7 +188,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_4d(
     }
 
     return {
-        .program = std::move(program),
+        .program = program,
         .override_runtime_arguments_callback =
             create_override_runtime_arguments_callback(reader_kernel_id, writer_kernel_id, num_cores, core_h)};
 }
@@ -232,7 +232,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_3d(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     // create circular buffers
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_grad.get_dtype());
@@ -366,7 +366,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_3d(
     }
 
     return {
-        .program = std::move(program),
+        .program = program,
         .override_runtime_arguments_callback =
             create_override_runtime_arguments_callback(reader_kernel_id, writer_kernel_id, num_cores, core_h)};
 }
@@ -406,7 +406,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_2d(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     // create circular buffers
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_grad.get_dtype());
@@ -539,7 +539,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_backward_impl_2d(
     }
 
     return {
-        .program = std::move(program),
+        .program = program,
         .override_runtime_arguments_callback =
             create_override_runtime_arguments_callback(reader_kernel_id, writer_kernel_id, num_cores, core_h)};
 }

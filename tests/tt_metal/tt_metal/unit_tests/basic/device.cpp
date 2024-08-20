@@ -233,7 +233,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
             tt_metal::detail::WriteToDeviceL1(this->devices_.at(id), logical_core, write_address, host_input);
         }
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program *program = tt_metal::CreateProgram();
         string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core(0, 0);
         uint32_t intermediate_l1_addr = L1_UNRESERVED_BASE;
@@ -285,7 +285,7 @@ TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
 
 // Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
 TEST_F(DeviceFixture, TestL1ToPCIeAt16BAlignedAddress) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
     Device *device = this->devices_.at(0);
     EXPECT_TRUE(device->is_mmio_capable());
     CoreCoord logical_core(0, 0);

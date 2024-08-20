@@ -27,7 +27,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     std::optional<uint32_t> token_idx,
     DeviceComputeKernelConfig compute_kernel_config
 ) {
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
@@ -405,7 +405,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
                                                 Wt,
                                                 HtWt](
                                                    const void *operation,
-                                                   Program &program,
+                                                   Program *program,
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
@@ -470,7 +470,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace tt_metal

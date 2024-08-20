@@ -208,7 +208,7 @@ operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float
     }
 
     return {
-        .program = std::move(program),
+        .program = program,
         .override_runtime_arguments_callback =
             create_override_runtime_arguments_callback(reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y)};
 }

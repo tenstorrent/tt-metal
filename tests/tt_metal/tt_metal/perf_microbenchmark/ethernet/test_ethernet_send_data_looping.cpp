@@ -131,7 +131,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::CreateProgram();
+    tt_metal::Program *sender_program = tt_metal::CreateProgram();
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -160,7 +160,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                           Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::CreateProgram();
+    tt_metal::Program *receiver_program = tt_metal::CreateProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,

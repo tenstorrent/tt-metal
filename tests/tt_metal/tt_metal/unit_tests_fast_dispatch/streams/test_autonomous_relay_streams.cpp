@@ -234,7 +234,7 @@ void build_and_run_autonomous_stream_test(
 
     programs.emplace_back();
     Device* device = devices.at(0);
-    Program& program = programs.at(0);
+    Program* program = programs.at(0);
     log_trace(tt::LogTest, "Device ID: {}", device->id());
 
     CoreCoord sender_core = CoreCoord(0, 0);

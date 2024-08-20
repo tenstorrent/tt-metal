@@ -230,7 +230,7 @@ int main(int argc, char **argv) {
         tt_metal::detail::WriteToDeviceL1(device, logical_core, L1_UNRESERVED_BASE, go_signal);
 
         // Application setup
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program *program = tt_metal::CreateProgram();
 
         uint32_t kernel_read_size = 64 * 1024;
 

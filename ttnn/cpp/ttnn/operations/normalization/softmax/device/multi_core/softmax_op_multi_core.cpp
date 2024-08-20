@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
     uint32_t mask_Ht = mask_H/TILE_HEIGHT;
 
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     // This should allocate input_tensor DRAM buffer on the device
     Device *device = input_tensor.device();
@@ -289,7 +289,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         ]
     (
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -401,7 +401,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_arguments_callback};
 } // scale_mask_softmax_multi_core
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
@@ -536,7 +536,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
     // define core ranges
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -766,7 +766,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         ]
     (
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -790,7 +790,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_arguments_callback};
 } // scale_mask_softmax_sharded_multi_core
 
 }  // namespace ttnn::operations::normalization

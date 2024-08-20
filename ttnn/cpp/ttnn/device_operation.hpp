@@ -23,12 +23,12 @@ namespace device_operation {
 
 template <typename shared_variables_t>
 struct CachedProgram {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
     // Cached program needs to share shared_variables between create and override_runtime_arguments functions
     shared_variables_t shared_variables;
 
-    CachedProgram(tt::tt_metal::Program&& program, shared_variables_t&& shared_variables) :
-        program{std::move(program)}, shared_variables{shared_variables} {}
+    CachedProgram(tt::tt_metal::Program*& program, shared_variables_t&& shared_variables) :
+        program{program}, shared_variables{shared_variables} {}
 };
 
 struct CachedProgramFactory {

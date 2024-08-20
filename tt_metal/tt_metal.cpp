@@ -31,6 +31,10 @@ namespace tt {
 
 namespace tt_metal {
 
+struct Program {
+    MetalProgram *metal_program;
+}
+
 namespace {
 
 CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {
@@ -872,10 +876,6 @@ bool CloseDevice(Device *device) {
     ZoneScoped;
     auto device_id = device->id();
     return tt::DevicePool::instance().close_device(device_id);
-}
-
-struct Program {
-    MetalProgram *metal_program;
 }
 
 Program *CreateProgram() {

@@ -133,7 +133,7 @@ SLICE:
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s
     constexpr uint32_t src0_cb_index = CB::c_in0;

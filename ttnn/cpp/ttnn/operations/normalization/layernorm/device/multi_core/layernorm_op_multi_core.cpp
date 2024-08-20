@@ -195,7 +195,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
@@ -367,7 +367,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         ]
     (
         const void* operation,
-        const Program &program,
+        const Program *program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -407,7 +407,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 operation::ProgramWithCallbacks layernorm_multi_core_sharded(
@@ -577,7 +577,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
     // define core ranges
     bool use_mcast = num_blocks > 1;
 
@@ -1351,7 +1351,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         ]
     (
         const void* operation,
-        Program &program,
+        Program *program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -1395,7 +1395,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace ttnn::operations::normalization

@@ -75,7 +75,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
     tt_metal::Device *device {input.device()};
 
     ////////////////////////////////////////////////////////////////////////////
@@ -397,7 +397,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
                                            num_cores_y
                                             ](
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -428,7 +428,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace primary

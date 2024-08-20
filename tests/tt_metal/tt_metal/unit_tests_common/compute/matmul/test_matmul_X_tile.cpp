@@ -31,7 +31,7 @@ struct MatmulTileConfig {
 bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulTileConfig &cfg, vector<uint32_t> activations, vector<std::seed_seq::result_type> weights, deprecated::Tensor<bfloat16> tensor){
     bool pass = true;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
 

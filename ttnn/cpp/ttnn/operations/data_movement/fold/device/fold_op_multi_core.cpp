@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement {
 
 cached_program_t fold_multi_core(
     const Tensor& input, const Tensor& output, uint8_t stride_h, uint8_t stride_w) {
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
     Device* device = output.device();
 
     auto all_cores = input.shard_spec()->grid;
@@ -79,7 +79,7 @@ cached_program_t fold_multi_core(
             pixels_per_dst_row * aligned_pixel_size,
         });
 
-    return { std::move(program), {writer_kernel_id, stride_h, stride_w, cb_src0, cb_dst0} };
+    return { program, {writer_kernel_id, stride_h, stride_w, cb_src0, cb_dst0} };
 }
 
 cached_program_t Fold::MultiCore::create(const operation_attributes_t& operation_attributes,

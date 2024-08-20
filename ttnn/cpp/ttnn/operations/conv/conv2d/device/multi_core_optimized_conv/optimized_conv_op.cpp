@@ -36,7 +36,7 @@ const uint32_t untilize_mode_reblock_cb               = CB::c_intermed2;
 const uint32_t out0_cb                                = CB::c_out0;
 
 
-std::tuple<CBHandle, CBHandle> create_CBs(tt_metal::Program &program,
+std::tuple<CBHandle, CBHandle> create_CBs(tt_metal::Program *program,
                                 const Tensor& input,
                                 CoreRange core,
                                 uint32_t num_cb0_tiles,
@@ -267,7 +267,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
 
     // sanity check
     assert(num_blocks_output_w == num_blocks_weight_w);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
     //CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     //CoreRange core = {{0, 0}, {0, 0}};
 
@@ -1209,7 +1209,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
         ]
     (
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -1255,7 +1255,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         }
     };
-    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+    return {.program=program, .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 }  // namespace tt_metal

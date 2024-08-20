@@ -175,13 +175,13 @@ static void log_sharded_tensor_kernel_args(Tensor const& tensor, std::size_t pag
 //   (in other words, disable the "bidirectional" send flag)
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers(const Tensor& input_tensor, Tensor& output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology) {
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_multi_core_with_workers_helper(program, input_tensor, output_tensor, dim, num_links, ring_size, ring_index, receiver_device_id, sender_device_id, topology, empty_fused_op_signaler);
 }
 
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program *program,
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const uint32_t dim,
@@ -1049,7 +1049,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
     auto override_runtime_arguments_callback = [num_links, receive_reader_kernel_core_list, receive_writer_kernel_core_list, send_reader_kernel_core_list, send_writer_kernel_core_list] (
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -1071,7 +1071,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         }
     };
 
-    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+    return {.program=program, .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 }  // namespace ttnn

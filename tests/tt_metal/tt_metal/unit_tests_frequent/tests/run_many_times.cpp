@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 
 void RunTest(Device *device) {
     // Set up program
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     std::set<CoreRange> core_ranges;
     //CoreCoord grid_size = device->logical_grid_size();

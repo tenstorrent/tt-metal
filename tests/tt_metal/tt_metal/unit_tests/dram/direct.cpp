@@ -36,7 +36,7 @@ bool reader_only(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,
@@ -105,7 +105,7 @@ bool writer_only(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
 
     tt_metal::InterleavedBufferConfig dram_config{
@@ -181,7 +181,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,
@@ -280,7 +280,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,

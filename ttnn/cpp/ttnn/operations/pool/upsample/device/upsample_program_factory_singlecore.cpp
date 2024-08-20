@@ -21,7 +21,7 @@ namespace tt {
 namespace tt_metal {
 
 operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w) {
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -118,7 +118,7 @@ operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor
     );
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
+        const Program *program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -140,7 +140,7 @@ operation::ProgramWithCallbacks upsample_single_core(const Tensor &input, Tensor
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // namespace tt_metal

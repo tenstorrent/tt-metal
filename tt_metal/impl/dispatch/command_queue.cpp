@@ -2763,7 +2763,7 @@ void EnqueueProgramImpl(
             using T = std::decay_t<decltype(program)>;
             Device* device = cq.device();
             if constexpr (std::is_same_v<T, std::reference_wrapper<MetalProgram>>) {
-                detail::CompileProgram(device, program);
+                program.get().compile(device);
                 program.get().allocate_circular_buffers();
                 program.get().validate_circular_buffer_region(device);
                 cq.hw_command_queue().enqueue_program(program, blocking);
@@ -2771,7 +2771,7 @@ void EnqueueProgramImpl(
                 // leaks on device.
                 program.get().release_buffers();
             } else if constexpr (std::is_same_v<T, std::shared_ptr<MetalProgram>>) {
-                detail::CompileProgram(device, *program);
+                program->compile(device);
                 program->allocate_circular_buffers();
                 program->validate_circular_buffer_region(device);
                 cq.hw_command_queue().enqueue_program(*program, blocking);

@@ -87,7 +87,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     std::vector<CoreCoord>all_cores_list,
     uint32_t bank_start_id,
     const uint32_t &input_buffer_addr) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     uint32_t start_tile_id = 0;
     uint32_t kt = k / 32;
@@ -151,7 +151,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
         tt_metal::SetRuntimeArgs(program, reader_kernel, core, rt_args);
     }
-    return {std::move(program), reader_kernel, cb_addr};
+    return {program, reader_kernel, cb_addr};
 }
 
 

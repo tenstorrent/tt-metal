@@ -26,7 +26,7 @@ struct ProgramCache {
 
     template <typename T>
     inline void insert(uint64_t program_hash, T&& program) {
-        this->cache_.insert({program_hash, std::move(program)});
+        this->cache_.insert({program_hash, program});
     }
 
     void enable() {

@@ -19,7 +19,7 @@ using namespace tt::constants;
 
 operation::ProgramWithCallbacks unary_multi_core(const Tensor &a, Tensor &output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en, bool preserve_fp32_precision) {
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
@@ -134,7 +134,7 @@ operation::ProgramWithCallbacks unary_multi_core(const Tensor &a, Tensor &output
                                            unary_writer_kernel_id = std::move(unary_writer_kernel_id),
                                            num_cores,
                                            num_cores_y](
-                                              const tt::tt_metal::Program &program,
+                                              const tt::tt_metal::Program *program,
                                               const std::vector<tt::tt_metal::Buffer *> &input_buffers,
                                               const std::vector<tt::tt_metal::Buffer *> &output_buffers) {
         auto src_buffer = input_buffers.at(0);
@@ -156,7 +156,7 @@ operation::ProgramWithCallbacks unary_multi_core(const Tensor &a, Tensor &output
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // namespace ttnn::operations::unary

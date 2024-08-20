@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks moreh_sum_int_w_impl(const Tensor &input, const 
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Device *device{input.device()};
-    tt_metal::Program program{tt_metal::CreateProgram()};
+    tt_metal::Program *program{tt_metal::CreateProgram()};
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -187,7 +187,7 @@ operation::ProgramWithCallbacks moreh_sum_int_w_impl(const Tensor &input, const 
     }
 
      auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, num_cores, num_cores_y](
-                                              const Program &program,
+                                              const Program *program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
@@ -209,7 +209,7 @@ operation::ProgramWithCallbacks moreh_sum_int_w_impl(const Tensor &input, const 
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // namespace primary

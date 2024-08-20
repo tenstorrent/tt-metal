@@ -36,7 +36,7 @@ int main(int argc, char **argv) {
         */
         CommandQueue& cq = device->command_queue();
 
-        Program program = CreateProgram();
+        Program *program = CreateProgram();
 
         constexpr CoreCoord core = {0, 0};
 

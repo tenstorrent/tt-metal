@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 
     uint32_t bnc1 = (bN*bC == 1);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     tt_metal::Device *device = a.device();
 
@@ -218,7 +218,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
         ]
     (
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -336,7 +336,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
         }
     };
 
-    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+    return {.program=program, .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 }  // namespace tt_metal

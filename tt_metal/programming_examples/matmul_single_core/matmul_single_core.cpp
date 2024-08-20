@@ -53,7 +53,7 @@ void matmul_single_core(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std:
     * Core range is just single core
     */
     CommandQueue& cq = device->command_queue();
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
     CoreRange core({0, 0}, {0, 0});
 
     /*

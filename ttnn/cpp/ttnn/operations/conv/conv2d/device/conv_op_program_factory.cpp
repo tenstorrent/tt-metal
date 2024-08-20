@@ -61,7 +61,7 @@ const uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
 const uint32_t out0_cb                                = CB::c_out0;
 
 
-void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
+void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program *program,
                                 tt_metal::Device* device,
                                 CoreRange core,
                                 uint32_t num_cb0_tiles,
@@ -226,7 +226,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     // sanity check
     assert(num_blocks_output_w == num_blocks_weight_w);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
     CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     CoreRange core({0, 0}, {0, 0});
 
@@ -619,7 +619,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         has_bias=has_bias
     ]
     (
-        const Program &program,
+        const Program *program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -651,7 +651,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 
 }
 
@@ -1090,7 +1090,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     detail::WriteToDeviceDRAMChannel(device, dram_bank_id, act_address_map_dram_addr, act_address_map);
     detail::WriteToDeviceDRAMChannel(device, dram_bank_id, weight_address_map_dram_addr, weight_address_map);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
     CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     CoreRange core({0, 0}, {0, 0});
 
@@ -1345,7 +1345,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         writer_kernel_id=writer_id
     ]
     (
-        const Program &program,
+        const Program *program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -1373,7 +1373,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 inline Tensor conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params,

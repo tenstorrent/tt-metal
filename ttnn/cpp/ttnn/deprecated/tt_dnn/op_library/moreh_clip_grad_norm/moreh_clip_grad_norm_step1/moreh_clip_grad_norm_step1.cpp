@@ -180,7 +180,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
                                            num_cores_to_be_used = num_cores_to_be_used,
                                            num_cores_y = num_cores_y](
                                               const void* operation,
-                                              Program& program,
+                                              Program* program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>&) {
@@ -213,7 +213,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace primary

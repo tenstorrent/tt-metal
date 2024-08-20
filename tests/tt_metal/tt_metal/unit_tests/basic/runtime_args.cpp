@@ -49,7 +49,7 @@ uint32_t get_runtime_arg_addr(tt::RISCV processor, bool is_common) {
 };
 
 Program initialize_program_data_movement(Device *device, const CoreRangeSet &core_range_set) {
-    Program program = tt_metal::CreateProgram();
+    Program *program = tt_metal::CreateProgram();
 
     auto add_two_ints_kernel = tt_metal::CreateKernel(
         program,
@@ -59,12 +59,12 @@ Program initialize_program_data_movement(Device *device, const CoreRangeSet &cor
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     detail::CompileProgram(device, program);
-    return std::move(program);
+    return program;
 }
 
 Program initialize_program_data_movement_rta(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args,
                                              bool common_rtas = false) {
-    Program program = tt_metal::CreateProgram();
+    Program *program = tt_metal::CreateProgram();
 
     uint32_t rta_base_dm = get_runtime_arg_addr(tt::RISCV::BRISC, common_rtas);
     std::map<string, string> dm_defines = {{"DATA_MOVEMENT", "1"},
@@ -82,11 +82,11 @@ Program initialize_program_data_movement_rta(Device *device, const CoreRangeSet 
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = dm_defines});
 
     detail::CompileProgram(device, program);
-    return std::move(program);
+    return program;
 }
 
 Program initialize_program_compute(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args, uint32_t num_common_rt_args) {
-    Program program = tt_metal::CreateProgram();
+    Program *program = tt_metal::CreateProgram();
 
     // Tell kernel how many unique and common RT args to expect. Will increment each.
     uint32_t rta_base_compute = get_runtime_arg_addr(tt::RISCV::COMPUTE, false);
@@ -101,7 +101,7 @@ Program initialize_program_compute(Device *device, const CoreRangeSet &core_rang
         core_range_set,
         tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compile_args});
 
-    return std::move(program);
+    return program;
 }
 
 // Verify the runtime args for a single core (apply optional non-zero increment amounts to values written to match compute kernel)
@@ -124,7 +124,7 @@ bool verify_core_rt_args(Device *device, bool is_common, CoreCoord core, uint32_
 
 // Iterate over all cores unique and common runtime args, and verify they match expected values.
 bool verify_results(
-    bool are_args_incremented, Device *device, const Program &program, const std::map<CoreCoord, std::vector<uint32_t>> &core_to_rt_args, const std::vector<uint32_t> &common_rt_args = {}) {
+    bool are_args_incremented, Device *device, const Program *program, const std::map<CoreCoord, std::vector<uint32_t>> &core_to_rt_args, const std::vector<uint32_t> &common_rt_args = {}) {
 
     bool pass = true;
     EXPECT_TRUE(program.num_kernels() == 1);

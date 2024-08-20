@@ -86,8 +86,8 @@ std::tuple<Program,Program> build(
     KernelHandle &local_kernel,
     KernelHandle &remote_kernel
 ) {
-    Program program0;
-    Program program1;
+    Program *program0;
+    Program *program1;
 
     std::vector<uint32_t> const& ct_args = {num_channels};
 
@@ -133,8 +133,8 @@ std::tuple<Program,Program> build(
 void run(
     Device *device0,
     Device *device1,
-    Program &program0,
-    Program &program1,
+    Program *program0,
+    Program *program1,
     KernelHandle local_kernel,
     KernelHandle remote_kernel,
 

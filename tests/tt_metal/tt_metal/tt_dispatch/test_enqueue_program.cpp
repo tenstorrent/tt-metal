@@ -15,7 +15,7 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
     // TODO(agrebenisan): This is directly copy and pasted from test_eltwise_binary.
     // We need to think of a better way to generate test data, so this section needs to be heavily refactored.
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
 
@@ -88,7 +88,7 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
     tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
 
-    tt_metal::Program program = create_program(device);
+    tt_metal::Program *program = create_program(device);
 
     CoreCoord worker_core(0, 0);
     vector<uint32_t> inp = create_random_vector_of_bfloat16(NUM_TILES * 2048, 100, 0);

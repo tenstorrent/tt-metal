@@ -92,7 +92,7 @@ void print_faces(std::vector<bfloat16> data, string name) {
     std::cout<<std::endl;
 }
 
-void create_CBs_for_fused_matmul(tt_metal::Program &program, tt_metal::Device* device, CoreCoord core, bool activations_rm, bool output_rm, uint32_t M, uint32_t N, uint32_t in0_block_w, uint32_t out_subblock_h) {
+void create_CBs_for_fused_matmul(tt_metal::Program *program, tt_metal::Device* device, CoreCoord core, bool activations_rm, bool output_rm, uint32_t M, uint32_t N, uint32_t in0_block_w, uint32_t out_subblock_h) {
 
     uint32_t num_bytes_for_df = 2;
 
@@ -209,7 +209,7 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program *program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
         uint32_t M = 8;

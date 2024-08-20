@@ -13,7 +13,7 @@
 #include "debug/dprint_buffer.h"
 #include "llrt/hal.hpp"
 
-inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, const tt::tt_metal::Program &program) {
+inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, const tt::tt_metal::Program *program) {
 #if defined(TRACY_ENABLE)
     // TODO: use enums from profiler_common.h
     enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };

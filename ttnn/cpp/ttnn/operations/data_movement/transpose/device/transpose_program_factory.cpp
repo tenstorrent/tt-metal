@@ -127,7 +127,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor &a, Tensor 
     TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
     TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
@@ -192,7 +192,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor &a, Tensor 
         ]
     (
         const void* operation,
-        const Program& program,
+        const Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -214,7 +214,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor &a, Tensor 
             writer_kernel_id, src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2);
     };
 
-    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+    return {.program=program, .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
 template <bool IS_CREATING>
@@ -456,7 +456,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     uint32_t NCH = N * C * H;
     bool row_major = a.get_layout() == Layout::ROW_MAJOR;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
@@ -579,7 +579,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
         ]
     (
         const void* operation,
-        const Program& program,
+        const Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -616,7 +616,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
         }
     };
 
-    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+    return {.program=program, .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runtime_args_mc_hc_rm_sharded(
@@ -1080,7 +1080,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor &a,
         ]
     (
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -1096,7 +1096,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor &a,
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
     };
 
-   return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+   return {.program=program, .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
 template <bool IS_CREATING>
@@ -1356,7 +1356,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
     uint32_t wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
@@ -1514,7 +1514,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         ]
     (
         const void* operation,
-        const Program& program,
+        const Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -1548,12 +1548,12 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         }
     };
 
-   return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+   return {.program=program, .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a, Tensor &output) {
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
@@ -1663,7 +1663,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
         ]
     (
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -1715,12 +1715,12 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, cores, unary_writer_args);
     };
 
-   return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+   return {.program=program, .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
 
 operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor &a, Tensor &output) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
@@ -1863,7 +1863,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
         ]
     (
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -1879,7 +1879,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor 
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
     };
 
-   return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+   return {.program=program, .override_runtime_arguments_callback=override_runtime_args_callback};
 
 }
 

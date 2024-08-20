@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
     auto arch = param_in.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     // create circular buffers
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(param_in.get_dtype());
@@ -190,7 +190,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
                                            core_h,
                                            has_momentum_buffer_out = has_momentum_buffer_out](
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -227,7 +227,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace primary

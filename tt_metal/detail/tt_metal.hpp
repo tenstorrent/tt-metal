@@ -13,7 +13,8 @@
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 
 namespace tt::tt_metal {
-    class Program;
+    struct Program;
+    typedef struct Program Program;
     class Buffer;
     class Device;
 

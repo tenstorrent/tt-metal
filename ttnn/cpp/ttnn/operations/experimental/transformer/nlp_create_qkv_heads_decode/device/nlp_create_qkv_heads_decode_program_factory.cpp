@@ -15,7 +15,7 @@ namespace ttnn::operations::experimental::transformer {
 
     operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(const Tensor &input_tensor, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program *program = tt_metal::CreateProgram();
 
         const auto& input_shape = input_tensor.get_legacy_shape();
 
@@ -149,7 +149,7 @@ namespace ttnn::operations::experimental::transformer {
         ]
         (
             const void* operation,
-            Program &program,
+            Program *program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors
@@ -183,6 +183,6 @@ namespace ttnn::operations::experimental::transformer {
             }
         };
 
-        return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+        return {.program=program, .override_runtime_arguments_callback=override_runtime_arguments_callback};
     }
 } // namespace ttnn::operations::experimental::transformer

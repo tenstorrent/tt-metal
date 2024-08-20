@@ -17,7 +17,7 @@ struct TestBufferConfig {
 };
 
 Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(

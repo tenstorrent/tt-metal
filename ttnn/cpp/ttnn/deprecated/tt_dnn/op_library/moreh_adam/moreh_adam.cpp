@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks moreh_adam_(
     const DeviceComputeKernelConfig compute_kernel_config) {
     uint32_t num_tiles = param_in.volume() / TILE_HW;
 
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -249,7 +249,7 @@ operation::ProgramWithCallbacks moreh_adam_(
                                            writer_kernel_id = writer_kernel_id,
                                            num_cores = num_cores,
                                            num_cores_y = num_cores_y](
-                                              const Program& program,
+                                              const Program* program,
                                               const std::vector<Buffer*>& input_buffers,
                                               const std::vector<Buffer*>& output_buffers) {
         auto param_in_buffer = input_buffers.at(0);
@@ -289,7 +289,7 @@ operation::ProgramWithCallbacks moreh_adam_(
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // namespace primary

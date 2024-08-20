@@ -61,7 +61,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
 bool assign_runtime_args_to_program(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::Program *program,
     const uint32_t &num_cores,
     const uint32_t &num_cores_y,
     const uint32_t &num_cores_x,
@@ -368,7 +368,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     const uint32_t &single_tile_size,
     const tt::DataFormat &tile_format,
     const uint32_t &access_type) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     uint32_t cb_index = 0;
     uint32_t cb_tiles = num_reqs_at_a_time;
@@ -389,12 +389,12 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             .processor = (access_type == 0) ? tt_metal::DataMovementProcessor::RISCV_1
                                             : tt_metal::DataMovementProcessor::RISCV_0,
             .noc = (access_type == 0) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default});
-    return {std::move(program), reader_kernel, cb_addr};
+    return {program, reader_kernel, cb_addr};
 }
 
 bool assign_runtime_args_to_program(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::Program *program,
     const uint32_t &num_cores,
     const uint32_t &num_cores_y,
     const uint32_t &num_cores_x,

@@ -8,6 +8,8 @@
 #include <vector>
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
+#include "tt_metal/impl/buffers/circular_buffer_types.hpp"
+#include "tt_metal/impl/kernels/kernel_types.hpp"
 
 /** @file */
 
@@ -36,6 +38,7 @@ class Trace;
 class CircularBuffer;
 class Event;
 class Buffer;
+class Kernel;
 
 // ==================================================
 //                  HOST API: Device management

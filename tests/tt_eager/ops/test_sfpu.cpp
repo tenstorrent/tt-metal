@@ -72,7 +72,7 @@ bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program *program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
 

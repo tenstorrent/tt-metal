@@ -45,7 +45,7 @@ create_program(
     int out_subblock_w,
     int per_core_M,
     int per_core_N) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
@@ -193,7 +193,7 @@ create_program(
     uint32_t in1_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     return {
-        std::move(program),
+        program,
         mm_reader_kernel_in0_sender_in1_sender,
         mm_reader_kernel_in0_sender_in1_receiver,
         mm_reader_kernel_in0_receiver_in1_sender,
@@ -208,7 +208,7 @@ create_program(
 
 bool write_runtime_args_to_device(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::Program *program,
     int start_core_x,
     int start_core_y,
     int num_cores_r,

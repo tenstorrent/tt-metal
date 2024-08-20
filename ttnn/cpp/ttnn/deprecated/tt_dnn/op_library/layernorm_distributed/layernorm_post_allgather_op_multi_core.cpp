@@ -215,7 +215,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
@@ -393,7 +393,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
         ]
     (
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -440,7 +440,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 

@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Device *device{input.device()};
-    tt_metal::Program program{tt_metal::CreateProgram()};
+    tt_metal::Program *program{tt_metal::CreateProgram()};
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -185,7 +185,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     }
 
      auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, num_cores, num_cores_y](
-                                              const Program &program,
+                                              const Program *program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         log_debug(LogOp, "{}:{} args_callback ", __func__, __LINE__);
@@ -207,7 +207,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 
 
 
@@ -238,7 +238,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     //     fp32_dest_acc_en = true;
     // }
 
-    // tt_metal::Program program = tt_metal::CreateProgram();
+    // tt_metal::Program *program = tt_metal::CreateProgram();
 
     // tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     // uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
@@ -385,7 +385,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     //                                             num_cores = num_cores,
     //                                             num_cores_y = num_cores_y](
     //                                                const void *operation,
-    //                                                Program &program,
+    //                                                Program *program,
     //                                                const std::vector<Tensor> &input_tensors,
     //                                                const std::vector<std::optional<const Tensor>> &,
     //                                                const std::vector<Tensor> &output_tensors) {
@@ -408,7 +408,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     //     }
     // };
 
-    // return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    // return {.program = program, .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace primary

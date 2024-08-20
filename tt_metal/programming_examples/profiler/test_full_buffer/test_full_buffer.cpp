@@ -16,7 +16,7 @@ void RunFillUpAllBuffers(tt_metal::Device *device, int loop_count, bool fast_dis
     CoreRange all_cores(start_core, end_core);
     auto eth_cores = device->get_active_ethernet_cores(true);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     constexpr int loop_size = 200;
     std::map<string, string> kernel_defines = {

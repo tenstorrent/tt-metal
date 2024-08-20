@@ -149,12 +149,12 @@ In order for an op to be cachable, it needs to implement the following:
         // i.e.:
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor> &input_tensors) const {
 
-            Program program = CreateProgram();
+            Program *program = CreateProgram();
 
             // ...
 
             auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                const Program &program,
+                const Program *program,
                 const std::vector<Buffer*>& input_buffers,
                 const std::vector<Buffer*>& output_buffers
             ) {
@@ -175,7 +175,7 @@ In order for an op to be cachable, it needs to implement the following:
                 }
             };
 
-            return {std::move(program), override_runtime_args_callback};
+            return {program, override_runtime_args_callback};
         }
     };
 

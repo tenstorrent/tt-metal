@@ -54,7 +54,7 @@ namespace tt::test::buffer::detail {
             generate_uniform_random_vector<uint32_t>(5, 5, byte_size / sizeof(uint32_t));
         std::vector<uint32_t> outputs;
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program *program = tt_metal::CreateProgram();
         const uint32_t cb_index = 0;
         const uint32_t output_cb_index = 16;
         const CoreCoord phys_core = device->worker_core_from_logical_core(core);

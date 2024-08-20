@@ -16,7 +16,7 @@ using namespace tt;
 
 operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, const uint32_t out_subblock_w, CoreCoord compute_with_storage_grid_size, const bool row_major, DeviceComputeKernelConfig compute_kernel_config) {
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
@@ -298,7 +298,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
             bfloat16_row_bytes
         ]
     (
-        Program& program,
+        Program* program,
         const Tensor& a,
         const Tensor& b,
         const Tensor& output
@@ -556,7 +556,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         ]
     (
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -566,7 +566,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         set_runtime_args(program, input_tensors.at(0), input_tensors.at(1), output_tensor);
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // ttnn::operations::experimental::transformer

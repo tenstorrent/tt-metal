@@ -1480,7 +1480,7 @@ void Device::compile_command_queue_programs() {
 
             tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_core, 0, dispatch_core_type); // dispatch_sem
         }
-        detail::CompileProgram(this, *command_queue_program_ptr, /*fd_bootloader_mode=*/true);
+        command_queue_program_ptr->compile(this, /*fd_bootloader_mode=*/true);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
         this->setup_tunnel_for_remote_devices();
     } else {
@@ -1756,10 +1756,10 @@ void Device::compile_command_queue_programs() {
             my_noc_index
         );
 
-        detail::CompileProgram(this, *command_queue_program_ptr, /*fd_bootloader_mode=*/true);
+        command_queue_program_ptr->compile(this, /*fd_bootloader_mode=*/true);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
         if (first_tunnel_stop) {
-            detail::CompileProgram(mmio_device, *mmio_command_queue_program_ptr, /*fd_bootloader_mode=*/true);
+            mmio_command_queue_program_ptr->compile(mmio_device, /*fd_bootloader_mode=*/true);
             this->command_queue_programs.push_back(std::move(mmio_command_queue_program_ptr));
         }
     }

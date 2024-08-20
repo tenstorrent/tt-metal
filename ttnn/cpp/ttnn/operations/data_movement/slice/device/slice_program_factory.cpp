@@ -130,7 +130,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     const Tensor& a, Tensor& output, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end) {
     const tt::tt_metal::Shape output_shape = output.get_legacy_shape();
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device* device = a.device();
@@ -216,7 +216,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     auto override_runtime_args_callback =
         [unary_reader_kernel_id, unary_writer_kernel_id, compute_with_storage_grid_size, max_read_size](
             const void* operation,
-            const Program& program,
+            const Program* program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
@@ -258,7 +258,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
             }
         };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {
@@ -445,7 +445,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     const Tensor& a, Tensor& output, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end) {
     const tt::tt_metal::Shape output_shape = output.get_legacy_shape();
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device* device = a.device();
@@ -552,7 +552,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
         ]
     (
         const void* operation,
-        Program& program,
+        Program* program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -564,7 +564,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 template <bool initialize_args>
@@ -579,7 +579,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
     const uint32_t& num_cores_group_2,
     const uint32_t& num_tiles_per_core_group_1,
     const uint32_t& num_tiles_per_core_group_2,
-    const Program& program,
+    const Program* program,
     const tt::tt_metal::KernelHandle& unary_reader_kernel_id,
     const tt::tt_metal::KernelHandle& unary_writer_kernel_id,
     std::vector<uint32_t>& accumulated_total_per_dim) {
@@ -717,7 +717,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     const Tensor& a, Tensor& output, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end) {
     const tt::tt_metal::Shape output_shape = output.get_legacy_shape();
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device* device = a.device();
@@ -800,7 +800,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
                                            cores,
                                            accumulated_total_per_dim](
                                               const void* operation,
-                                              const Program& program,
+                                              const Program* program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) mutable {
@@ -834,7 +834,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
             accumulated_total_per_dim);
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks slice_multi_core(

@@ -22,7 +22,7 @@ R"(DPRINT server timed out on core (*,*) riscv 4, waiting on a RAISE signal: 1
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     // Run a kernel that just waits on a signal that never comes (BRISC only).
     constexpr CoreCoord core = {0, 0}; // Print on first core only

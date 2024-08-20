@@ -104,7 +104,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program *program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
         uint32_t M = 4;

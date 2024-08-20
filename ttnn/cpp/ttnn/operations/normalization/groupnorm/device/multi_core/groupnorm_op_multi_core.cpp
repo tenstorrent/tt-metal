@@ -334,7 +334,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
     // define core ranges
     bool use_mcast = num_cores_per_batch > 1 or num_cores_per_group > 1;
     uint32_t start_core_x = 0;
@@ -917,7 +917,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         ]
     (
         const void* operation,
-        Program &program,
+        Program *program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -950,7 +950,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace ttnn::operations::normalization

@@ -84,7 +84,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
             [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
                 split_work_to_cores(core_range, num_units);
 
-        Program program = CreateProgram();
+        Program *program = CreateProgram();
 
         // create circular buffers
         auto src_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -277,7 +277,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
                                                core_h,
                                                index_dims,
                                                dim_offset](
-                                                  const Program &program,
+                                                  const Program *program,
                                                   const std::vector<Buffer *> &input_buffers,
                                                   const std::vector<Buffer *> &output_buffers) {
             TT_ASSERT(output_buffers.size() == 1);
@@ -313,7 +313,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
             }
         };
 
-        return {std::move(program), override_runtime_args_callback};
+        return {program, override_runtime_args_callback};
     } else {
         // compute index info
         IndexInfo index_info[4] = {0};
@@ -347,7 +347,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
             [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
                 split_work_to_cores(core_range, num_units);
 
-        Program program = CreateProgram();
+        Program *program = CreateProgram();
 
         // create circular buffers
         auto src_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -532,7 +532,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
                                                core_h,
                                                index_dims,
                                                dim_offset](
-                                                  const Program &program,
+                                                  const Program *program,
                                                   const std::vector<Buffer *> &input_buffers,
                                                   const std::vector<Buffer *> &output_buffers) {
             TT_ASSERT(output_buffers.size() == 1);
@@ -568,7 +568,7 @@ operation::ProgramWithCallbacks moreh_getitem_tilized(
             }
         };
 
-        return {std::move(program), override_runtime_args_callback};
+        return {program, override_runtime_args_callback};
     }
 }
 

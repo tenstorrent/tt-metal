@@ -171,7 +171,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
 
     auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y](
                                                    const void *operation,
-                                                   const Program &program,
+                                                   const Program *program,
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
@@ -191,7 +191,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace primary

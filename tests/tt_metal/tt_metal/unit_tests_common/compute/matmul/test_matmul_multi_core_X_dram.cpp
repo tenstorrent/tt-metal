@@ -33,7 +33,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
     int per_core_M, int per_core_N, int K,
     int in0_block_w, int out_subblock_h, int out_subblock_w) {
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size;  // double buffer
@@ -134,7 +134,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
-    return {std::move(program), mm_reader_kernel, unary_writer_kernel};
+    return {program, mm_reader_kernel, unary_writer_kernel};
 }
 
 bool matmul_multi_core_single_dram(tt_metal::Device *device){
@@ -274,7 +274,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device *device){
 
 bool assign_runtime_args_to_program(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::Program *program,
     int num_cores_r,
     int num_cores_c,
     tt_metal::KernelHandle mm_reader_kernel,

@@ -440,7 +440,7 @@ int main(int argc, char** argv) {
         log_debug(LogTest, "out_subblock_h {}", out_subblock_h);
         log_debug(LogTest, "out_subblock_w {}", out_subblock_w);
 
-        tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+        tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
         if (single_core) {
             program = create_program_single_core(
                 device,
@@ -852,7 +852,7 @@ tt_metal::Program create_program_single_core (
     uint32_t num_blocks,
     uint32_t interm_cb_dtype
 ) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     log_debug("cb_data_format: {} ", cb_data_format);
     log_debug("math_fidelity: {} ", math_fidelity);
@@ -1037,7 +1037,7 @@ tt_metal::Program create_program_single_core (
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines});
 
-    return std::move(program);
+    return program;
 }
 
 
@@ -1065,7 +1065,7 @@ tt_metal::Program create_program(
     uint32_t out_addr,
     bool matmul_block,
     bool packer_l1) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     uint32_t num_buffer = 2;  // double buffer
     uint32_t in0_block_tiles = per_core_Mt * in0_block_w;
@@ -1318,7 +1318,7 @@ tt_metal::Program create_program(
             tt_metal::SetRuntimeArgs(program, mm_in1_reader_writer_kernel_id, core, mm_in1_reader_writer_args);
         }
     }
-    return std::move(program);
+    return program;
 }
 
 std::vector<float> generate_fp32_random(uint32_t num_elems, int32_t rand_max_val = 100) {

@@ -98,7 +98,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
     int out_subblock_w,
     int per_core_M, int per_core_N) {
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
@@ -206,12 +206,12 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
-    return {std::move(program), mm_reader_kernel_sender, mm_reader_kernel_receiver, unary_writer_kernel};
+    return {program, mm_reader_kernel_sender, mm_reader_kernel_receiver, unary_writer_kernel};
 }
 
 bool write_runtime_args_to_device(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::Program *program,
     int start_core_x,
     int start_core_y,
     int num_cores_r,

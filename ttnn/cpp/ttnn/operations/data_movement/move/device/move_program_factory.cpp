@@ -57,7 +57,7 @@ std::vector<CoreRange> get_multicast_regions(const Device *device, const CoreRan
 // This variant of move is invoked when the input buffer and output buffer overlap, which is possible because input buffer is deallocated before the op runs.
 // In this case, data in each core needs to be moved to a temporary local location before being copied into the output buffer
 operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input, Tensor &output) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
 
@@ -169,7 +169,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
         pages_handled_per_core += num_pages_per_core;
     }
 
-    auto override_runtime_args_callback = [kernel_id, num_cores, num_cores_y](const Program &program, const std::vector<Buffer*>& input_buffers, const std::vector<Buffer*>& output_buffers) {
+    auto override_runtime_args_callback = [kernel_id, num_cores, num_cores_y](const Program *program, const std::vector<Buffer*>& input_buffers, const std::vector<Buffer*>& output_buffers) {
         auto src_buffer = input_buffers.at(0);
         auto dst_buffer = output_buffers.at(0);
 
@@ -183,7 +183,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 // Sharded buffers are mapped to CBs. Move from top of src CB to dst CB

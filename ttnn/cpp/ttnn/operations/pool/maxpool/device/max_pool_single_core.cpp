@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                         uint32_t dilation_h, uint32_t dilation_w,
                                                         const MemoryConfig& out_mem_config,
                                                         uint32_t nblocks) {
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
     CoreRange cores({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
@@ -235,7 +235,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                               compute_config);
 
     auto override_runtime_args_callback =
-        [reader_kernel, writer_kernel](const Program& program,
+        [reader_kernel, writer_kernel](const Program* program,
                                        const std::vector<Buffer*>& input_buffers,
                                        const std::vector<Buffer*>& output_buffers) {
         auto src_dram_buffer = input_buffers.at(0);
@@ -252,7 +252,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
             runtime_args[1] = dst_dram_buffer->address();
         }
     };
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 } // namespace tt_metal

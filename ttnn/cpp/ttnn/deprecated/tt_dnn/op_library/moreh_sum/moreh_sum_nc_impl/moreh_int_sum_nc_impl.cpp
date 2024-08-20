@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks moreh_sum_int_nc_impl(const Tensor &input, const
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Device *device{input.device()};
-    tt_metal::Program program{tt_metal::CreateProgram()};
+    tt_metal::Program *program{tt_metal::CreateProgram()};
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -160,7 +160,7 @@ operation::ProgramWithCallbacks moreh_sum_int_nc_impl(const Tensor &input, const
 
     auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y](
                                                    const void *operation,
-                                                   const Program &program,
+                                                   const Program *program,
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {
@@ -181,7 +181,7 @@ operation::ProgramWithCallbacks moreh_sum_int_nc_impl(const Tensor &input, const
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {.program = program, .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace primary

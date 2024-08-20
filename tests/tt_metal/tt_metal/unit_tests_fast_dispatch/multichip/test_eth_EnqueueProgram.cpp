@@ -49,7 +49,7 @@ const size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& 
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord& eth_core_coord) {
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
     bool pass = true;
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
@@ -92,7 +92,7 @@ bool reader_kernel_no_send(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -162,7 +162,7 @@ bool writer_kernel_no_receive(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -262,7 +262,7 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::CreateProgram();
+    tt_metal::Program *sender_program = tt_metal::CreateProgram();
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -285,7 +285,7 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::CreateProgram();
+    tt_metal::Program *receiver_program = tt_metal::CreateProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -372,7 +372,7 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::CreateProgram();
+    tt_metal::Program *sender_program = tt_metal::CreateProgram();
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -396,7 +396,7 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::CreateProgram();
+    tt_metal::Program *receiver_program = tt_metal::CreateProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -457,7 +457,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::CreateProgram();
+    tt_metal::Program *sender_program = tt_metal::CreateProgram();
 
     auto input_packed = generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
 
@@ -503,7 +503,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::CreateProgram();
+    tt_metal::Program *receiver_program = tt_metal::CreateProgram();
 
     auto output_buffer = CreateBuffer(receiver_config);
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;

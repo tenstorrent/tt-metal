@@ -60,7 +60,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Device* device = input.device();
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -360,7 +360,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     }
 
     return {
-        .program = std::move(program),
+        .program = program,
         .override_runtime_arguments_callback =
             create_override_runtime_arguments_callback(reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y)};
 }

@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks moreh_adamw_(
     const DeviceComputeKernelConfig compute_kernel_config) {
     uint32_t num_units = param_in.volume() / TILE_HW;
 
-    Program program = CreateProgram();
+    Program *program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -229,7 +229,7 @@ operation::ProgramWithCallbacks moreh_adamw_(
     }
 
     return {
-        std::move(program),
+        program,
         create_override_addresses_callback(reader_kernel_id, writer_kernel_id, num_cores, num_cores_y)};
 }
 

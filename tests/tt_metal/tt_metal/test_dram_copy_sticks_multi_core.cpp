@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program *program = tt_metal::CreateProgram();
         auto num_cores_c = 2;
         auto num_cores_r = 2;
         CoreCoord start_core = {0, 0};

@@ -100,7 +100,7 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::CreateProgram();
+    tt_metal::Program *sender_program = tt_metal::CreateProgram();
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -124,7 +124,7 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::CreateProgram();
+    tt_metal::Program *receiver_program = tt_metal::CreateProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -183,7 +183,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::CreateProgram();
+    tt_metal::Program *sender_program = tt_metal::CreateProgram();
 
     auto input_packed = generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
     /*std::vector<uint32_t> input_packed =
@@ -235,7 +235,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::CreateProgram();
+    tt_metal::Program *receiver_program = tt_metal::CreateProgram();
 
     auto output_buffer = CreateBuffer(receiver_config);
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;

@@ -15,7 +15,7 @@
 class CommonFixture: public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program) {
+    void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program* program) {
         static std::unordered_map<uint64_t, uint32_t> trace_captured;
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);

@@ -99,10 +99,10 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestRandomizedProgram) {
 
     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
-    vector<Program> programs;
+    vector<Program *> programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         programs.push_back(CreateProgram());
-        Program& program = programs.back();
+        Program *program = programs.back();
 
         std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
         std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
@@ -245,7 +245,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestRandomizedProgram) {
     for (uint8_t cq_id = 0; cq_id < this->device_->num_hw_cqs(); ++cq_id) {
         log_info(tt::LogTest, "Running {} programs on cq {} for cache warmup.", programs.size(), (uint32_t)cq_id);
         // This loop caches program and runs
-        for (Program& program: programs) {
+        for (Program *program: programs) {
             EnqueueProgram(this->device_->command_queue(cq_id), program, false);
         }
 
@@ -259,7 +259,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestRandomizedProgram) {
             if (i % 10 == 0) {
                 log_debug(tt::LogTest, "Enqueueing {} programs on cq {} for iter: {}/{} now.", programs.size(), (uint32_t)cq_id, i+1, NUM_ITERATIONS);
             }
-            for (Program& program: programs) {
+            for (Program *program: programs) {
                 EnqueueProgram(this->device_->command_queue(cq_id), program, false);
             }
         }

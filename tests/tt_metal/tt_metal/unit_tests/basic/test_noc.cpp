@@ -142,7 +142,7 @@ TEST_F(DeviceFixture, DirectedStreamRegWriteRead) {
     for (tt_metal::Device *device : this->devices_) {
         std::set<CoreCoord> storage_only_cores = device->storage_only_cores();
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program *program = tt_metal::CreateProgram();
         CoreCoord logical_grid_size = device->compute_with_storage_grid_size();
         CoreCoord end_core{logical_grid_size.x - 1, logical_grid_size.y - 1};
         CoreRange all_cores(start_core, end_core);

@@ -87,7 +87,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateReadKernel(
-    Program &program,
+    Program *program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args,
@@ -104,7 +104,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateWriteKernel(
-    Program &program,
+    Program *program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args,
@@ -121,7 +121,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
-    Program &program,
+    Program *program,
     const std::string &file_name,
     std::vector<ComputeKernelArg> args,
     std::map<std::string, std::string> defines,
@@ -140,7 +140,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
-    Program &program,
+    Program *program,
     const std::string &file_name,
     ComputeKernelArg arg,
     std::map<std::string, std::string> defines,
@@ -166,7 +166,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] std::vector<CBHandle> CreateCircularBuffer(
-    Program &program,
+    Program *program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
     tt::DataFormat data_format,
     std::vector<CircularBufferArg> args) {
@@ -180,7 +180,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 }
 
 [[maybe_unused]] CBHandle CreateCircularBuffer(
-    Program &program,
+    Program *program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
     tt::DataFormat data_format,
     CircularBufferArg arg) {

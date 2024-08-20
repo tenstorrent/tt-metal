@@ -11,7 +11,7 @@
 namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks topk_single_core_interleaved(const Tensor &input_tensor, const uint16_t k, const int8_t dim, Tensor &value_tensor, Tensor &index_tensor) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
     CoreRange core({0, 0}, {0, 0});
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(value_tensor.get_dtype());
@@ -152,7 +152,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(const Tensor &input
 
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, binary_writer_kernel_id](
-        const Program &program,
+        const Program *program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(const Tensor &input
 
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 /**
@@ -204,7 +204,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
  *
 */
 operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_tensor, const uint16_t k, const int8_t dim, Tensor &value_tensor, Tensor &index_tensor) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
@@ -488,7 +488,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
     }
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, binary_writer_final_kernel_id, num_cores](
-        const Program &program,
+        const Program *program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -510,7 +510,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(const Tensor &input_t
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 } // namespace ttnn::operations::reduction::detail
