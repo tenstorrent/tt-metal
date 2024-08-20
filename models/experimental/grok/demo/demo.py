@@ -13,7 +13,6 @@ if os.getenv("CI") == "true":
     os.environ["GROK_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
     os.environ["GROK_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
     os.environ["GROK_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Grok/Grok-1/"
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
@@ -306,7 +305,8 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
     ],
     ids=["general_weights", "instruct_weights"],
 )
-def test_grok8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights):
+@pytest.mark.parametrize("enable_async_mode", [True], indirect=True)
+def test_grok8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights, enable_async_mode):
     return run_grok_demo(
         user_input=input_prompts, batch_size=32, device_mesh=t3k_device_mesh, instruct_mode=instruct_weights
     )

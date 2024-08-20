@@ -8,7 +8,6 @@ from loguru import logger
 
 # Set flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
-    os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
     os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
@@ -64,7 +63,8 @@ class RefModel(torch.nn.Module):
     "is_sharded",
     (True, False),
 )
-def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds):
+@pytest.mark.parametrize("enable_async_mode", [True], indirect=True)
+def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds, enable_async_mode):
     dim = 4096
     dtype = ttnn.bfloat8_b
 
@@ -108,7 +108,8 @@ def test_rmsnorm_singledevice(device, is_sharded, use_program_cache, reset_seeds
     "is_sharded",
     (True, False),
 )
-def test_rmsnorm_multidevice(t3k_device_mesh, is_sharded, use_program_cache, reset_seeds):
+@pytest.mark.parametrize("enable_async_mode", [True], indirect=True)
+def test_rmsnorm_multidevice(t3k_device_mesh, is_sharded, use_program_cache, reset_seeds, enable_async_mode):
     dim = 4096
     dtype = ttnn.bfloat8_b
 

@@ -15,19 +15,14 @@ python models/experimental/grok/scripts/repack_weights.py <path_to_checkpoint_di
 ```
 
 ### Set up environment
-1. Set async env var:
-```
-export TT_METAL_ASYNC_DEVICE_QUEUE=1
-```
-
-2. Prepare the weight cache directory:
+1. Prepare the weight cache directory:
 
 ```
 # Make a directory for ttnn us to cache weights into. This speeds up subsequent runs.
 mkdir <weight_cache_dir>
 ```
 
-3. Set up environment variables:
+2. Set up environment variables:
 ```
 export GROK_CKPT_DIR=<repacked_output_dir>
 export GROK_TOKENIZER_PATH=<path_to_tokenizer_dir>
@@ -43,7 +38,7 @@ Note that the cached weights folder structure will contain the general and instr
   ...
 ```
 
-4. Cache the weights (first-time setup):
+3. Cache the weights (first-time setup):
 ```
 # Build a full 32 layer model to cache the weights. This will take some time.
 pytest -svv models/experimental/grok/tests/test_grok_model.py::test_grok_model_inference[wormhole_b0-True-1-32-output]
