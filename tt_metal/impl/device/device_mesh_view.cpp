@@ -7,6 +7,45 @@
 #include <algorithm>
 #include <stdexcept>
 
+// Utils to traverse devices in a ring to support AllGather operations
+bool ham_cycle_dfs(
+    const std::vector<std::vector<int>>& adj, std::vector<int>& path, std::vector<int>& visited, int pos) {
+    if (pos == path.size()) {
+        if (adj[path[pos - 1]][path[0]] == 1)
+            return true;
+        else
+            return false;
+    }
+
+    for (int v = 0; v < adj.size(); v++) {
+        if (adj[path[pos - 1]][v] == 1 and visited[v] == 0) {
+            path[pos] = v;
+            visited[v] = 1;
+
+            if (ham_cycle_dfs(adj, path, visited, pos + 1) == true)
+                return true;
+
+            path[pos] = -1;
+            visited[v] = 0;
+        }
+    }
+
+    return false;
+}
+
+std::vector<int> get_hamiltonian_cycle(std::vector<std::vector<int>>& adj, int s, int N) {
+    std::vector<int> path(N, -1);
+    std::vector<int> visited(adj.size(), 0);
+
+    path[0] = s;
+    visited[s] = 1;
+    if (ham_cycle_dfs(adj, path, visited, 1) == false) {
+        TT_FATAL(false, fmt::format("Could not find ring of devices starting from chip {} with size.", s, N));
+        return {};
+    }
+    return path;
+}
+
 namespace tt::tt_metal {
 
 using DeviceMesh = tt::tt_metal::DeviceMesh;
@@ -59,6 +98,7 @@ const std::vector<DeviceMeshView::device_pointer>& DeviceMeshView::get_devices()
     return devices_;
 }
 
+// Mesh Traveral APIs
 DeviceMeshView::DeviceView DeviceMeshView::get_devices(const Coordinate& start, const Coordinate& end) {
     if (start.row > end.row || start.col > end.col) {
         log_fatal("Invalid coordinates: start {} must be less than or equal to end {}", start, end);
@@ -115,6 +155,40 @@ std::vector<std::vector<DeviceMeshView::device_pointer>> DeviceMeshView::get_col
         column_views.push_back(get_devices_on_column(col));
     }
     return column_views;
+}
+
+// Ring Traversal APIs
+DeviceMeshView::DeviceView DeviceMeshView::get_devices_on_ring(
+    std::vector<DeviceMeshView::device_pointer> devices, int start_device_id, int num_devices_in_ring) const {
+    // Returns the indices of the devices in the ring starting from the start_device_id
+    // i.e. there are connections from devices[device_ring_idx[i]] to devices[device_ring_idx[i+1]] for all i, with wrap
+    std::vector<std::vector<int>> adj(devices.size(), std::vector<int>(devices.size(), 0));
+    int start_index = -1;
+    for (std::uint32_t i = 0; i < devices.size(); ++i) {
+        const auto& device = devices[i];
+        if (device->id() == start_device_id) {
+            start_index = i;
+        }
+        for (const auto& connected_device_id : device->get_ethernet_connected_device_ids()) {
+            for (std::uint32_t j = 0; j < devices.size(); ++j) {
+                if (devices[j]->id() == connected_device_id) {
+                    adj[i][j] = 1;
+                }
+            }
+        }
+    }
+    TT_FATAL(start_index != -1, "Could not find start device in the list of devices");
+
+    const auto& device_ring_idx = get_hamiltonian_cycle(adj, start_device_id, num_devices_in_ring);
+
+    std::vector<DeviceMeshView::device_pointer> device_ring;
+    device_ring.reserve(device_ring_idx.size());
+
+    for (const auto& idx : device_ring_idx) {
+        device_ring.push_back(devices[idx]);
+    }
+
+    return device_ring;
 }
 
 template<typename Pred>

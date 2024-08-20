@@ -9,7 +9,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
-
 namespace tt::tt_metal {
 
 DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type)
@@ -117,10 +116,19 @@ std::vector<Device*> DeviceMesh::get_devices_on_column(int col_idx) const {
     return this->view->get_devices_on_column(col_idx);
 }
 
+std::vector<Device*> DeviceMesh::get_devices_on_ring() const {
+    const auto& devices = this->get_devices();
+    TT_ASSERT(not devices.empty(), "No devices in the mesh");
+
+    return this->view->get_devices_on_ring(devices, devices[0]->id(), devices.size());
+}
+
 const DeviceIds DeviceMesh::get_device_ids() const
 {
+    // Return the logical device ids
     DeviceIds device_ids;
     for (const auto& [device_id, device] : mesh_devices) {
+        // device_id is not always equal to device->id()
         device_ids.push_back(device_id);
     }
     return device_ids;
@@ -181,4 +189,4 @@ bool validate_worker_modes(const std::vector<Device*>& workers) {
     return worker_modes_match;
 }
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

@@ -39,6 +39,7 @@ public:
     Device *get_device(int row_idx, int col_idx) const;
     std::vector<Device *> get_devices_on_row(int row_idx) const;
     std::vector<Device *> get_devices_on_column(int col_idx) const;
+    std::vector<Device *> get_devices_on_ring() const;
 
     const DeviceIds get_device_ids() const;
 

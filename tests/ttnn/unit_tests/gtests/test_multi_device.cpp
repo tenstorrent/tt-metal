@@ -45,4 +45,15 @@ TEST_F(T3kMultiDeviceFixture, TestGetDistributedTensorConfigFromMultiDeviceStora
     EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));
 }
 
+TEST_F(T3kMultiDeviceFixture, TestDeviceMeshRingAPI) {
+    DeviceMesh* device_mesh = this->device_mesh_.get();
+    const auto& ring_devices = device_mesh->get_devices_on_ring();
+    // Verify that the first index is mapped to Device with id 0
+    for (int i = 0; i < ring_devices.size(); i++) {
+        int next_device_id = ring_devices[(i + 1) % ring_devices.size()]->id();
+        const auto& connected_chips = ring_devices[i]->get_ethernet_connected_device_ids();
+        EXPECT_TRUE(std::find(connected_chips.begin(), connected_chips.end(), next_device_id) != connected_chips.end());
+    }
+}
+
 }  // namespace ttnn::multi_device::test

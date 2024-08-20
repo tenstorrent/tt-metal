@@ -81,6 +81,9 @@ public:
     [[nodiscard]] DeviceViews get_row_views() const;
     [[nodiscard]] DeviceViews get_column_views() const;
 
+    [[nodiscard]] DeviceView get_devices_on_ring(
+        std::vector<device_pointer> devices, int start_device_id, int num_devices_in_ring) const;
+
     template<typename Pred>
     [[nodiscard]] DeviceMeshView subview(Pred&& predicate) const;
 
