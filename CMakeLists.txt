@@ -93,6 +93,9 @@ else()
 endif()
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
 
+option(ENABLE_ASAN "Enable build with AddressSanitizer" OFF)
+message(STATUS "Build with ASAN: ${ENABLE_ASAN}")
+
 include(GNUInstallDirs)
 set(CMAKE_INSTALL_PREFIX "${PROJECT_BINARY_DIR}")
 set(CMAKE_INSTALL_LIBDIR "${PROJECT_BINARY_DIR}/lib")
@@ -156,7 +159,7 @@ target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-
 ADJUST_COMPILER_WARNINGS()
 
 add_library(compiler_flags INTERFACE)
-target_link_libraries(compiler_flags INTERFACE compiler_warnings stdlib)
+target_link_libraries(compiler_flags INTERFACE linker_flags compiler_warnings stdlib)
 target_compile_options(compiler_flags INTERFACE -mavx2 -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto)
 
 if(ENABLE_CODE_TIMERS)
@@ -165,6 +168,10 @@ endif()
 if(ENABLE_TRACY)
     target_compile_options(compiler_flags INTERFACE -DTRACY_ENABLE -fno-omit-frame-pointer)
     target_link_options(linker_flags INTERFACE -rdynamic)
+endif()
+if(ENABLE_ASAN)
+    target_compile_options(compiler_flags INTERFACE -fsanitize=address)
+    target_link_options(linker_flags INTERFACE -fsanitize=address)
 endif()
 
 string(TOUPPER $ENV{ARCH_NAME} ARCH_NAME_DEF)
