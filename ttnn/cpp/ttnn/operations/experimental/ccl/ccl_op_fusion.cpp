@@ -137,6 +137,7 @@ void MatmulFusedOpSignaler::emit_matmul_fused_op_ct_args(
 ) {
     TT_ASSERT(initialized_all_gather && initialized_fused_op, "MatmulFusedOpSignaler not initialized fully.");
 
+    ct_args.push_back(static_cast<bool>(true));
     ct_args.push_back(static_cast<uint32_t>(this->num_transfers));
     ct_args.push_back(static_cast<uint32_t>(this->ring_size));
     ct_args.push_back(static_cast<uint32_t>(this->start_ring_index));

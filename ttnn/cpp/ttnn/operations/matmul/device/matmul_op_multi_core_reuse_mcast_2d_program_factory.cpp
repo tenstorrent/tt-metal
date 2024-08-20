@@ -495,11 +495,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
     }
 
-    if (fuse_op) {
-        mm_kernel_in0_sender_interleaved_defines["MATMUL_SIGNAL"] = "1";
-        mm_kernel_in1_sender_writer_defines["MATMUL_SIGNAL"] = "1";
-    }
-
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
@@ -543,6 +538,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // Switch the offesets for the weights
             fused_op_signaler->output_page_offset = fused_op_signaler->tensor_slice_shape_width * fused_op_signaler->weight_tensor_width;
             fused_op_signaler->emit_matmul_fused_op_ct_args(in1_sender_writer_compile_time_args);
+        } else {
+            // Push false for fuse_op param
+            in0_sender_compile_time_args.push_back(static_cast<bool>(false));
+            in1_sender_writer_compile_time_args.push_back(static_cast<bool>(false));
         }
 
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(

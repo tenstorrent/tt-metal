@@ -166,3 +166,121 @@ FORCE_INLINE void advance_start_page_idx(
     }
 
 }
+
+
+struct MatmulOpReceiver {
+    uint32_t num_tensor_slices;
+    uint32_t num_directions = 2; // ASSUMPTION: Always 2 directions
+
+    bool wait_for_signal;
+    uint32_t num_transfers;
+    uint32_t ring_size;
+    uint32_t tensor_slice_shape_width; // In tiles
+    uint32_t output_page_offset;
+    uint32_t last_output_page_offset;
+
+    uint32_t num_blocks;
+    uint32_t num_blocks_per_slice;
+
+    // Used to track internal state
+    uint32_t ring_idxs[2];
+    uint32_t start_page_idxs[2];
+    bool is_clockwise_dirs[2];
+    volatile tt_l1_ptr uint32_t* signal_op_semaphore_addr_ptrs[2];
+    uint32_t curr_dir;
+    uint32_t curr_transfer_idx;
+
+
+    bool initialized = false;
+
+    MatmulOpReceiver() {}
+
+    MatmulOpReceiver(
+        bool wait_for_signal,
+        uint32_t num_transfers,
+        uint32_t ring_size,
+        uint32_t start_ring_index,
+        uint32_t tensor_slice_shape_width,
+        uint32_t output_page_offset,
+        uint32_t last_output_page_offset,
+        uint32_t is_clockwise_direction,
+        uint32_t signal_op_sem_addr_dir0,
+        uint32_t signal_op_sem_addr_dir1,
+        uint32_t num_blocks,
+        uint32_t tiles_per_block // Across the same dimension as tensor_slice_shape_width
+    ) : wait_for_signal(wait_for_signal),
+        num_transfers(num_transfers),
+        ring_size(ring_size),
+        tensor_slice_shape_width(tensor_slice_shape_width),
+        output_page_offset(output_page_offset),
+        last_output_page_offset(last_output_page_offset),
+        num_blocks(num_blocks)
+    {
+
+        this->num_tensor_slices = this->num_transfers * this->num_directions;
+
+        // Signal receiver semaphores
+        if (this->wait_for_signal) {
+            this->signal_op_semaphore_addr_ptrs[0] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_op_sem_addr_dir0);
+            this->signal_op_semaphore_addr_ptrs[1] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_op_sem_addr_dir1);
+        }
+
+        // Start idxs for the different directions
+        this->ring_idxs[0] = start_ring_index;
+        // Adjust to include copying over the local tensor slice, which is at start_ring_index. If clockwise, then dir1 will be anticlockwise, which means that the ring index will update in ascending order.
+        // Therefore, to undo that, we subtract 1. If anticlockwise, then dir1 will be clockwise, which means that the ring index will update in descending order. Therefore, to undo that, we add 1.
+        this->ring_idxs[1] = (is_clockwise_direction ? start_ring_index - 1 : start_ring_index + 1) % this->ring_size;
+
+        this->start_page_idxs[0] = this->ring_idxs[0] * this->output_page_offset;
+        this->start_page_idxs[1] = this->ring_idxs[1] * this->output_page_offset;
+
+        this->is_clockwise_dirs[0] = is_clockwise_direction;
+        this->is_clockwise_dirs[1] = !is_clockwise_direction;
+
+        this->num_blocks_per_slice = this->tensor_slice_shape_width / tiles_per_block;
+        ASSERT(this->num_tensor_slices * this->num_blocks_per_slice == this->num_blocks);
+
+        this->curr_dir = is_clockwise_direction ? 0 : 1;
+        this->curr_transfer_idx = 0;
+
+        this->initialized = true;
+    }
+
+
+    void update_current_block_start_tile_id(
+        const uint32_t& block_idx,
+        uint32_t& curr_block_start_tile_id,
+        const uint32_t& tensor_start_tile_id
+    ) {
+        if (block_idx % this->num_blocks_per_slice == 0) { // Aligned to the start of a tensor slice
+
+            uint32_t tensor_slice_cnt = this->curr_transfer_idx / this->num_directions;
+
+            // Update the start page idx of the tensor slice in curr_direction
+            advance_start_page_idx(
+                this->start_page_idxs[this->curr_dir],
+                this->ring_idxs[this->curr_dir],
+                this->ring_size,
+                this->is_clockwise_dirs[this->curr_dir],
+                this->output_page_offset,
+                this->last_output_page_offset
+            );
+
+            // Use the new start page idx to find the start tile id of the current tensor slice
+            curr_block_start_tile_id = tensor_start_tile_id + this->start_page_idxs[this->curr_dir];
+
+            if (this->wait_for_signal) {
+                // Wait to receive the signal to proceed processing the tensor slice
+                if ((this->curr_dir == 0 && tensor_slice_cnt < this->num_transfers)
+                    || (this->curr_dir == 1 && tensor_slice_cnt < this->num_transfers - 1)) {
+                    noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], tensor_slice_cnt + 1);
+                }
+            }
+
+            // Update the relevant internal states
+            this->curr_transfer_idx++;
+            this->curr_dir = !this->curr_dir;
+        }
+    }
+
+};

@@ -97,6 +97,27 @@ void kernel_main() {
         .data_format = bias_data_format};
 #endif
 
+    constexpr bool fuse_op = get_compile_time_arg_val(26);
+
+    MatmulOpReceiver fused_op_receiver;
+    if constexpr(fuse_op) {
+        fused_op_receiver = MatmulOpReceiver(
+            false, /* wait_for_signal */
+            get_compile_time_arg_val(27), /* num_transfers */
+            get_compile_time_arg_val(28), /* ring_size */
+            get_compile_time_arg_val(29), /* start_ring_index */
+            get_compile_time_arg_val(30), /* tensor_slice_shape_width */
+            get_compile_time_arg_val(31), /* output_page_offset */
+            get_compile_time_arg_val(32), /* last_output_page_offset */
+            get_compile_time_arg_val(33), /* is_clockwise_direction */
+            0, /* signal_op_sem_addr_dir0 */
+            0, /* signal_op_sem_addr_dir1 */
+            num_blocks,
+            in1_block_h /* tiles_per_block (in the same dimension */
+        );
+    }
+
+
 // RT and COMPILE TIME ARGS for DRAM sharded weights
 #ifdef IN1_DRAM_SHARDED
     const uint32_t vc = get_arg_val<uint32_t>(18);
@@ -105,64 +126,13 @@ void kernel_main() {
     tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes = (tt_l1_ptr uint32_t*)get_arg_addr(21);
     tt_l1_ptr uint32_t* current_dram_bank_id = (tt_l1_ptr uint32_t*)get_arg_addr(22);
 
-    constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(26);
-    constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(27);
+    constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(27);
+    constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(28);
 #endif
 
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
-
-// COMPILE TIME ARGS for All Gather Matmul
-#ifdef MATMUL_SIGNAL
-    /* Overlapped all-gather with matmul params */
-    const uint32_t num_transfers = get_compile_time_arg_val(26);
-    const uint32_t ring_size = get_compile_time_arg_val(27);
-    const uint32_t start_ring_index = get_compile_time_arg_val(28);
-    const uint32_t tensor_slice_shape_width = get_compile_time_arg_val(29);
-    const uint32_t output_page_offset = get_compile_time_arg_val(30);
-    const uint32_t last_output_page_offset = get_compile_time_arg_val(31);
-    const uint32_t is_clockwise_direction = get_compile_time_arg_val(32);
-    const uint32_t signal_op_sem_addr_dir0 = get_compile_time_arg_val(33);
-    const uint32_t signal_op_sem_addr_dir1 = get_compile_time_arg_val(34);
-
-    // // DPRINT all the above values
-    // DPRINT << "num_transfers: " << num_transfers << ENDL();
-    // DPRINT << "ring_size: " << ring_size << ENDL();
-    // DPRINT << "start_ring_index: " << start_ring_index << ENDL();
-    // DPRINT << "tensor_slice_shape_width: " << tensor_slice_shape_width << ENDL();
-    // DPRINT << "output_page_offset: " << output_page_offset << ENDL();
-    // DPRINT << "last_output_page_offset: " << last_output_page_offset << ENDL();
-    // DPRINT << "is_clockwise_direction: " << is_clockwise_direction << ENDL();
-    // DPRINT << "signal_op_sem_addr_dir0: " << signal_op_sem_addr_dir0 << ENDL();
-    // DPRINT << "signal_op_sem_addr_dir1: " << signal_op_sem_addr_dir1 << ENDL();
-
-
-    // Internal semaphores
-    volatile tt_l1_ptr uint32_t* signal_op_semaphore_addr_ptr_dir0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_op_sem_addr_dir0);
-    volatile tt_l1_ptr uint32_t* signal_op_semaphore_addr_ptr_dir1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_op_sem_addr_dir1);
-
-    // Start idxs for the different directions
-    uint32_t ring_index_dir0 = start_ring_index;
-    // Adjust to include copying over the local tensor slice, which is at start_ring_index. If clockwise, then dir1 will be anticlockwise, which means that the ring index will update in ascending order.
-    // Therefore, to undo that, we subtract 1. If anticlockwise, then dir1 will be clockwise, which means that the ring index will update in descending order. Therefore, to undo that, we add 1.
-    uint32_t ring_index_dir1 = (is_clockwise_direction ? start_ring_index - 1 : start_ring_index + 1) % ring_size;
-
-    volatile tt_l1_ptr uint32_t* signal_op_semaphore_ptrs[2] = {signal_op_semaphore_addr_ptr_dir0, signal_op_semaphore_addr_ptr_dir1};
-    uint32_t ring_idxs[2] = {ring_index_dir0, ring_index_dir1};
-    uint32_t start_page_idxs[2] = {ring_index_dir0 * output_page_offset, ring_index_dir1 * output_page_offset};
-    uint32_t is_clockwise_dirs[2] = {is_clockwise_direction, !is_clockwise_direction};
-
-    const uint32_t num_blocks_per_slice = tensor_slice_shape_width / in1_block_h; // TODO: Confirm if tensor_slice_shape_width is in tiles
-    DPRINT << "IN1 CHECK num_blocks_per_slice * num tensor slices ::: " << num_blocks_per_slice * (num_transfers * 2) << " === " << num_blocks << ENDL();
-
-    // // DPRINT the num blocks stuff
-    // DPRINT << "Num blocks: " << num_blocks << ENDL();
-    // DPRINT << "Num blocks per slice: " << num_blocks_per_slice << ENDL();
-    // DPRINT << "tensor_slice_shape_width: " << tensor_slice_shape_width << ENDL();
-    // DPRINT << "in1_block_w: " << in1_block_w << ENDL();
-    // DPRINT << "Num transfers: " << num_transfers << ENDL();
-#endif
 
 
 //  READER
@@ -219,27 +189,15 @@ void kernel_main() {
 #ifdef IN1_DRAM_SHARDED
         uint32_t l1_read_addr_in1_offset = 0;
 #endif
-#ifndef MATMUL_SIGNAL
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; ++block) {
-#else
-        // (num_transfers * 2) * num_blocks_per_slice === num_blocks so we iterate through the same number of blocks
-        for (uint32_t i = 0, dir = 0; i < num_transfers * 2; i++, dir = !dir) {
-            uint32_t tensor_slice_cnt = i / 2; // Since we are alternating between the two directions, we need to divide by 2 to get the correct tensor slice count in each direction
-
-            // Note: this call will only run when block is aligned to the start of a tensor slice
-            advance_start_page_idx(start_page_idxs[dir], ring_idxs[dir], ring_size, is_clockwise_dirs[dir], output_page_offset, last_output_page_offset);
-
-            uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id + start_page_idxs[dir];
-
-            // Wait for the signal for this tensor slice
-            // DPRINT << "Waiting for signal for tensor slice: " << tensor_slice_cnt << " in direction: " << dir << ENDL();
-            if ((!dir && tensor_slice_cnt < num_transfers) || (dir && tensor_slice_cnt < num_transfers - 1)) { // Using dir as a selector to select which logic to choose, because dir = 1 will have 1 less semaphore (because one is local already)
-                // noc_semaphore_wait_min(signal_op_semaphore_ptrs[dir], tensor_slice_cnt + 1); // TODO: Update the semaphore pointer to be an array based on direction, just like datacopy
+            if constexpr(fuse_op) {
+                fused_op_receiver.update_current_block_start_tile_id(
+                    block,
+                    in1_tensor_current_block_start_tile_id,
+                    in1_tensor_start_tile_id
+                );
             }
-
-            for (uint32_t tensor_slice_block = 0; tensor_slice_block < num_blocks_per_slice; ++tensor_slice_block) {
-#endif
 #ifdef IN1_DRAM_SHARDED
             // Operand 1
             cb_reserve_back(cb_id_in1, in1_block_num_tiles);
@@ -335,13 +293,7 @@ void kernel_main() {
 #ifndef IN1_SHARDED
             cb_push_back(cb_id_in1, in1_block_num_tiles);
 #endif
-
-#ifdef MATMUL_SIGNAL
-            }
         }
-#else
-        }
-#endif
 #ifdef FUSE_BIAS
         // Only read bias on first batch
         if (b == 0) {
