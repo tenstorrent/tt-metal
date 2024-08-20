@@ -9,10 +9,9 @@ import torch
 import ttnn
 
 
-@pytest.mark.skip(reason="Graph capture is causing other tests to fail")
 @pytest.mark.parametrize("scalar", [3])
 @pytest.mark.parametrize("size", [64])
-@pytest.mark.parametrize("mode", [ttnn.graph.GraphRunMode.FAKE, ttnn.graph.GraphRunMode.REAL])
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
 def test_graph_capture(device, scalar, size, mode):
     torch.manual_seed(0)
 
@@ -27,4 +26,5 @@ def test_graph_capture(device, scalar, size, mode):
     assert captured_graph[0]["name"] == "capture_start"
     assert captured_graph[1]["name"] == "begin_function"
     assert captured_graph[1]["params"]["name"] == "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor"
-    assert captured_graph[-1]["name"] == "buffer_deallocate"
+    assert captured_graph[-2]["name"] == "buffer_deallocate"
+    assert captured_graph[-1]["name"] == "capture_end"
