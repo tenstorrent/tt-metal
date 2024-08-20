@@ -1327,7 +1327,7 @@ def gen_celu_args(
     dtypes,
     layouts,
     mem_configs,
-    low=-0.01,
+    low=0.01,
     high=10,
     dtype=torch.bfloat16,
     do_sanitize_args=True,
