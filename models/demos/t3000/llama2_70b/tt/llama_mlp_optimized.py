@@ -48,6 +48,7 @@ class TtLlamaMLP_optimized:
         w2_str = f"{self.layer_name}.feed_forward.w2.weight"
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
+        w1_dram_shard_str = f"{self.layer_name}.feed_forward.w1_dram_shard.weight"
         w2_dram_shard_str = f"{self.layer_name}.feed_forward.w2_dram_shard_reduce.weight"
         w3_dram_shard_str = f"{self.layer_name}.feed_forward.w3_dram_shard.weight"
 
@@ -81,14 +82,18 @@ class TtLlamaMLP_optimized:
             }
         )
 
+        w3_shard_shape = (8192, 4224 // 12)  # padded cols to divide by 12
+        w3_shard_spec = ttnn.ShardSpec(weight_grid, w3_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        w3_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w3_shard_spec)
+
         self.w1 = ttnn.as_tensor(
             padded_w1,
             dtype=w1_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
-            cache_file_name=self.cache_path / w1_str,
+            device=self.device_mesh,
+            memory_config=w3_mem_config,
+            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            cache_file_name=self.cache_path / w1_dram_shard_str,
         )
 
         w2_shard_shape = (4096, 8448 // 12)  # expand dim is 32k / 8 chips padded
@@ -104,9 +109,6 @@ class TtLlamaMLP_optimized:
             cache_file_name=self.cache_path / w2_dram_shard_str,
         )
 
-        w3_shard_shape = (8192, 4224 // 12)  # padded cols to divide by 12
-        w3_shard_spec = ttnn.ShardSpec(weight_grid, w3_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
-        w3_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w3_shard_spec)
         self.w3 = ttnn.as_tensor(
             padded_w3,
             dtype=w3_dtype,
@@ -184,8 +186,8 @@ class TtLlamaMLP_optimized:
         w1_out = ttnn.matmul(
             x,
             self.w1,
-            program_config=self.model_config["PADDED_FF1_MM_PROGCFG"],
-            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
         )
 
@@ -193,7 +195,7 @@ class TtLlamaMLP_optimized:
             x,
             self.w3,
             program_config=self.model_config["PADDED_FF3_MM_PROGCFG"],
-            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
         )
         x.deallocate(True)
@@ -201,9 +203,11 @@ class TtLlamaMLP_optimized:
         hidden_states = ttnn.mul(
             w1_out,
             w3_out,
-            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
-            dtype=self.model_config["BFP8_DTYPE"],
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            dtype=ttnn.bfloat8_b,
         )
+
         w1_out.deallocate(True)
         w3_out.deallocate(True)
 
@@ -211,7 +215,7 @@ class TtLlamaMLP_optimized:
             hidden_states,
             self.w2,
             program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
-            memory_config=self.model_config["WIDTH_SHARDED_MEMCFG"],
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
 

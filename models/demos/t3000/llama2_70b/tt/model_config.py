@@ -557,17 +557,6 @@ def get_model_config(
     # Llama MLP config
     # Padded MLP 32K config:
     if llm_mode == "decode":
-        model_config["PADDED_FF1_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
-            in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
-            out_subblock_h=1,  # Must be divisible by per_core_M
-            out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
-            per_core_N=4,  # N / TILE_WIDTH / Grid_Size is based on compute_with_storage_grid_size, N = 4096 for num_device=8
-            fuse_batch=True,
-            fused_activation=ttnn.UnaryOpType.SILU,
-            mcast_in0=True,
-        )
         model_config["PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=8,  # K = 8192 / TILE_WIDTH=32 / Grid_Size is based on compute_with_storage_grid_size
             per_core_M=1,  # M / TILE_HEIGHT = 32 / 32
