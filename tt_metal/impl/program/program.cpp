@@ -80,7 +80,6 @@ namespace detail {
 
 void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
 
-void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 }  // namespace detail
 
 std::atomic<uint64_t> MetalProgram::program_counter = 0;
@@ -98,6 +97,77 @@ MetalProgram::MetalProgram() :
 
     program_configs_.resize(programmable_core_count);
     program_config_sizes_.resize(programmable_core_count);
+}
+
+// Helper function to validate DataMovementConfigs, used in create_kernel
+void CheckDataMovementConfig(MetalProgram *program, const std::string &file_name, const CoreRangeSet &core_ranges) {
+    bool riscv0_in_use = false; bool riscv1_in_use = false;
+    bool noc0_in_use = false; bool noc1_in_use = false;
+
+    auto set_global_and_local_noc_usage = [&](KernelHandle kernel_id, bool &local_noc0_usage, bool &local_noc1_usage) {
+        const auto kernel = program->get_kernel(kernel_id);
+        auto kernel_config = std::get<DataMovementConfig>(kernel->config());
+        auto noc_value = magic_enum::enum_integer(kernel_config.noc);
+        local_noc0_usage = noc_value == 0;
+        local_noc1_usage = noc_value == 1;
+        noc0_in_use = local_noc0_usage;
+        noc1_in_use = local_noc1_usage;
+    };
+
+    for (const auto &core_range : core_ranges.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                const KernelGroup * kernel_group = program->kernels_on_core(CoreCoord(x, y),
+                    hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+                if (kernel_group != nullptr) {
+                    bool local_noc0_in_use = false; bool local_noc1_in_use = false;
+                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value()) {
+                        riscv0_in_use = true;
+                        set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value(), local_noc0_in_use, local_noc1_in_use);
+                    }
+                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
+                        riscv1_in_use = true;
+                        set_global_and_local_noc_usage(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value(), local_noc0_in_use, local_noc1_in_use);
+                    }
+                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
+                        kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
+                        TT_FATAL(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!", CoreCoord(x, y).str());
+                    }
+                }
+            }
+        }
+    }
+
+    TT_FATAL(not (riscv0_in_use and riscv1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because both data movement processors are in use!", file_name);
+    TT_FATAL(not (noc0_in_use and noc1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernels for {} across specified cores because both NOCs are in use!", file_name);
+}
+
+KernelHandle MetalProgram::create_kernel(
+    const std::string &file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config) {
+    return std::visit(
+        [&](auto &&cfg) -> KernelHandle {
+            CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+            std::shared_ptr<Kernel> kernel;
+            using T = std::decay_t<decltype(cfg)>;
+            if constexpr (std::is_same_v<T, DataMovementConfig>) {
+                CheckDataMovementConfig(this, file_name, core_ranges);
+                kernel = std::make_shared<DataMovementKernel>(file_name, core_ranges, cfg);
+                return this->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+            } else if constexpr (std::is_same_v<T, ComputeConfig>) {
+                kernel = std::make_shared<ComputeKernel>(file_name, core_ranges, cfg);
+                return this->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+            } else if constexpr (std::is_same_v<T, EthernetConfig>) {
+                kernel = std::make_shared<EthernetKernel>(file_name, core_ranges, cfg);
+                if (cfg.eth_mode == Eth::IDLE) {
+                    return this->add_kernel(kernel, HalProgrammableCoreType::IDLE_ETH);
+                } else {
+                    return this->add_kernel(kernel, HalProgrammableCoreType::ACTIVE_ETH);
+                }
+            }
+        },
+        config);
 }
 
 KernelHandle MetalProgram::add_kernel(std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType &programmable_core_type) {
@@ -518,6 +588,75 @@ void MetalProgram::init_semaphores(const Device &device, const CoreCoord &logica
             {semaphore.get().initial_value()},
             addr + semaphore.get().offset());
     }
+}
+
+// Helper function to get semaphore ids from a core range, used in create_semaphore.
+std::optional<uint32_t> get_semaphore_id(const MetalProgram *program, const CoreRange &core_range) {
+    std::optional<uint32_t> semaphore_id = std::nullopt;
+    std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
+    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+            CoreCoord logical_core(x, y);
+            auto semaphores = program->semaphores_on_core(logical_core);
+            if (semaphores.size() == NUM_SEMAPHORES) {
+                TT_THROW(
+                    "Cannot add semaphore on core " + logical_core.str() + ". Max number of semaphores (" +
+                    std::to_string(NUM_SEMAPHORES) + ") reached!");
+            }
+
+            for (const auto &semaphore : semaphores) {
+                semaphore_histogram[semaphore.get().id()]++;
+            }
+        }
+    }
+
+    std::optional<uint32_t> uninitialized_sem_id = std::nullopt;
+    for (int sem_id = 0; sem_id < semaphore_histogram.size(); sem_id++) {
+        if (semaphore_histogram.at(sem_id) == 0) {
+            uninitialized_sem_id = sem_id;
+            break;
+        }
+    }
+
+    if (uninitialized_sem_id.has_value()) {
+        semaphore_id =  uninitialized_sem_id.value();
+    } else {
+        TT_THROW("Unable to initialize semaphores on core range " + core_range.str());
+    }
+
+    return semaphore_id;
+}
+
+uint32_t MetalProgram::create_semaphore(
+    const std::variant<CoreRange, CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type) {
+    return std::visit(
+        [&](auto &&c) -> uint32_t {
+            using T = std::decay_t<decltype(c)>;
+            CoreRangeSet crs({});
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                crs = CoreRangeSet({c});
+            } else {
+                crs = c;
+            }
+            std::optional<uint32_t> semaphore_id;
+            TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
+            for (const auto &core_range : crs.ranges()) {
+                CoreCoord start_core = core_range.start_coord;
+                CoreCoord end_core = core_range.end_coord;
+                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(this, core_range);
+                if (!semaphore_id.has_value()) {
+                    semaphore_id = semaphore_id_candidate;
+                } else {
+                    semaphore_id = std::max(semaphore_id.value(), semaphore_id_candidate.value());
+                }
+            }
+            TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
+
+            this->add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
+
+            return semaphore_id.value();
+        },
+        core_spec);
 }
 
 void MetalProgram::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {

@@ -116,6 +116,8 @@ class MetalProgram {
     size_t num_semaphores ( const CoreCoord & core ) const;
     size_t num_semaphores () const;
     void init_semaphores ( const Device & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
+    uint32_t create_semaphore(
+        const std::variant<CoreRange, CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
     // XXXXX TODO: this should return a const reference
     std::vector<std::vector<CoreCoord>> logical_cores() const;
 
@@ -133,9 +135,14 @@ class MetalProgram {
 
     bool is_finalized() const { return this->finalized_; }
     void finalize();
-    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType &core_type);
+    KernelHandle create_kernel(
+        const std::string &file_name,
+        const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+        const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
+
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
+    CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
 
     void capture_multi_device_dependencies() { capture_multi_device_dependencies_ = true; }
     bool has_multi_device_dependencies() { return capture_multi_device_dependencies_; }
@@ -198,6 +205,7 @@ class MetalProgram {
     std::vector<CircularBufferAllocator> cb_allocators_;
 
     std::vector<Semaphore> semaphores_;
+    void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
     CoreRangeSet worker_crs_;
     std::unordered_map<chip_id_t, bool> compile_needed_;
@@ -217,13 +225,10 @@ class MetalProgram {
 
     friend uint32_t CreateSemaphore(MetalProgram &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
 
-    CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
-
-    void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
-
     void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
+    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType &core_type);
 
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
     uint32_t& get_program_config_size(uint32_t programmable_core_type_index);

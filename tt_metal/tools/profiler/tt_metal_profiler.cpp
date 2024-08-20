@@ -232,18 +232,17 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
             {"SAMPLE_COUNT", std::to_string(sampleCount)},
         };
 
-        tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
-            *sync_program, "tt_metal/tools/profiler/sync/sync_kernel.cpp",
+        tt_metal::KernelHandle brisc_kernel = sync_program.get()->create_kernel(
+            "tt_metal/tools/profiler/sync/sync_kernel.cpp",
             logical_core,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt_metal::NOC::RISCV_0_default,
-                .defines = kernel_defines}
-            );
+                .defines = kernel_defines});
     }
     constexpr bool wait_for_all_cores_done = false;
     constexpr bool force_slow_dispatch = true;
-    LaunchProgram(device, sync_program, wait_for_all_cores_done, force_slow_dispatch);
+    device->launch_program(sync_program.get(), wait_for_all_cores_done, force_slow_dispatch);
 
     std::filesystem::path output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";

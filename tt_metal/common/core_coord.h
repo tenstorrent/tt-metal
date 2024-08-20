@@ -269,6 +269,22 @@ class CoreRangeSet {
     CoreRangeSet(CoreRangeSet &&other) = default;
     CoreRangeSet &operator=(CoreRangeSet &&other) = default;
 
+    static CoreRangeSet get_core_range_set(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {
+        ZoneScoped;
+        return std::visit(
+            [](auto &&core_spec) -> CoreRangeSet {
+                using T = std::decay_t<decltype(core_spec)>;
+                if constexpr (std::is_same_v<T, CoreCoord>) {
+                    return CoreRangeSet({CoreRange(core_spec, core_spec)});
+                } else if constexpr (std::is_same_v<T, CoreRange>) {
+                    return CoreRangeSet({core_spec});
+                } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                    return core_spec;
+                }
+            },
+            specified_core_spec);
+    }
+
     auto size() const { return ranges_.size(); }
 
     CoreRangeSet merge(const std::set<CoreRange> &other) const {

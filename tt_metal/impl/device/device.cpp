@@ -8,6 +8,8 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/common/core_descriptor.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -529,20 +531,16 @@ void Device::configure_kernel_variant(
     defines.insert(defines_in.begin(), defines_in.end());
 
     if (dispatch_core_type == CoreType::WORKER) {
-        tt::tt_metal::CreateKernel(
-            program,
+        program.create_kernel(
             path,
             kernel_core,
-            tt::tt_metal::DataMovementConfig {
+            tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = my_noc_index,
                 .compile_args = compile_args,
-                .defines = defines
-            }
-        );
+                .defines = defines});
     } else {
-        tt::tt_metal::CreateKernel(
-            program,
+        program.create_kernel(
             path,
             kernel_core,
             tt::tt_metal::EthernetConfig{
@@ -1435,8 +1433,8 @@ void Device::compile_command_queue_programs() {
                 my_noc_index
             );
 
-            tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, 0, dispatch_core_type); // prefetch_sync_sem
-            tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(), dispatch_core_type); // prefetch_sem
+            command_queue_program_ptr->create_semaphore(prefetch_core, 0, dispatch_core_type); // prefetch_sync_sem
+            command_queue_program_ptr->create_semaphore(prefetch_core, dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(), dispatch_core_type); // prefetch_sem
 
             std::vector<uint32_t> dispatch_compile_args = {
                 dispatch_constants::DISPATCH_BUFFER_BASE,
@@ -1478,7 +1476,7 @@ void Device::compile_command_queue_programs() {
                 my_noc_index
             );
 
-            tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_core, 0, dispatch_core_type); // dispatch_sem
+            command_queue_program_ptr->create_semaphore(dispatch_core, 0, dispatch_core_type); // dispatch_sem
         }
         command_queue_program_ptr->compile(this, /*fd_bootloader_mode=*/true);
         this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
@@ -1526,7 +1524,7 @@ void Device::compile_command_queue_programs() {
                 for (auto sem : prefetch_settings.semaphores) {
                     //size of semaphores vector is number of needed semaphores on the core.
                     //Value of each vector entry is the initialization value for the semaphore.
-                    tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, prefetch_core, sem, prefetch_settings.dispatch_core_type);
+                    mmio_command_queue_program_ptr->create_semaphore(prefetch_core, sem, prefetch_settings.dispatch_core_type);
                 }
                 configure_kernel_variant(
                     *mmio_command_queue_program_ptr,
@@ -1549,7 +1547,7 @@ void Device::compile_command_queue_programs() {
             for (auto sem : mux_settings.semaphores) {
                 //size of semaphores vector is number of needed semaphores on the core.
                 //Value of each vector entry is the initialization value for the semaphore.
-                tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, mux_core, sem, mux_settings.dispatch_core_type);
+                mmio_command_queue_program_ptr->create_semaphore(mux_core, sem, mux_settings.dispatch_core_type);
             }
             configure_kernel_variant(
                 *mmio_command_queue_program_ptr,
@@ -1587,7 +1585,7 @@ void Device::compile_command_queue_programs() {
             for (auto sem : demux_settings.semaphores) {
                 //size of semaphores vector is number of needed semaphores on the core.
                 //Value of each vector entry is the initialization value for the semaphore.
-                tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, demux_core, sem, demux_settings.dispatch_core_type);
+                mmio_command_queue_program_ptr->create_semaphore(demux_core, sem, demux_settings.dispatch_core_type);
             }
             configure_kernel_variant(
                 *mmio_command_queue_program_ptr,
@@ -1608,7 +1606,7 @@ void Device::compile_command_queue_programs() {
                 for (auto sem : dispatch_settings.semaphores) {
                     //size of semaphores vector is number of needed semaphores on the core.
                     //Value of each vector entry is the initialization value for the semaphore.
-                    tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, dispatch_core, sem, dispatch_settings.dispatch_core_type);
+                    mmio_command_queue_program_ptr->create_semaphore(dispatch_core, sem, dispatch_settings.dispatch_core_type);
                 }
                 configure_kernel_variant(
                     *mmio_command_queue_program_ptr,
@@ -1671,7 +1669,7 @@ void Device::compile_command_queue_programs() {
         for (auto sem : demux_d_settings.semaphores) {
             //size of semaphores vector is number of needed semaphores on the core.
             //Value of each vector entry is the initialization value for the semaphore.
-            tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, demux_d_core, sem, demux_d_settings.dispatch_core_type);
+            command_queue_program_ptr->create_semaphore(demux_d_core, sem, demux_d_settings.dispatch_core_type);
         }
         configure_kernel_variant(
             *command_queue_program_ptr,
@@ -1692,7 +1690,7 @@ void Device::compile_command_queue_programs() {
             for (auto sem : prefetch_d_settings.semaphores) {
                 //size of semaphores vector is number of needed semaphores on the core.
                 //Value of each vector entry is the initialization value for the semaphore.
-                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_d_core, sem, prefetch_d_settings.dispatch_core_type);
+                command_queue_program_ptr->create_semaphore(prefetch_d_core, sem, prefetch_d_settings.dispatch_core_type);
             }
             configure_kernel_variant(
                 *command_queue_program_ptr,
@@ -1715,7 +1713,7 @@ void Device::compile_command_queue_programs() {
             for (auto sem : dispatch_d_settings.semaphores) {
                 //size of semaphores vector is number of needed semaphores on the core.
                 //Value of each vector entry is the initialization value for the semaphore.
-                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_d_core, sem, dispatch_d_settings.dispatch_core_type);
+                command_queue_program_ptr->create_semaphore(dispatch_d_core, sem, dispatch_d_settings.dispatch_core_type);
             }
             configure_kernel_variant(
                 *command_queue_program_ptr,
@@ -1739,7 +1737,7 @@ void Device::compile_command_queue_programs() {
         for (auto sem : mux_d_settings.semaphores) {
             //size of semaphores vector is number of needed semaphores on the core.
             //Value of each vector entry is the initialization value for the semaphore.
-            tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, mux_d_core, sem, mux_d_settings.dispatch_core_type);
+            command_queue_program_ptr->create_semaphore(mux_d_core, sem, mux_d_settings.dispatch_core_type);
         }
         configure_kernel_variant(
             *command_queue_program_ptr,
@@ -1784,7 +1782,7 @@ void Device::configure_command_queue_programs() {
         TT_ASSERT(this->command_queue_programs.size() == program_size);
     }
 
-    MetalProgram& command_queue_program = *this->command_queue_programs[0];
+    MetalProgram &command_queue_program = *this->command_queue_programs[0];
     uint8_t num_hw_cqs = this->num_hw_cqs();
 
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
@@ -1840,13 +1838,13 @@ void Device::configure_command_queue_programs() {
         }
     }
 
-    detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
+    this->configure_with_program(&command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
     if (device_id != mmio_device_id) {
         if (tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1) {
             //first or only remote device on the tunnel, launch fd2 kernels on mmio device for all remote devices.
-            MetalProgram& mmio_command_queue_program = *this->command_queue_programs[1];
-            detail::ConfigureDeviceWithProgram(mmio_device, mmio_command_queue_program, true);
+            MetalProgram &mmio_command_queue_program = *this->command_queue_programs[1];
+            mmio_device->configure_with_program(&mmio_command_queue_program, true);
             tt::Cluster::instance().l1_barrier(mmio_device_id);
         }
     }
@@ -2471,6 +2469,163 @@ void Device::generate_device_headers(const std::string &path) const
         soc_d.grid_size,
         harvested_rows,
         num_host_channels > 0);
+}
+
+bool Device::configure_with_program(MetalProgram *program, bool fd_bootloader_mode) {
+    ZoneScoped;
+    bool pass = true;
+    // This is function is shared between FD and SD.
+    // We call this function when initializing HW Command Queues (tracked as fd_bootloader_mode) for Fast Dispatch.
+    // Used to Launch programs for Slow dispatch.
+    bool using_fast_dispatch = fd_bootloader_mode;
+    detail::DispatchStateCheck(using_fast_dispatch);
+
+    auto device_id = this->id();
+
+    program->allocate_circular_buffers();
+    program->validate_circular_buffer_region(this);
+
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program->logical_cores();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        const auto & logical_cores = logical_cores_used_in_program[index];
+        CoreType core_type = hal.get_core_type(index);
+        for (const auto &logical_core : logical_cores) {
+            KernelGroup *kernel_group = program->kernels_on_core(logical_core, index);
+            CoreCoord physical_core = this->physical_core_from_logical_core(logical_core, core_type);
+
+            // Configure kernel group
+            for (auto &optional_id : kernel_group->kernel_ids) {
+                if (optional_id) {
+                    program->get_kernel(optional_id.value())->configure(this, logical_core);
+                }
+            }
+            // TODO: add support for CB for ethernet cores
+            if (core_type == CoreType::WORKER) {
+                // CircularBufferConfigVec -- common across all kernels, so written once to the core
+                llrt::CircularBufferConfigVec circular_buffer_config_vec = llrt::create_circular_buffer_config_vector();
+
+                auto cbs_on_core = program->circular_buffers_on_core(logical_core);
+                for (auto circular_buffer : cbs_on_core) {
+                    for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
+                        llrt::set_config_for_circular_buffer(
+                            circular_buffer_config_vec,
+                            buffer_index,
+                            circular_buffer->address(),
+                            circular_buffer->size(),
+                            circular_buffer->num_pages(buffer_index));
+                    }
+                }  // PROF_END("CBS")
+
+                if (cbs_on_core.size()) {
+                    llrt::write_circular_buffer_config_vector_to_core(
+                        device_id, physical_core, circular_buffer_config_vec);
+                }
+            }
+            program->init_semaphores(*this, logical_core, index);
+        }
+    }
+
+    return pass;
+}
+
+void Device::launch_program(MetalProgram *program, bool wait_until_cores_done, bool force_slow_dispatch) {
+    {  // Profiler scope start
+        ZoneScoped;
+        detail::DispatchStateCheck(force_slow_dispatch);
+        program->compile(this, false);
+        if (!program->is_finalized()) {
+            program->finalize();
+        }
+
+        this->write_runtime_args(program, force_slow_dispatch);
+        this->configure_with_program(program, force_slow_dispatch);
+
+        auto device_id = device->id();
+
+        tt::Cluster::instance().dram_barrier(device_id);
+
+        // Note: the l1_barrier below is needed to be sure writes to cores that
+        // don't get the GO mailbox (eg, storage cores) have all landed
+        tt::Cluster::instance().l1_barrier(device_id);
+
+        std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program->logical_cores();
+        std::unordered_set<CoreCoord> not_done_cores;
+        for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size(); programmable_core_type_index++) {
+            CoreType core_type = hal.get_core_type(programmable_core_type_index);
+            for (const auto &logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+                launch_msg_t *msg = &program->kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+                msg->kernel_config.host_assigned_id = program->get_runtime_id();
+
+                auto physical_core = this->physical_core_from_logical_core(logical_core, core_type);
+                not_done_cores.insert(physical_core);
+                tt::llrt::write_launch_msg_to_core(device_id, physical_core, msg, this->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
+            }
+        }
+        if (wait_until_cores_done) {
+            // Wait for all cores to be done
+            llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+        }
+    }  // Profiler scope end
+    if (wait_until_cores_done) {
+        DumpDeviceProfileResults(this);
+    }
+}
+
+void Device::write_runtime_args(MetalProgram *program, bool force_slow_dispatch) {
+    ZoneScoped;
+    auto device_id = this->id();
+    detail::DispatchStateCheck(force_slow_dispatch);
+
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        CoreType core_type = hal.get_core_type(index);
+        for (auto& kg : program->get_kernel_groups(index)) {
+            uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base[index];
+            for (const CoreRange &core_range : kg.core_ranges.ranges()) {
+                for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                    for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                        CoreCoord logical_core(x, y);
+                        auto physical_core = this->physical_core_from_logical_core(logical_core, core_type);
+                        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+                            auto& optional_id = kg.kernel_ids[dispatch_class];
+                            if (optional_id) {
+                                const auto &kernel = program->get_kernel(optional_id.value());
+                                const auto &rt_args = kernel->runtime_args(logical_core);
+
+                                if (rt_args.size() > 0) {
+                                    auto rt_args_addr = kernel_config_base + kg.launch_msg.kernel_config.mem_map[dispatch_class].rta_offset;
+                                    log_trace(
+                                              tt::LogMetal,
+                                              "{} - Writing {} unique rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",
+                                              __FUNCTION__,
+                                              rt_args.size(),
+                                              logical_core.str(),
+                                              physical_core.str(),
+                                              rt_args_addr,
+                                              rt_args);
+                                    tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, rt_args_addr);
+                                }
+
+                                const auto &common_rt_args = kernel->common_runtime_args();
+                                if (common_rt_args.size() > 0) {
+                                    auto common_rt_args_addr = kernel_config_base + kg.launch_msg.kernel_config.mem_map[dispatch_class].crta_offset;
+                                    log_trace(
+                                              tt::LogMetal,
+                                              "{} - Writing {} common rtargs to core {} (physical: {}) addr 0x{:x} => args: {}",
+                                              __FUNCTION__,
+                                              common_rt_args.size(),
+                                              logical_core.str(),
+                                              physical_core.str(),
+                                              common_rt_args_addr,
+                                              common_rt_args);
+                                    tt::llrt::write_hex_vec_to_core(device_id, physical_core, common_rt_args, common_rt_args_addr);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 }  // namespace tt_metal

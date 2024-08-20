@@ -2522,22 +2522,12 @@ void HWCommandQueue::terminate() {
 }
 
 void EnqueueAddBufferToProgramImpl(
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program) {
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, MetalProgram* program) {
     std::visit(
         [program](auto&& b) {
             using buffer_type = std::decay_t<decltype(b)>;
             if constexpr (std::is_same_v<buffer_type, std::shared_ptr<Buffer>>) {
-                std::visit(
-                    [&b](auto&& p) {
-                        using program_type = std::decay_t<decltype(p)>;
-                        if constexpr (std::is_same_v<program_type, std::reference_wrapper<MetalProgram>>) {
-                            p.get().add_buffer(b);
-                        } else {
-                            p->add_buffer(b);
-                        }
-                    },
-                    program);
+                program->add_buffer(b);
             }
         },
         buffer);
@@ -2546,7 +2536,7 @@ void EnqueueAddBufferToProgramImpl(
 void EnqueueAddBufferToProgram(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program,
+    MetalProgram* program,
     bool blocking) {
     EnqueueAddBufferToProgramImpl(buffer, program);
     // cq.run_command(CommandInterface{
@@ -2747,40 +2737,22 @@ void EnqueueWriteBufferImpl(
         buffer);
 }
 
-void EnqueueProgram(
-    CommandQueue& cq, std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program, bool blocking) {
+void EnqueueProgram(CommandQueue& cq, MetalProgram* program, bool blocking) {
     detail::DispatchStateCheck(true);
     cq.run_command(
         CommandInterface{.type = EnqueueCommandType::ENQUEUE_PROGRAM, .blocking = blocking, .program = program});
 }
 
-void EnqueueProgramImpl(
-    CommandQueue& cq, std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program, bool blocking) {
+void EnqueueProgramImpl(CommandQueue& cq, MetalProgram* program, bool blocking) {
     ZoneScoped;
-    std::visit(
-        [&cq, blocking](auto&& program) {
-            ZoneScoped;
-            using T = std::decay_t<decltype(program)>;
-            Device* device = cq.device();
-            if constexpr (std::is_same_v<T, std::reference_wrapper<MetalProgram>>) {
-                program.get().compile(device);
-                program.get().allocate_circular_buffers();
-                program.get().validate_circular_buffer_region(device);
-                cq.hw_command_queue().enqueue_program(program, blocking);
-                // MetalProgram relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
-                // leaks on device.
-                program.get().release_buffers();
-            } else if constexpr (std::is_same_v<T, std::shared_ptr<MetalProgram>>) {
-                program->compile(device);
-                program->allocate_circular_buffers();
-                program->validate_circular_buffer_region(device);
-                cq.hw_command_queue().enqueue_program(*program, blocking);
-                // MetalProgram relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
-                // leaks on device.
-                program->release_buffers();
-            }
-        },
-        program);
+    Device* device = cq.device();
+    program->compile(device);
+    program->allocate_circular_buffers();
+    program->validate_circular_buffer_region(device);
+    cq.hw_command_queue().enqueue_program(*program, blocking);
+    // MetalProgram relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
+    // leaks on device.
+    program->release_buffers();
 }
 
 void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event) {

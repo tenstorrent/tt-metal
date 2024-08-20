@@ -321,6 +321,10 @@ class Device {
     template <typename CoreRangeContainer>
     std::vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
 
+    bool configure_with_program(MetalProgram *program, bool fd_bootloader_mode);
+    void launch_program(MetalProgram *program, bool wait_until_cores_done, bool force_slow_dispatch);
+    void write_runtime_args(MetalProgram *program, bool force_slow_dispatch);
+
    private:
     void DisableAllocs();
     void EnableAllocs();

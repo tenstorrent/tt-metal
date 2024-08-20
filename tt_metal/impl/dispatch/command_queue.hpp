@@ -50,6 +50,8 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 class CommandQueue;
 class CommandInterface;
 
+void EnqueueProgram(CommandQueue& cq, MetalProgram* program, bool blocking);
+
 using WorkerQueue = LockFreeQueue<CommandInterface>;
 
 class Command {
@@ -555,7 +557,7 @@ class HWCommandQueue {
     friend void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking);
     friend void EnqueueProgramImpl(
         CommandQueue& cq,
-        std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program,
+        MetalProgram *program,
         bool blocking);
     friend void EnqueueReadBufferImpl(
         CommandQueue& cq,
@@ -583,7 +585,7 @@ struct CommandInterface {
     EnqueueCommandType type;
     std::optional<bool> blocking;
     std::optional<std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>> buffer;
-    std::optional<std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>>> program;
+    std::optional<MetalProgram *> program;
     std::optional<AllocBufferMetadata> alloc_md;
     std::optional<RuntimeArgsMetadata> runtime_args_md;
     std::optional<const Buffer*> shadow_buffer;
@@ -695,7 +697,7 @@ void EnqueueSetRuntimeArgs(
 void EnqueueAddBufferToProgram(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    std::variant<std::reference_wrapper<MetalProgram>, std::shared_ptr<MetalProgram>> program,
+    MetalProgram *program,
     bool blocking);
 
 }  // namespace tt::tt_metal

@@ -4,6 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/program/program.hpp"
 #include "command_queue_interface.hpp"
 
 namespace tt {
