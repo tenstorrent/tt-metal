@@ -81,7 +81,7 @@
 
 | Model                                              | Last verified release                                                     |   Technique        | Gen. Token [3]      |  Batch                | Time to first token [4] | End-to-end throughput [1]    | Device throughput [2]        | Target throughput |
 |----------------------------------------------------|---------------------------------------------------------------------------|--------------------|---------------------|-----------------------|-------------------------|------------------------------|------------------------------|-------------------|
-| [Falcon7B](./models/demos/tg/falcon7b)             |                                                                           | Data Parallel      | 129th               |  1024                 | 0.30 s                  | 4.0 t/s/u - 4096 t/s         | 17.7 t/s/u - 18125 t/s       |   26 t/s/u        |
+| [Falcon7B](./models/demos/tg/falcon7b)             | [v0.51.0-rc30](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc30) | Data Parallel      | 129th               |  1024                 | 0.30 s                  | 4.0 t/s/u - 4096 t/s         | 17.7 t/s/u - 18125 t/s       |   26 t/s/u        |
 
 
 
