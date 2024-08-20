@@ -8,7 +8,6 @@ from transformers import BertForQuestionAnswering
 import numpy as np
 from loguru import logger
 
-import tt_lib as ttl
 import ttnn
 from models.experimental.bert_large_perf.tt.mha import TtMultiHeadAttentionModel
 from models.experimental.bert_large_perf.tt.ffn import TtFeedForwardModel
@@ -32,26 +31,26 @@ class TtBertEncoder(torch.nn.Module):
             state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.dense.weight"]
         )
         self.attention_output_weight = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 self.attention_output_weight.reshape(-1).tolist(),
                 self.attention_output_weight.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
         self.attention_output_bias = pad_weight(
             state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.dense.bias"]
         )
         self.attention_output_bias = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 self.attention_output_bias.reshape(-1).tolist(),
                 self.attention_output_bias.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
 
@@ -63,24 +62,24 @@ class TtBertEncoder(torch.nn.Module):
         beta0 = state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.bias"]
         mha_gamma = pad_weight(gamma0)
         mha_gamma = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 mha_gamma.reshape(-1).tolist(),
                 mha_gamma.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
         mha_beta = pad_weight(beta0)
         mha_beta = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 mha_beta.reshape(-1).tolist(),
                 mha_beta.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
         self.mha_add_and_norm = AddAndNorm(
@@ -101,24 +100,24 @@ class TtBertEncoder(torch.nn.Module):
         beta1 = state_dict[f"bert.encoder.layer.{encoder_idx}.output.LayerNorm.bias"]
         ffn_gamma = pad_weight(gamma1)
         ffn_gamma = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 ffn_gamma.reshape(-1).tolist(),
                 ffn_gamma.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
         ffn_beta = pad_weight(beta1)
         ffn_beta = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 ffn_beta.reshape(-1).tolist(),
                 ffn_beta.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
         self.ffn_add_and_norm = AddAndNorm(
@@ -134,11 +133,9 @@ class TtBertEncoder(torch.nn.Module):
     def op11_mm_plus_bias(self, mha_res, attention_output_weight, attention_output_bias):
         # profiler.start("__op11_mm_plus_bias")
         output = ttnn.matmul(mha_res, attention_output_weight)
-        mha_out = ttl.tensor.bcast(
+        mha_out = ttnn.add(
             output,
             attention_output_bias,
-            ttl.tensor.BcastOpMath.ADD,
-            ttl.tensor.BcastOpDim.H,
         )
         # profiler.end("__op11_mm_plus_bias")
 
@@ -204,16 +201,16 @@ def run_bert_encoder_inference(device, model_version, batch, seq_len, pcc, model
     pytorch_out = pytorch_bert_model(bert_encoder_input.squeeze(1)).unsqueeze(1)
 
     pad_bert_encoder_input = pad_activation(bert_encoder_input)
-    tt_bert_encoder_input = ttl.tensor.Tensor(
+    tt_bert_encoder_input = ttnn.Tensor(
         pad_bert_encoder_input.reshape(-1).tolist(),
         bert_encoder_input.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ).to(ttnn.TILE_LAYOUT)
     tt_bert_encoder_input = tt_bert_encoder_input.to(device)
 
     tt_out = tt_bert_encoder_model(tt_bert_encoder_input).cpu()
-    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_out = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")

@@ -95,6 +95,8 @@ def manage_config(name, value):
 
 from ttnn._ttnn.multi_device import get_device_tensor, get_device_tensors, aggregate_as_tensor
 
+from ttnn._ttnn.events import create_event, record_event, wait_for_event
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
@@ -141,6 +143,7 @@ from ttnn.types import (
 
 from ttnn.device import (
     Device,
+    DispatchCoreType,
     open_device,
     close_device,
     enable_program_cache,
@@ -152,6 +155,7 @@ from ttnn.device import (
 
 from ttnn.multi_device import (
     DeviceMesh,
+    DispatchCoreType,
     open_device_mesh,
     close_device_mesh,
     get_num_pcie_devices,
@@ -282,6 +286,9 @@ from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim, ge
 from ttnn.operations.pool import TTPyMaxPool, max_pool2d, max_pool2d_legacy, MaxPool2d, global_avg_pool2d, avg_pool2d
 from ttnn.operations.conv1d import Conv1d, Conv1dConfig
 
+from ttnn.operations.transformer import SDPAProgramConfig
+
+import ttnn._ttnn.graph as graph
 
 if importlib.util.find_spec("torch") is not None:
     import ttnn.tracer

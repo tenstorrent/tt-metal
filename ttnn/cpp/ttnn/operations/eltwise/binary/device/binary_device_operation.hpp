@@ -141,11 +141,58 @@ struct BinaryDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
+    struct BroadcastHeightMultiCoreSharded {
+        struct shared_variables_t {
+            KernelHandle binary_reader_kernel_id;
+            KernelHandle bcast_kernel_id;
+            uint32_t cb_src0;
+            CBHandle out_cb;
+            uint32_t ncores_x;
+        };
+
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    struct BroadcastHeightMultiCoreShardedOptimized {
+        struct shared_variables_t {
+            KernelHandle binary_reader_kernel_id;
+            KernelHandle bcast_kernel_id;
+            uint32_t cb_src0;
+            CBHandle out_cb;
+            uint32_t ncores_x;
+        };
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
     using program_factory_t = std::variant<
         ElementWiseMultiCore,
         BroadcastWidthMultiCore,
         BroadcastHeightMultiCore,
-        BroadcastHeightAndWidthMultiCore>;
+        BroadcastHeightAndWidthMultiCore,
+        BroadcastHeightMultiCoreSharded,
+        BroadcastHeightMultiCoreShardedOptimized>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -166,7 +213,7 @@ struct BinaryDeviceOperation {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> operator()(
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         BinaryOpType binary_op_type,
@@ -181,4 +228,6 @@ struct BinaryDeviceOperation {
 }  // namespace ttnn::operations::binary
 
 
-TTNN_REGISTER_OPERATION(ttnn::prim, binary, ttnn::operations::binary::BinaryDeviceOperation);
+namespace ttnn::prim {
+constexpr auto binary = ttnn::register_operation<"ttnn::prim::binary", ttnn::operations::binary::BinaryDeviceOperation>();
+} // namespace ttnn::prim

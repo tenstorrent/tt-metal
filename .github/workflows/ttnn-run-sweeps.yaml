@@ -1,8 +1,6 @@
 name: "ttnn - Run sweeps"
 
 on:
-  schedule:
-    - cron: "0 1,7,13,19 * * *"
   workflow_dispatch:
   workflow_call:
 
@@ -24,6 +22,7 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
     runs-on: ${{ matrix.arch }}
     steps:

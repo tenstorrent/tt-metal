@@ -10,7 +10,7 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/common/bfloat16.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape/reshape.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -670,7 +670,7 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
 }
 
 //rdiv
-Tensor ExecuteRdiv::operator()(uint8_t queue_id, const Tensor& input_tensor, float value, const std::string& round_mode, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor) {
+Tensor ExecuteRdiv::invoke(uint8_t queue_id, const Tensor& input_tensor, float value, const std::string& round_mode, const std::optional<MemoryConfig>& memory_config, std::optional<Tensor> optional_output_tensor) {
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor recip_result = ttnn::reciprocal(queue_id, input_tensor, memory_config, optional_output_tensor);
     Tensor result = ttnn::multiply(queue_id, recip_result, value, std::nullopt, memory_config, optional_output_tensor);
@@ -768,7 +768,7 @@ Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::op
     TT_FATAL(y.get_legacy_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
 
     // format to HW
-    Tensor y_hw = tt::tt_metal::reshape(
+    Tensor y_hw = ttnn::reshape_on_device(
         y, 1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]);
 
     // compute @fn
@@ -777,7 +777,7 @@ Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::op
     y_hw.deallocate();
 
     // reformat
-    Tensor z_1 = tt::tt_metal ::reshape(
+    Tensor z_1 = ttnn::reshape_on_device(
         z_0, y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]);
     z_0.deallocate();
 

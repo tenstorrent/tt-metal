@@ -10,6 +10,7 @@
 #include "ttnn/run_operation.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "tt_metal/graph/graph_tracking.hpp"
 
 namespace tt::tt_metal::detail {
 
@@ -344,18 +345,24 @@ Tensor convert_numpy_tensor_to_tt_tensor(
 
 Tensor convert_python_tensor_to_tt_tensor(
     const py::handle &tensor, std::optional<DataType> optional_data_type = std::nullopt, bool enable_borrow = true) {
+    GraphTracker::instance().track_begin_function("tt::tt_metal::detail::convert_python_tensor_to_tt_tensor", tensor, optional_data_type, enable_borrow);
     py::object torch = py::module_::import("torch");
     py::object np = py::module_::import("numpy");
     if (py::isinstance(tensor, torch.attr("Tensor"))) {
-        return convert_torch_tensor_to_tt_tensor(tensor, optional_data_type, enable_borrow);
+        auto output = convert_torch_tensor_to_tt_tensor(tensor, optional_data_type, enable_borrow);
+        GraphTracker::instance().track_end_function(output);
+        return output;
     } else if (py::isinstance(tensor, np.attr("ndarray"))) {
-        return convert_numpy_tensor_to_tt_tensor(tensor, optional_data_type);
+        auto output = convert_numpy_tensor_to_tt_tensor(tensor, optional_data_type);
+        GraphTracker::instance().track_end_function(output);
+        return output;
     } else {
         TT_THROW("The argument must be of type torch.Tensor or numpy.ndarray!");
     }
 }
 
 Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optional<DataType> data_type, const std::unordered_map<std::string, std::string>& strategy) {
+    GraphTracker::instance().track_begin_function("tt::tt_metal::detail::convert_python_tensors_to_tt_tensors", tensor_shards, data_type, strategy);
     std::vector<Tensor> tt_shards;
     for (const auto &shard : tensor_shards) {
         tt_shards.push_back(detail::convert_python_tensor_to_tt_tensor(shard, data_type, false));
@@ -370,7 +377,9 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
     auto distributed_tensor_config = get_distributed_tensor_config(strategy);
     auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_shapes};
 
-    return Tensor(std::move(storage), tt_shards.at(0).get_legacy_shape(), tt_shards.at(0).get_dtype(), Layout::ROW_MAJOR);
+    auto output = Tensor(std::move(storage), tt_shards.at(0).get_legacy_shape(), tt_shards.at(0).get_dtype(), Layout::ROW_MAJOR);
+    GraphTracker::instance().track_end_function(output);
+    return output;
 }
 
     OwnedBuffer create_owned_buffer_from_vector_of_floats(std::vector<float>&& data, DataType data_type) {
@@ -402,6 +411,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
     }
 
     py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor) {
+        GraphTracker::instance().track_begin_function("tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor", tt_tensor);
         TT_ASSERT(tt_tensor.storage_type() == StorageType::OWNED or tt_tensor.storage_type() == StorageType::BORROWED);
 
         using namespace pybind11::literals;
@@ -461,6 +471,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         if (tt_tensor.storage_type() == StorageType::BORROWED) {
             tensor = tensor.attr("clone")();
         }
+        GraphTracker::instance().track_end_function(tensor);
         return tensor;
     }
 
@@ -559,7 +570,8 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 // auto tensor = detail::convert_torch_tensor_to_tt_tensor(value);
                 // input_tensors.push_back(tensor);
             } else {
-                attributes.push_back({name, fmt::format("{}", value)});
+                // TODO(MO): Exclude tensor data as it is not an attribute
+                //attributes.push_back({name, fmt::format("{}", value)});
             }
         };
 
@@ -604,15 +616,16 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 return py::cpp_function(std::function([function, function_name](
                                                           const py::args &args, const py::kwargs &kwargs) {
                     ZoneScopedN("TT_DNN_FALLBACK_OP");
-                    auto [op, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
-                    operation::log_operation(op, input_tensors);
                     uint32_t op_id = tt::tt_metal::assign_operation_id();
+                    auto [op, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
+                    GraphTracker::instance().track_begin_function(op.get_type_name(), args, kwargs);
+                    operation::log_operation(op, input_tensors);
 
-                    auto output_tensors = function(*args, **kwargs);
+                    auto output = function(*args, **kwargs);
 
                     TracyOpTTNNExternal(op_id, op, input_tensors);
-
-                    return output_tensors;
+                    GraphTracker::instance().track_end_function(output);
+                    return output;
                 }));
             },
             py::arg("function").noconvert(),

@@ -13,8 +13,8 @@ using DeviceMesh = tt::tt_metal::DeviceMesh;
 
 DeviceMeshView::DeviceMeshView(const DeviceMesh& mesh)
     : top_left_(0, 0), bottom_right_(mesh.num_rows() - 1, mesh.num_cols() - 1) {
-    for (int row = 0; row < mesh.num_rows(); ++row) {
-        for (int col = 0; col < mesh.num_cols(); ++col) {
+    for (size_t row = 0; row < mesh.num_rows(); ++row) {
+        for (size_t col = 0; col < mesh.num_cols(); ++col) {
             if (auto device = mesh.get_device(row, col)) {
                 devices_.push_back(device);
                 device_coordinates_[(device)->id()] = {row, col};
@@ -25,8 +25,8 @@ DeviceMeshView::DeviceMeshView(const DeviceMesh& mesh)
 
 DeviceMeshView::DeviceMeshView(const DeviceMesh& mesh, Coordinate top_left, Coordinate bottom_right)
     : top_left_(top_left), bottom_right_(bottom_right) {
-    for (int row = top_left.row; row <= bottom_right.row; ++row) {
-        for (int col = top_left.col; col <= bottom_right.col; ++col) {
+    for (size_t row = top_left.row; row <= bottom_right.row; ++row) {
+        for (size_t col = top_left.col; col <= bottom_right.col; ++col) {
             if (auto device = mesh.get_device(row, col)) {
                 devices_.push_back(device);
                 device_coordinates_[(device)->id()] = {row, col};
@@ -41,11 +41,11 @@ DeviceMeshView::DeviceMeshView(std::vector<device_pointer> devices, CoordinateMa
     initialize_from_devices(devices_, std::move(mapper));
 }
 
-DeviceMeshView::device_pointer DeviceMeshView::get_device(int row, int col) {
+DeviceMeshView::device_pointer DeviceMeshView::get_device(size_t row, size_t col) {
     return const_cast<device_pointer>(std::as_const(*this).get_device(row, col));
 }
 
-DeviceMeshView::const_device_pointer DeviceMeshView::get_device(int row, int col) const {
+DeviceMeshView::const_device_pointer DeviceMeshView::get_device(size_t row, size_t col) const {
     for (const auto& device : devices_) {
         auto it = device_coordinates_.find(device->id());
         if (it != device_coordinates_.end() && it->second.row == row && it->second.col == col) {
@@ -65,8 +65,8 @@ DeviceMeshView::DeviceView DeviceMeshView::get_devices(const Coordinate& start, 
     }
 
     DeviceView devices_in_region;
-    for (int row = start.row; row <= end.row; ++row) {
-        for (int col = start.col; col <= end.col; ++col) {
+    for (size_t row = start.row; row <= end.row; ++row) {
+        for (size_t col = start.col; col <= end.col; ++col) {
             if (auto device = get_device(row, col)) {
                 devices_in_region.push_back(device);
             }
@@ -79,7 +79,7 @@ DeviceMeshView::DeviceView DeviceMeshView::get_devices(const DeviceGrid& shape) 
     return get_devices({0, 0}, {shape.first - 1, shape.second - 1});
 }
 
-std::vector<DeviceMeshView::device_pointer> DeviceMeshView::get_devices_on_row(int row) const {
+std::vector<DeviceMeshView::device_pointer> DeviceMeshView::get_devices_on_row(size_t row) const {
     std::vector<device_pointer> row_devices;
     for (const auto& device : devices_) {
         auto it = device_coordinates_.find(device->id());
@@ -90,7 +90,7 @@ std::vector<DeviceMeshView::device_pointer> DeviceMeshView::get_devices_on_row(i
     return row_devices;
 }
 
-std::vector<DeviceMeshView::device_pointer> DeviceMeshView::get_devices_on_column(int col) const {
+std::vector<DeviceMeshView::device_pointer> DeviceMeshView::get_devices_on_column(size_t col) const {
     std::vector<device_pointer> col_devices;
     for (const auto& device : devices_) {
         auto it = device_coordinates_.find(device->id());
@@ -103,7 +103,7 @@ std::vector<DeviceMeshView::device_pointer> DeviceMeshView::get_devices_on_colum
 
 std::vector<std::vector<DeviceMeshView::device_pointer>> DeviceMeshView::get_row_views() const {
     std::vector<std::vector<device_pointer>> row_views;
-    for (int row = top_left_.row; row <= bottom_right_.row; ++row) {
+    for (size_t row = top_left_.row; row <= bottom_right_.row; ++row) {
         row_views.push_back(get_devices_on_row(row));
     }
     return row_views;
@@ -111,7 +111,7 @@ std::vector<std::vector<DeviceMeshView::device_pointer>> DeviceMeshView::get_row
 
 std::vector<std::vector<DeviceMeshView::device_pointer>> DeviceMeshView::get_column_views() const {
     std::vector<std::vector<device_pointer>> column_views;
-    for (int col = top_left_.col; col <= bottom_right_.col; ++col) {
+    for (size_t col = top_left_.col; col <= bottom_right_.col; ++col) {
         column_views.push_back(get_devices_on_column(col));
     }
     return column_views;
@@ -135,7 +135,7 @@ size_t DeviceMeshView::size() const noexcept {
     return devices_.size();
 }
 
-std::pair<int, int> DeviceMeshView::shape() const noexcept {
+std::pair<size_t, size_t> DeviceMeshView::shape() const noexcept {
     return {num_rows(), num_cols()};
 }
 

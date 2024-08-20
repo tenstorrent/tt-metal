@@ -5,7 +5,7 @@
 #pragma once
 
 #include "eth_l1_address_map.h"
-#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/cpp/ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <limits>
 
@@ -21,42 +21,26 @@ struct EriscDatamoverConfig {
 
     static constexpr std::size_t semaphore_size = 32;
     static constexpr std::size_t handshake_location_size = 16;  // ethernet word size
+    static constexpr std::size_t handshake_padding_multiple = 3;  // ethernet word size
     // The EDM uses this fixed address as a source for a first level ack sent from receiver -> sender
     // side. We have this dedicated source address to avoid a race between first and second level ack
     // where second level ack overwrites the first level ack in L1 before the first one is sent out.
     // The memory contents in L1 will be {1, 1, x, x}. By having this dedicated source memory, we
     // avoid the race
     static constexpr std::size_t edm_receiver_first_level_ack_source_word_size = 16;  // ethernet word size
+    static constexpr std::size_t eth_channel_sync_size_bytes = 16;
     static constexpr std::size_t eth_word_size_bytes = 16;
+    static constexpr bool enable_merged_payload_and_channel_sync = true;
+    static std::size_t get_eth_channel_sync_size_bytes();
+    static uint32_t get_edm_handshake_address();
+    static std::size_t get_semaphores_region_size(std::size_t num_edm_channels);
+    static std::size_t get_semaphores_region_start_offset(std::size_t num_edm_channels);
+    static uint32_t get_semaphores_base_address(std::size_t num_edm_channels);
+    static uint32_t get_buffers_region_start_offset(std::size_t num_edm_channels);
+    static std::size_t get_eth_word_size();
+    static uint32_t get_buffers_base_address(std::size_t num_edm_channels);
+    static uint32_t compute_buffer_size(std::size_t num_edm_channels, std::size_t num_buffers_per_channel = 1, uint32_t page_size = eth_word_size_bytes);
 
-    static uint32_t get_edm_handshake_address() { return usable_l1_base_address; }
-    static uint32_t get_semaphores_base_address(std::size_t num_edm_channels) {
-        return usable_l1_base_address + (handshake_location_size * 3) + edm_receiver_first_level_ack_source_word_size;
-    }
-    static uint32_t get_buffers_base_address(std::size_t num_edm_channels) {
-        uint32_t base_address =tt::round_up(
-            get_semaphores_base_address(num_edm_channels) + num_edm_channels * semaphore_size, eth_word_size_bytes);
-        TT_ASSERT(base_address % eth_word_size_bytes == 0);
-        return base_address;
-    }
-    static uint32_t compute_buffer_size(std::size_t num_edm_channels, uint32_t page_size = eth_word_size_bytes) {
-        page_size = std::max<uint32_t>(page_size, eth_word_size_bytes);
-        TT_ASSERT(num_edm_channels > 0);
-        uint32_t buffer_size =tt::round_down(
-            (total_l1_buffer_space - get_buffers_base_address(num_edm_channels)) / (num_edm_channels), page_size);
-        log_trace(tt::LogOp, "total_l1_buffer_space: {}", total_l1_buffer_space);
-        log_trace(
-            tt::LogOp, "get_buffers_base_address(num_edm_channels): {}", get_buffers_base_address(num_edm_channels));
-        log_trace(
-            tt::LogOp, "usable buffer space: {}", total_l1_buffer_space - get_buffers_base_address(num_edm_channels));
-        log_trace(tt::LogOp, "num_edm_channels: {}", num_edm_channels);
-        log_trace(tt::LogOp, "page_size: {}", page_size);
-
-        log_trace(tt::LogOp, "Buffer size: {}", buffer_size);
-
-        TT_ASSERT(buffer_size > 0 && buffer_size % page_size == 0);
-        return buffer_size;
-    }
 };
 
 struct CCLOpConfig {
@@ -64,8 +48,6 @@ struct CCLOpConfig {
     CCLOpConfig(
         std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology);
 
-    uint32_t get_input_shard_size_bytes() const;
-    uint32_t get_output_shard_size_bytes() const;
     uint32_t get_page_size() const;
     Topology get_topology() const;
     bool is_input_sharded() const;
@@ -76,8 +58,6 @@ struct CCLOpConfig {
     std::map<string, string> emit_worker_defines() const;
 
    private:
-    std::optional<uint32_t> input_shard_size_bytes;
-    std::optional<uint32_t> output_shard_size_bytes;
     uint32_t page_size;
     uint32_t shard_grid_size;
     Topology topology;
@@ -97,6 +77,7 @@ class EriscDatamoverBuilder {
             uint32_t worker_semaphore_id,
             uint32_t num_eth_messages_to_forward,
             uint32_t channel,
+            uint32_t num_buffers,
             std::vector<ccl::WorkerXY> const& worker_coords,
             uint32_t largest_message_size_bytes = 0) :
             worker_coords(worker_coords),
@@ -111,6 +92,7 @@ class EriscDatamoverBuilder {
         uint32_t num_eth_messages_to_forward;
         uint32_t channel;
         uint32_t largest_message_size_bytes;
+        uint32_t num_buffers;
         bool is_sender;
     };
 
@@ -143,6 +125,8 @@ class EriscDatamoverBuilder {
     ccl::EriscDataMoverTerminationMode const termination_mode;
     uint32_t num_senders;
     uint32_t num_receivers;
+    std::size_t num_buffers_per_channel;
+    chip_id_t chip_id;
 
     bool enable_sender;
     bool enable_receiver;
@@ -160,19 +144,24 @@ class EriscDatamoverBuilder {
         std::vector<uint32_t> const& local_semaphore_addresses,
         std::vector<uint32_t> const& local_buffer_addresses,
         ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
-        ccl::EriscDataMoverTerminationMode termination_mode =
-            ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) :
+        ccl::EriscDataMoverTerminationMode termination_mode = ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED,
+        std::size_t num_buffers_per_channel = 1,
+        chip_id_t chip_id = -1) :
         local_semaphore_addresses(local_semaphore_addresses),
         local_buffer_addresses(local_buffer_addresses),
         eth_buffer_size_bytes(eth_buffer_size),
         handshake_addr(handshake_addr),
         num_channel_buffers(local_buffer_addresses.size()),
         buffer_sharing_mode(buffer_sharing_mode),
+        num_buffers_per_channel(num_buffers_per_channel),
         termination_mode(termination_mode),
         enable_sender(false),
         enable_receiver(false),
         num_senders(0),
-        num_receivers(0) {
+        num_receivers(0),
+        chip_id(chip_id) {
+
+        TT_ASSERT(num_buffers_per_channel > 0);
         TT_ASSERT(local_buffer_addresses.size() == local_semaphore_addresses.size());
         active_channels.reserve(num_channel_buffers);
         TT_ASSERT(eth_buffer_size_bytes < 163000);
@@ -199,7 +188,7 @@ class EriscDatamoverBuilder {
         this->num_senders++;
         auto channel = active_channels.size();
         active_channels.emplace_back(
-            true, worker_semaphore_id, num_eth_messages_to_forward, channel, worker_coords, expected_message_size_bytes);
+            true, worker_semaphore_id, num_eth_messages_to_forward, channel, this->num_buffers_per_channel, worker_coords, expected_message_size_bytes);
         log_trace(tt::LogOp, "Adding sender channel:");
         log_trace(tt::LogOp, "\tworker_semaphore_id: {}", active_channels.back().worker_semaphore_id);
         log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
@@ -229,7 +218,7 @@ class EriscDatamoverBuilder {
         this->num_receivers++;
         auto channel = active_channels.size();
         active_channels.emplace_back(
-            false, worker_semaphore_id, num_eth_messages_to_forward, channel, worker_coords, expected_message_size_bytes);
+            false, worker_semaphore_id, num_eth_messages_to_forward, channel, this->num_buffers_per_channel, worker_coords, expected_message_size_bytes);
         log_trace(tt::LogOp, "Adding receiver channel:");
         log_trace(tt::LogOp, "\tworker_semaphore_id: {}", active_channels.back().worker_semaphore_id);
         log_trace(tt::LogOp, "\tnum_eth_messages_to_forward: {}", active_channels.back().num_eth_messages_to_forward);
@@ -247,7 +236,12 @@ class EriscDatamoverBuilder {
             this->num_senders,
             this->num_receivers,
             this->buffer_sharing_mode,
-            this->termination_mode};
+            this->termination_mode,
+            1,
+            static_cast<uint32_t>(this->num_senders > 0 && active_channels.at(0).is_sender),
+            this->num_buffers_per_channel,
+            chip_id
+            };
     }
 
     [[nodiscard]]

@@ -93,12 +93,12 @@ def test_group_attn_matmul(
     else:
         output_mem_config = interleaved_mem_config
 
-    tt_output_tensor_on_device = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+    tt_output_tensor_on_device = ttnn.experimental.group_attn_matmul(
         tt_input_tensor_a,
         tt_input_tensor_b,
         compute_with_storage_grid_size=compute_grid_size,
-        output_mem_config=output_mem_config,
-        output_dtype=output_dtype,
+        memory_config=output_mem_config,
+        dtype=output_dtype,
     )
     if output_sharded:
         tt_output_tensor_on_device = ttnn.experimental.tensor.sharded_to_interleaved(

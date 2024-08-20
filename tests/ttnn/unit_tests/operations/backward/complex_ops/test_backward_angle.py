@@ -8,7 +8,6 @@ import sys
 
 import torch
 
-import tt_lib as ttl
 import pytest
 import ttnn
 from loguru import logger
@@ -26,12 +25,12 @@ from tests.ttnn.unit_tests.operations.backward.complex_ops.backward_complex_util
 @pytest.mark.parametrize(
     "memcfg",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
     ids=["out_DRAM", "out_L1"],
 )
-@pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
+@pytest.mark.parametrize("dtype", ((ttnn.bfloat16,)))
 @pytest.mark.parametrize("bs", ((1, 1), (1, 2), (2, 2)))
 @pytest.mark.parametrize("hw", ((32, 64), (320, 384)))
 def test_level2_angle_bw(bs, hw, memcfg, dtype, device, function_level_defaults):
@@ -41,8 +40,8 @@ def test_level2_angle_bw(bs, hw, memcfg, dtype, device, function_level_defaults)
     in_data.requires_grad = True
 
     input_tensor = ttnn.complex_tensor(
-        ttl.tensor.Tensor(in_data.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(in_data.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
+        ttnn.Tensor(in_data.real, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
+        ttnn.Tensor(in_data.imag, dtype).to(ttnn.TILE_LAYOUT).to(device, memcfg),
     )
 
     grad_data, grad_tensor = data_gen_with_range(input_shape, -50, 40, device)

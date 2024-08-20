@@ -394,21 +394,21 @@ class TtLlamaAttention_galaxy:
     ):
         # K CACHE UPDATE
         keys = self.layer_past[0]
-        ttnn.experimental.tensor.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
+        ttnn.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
         key_layer.deallocate(True)
 
         # V CACHE UPDATE
         values = self.layer_past[1]
-        ttnn.experimental.tensor.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
+        ttnn.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
         value_layer.deallocate(True)
 
-        program_config = ttnn.experimental.operations.primary.transformers.SDPAMultiCoreProgramConfig(
+        program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device_mesh.get_device(0).compute_with_storage_grid_size(),
             q_chunk_size=0,  # unused
             k_chunk_size=0,  # unused
         )
 
-        attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
+        attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
             query_layer,
             keys,
             values,
@@ -416,7 +416,7 @@ class TtLlamaAttention_galaxy:
             scale=self.scale,
             program_config=program_config,
             compute_kernel_config=self.COMPUTE_KERNEL_SDPA,
-            output_mem_config=self.SDPA_HEIGHT_SHARDED_MEMCFG,
+            memory_config=self.SDPA_HEIGHT_SHARDED_MEMCFG,
         )
         return attn_output
 

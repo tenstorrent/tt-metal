@@ -4,7 +4,6 @@
 
 #include "transpose_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/copy/copy_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -47,9 +46,6 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
             TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
             const auto shard_spec = input_tensor.shard_spec().value();
             TT_FATAL(shard_spec.shape[1] == W);
-            TT_FATAL(shard_spec.shape[0] % H == 0 or H % shard_spec.shape[0] == 0);
-            TT_FATAL(shard_spec.shape[0] % C == 0 or C % shard_spec.shape[0] == 0);
-            TT_FATAL(C % H == 0 or H % C == 0);
             TT_FATAL(this->output_mem_config.is_sharded());
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         } else {

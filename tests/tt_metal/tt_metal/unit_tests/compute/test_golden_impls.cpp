@@ -10,6 +10,7 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tests/tt_metal/test_utils/packing.hpp"
 
 
 namespace unit_tests::compute {
@@ -211,5 +212,25 @@ std::vector<uint16_t> gold_reduce_hw(const std::vector<uint16_t> &src_vec, const
 
     return reduced;
 }
+
+std::vector<uint32_t> gold_standard_tilize_w_elwadd(const std::vector<uint32_t> &src0_vec, const std::vector<uint32_t> &src1_vec, const std::vector<uint32_t> &shape) {
+
+    std::vector<bfloat16> unpacked_tilize_src0_vec = tt::test_utils::unpack_vector<bfloat16, uint32_t>(gold_standard_tilize(src0_vec, shape));
+    std::vector<bfloat16> unpacked_src1_vec = tt::test_utils::unpack_vector<bfloat16, uint32_t>(src1_vec);
+
+    std::vector<bfloat16> result_vec(unpacked_tilize_src0_vec.size());
+
+    std::transform(
+        unpacked_tilize_src0_vec.begin(),
+        unpacked_tilize_src0_vec.end(),
+        unpacked_src1_vec.begin(),
+        result_vec.begin(),
+        [&](const bfloat16& lhs, const bfloat16& rhs) {
+            return (lhs.to_float() + rhs.to_float());
+        });
+
+    return tt::test_utils::pack_vector<uint32_t, bfloat16>(result_vec);
+}
+
 
 }   // unit_tests::compute

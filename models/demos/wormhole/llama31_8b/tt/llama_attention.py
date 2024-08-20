@@ -298,23 +298,21 @@ class TtLlamaAttention(nn.Module):
             ttnn.deallocate(k_heads)
             ttnn.deallocate(v_heads)
 
-            attn_output_1G4D = (
-                ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode_gqa(
-                    q_heads,
-                    keys,
-                    values,
-                    [current_pos for _ in range(self.max_batch_size * self.n_kv_heads)],
-                    scale=self.scale,
-                    program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                    compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
-                    output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
+                q_heads,
+                keys,
+                values,
+                [current_pos for _ in range(self.max_batch_size * self.n_kv_heads)],
+                scale=self.scale,
+                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
             attn_output_11BH = ttnn.to_memory_config(
                 attn_output_1G4D, memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"]
             )
-            attn_output_cat = ttnn.experimental.tensor.nlp_concat_heads_decode(
+            attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
                 attn_output_11BH,
                 num_heads=self.n_heads,
             )
@@ -408,12 +406,12 @@ class TtLlamaAttention(nn.Module):
             v_fill = ttnn.experimental.tensor.interleaved_to_sharded(
                 v_fill, sharded_mem_config=self.model_config["KV_PREFILL_MEM_CFG"](seq_len)
             )
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             keys_BKSD,
             k_fill,
             user_id,
         )
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             values_BKSD,
             v_fill,
             user_id,
@@ -429,7 +427,7 @@ class TtLlamaAttention(nn.Module):
         q_heads_84SD = ttnn.reshape(
             q_heads_1QSD, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
         )
-        attn_output_84SD = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+        attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_84SD,
             k_heads_K1SD,
             v_heads_V1SD,

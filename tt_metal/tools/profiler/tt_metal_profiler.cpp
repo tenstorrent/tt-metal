@@ -14,6 +14,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 
 #include "tt_metal/third_party/tracy/public/tracy/TracyTTDevice.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 namespace tt {
 
@@ -21,10 +22,18 @@ namespace tt_metal {
 
 void DumpDeviceProfileResults(Device* device, const Program& program) {
 #if defined(TRACY_ENABLE)
-    auto const& worker_cores_in_program =
-        device->worker_cores_from_logical_cores(program.logical_cores().at(CoreType::WORKER));
-    auto const& eth_cores_in_program =
-        device->ethernet_cores_from_logical_cores(program.logical_cores().at(CoreType::ETH));
+    std::vector<CoreCoord> worker_cores_in_program;
+    std::vector<CoreCoord> eth_cores_in_program;
+
+    std::vector<std::vector<CoreCoord>>logical_cores = program.logical_cores();
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        if (hal.get_core_type(index) == CoreType::WORKER) {
+            worker_cores_in_program = device->worker_cores_from_logical_cores(logical_cores[index]);
+        }
+        if (hal.get_core_type(index) == CoreType::ETH) {
+            eth_cores_in_program = device->ethernet_cores_from_logical_cores(logical_cores[index]);
+        }
+    }
 
     std::vector<CoreCoord> cores_in_program;
     cores_in_program.reserve(worker_cores_in_program.size() + eth_cores_in_program.size());
@@ -318,7 +327,8 @@ void DumpDeviceProfileResults(Device *device, bool lastDump) {
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
     auto device_num_hw_cqs = device->num_hw_cqs();
-    for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs)) {
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+    for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_type)) {
         const CoreCoord curr_core = device->worker_core_from_logical_core(core);
         workerCores.push_back(curr_core);
     }
@@ -335,11 +345,11 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
+    auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
         auto device_id = device->id();
         auto device_num_hw_cqs = device->num_hw_cqs();
-        for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs)) {
-            CoreType dispatch_core_type = tt::get_dispatch_core_type(device_id, device_num_hw_cqs);
+        for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_type)) {
             const auto curr_core = device->physical_core_from_logical_core(core, dispatch_core_type);
             worker_cores.push_back(curr_core);
         }
@@ -382,9 +392,8 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
                         log_warning(msg.c_str());
                         break;
                     }
-                    for (const CoreCoord& core : tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs))
-                    {
-                        CoreType dispatch_core_type = tt::get_dispatch_core_type(device_id, device_num_hw_cqs);
+                    for (const CoreCoord& core :
+                         tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_type)) {
                         const auto curr_core = device->physical_core_from_logical_core(core, dispatch_core_type);
                         vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                                 device_id,

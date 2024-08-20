@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttm
 
 from transformers import (
     BloomForQuestionAnswering,
@@ -39,9 +38,7 @@ def run_bloom_qa_inference(device):
     torch.manual_seed(0)
 
     model_name = "bigscience/bloom-560m"
-    hugging_bloom_reference_model = BloomForQuestionAnswering.from_pretrained(
-        model_name, torchscript=False
-    )
+    hugging_bloom_reference_model = BloomForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     hugging_bloom_reference_model.eval()
 
     config = hugging_bloom_reference_model.config
@@ -53,9 +50,7 @@ def run_bloom_qa_inference(device):
     # Prepare input
     # tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer = BloomTokenizerFast.from_pretrained(model_name)
-    nlp = pipeline(
-        "question-answering", model=hugging_bloom_reference_model, tokenizer=tokenizer
-    )
+    nlp = pipeline("question-answering", model=hugging_bloom_reference_model, tokenizer=tokenizer)
     preprocess_params, _, postprocess_params = nlp._sanitize_parameters()
 
     input_sentance = "summarize: QuillBot's Summarizer wants to change how you read! Instead of reading through loads of documents, you can get a short annotated summary or bullet points with all the key information."
@@ -64,14 +59,10 @@ def run_bloom_qa_inference(device):
     input_ids = pad_input_32(tokenized.input_ids, config.pad_token_id)
     attention_mask = pad_input_32(tokenized.attention_mask, 0)
 
-    pt_out = pt_bloom_qa.forward(
-        input_ids=input_ids
-    )  # , attention_mask=attention_mask)
+    pt_out = pt_bloom_qa.forward(input_ids=input_ids)  # , attention_mask=attention_mask)
     print("PT finished")
 
-    tt_out = tt_bloom_qa.forward(
-        device, input_ids=input_ids
-    )  # , attention_mask=attention_mask)
+    tt_out = tt_bloom_qa.forward(device, input_ids=input_ids)  # , attention_mask=attention_mask)
     print("TT finished")
 
     pt_start_logits = pt_out[0]  # start_logits

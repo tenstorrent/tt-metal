@@ -8,7 +8,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"

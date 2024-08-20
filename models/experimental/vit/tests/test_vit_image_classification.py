@@ -9,8 +9,6 @@ from loguru import logger
 from transformers import ViTForImageClassification as HF_ViTForImageClassication
 from transformers import AutoImageProcessor as HF_AutoImageProcessor
 
-import tt_lib
-
 from models.experimental.vit.tt.modeling_vit import TtViTForImageClassification
 from models.utility_functions import (
     torch_to_tt_tensor_rm,

@@ -7,7 +7,6 @@ import torch.nn.functional as F
 import torch
 
 import ttnn
-import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.stable_diffusion.sd_utils import make_linear
 from models.experimental.stable_diffusion.tt.experimental_ops import Conv2d
@@ -53,9 +52,7 @@ class TtResnetBlock2D(nn.Module):
         self.output_scale_factor = output_scale_factor
         self.device = device
         self.host = host
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         if groups_out is None:
             groups_out = groups
@@ -163,8 +160,8 @@ class TtResnetBlock2D(nn.Module):
                 padding=0,
             )
 
-    def forward(self, input_tensor: ttl.tensor.Tensor, temb: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
-        out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    def forward(self, input_tensor: ttnn.Tensor, temb: ttnn.Tensor) -> ttnn.Tensor:
+        out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
         hidden_states = input_tensor
         hidden_states = self.norm1(hidden_states)
         hidden_states = self.nonlinearity(
@@ -185,12 +182,7 @@ class TtResnetBlock2D(nn.Module):
             temb = fallback_ops.reshape(temb, temb.get_legacy_shape()[2], temb.get_legacy_shape()[3], 1, 1)
 
         if temb is not None and self.time_embedding_norm == "default":
-            hidden_states = ttl.tensor.bcast(
-                hidden_states,
-                temb,
-                ttl.tensor.BcastOpMath.ADD,
-                ttl.tensor.BcastOpDim.HW,
-            )
+            hidden_states = ttnn.add(hidden_states, temb)
 
         hidden_states = self.norm2(hidden_states)
 

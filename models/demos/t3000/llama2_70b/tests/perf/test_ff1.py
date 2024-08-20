@@ -6,8 +6,6 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib
-import tt_lib as ttl
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.model_config import (
@@ -98,15 +96,15 @@ def run_test_ff1(
 
         output_config = model_config["FF1_MM_OUTPUT_MEMCFG"]
 
-        inp_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-            ttl.tensor.BufferType.L1,
-            ttl.tensor.ShardSpec(
-                ttl.tensor.CoreRangeSet(
+        inp_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttl.tensor.CoreRange(
-                            ttl.tensor.CoreCoord(*start_idx),
-                            ttl.tensor.CoreCoord(*end_idx),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(*start_idx),
+                            ttnn.CoreCoord(*end_idx),
                         ),
                     }
                 ),
@@ -114,7 +112,7 @@ def run_test_ff1(
                     32,
                     int(8 * 1024 / n_cores),
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )

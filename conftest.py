@@ -83,6 +83,16 @@ def get_tt_cache_path():
     return get_tt_cache_path_
 
 
+def get_dispatch_core_type():
+    import tt_lib as ttl
+
+    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
+    dispatch_core_type = ttl.device.DispatchCoreType.WORKER
+    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
+        dispatch_core_type = ttl.device.DispatchCoreType.ETH
+    return dispatch_core_type
+
+
 @pytest.fixture(scope="function")
 def device_params(request):
     return getattr(request, "param", {})
@@ -97,7 +107,7 @@ def device(request, device_params):
 
     num_devices = ttl.device.GetNumPCIeDevices()
     assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
-    device = ttl.device.CreateDevice(device_id=device_id, **device_params)
+    device = ttl.device.CreateDevice(device_id=device_id, dispatch_core_type=get_dispatch_core_type(), **device_params)
     ttl.device.SetDefaultDevice(device)
 
     yield device
@@ -117,7 +127,7 @@ def pcie_devices(request, device_params):
     request.node.pci_ids = device_ids
 
     # Get only physical devices
-    devices = ttl.device.CreateDevices(device_ids, **device_params)
+    devices = ttl.device.CreateDevices(device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params)
 
     yield [devices[i] for i in range(num_devices)]
 
@@ -136,7 +146,7 @@ def all_devices(request, device_params):
     request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids]
 
     # Get only physical devices
-    devices = ttl.device.CreateDevices(device_ids, **device_params)
+    devices = ttl.device.CreateDevices(device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params)
 
     yield [devices[i] for i in range(num_devices)]
 
@@ -188,7 +198,9 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
 
     request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
-    device_mesh = ttnn.open_device_mesh(device_grid, device_ids[:num_devices_requested], **device_params)
+    device_mesh = ttnn.open_device_mesh(
+        device_grid, device_ids[:num_devices_requested], dispatch_core_type=get_dispatch_core_type(), **device_params
+    )
 
     logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
     yield device_mesh
@@ -214,7 +226,10 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     request.node.pci_ids = device_ids[:num_pcie_devices_requested]
 
     device_mesh = ttnn.open_device_mesh(
-        ttnn.DeviceGrid(1, num_pcie_devices_requested), device_ids[:num_pcie_devices_requested], **device_params
+        ttnn.DeviceGrid(1, num_pcie_devices_requested),
+        device_ids[:num_pcie_devices_requested],
+        dispatch_core_type=get_dispatch_core_type(),
+        **device_params,
     )
 
     logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
@@ -243,7 +258,10 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
     device_mesh = ttnn.open_device_mesh(
-        ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested], **device_params
+        ttnn.DeviceGrid(1, num_devices_requested),
+        device_ids[:num_devices_requested],
+        dispatch_core_type=get_dispatch_core_type(),
+        **device_params,
     )
 
     logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
@@ -555,7 +573,7 @@ def pytest_timeout_set_timer(item, settings):
                 timeout -= 5
                 parent_status = get_parent_status()
             if parent_status != "already dead":
-                logger.info(f"Timing out test case")
+                logger.warning(f"This test seems to have hung... Timing out test case")
                 os.kill(parent_pid, signal.SIGKILL)
             logger.info(f"Killing timer")
             os._exit(1)

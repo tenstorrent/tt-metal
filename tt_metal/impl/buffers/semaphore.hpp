@@ -4,11 +4,10 @@
 
 #pragma once
 
-#include "common/tt_backend_api_types.hpp"
+#include "llrt/hal.hpp"
 #include "common/core_coord.h"
 #include "hostdevcommon/common_runtime_address_map.h"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 
 namespace tt {
 
@@ -17,11 +16,9 @@ namespace tt_metal {
 // Semaphores are statically allocated withing range [SEMAPHORE_BASE, SEMAPHORE_BASE + SEMAPHORE_SIZE]
 class Semaphore {
    public:
-    Semaphore(const CoreRangeSet &core_range_set, uint32_t id, uint32_t initial_value) :
-        core_range_set_(core_range_set), id_(id), initial_value_(initial_value), core_type_(CoreType::WORKER) {}
+    Semaphore(const CoreRangeSet &core_range_set, uint32_t id, uint32_t initial_value);
 
-    Semaphore(const CoreRangeSet &core_range_set, uint32_t id, uint32_t initial_value, CoreType core_type) :
-        core_range_set_(core_range_set), id_(id), initial_value_(initial_value), core_type_(core_type) {}
+    Semaphore(const CoreRangeSet &core_range_set, uint32_t id, uint32_t initial_value, CoreType core_type);
 
     Semaphore(const Semaphore &other);
 
@@ -50,7 +47,7 @@ class Semaphore {
     CoreRangeSet core_range_set_;             // Ranges of cores where this semaphore is initialized
     uint32_t id_;
     uint32_t initial_value_;              // Initial value of semaphore
-    CoreType core_type_;                       // Type of core. ETH, WORKER.
+    CoreType core_type_;
 };
 
 }  // namespace tt_metal

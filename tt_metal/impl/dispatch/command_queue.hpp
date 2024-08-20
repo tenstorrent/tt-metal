@@ -14,7 +14,6 @@
 
 #include "common/env_lib.hpp"
 #include "tt_metal/common/base.hpp"
-#include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/lock_free_queue.hpp"
@@ -22,6 +21,10 @@
 #include "tt_metal/impl/trace/trace_buffer.hpp"
 
 namespace tt::tt_metal {
+
+class Event;
+class Trace;
+using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType {
@@ -43,10 +46,6 @@ enum class EnqueueCommandType {
 };
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
-
-// TEMPORARY! TODO(agrebenisan): need to use proper macro based on loading noc
-#define NOC_X(x) x
-#define NOC_Y(y) y
 
 class CommandQueue;
 class CommandInterface;

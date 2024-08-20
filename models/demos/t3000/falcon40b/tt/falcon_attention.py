@@ -336,17 +336,21 @@ class TtFalconAttention:
         key_layer = self.rotary_embedding(key_layer)
 
         # K Cache update
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             layer_past[0],
-            ttnn.experimental.tensor.typecast(key_layer, self.model_config["KV_CACHE_DTYPE"]),
+            ttnn.experimental.typecast(
+                key_layer, self.model_config["KV_CACHE_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            ),
             user_id,
         )
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             layer_past[1],
-            ttnn.experimental.tensor.typecast(value_layer, self.model_config["KV_CACHE_DTYPE"]),
+            ttnn.experimental.typecast(
+                value_layer, self.model_config["KV_CACHE_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            ),
             user_id,
         )
-        attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
             query_layer,
             key_layer,
             value_layer,
@@ -476,7 +480,7 @@ class TtFalconAttention:
             kv_cache_shard_shape[0] = layer_past[0].get_legacy_shape()[1] * padded_layer_past_len
             kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
         # Update kv_cache in place
-        ttnn.experimental.tensor.update_cache(
+        ttnn.update_cache(
             layer_past[0],
             key_layer,
             layer_past_len,
@@ -511,14 +515,14 @@ class TtFalconAttention:
         )
         key_layer.deallocate(True)
 
-        attn_weights = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+        attn_weights = ttnn.experimental.group_attn_matmul(
             query_layer,
             key_layer_transposed,
             compute_with_storage_grid_size=self.device_mesh.get_devices()[
                 0
             ].compute_with_storage_grid_size(),  # Change this
-            output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+            memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
         )
         query_layer.deallocate(True)
         key_layer_transposed.deallocate(True)
@@ -541,7 +545,7 @@ class TtFalconAttention:
         ######################
 
         # Update kv_cache in place
-        ttnn.experimental.tensor.update_cache(
+        ttnn.update_cache(
             layer_past[1],
             value_layer,
             layer_past_len,
@@ -568,12 +572,12 @@ class TtFalconAttention:
         ########################
         ### POST-SOFTMAX MM ###
         ########################
-        attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+        attn_output = ttnn.experimental.group_attn_matmul(
             attn_weights,
             value_layer,
             compute_with_storage_grid_size=self.device_mesh.get_devices()[0].compute_with_storage_grid_size(),
-            output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
+            memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
+            dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
         )
         attn_weights.deallocate(True)
         value_layer.deallocate(True)

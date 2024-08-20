@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_pytorch_ops
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
@@ -367,6 +368,30 @@ op_map = {
     "ttnn-reshape": {
         "tt_op": ttnn_ops.reshape,
         "pytorch_op": pytorch_ops.reshape,
+    },
+    "ttnn-transpose_01": {
+        "tt_op": ttnn_ops.transpose_01,
+        "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=1),
+    },
+    "ttnn-transpose_02": {
+        "tt_op": ttnn_ops.transpose_02,
+        "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=2),
+    },
+    "ttnn-transpose_03": {
+        "tt_op": ttnn_ops.transpose_03,
+        "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=3),
+    },
+    "ttnn-transpose_12": {
+        "tt_op": ttnn_ops.transpose_12,
+        "pytorch_op": partial(pytorch_ops.transpose, dim0=1, dim1=2),
+    },
+    "ttnn-transpose_13": {
+        "tt_op": ttnn_ops.transpose_13,
+        "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=3),
+    },
+    "ttnn-transpose_23": {
+        "tt_op": ttnn_ops.transpose_23,
+        "pytorch_op": partial(pytorch_ops.transpose, dim0=2, dim1=3),
     },
     "ttnn-gelu": {
         "tt_op": ttnn_ops.gelu,
@@ -960,5 +985,21 @@ op_map = {
     "complex-add-bw": {
         "tt_op": ttnn_ops.complex_add_bw,
         "pytorch_op": pytorch_ops.complex_add_bw,
+    },
+    "complex-angle": {
+        "tt_op": ttnn_ops.complex_angle,
+        "pytorch_op": pytorch_ops.complex_angle,
+    },
+    "complex-conj-bw": {
+        "tt_op": ttnn_ops.complex_conj_bw,
+        "pytorch_op": pytorch_ops.complex_conj_bw,
+    },
+    "eltwise-celu": {
+        "tt_op": ttnn_ops.eltwise_celu,
+        "pytorch_op": pytorch_ops.celu,
+    },
+    "eltwise-bias_gelu_unary": {
+        "tt_op": ttnn_ops.eltwise_bias_gelu_unary,
+        "pytorch_op": pytorch_ops.bias_gelu_unary,
     },
 }

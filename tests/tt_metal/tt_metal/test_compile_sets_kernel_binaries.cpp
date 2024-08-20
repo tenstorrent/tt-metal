@@ -12,7 +12,9 @@
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/program.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
+#include "llrt/hal.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -51,7 +53,7 @@ int main(int argc, char **argv) {
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE);
+        tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
         std::vector<Device*> devices = tt::DevicePool::instance().get_all_active_devices();
         std::vector<Program> programs;
         std::set<uint32_t> build_keys;
@@ -134,7 +136,8 @@ int main(int argc, char **argv) {
             //                      Compile Application
             ////////////////////////////////////////////////////////////////////////////
             // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
-            const KernelGroup* kernel_group = program.kernels_on_core(core, CoreType::WORKER);
+            uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+            const KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
             TT_FATAL(
                 kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
                 kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value());
@@ -174,7 +177,8 @@ int main(int argc, char **argv) {
                     for (int j = 0; j < num_compiles; j++) {
                         uint32_t mask = device->build_key();
                         tt_metal::detail::CompileProgram(device, program);
-                        const KernelGroup* kernel_group = program.kernels_on_core(core, CoreType::WORKER);
+                        uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+                        const KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
                         auto compute_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
                         auto riscv0_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
                         auto riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());

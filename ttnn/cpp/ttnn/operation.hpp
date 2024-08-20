@@ -7,7 +7,6 @@
 #include <experimental/type_traits>
 #include <ttnn/tensor/tensor.hpp>
 
-#include "tt_metal/detail/program.hpp" /* Need this for GetKernel, which is used in CQ Set/Update Runtime Args Functions */
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_stl/concepts.hpp"
@@ -27,7 +26,7 @@ static Hash hash_operation(const Types&... objects) {
 }
 
 using OverrideAddressesCallback =
-    std::function<void(const Program&, const std::vector<Buffer*>&, const std::vector<Buffer*>&)>;
+    std::function<void(const Program&, const std::vector<tt::tt_metal::Buffer*>&, const std::vector<tt::tt_metal::Buffer*>&)>;
 
 using Tensors = std::vector<Tensor>;
 using OptionalTensors = std::vector<std::optional<Tensor>>;

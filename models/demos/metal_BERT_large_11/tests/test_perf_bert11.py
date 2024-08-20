@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer
 
-import tt_lib
+import ttnn
 
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
@@ -124,7 +124,7 @@ def run_perf_bert11(
             del tt_embedding_inputs
             del tt_embedding
         # Run last inference iteration
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_run_accum_key, force_enable=True)
         del tt_output
 
@@ -152,7 +152,7 @@ def run_perf_bert11(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
-    ([8, "BFLOAT8_B-SHARDED", 0.0329, 6, 10],),
+    ([8, "BFLOAT8_B-SHARDED", 0.0324, 6, 10],),
 )
 def test_perf_bare_metal_wh(
     device,
@@ -179,7 +179,7 @@ def test_perf_bare_metal_wh(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
-    ([12, "BFLOAT8_B-SHARDED", 0.0329, 6, 10],),
+    ([12, "BFLOAT8_B-SHARDED", 0.0324, 6, 10],),
 )
 def test_perf_bare_metal_gs(
     device,

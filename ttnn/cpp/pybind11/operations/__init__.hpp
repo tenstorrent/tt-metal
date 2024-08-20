@@ -13,7 +13,6 @@
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
-#include "pybind11/operations/kv_cache.hpp"
 
 #include "ttnn/operations/pool/avgpool/avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/downsample/downsample_pybind.hpp"
@@ -23,7 +22,7 @@
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
-#include "ttnn/operations/conv2d/conv2d_pybind.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
 #include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
 #include "ttnn/operations/examples/examples_pybind.hpp"
 #include "ttnn/operations/normalization/normalization_pybind.hpp"
@@ -39,6 +38,7 @@
 #include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
 #include "ttnn/operations/loss/loss_pybind.hpp"
+#include "ttnn/operations/kv_cache/kv_cache_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -101,7 +101,7 @@ void py_module(py::module& module) {
     data_movement::py_module(m_data_movement);
 
     auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
-    conv2d::py_module(m_conv2d);
+    conv::conv2d::py_bind_conv2d(m_conv2d);
 
     auto m_pool = module.def_submodule("pool", "pooling  operations");
     pool::py_module(m_pool);
@@ -119,7 +119,7 @@ void py_module(py::module& module) {
     reduction::py_module(m_reduction);
 
     auto m_kv_cache = module.def_submodule("kv_cache", "KV cache operations");
-    kv_cache::py_module(m_kv_cache);
+    kv_cache::py_bind_kv_cache(m_kv_cache);
 
     auto m_copy = module.def_submodule("copy", "copy operations");
     copy::py_module(m_copy);

@@ -326,9 +326,10 @@ MatmulProgramConfig create_matmul_program_config(
         auto shard_shape = input_tensor_a_memory_config.shard_spec.value().shape;
         m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
         n_tiles_per_core = (n * shard_shape[1]) / (k * ttnn::TILE_SIZE);
-        k_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
+        k_tiles_per_core = std::gcd(shard_shape[1] / ttnn::TILE_SIZE, k);
     }
 
+    n_tiles_per_core = std::max(n_tiles_per_core, (unsigned int)1);
     auto matmul_params = get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
     uint32_t out_subblock_h = std::get<0>(matmul_params);
     uint32_t out_subblock_w = std::get<1>(matmul_params);
@@ -508,7 +509,7 @@ MatmulProgramConfig get_matmul_program_config(
 
             uint32_t per_core_M = div_up(M, virtual_y);
             uint32_t per_core_N = div_up(N, virtual_x);
-            uint32_t in0_block_w = cores_along_x_match_grid_size ? shard_shape[1] / TILE_WIDTH : 1;
+            uint32_t in0_block_w = cores_along_x_match_grid_size ? std::gcd(shard_shape[1] / TILE_WIDTH, K) : 1;
 
             auto subblock_hw = bmm_op_utils::get_matmul_subblock_params(
                 per_core_M, per_core_N, false, per_core_N_equals_subblock_w_constraint, fp32_dest_acc_en);
@@ -575,7 +576,7 @@ MatmulProgramConfig get_matmul_program_config(
         };
     }
     return create_matmul_program_config(
-        input_tensor_a, input_tensor_b, grid_size, fused_activation, compute_kernel_config);
+        input_tensor_a, input_tensor_b, user_core_coord, fused_activation, compute_kernel_config);
 }
 
 inline uint32_t get_estimated_size_of_cbs(
@@ -675,7 +676,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 false /* out_sharded */,
                 std::nullopt /* compute_with_storage_grid_size */,
                 compute_kernel_config);
-        } else if (core_range.y > 0) {
+        } else if (core_range.y > 0 && num_blocks_x <= num_cores_x && num_blocks_y <= num_cores_y) {
             bool transpose_mcast = input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED &&
                                    input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
             out_subblock_h = 4;
@@ -849,6 +850,36 @@ namespace operations {
 
 namespace matmul {
 
+Matmul create_matmul_struct(
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    const struct Matmul &parameters
+) {
+    auto arch = input_tensor_a.device()->arch();
+    const bool has_user_grid = parameters.user_core_coord.has_value();
+    const bool has_program_config = parameters.program_config.has_value();
+    const auto increase_fidelity = !has_program_config && !has_user_grid;
+    auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
+    auto kernel_config_val =
+        init_device_compute_kernel_config(arch, parameters.compute_kernel_config, math_fidelity);
+    bool broadcast_batch = parameters.bcast_batch.value_or(
+        get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
+    TT_FATAL(
+        !(has_user_grid && has_program_config),
+        "Cannot use both user core grid/coordinates and a program config");
+    
+    return Matmul{
+        parameters.program_config,
+        broadcast_batch,
+        parameters.output_mem_config,
+        parameters.output_dtype.value_or(input_tensor_a.get_dtype()),
+        kernel_config_val,
+        parameters.untilize_out,
+        parameters.user_core_coord,
+        parameters.user_fused_activation,
+        parameters.user_run_batched};
+}
+
 Tensor matmul(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
@@ -873,29 +904,9 @@ Tensor matmul(
             const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto &input_tensor_a = input_tensors.at(0);
             const auto &input_tensor_b = input_tensors.at(1);
-            auto arch = input_tensor_a.device()->arch();
-            const bool has_user_grid = parameters.user_core_coord.has_value();
-            const bool has_program_config = parameters.program_config.has_value();
-            const auto increase_fidelity = !has_program_config && !has_user_grid;
-            auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
-            auto kernel_config_val =
-                init_device_compute_kernel_config(arch, parameters.compute_kernel_config, math_fidelity);
-            bool broadcast_batch = parameters.bcast_batch.value_or(
-                get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
-            TT_FATAL(
-                !(has_user_grid && has_program_config),
-                "Cannot use both user core grid/coordinates and a program config");
+            
             return operation::run(
-                Matmul{
-                    parameters.program_config,
-                    broadcast_batch,
-                    parameters.output_mem_config,
-                    parameters.output_dtype.value_or(input_tensor_a.get_dtype()),
-                    kernel_config_val,
-                    parameters.untilize_out,
-                    parameters.user_core_coord,
-                    parameters.user_fused_activation,
-                    parameters.user_run_batched},
+                create_matmul_struct(input_tensor_a, input_tensor_b, parameters),
                 {input_tensor_a, input_tensor_b},
                 optional_input_tensors,
                 {},

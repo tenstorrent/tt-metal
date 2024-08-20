@@ -15,6 +15,19 @@
 __firmware_start = DEFINED(__fw_export_end_text) ? __fw_export_end_text : ORIGIN(REGION_CODE);
 __ldm_start = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : ORIGIN(REGION_DATA);
 
+/*
+  Need a 32B separation between FW end and Kernel start on eriscs to
+    ensure kernel does not get cached into i$ because we cannot flush the i$.
+  FW must align to 32 byte boundary so Kernel begins aligned to meet noc
+    alignment constraints
+*/
+#if LD_TARGET == IERISC
+__padding = 31;
+__alignment = 32;
+#endif
+__padding = 0;
+__alignment = 16;
+
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
@@ -52,9 +65,8 @@ SECTIONS
     *(l1_data_noinit)
   } > REGION_CODE
 
-  /* FW must align to 16 byte boundary so Kernel begins aligned to meet noc
-     alignment constraints */
-  . = ALIGN(16);
+  . += __padding;
+  . = ALIGN(__alignment);
 
   PROVIDE (__etext = .);
   PROVIDE (_etext = .);

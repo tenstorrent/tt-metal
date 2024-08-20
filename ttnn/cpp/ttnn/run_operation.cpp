@@ -15,6 +15,7 @@
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace tt::tt_metal {
     std::atomic<uint32_t> operation_id_atomic_count = 0;
@@ -54,7 +55,7 @@ void override_addresses(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OutputTensors& output_tensors) {
-    std::vector<Buffer*> input_buffers;
+    std::vector<tt::tt_metal::Buffer*> input_buffers;
     for (auto& tensor : input_tensors) {
         input_buffers.push_back(tensor.buffer());
     }
@@ -63,7 +64,7 @@ void override_addresses(
         input_buffers.push_back(buffer);
     }
 
-    std::vector<Buffer*> output_buffers;
+    std::vector<tt::tt_metal::Buffer*> output_buffers;
     for (auto& tensor : output_tensors) {
         if constexpr (std::is_same_v<OptionalTensors, OutputTensors>) {
             auto buffer = tensor.has_value() ? tensor.value().buffer() : nullptr;
@@ -90,7 +91,7 @@ template void override_addresses<OptionalTensors>(
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& output_tensors);
 
-
+}  // namespace detail
 
 template<typename OutputTensors>
 struct OldInfraDeviceOperation {
@@ -139,7 +140,7 @@ struct OldInfraDeviceOperation {
 
             if (override_addresses_callback.has_value()) {
                 // Deprecated
-                override_addresses(
+                detail::override_addresses(
                     override_addresses_callback.value(),
                     program,
                     tensor_args.input_tensors,
@@ -202,11 +203,33 @@ struct OldInfraDeviceOperation {
     static std::string get_type_name(const operation_attributes_t& attributes) {
         return attributes.get_type_name();
     }
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        operation_attributes_t&& operation_attributes,
+        const operation::Tensors& input_tensors,
+        const operation::OptionalConstTensors& optional_input_tensors,
+        const operation::OptionalTensors& optional_output_tensors
+    ) {
+        return std::make_tuple(
+            std::move(operation_attributes),
+            tensor_args_t{input_tensors, optional_input_tensors, optional_output_tensors}
+        );
+    }
 };
 
 
-}  // namespace detail
+} // namespace tt::tt_metal::operation
 
+namespace ttnn::prim {
+constexpr auto old_infra_device_operation = ttnn::register_operation<
+    "ttnn::prim::old_infra_device_operation",
+    tt::tt_metal::operation::OldInfraDeviceOperation<tt::tt_metal::operation::Tensors>>();
+constexpr auto old_infra_device_operation_with_optional_output_tensors = ttnn::register_operation<
+    "ttnn::prim::old_infra_device_operation_with_optional_output_tensors",
+    tt::tt_metal::operation::OldInfraDeviceOperation<tt::tt_metal::operation::OptionalTensors>>();
+}  // namespace ttnn::prim
+
+namespace tt::tt_metal::operation {
 
 template <class OutputTensors>
 OutputTensors run(
@@ -216,10 +239,11 @@ OutputTensors run(
     const OptionalTensors& optional_output_tensors,
     uint8_t cq_id) {
 
-    return ttnn::device_operation::run<detail::OldInfraDeviceOperation<OutputTensors>>(
-        cq_id,
-        typename detail::OldInfraDeviceOperation<OutputTensors>::operation_attributes_t{std::move(operation)},
-        typename detail::OldInfraDeviceOperation<OutputTensors>::tensor_args_t{input_tensors, optional_input_tensors, optional_output_tensors});
+    if constexpr (std::is_same_v<OutputTensors, Tensors>) {
+        return ttnn::prim::old_infra_device_operation(cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
+    } else {
+        return ttnn::prim::old_infra_device_operation_with_optional_output_tensors(cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
+    }
 }
 
 template Tensors run(

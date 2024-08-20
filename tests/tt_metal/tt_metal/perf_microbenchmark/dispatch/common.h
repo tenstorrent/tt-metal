@@ -9,7 +9,7 @@
 #include "core_coord.h"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "noc/noc_parameters.h"
 
@@ -479,15 +479,22 @@ void configure_kernel_variant(
     CoreCoord my_core,
     CoreCoord phys_my_core,
     CoreCoord phys_upstream_core,
-    CoreCoord phys_downstream_core) {
+    CoreCoord phys_downstream_core,
+    Device * device,
+    NOC my_noc_index,
+    NOC upstream_noc_index,
+    NOC downstream_noc_index) {
+
+    const auto& grid_size = device->grid_size();
 
     std::map<string, string> defines = {
-        {"MY_NOC_X", std::to_string(phys_my_core.x)},
-        {"MY_NOC_Y", std::to_string(phys_my_core.y)},
-        {"UPSTREAM_NOC_X", std::to_string(phys_upstream_core.x)},
-        {"UPSTREAM_NOC_Y", std::to_string(phys_upstream_core.y)},
-        {"DOWNSTREAM_NOC_X", std::to_string(phys_downstream_core.x)},
-        {"DOWNSTREAM_NOC_Y", std::to_string(phys_downstream_core.y)},
+        {"MY_NOC_X", std::to_string(NOC_0_X(my_noc_index, grid_size.x, phys_my_core.x))},
+        {"MY_NOC_Y", std::to_string(NOC_0_Y(my_noc_index, grid_size.y, phys_my_core.y))},
+        {"UPSTREAM_NOC_INDEX", std::to_string(upstream_noc_index)},
+        {"UPSTREAM_NOC_X", std::to_string(NOC_0_X(upstream_noc_index, grid_size.x, phys_upstream_core.x))},
+        {"UPSTREAM_NOC_Y", std::to_string(NOC_0_Y(upstream_noc_index, grid_size.y, phys_upstream_core.y))},
+        {"DOWNSTREAM_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, phys_downstream_core.x))},
+        {"DOWNSTREAM_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, phys_downstream_core.y))},
     };
     compile_args.push_back(is_dram_variant);
     compile_args.push_back(is_host_variant);
@@ -497,7 +504,7 @@ void configure_kernel_variant(
         {my_core},
         tt::tt_metal::DataMovementConfig {
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .noc = my_noc_index,
             .compile_args = compile_args,
             .defines = defines
         }
@@ -1035,6 +1042,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
         sub_cmd.addr = device_data.get_result_data_addr(range.start_coord);
         sub_cmd.length = xfer_size_bytes;
         sub_cmd.num_mcast_dests = (range.end_coord.x - range.start_coord.x + 1) * (range.end_coord.y - range.start_coord.y + 1);
+        sub_cmd.flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
 
         for (uint32_t i = 0; i < sizeof(CQDispatchWritePackedLargeSubCmd) / sizeof(uint32_t); i++) {
             cmds.push_back(((uint32_t *)&sub_cmd)[i]);

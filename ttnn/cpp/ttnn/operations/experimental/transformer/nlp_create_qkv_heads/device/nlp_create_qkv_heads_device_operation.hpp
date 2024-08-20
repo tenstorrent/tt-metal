@@ -12,6 +12,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -111,6 +112,20 @@ struct NlpCreateHeadsDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor_q,
+        const std::optional<Tensor>& input_tensor_kv,
+        const uint32_t num_q_heads,
+        const std::optional<uint32_t> num_kv_heads,
+        uint32_t head_dim,
+        const bool transpose_k_heads,
+        const std::optional<MemoryConfig>& memory_config,
+        std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors);
 };
 
 } // namespace ttnn::operations::experimental::transformer
+
+namespace ttnn::prim {
+constexpr auto nlp_create_qkv_heads = ttnn::register_operation<"ttnn::prim::nlp_create_qkv_heads", ttnn::operations::experimental::transformer::NlpCreateHeadsDeviceOperation>();
+} // namespace ttnn::prim

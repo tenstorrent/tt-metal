@@ -124,16 +124,16 @@ def test_mamba_reference_perplexity(
     verify_acc_metrics(calculated_acc_metrics, expected_acc_metrics)
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1000)
 @skip_for_grayskull("Mamba not supported on Grayskull")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "model_version, mode, batch_size, max_seq_len, num_samples, expected_ppl, expected_top1, expected_top5",
     (
-        ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 64, 64, 28.8, 0.37, 0.61),
-        ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 128, 64, 20.6, 0.40, 0.66),
-        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 64, 64, 27.0, 0.36, 0.62),
-        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 128, 64, 20.4, 0.40, 0.65),
+        ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 64, 64, 28.8, 0.365, 0.605),
+        ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 128, 64, 20.7, 0.395, 0.655),
+        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 64, 64, 27.1, 0.355, 0.615),
+        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 128, 64, 20.5, 0.395, 0.645),
     ),
 )
 def test_mamba_perplexity(

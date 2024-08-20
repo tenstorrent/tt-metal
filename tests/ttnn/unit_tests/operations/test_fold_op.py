@@ -114,15 +114,15 @@ def pad_and_fold_with_permute_and_reshape_on_device(
     activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     # reshape
     n, w, c, h = activation_pyt_padded.shape
-    activation_pyt_padded = ttnn.tt_lib.tensor.reshape(
-        activation_pyt_padded, n, w // stride_w, c * stride_w, h, output_mem_config=ttnn.L1_MEMORY_CONFIG
+    activation_pyt_padded = ttnn.reshape_on_device(
+        activation_pyt_padded, n, w // stride_w, c * stride_w, h, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     # transpose
     activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
     # reshape
     n, w, h, c = activation_pyt_padded.shape
-    activation_pyt_padded = ttnn.tt_lib.tensor.reshape(
-        activation_pyt_padded, n, w, h // stride_h, c * stride_h, output_mem_config=ttnn.L1_MEMORY_CONFIG
+    activation_pyt_padded = ttnn.reshape_on_device(
+        activation_pyt_padded, n, w, h // stride_h, c * stride_h, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     # transpose
     activation_pyt_padded = ttnn.transpose(activation_pyt_padded, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -205,7 +205,7 @@ def test_fold(act_shape, stride_h, stride_w, device):
         torch_input,
         device,
         ttnn.ROW_MAJOR_LAYOUT,
-        tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        tt_memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     tt_out = ttnn.fold(tt_input, stride_h, stride_w)

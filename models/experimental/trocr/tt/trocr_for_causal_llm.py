@@ -9,7 +9,7 @@ import copy
 from typing import Optional, Tuple, Union
 from dataclasses import dataclass
 
-import tt_lib
+import ttnn
 from models.utility_functions import torch_to_tt_tensor_rm
 from models.experimental.trocr.tt.trocr_decoder_wrapper import TtTrOCRDecoderWrapper
 from models.helper_funcs import Linear
@@ -17,12 +17,12 @@ from models.helper_funcs import Linear
 
 @dataclass
 class TtCausalLMOutputWithCrossAttentions(nn.Module):
-    loss: Optional[tt_lib.tensor.Tensor] = None
-    logits: tt_lib.tensor.Tensor = None
-    past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    cross_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    loss: Optional[ttnn.Tensor] = None
+    logits: ttnn.Tensor = None
+    past_key_values: Optional[Tuple[Tuple[ttnn.Tensor]]] = None
+    hidden_states: Optional[Tuple[ttnn.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.Tensor]] = None
+    cross_attentions: Optional[Tuple[ttnn.Tensor]] = None
 
 
 class TtTrOCRForCausalLM(nn.Module):
@@ -39,9 +39,7 @@ class TtTrOCRForCausalLM(nn.Module):
         self.config = config
         self.device = device
         super().__init__()
-        self.model = TtTrOCRDecoderWrapper(
-            config, base_address=base_address, state_dict=state_dict, device=device
-        )
+        self.model = TtTrOCRDecoderWrapper(config, base_address=base_address, state_dict=state_dict, device=device)
 
         self.output_projection_weight = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.output_projection.weight"],
@@ -56,33 +54,25 @@ class TtTrOCRForCausalLM(nn.Module):
 
     def forward(
         self,
-        input_ids: Optional[tt_lib.tensor.Tensor] = None,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        cross_attn_head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
-        inputs_embeds: Optional[tt_lib.tensor.Tensor] = None,
-        labels: Optional[tt_lib.tensor.Tensor] = None,
+        input_ids: Optional[ttnn.Tensor] = None,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        encoder_hidden_states: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
+        cross_attn_head_mask: Optional[ttnn.Tensor] = None,
+        past_key_values: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
+        inputs_embeds: Optional[ttnn.Tensor] = None,
+        labels: Optional[ttnn.Tensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, TtCausalLMOutputWithCrossAttentions]:
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model.decoder(

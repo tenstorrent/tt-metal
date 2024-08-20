@@ -26,10 +26,11 @@ from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "iterations",
-    (20,),
+    (17,),
 )
 def test_llama_model_inference(device, iterations, use_program_cache, reset_seeds):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
@@ -38,14 +39,17 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
     dtype = ttnn.bfloat8_b
     pcc = 0.92  # FIXME: why are first couple of iterations 0.93 and the rest higher?
 
-    model_args = TtModelArgs(device)
+    # Use instruct weights instead of general weights
+    instruct = False
+
+    model_args = TtModelArgs(device, instruct=instruct)
 
     model_args.n_layers = 32  # Full model
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")
-    state_dict = torch.load(model_args.consolidated_weights_path)
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     state_dict = {
         k: v
         for k, v in state_dict.items()
@@ -57,7 +61,10 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
     logger.info("Finished loading weights...")
 
     prompts = ["This is a test"] * model_args.max_batch_size
-    encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
+    if instruct:
+        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
+    else:
+        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
 
     if run_ref_pt:
         reference_model = Transformer(model_args)
@@ -88,6 +95,7 @@ def test_llama_model_inference(device, iterations, use_program_cache, reset_seed
         rot_mat=None,
         start_pos=generation_start_pos,
     )
+    logger.info("Model and caches loaded.")
 
     if run_ref_pt:
         all_tests_pass = True

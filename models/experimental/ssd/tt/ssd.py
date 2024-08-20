@@ -4,7 +4,6 @@
 
 import torch
 from torch import nn
-import tt_lib
 import ttnn
 import tt_lib.fallback_ops as fallback_ops
 from typing import List, Optional, Tuple, Dict, OrderedDict
@@ -111,16 +110,16 @@ class TtSSD(nn.Module):
 
     def postprocess_detections(
         self,
-        head_outputs: Dict[str, tt_lib.tensor.Tensor],
-        image_anchors: List[tt_lib.tensor.Tensor],
+        head_outputs: Dict[str, ttnn.Tensor],
+        image_anchors: List[ttnn.Tensor],
         image_shapes: Tuple[int, int],
-    ) -> List[Dict[str, tt_lib.tensor.Tensor]]:
+    ) -> List[Dict[str, ttnn.Tensor]]:
         bbox_regression = head_outputs["bbox_regression"]
         pred_scores = fallback_ops.softmax(head_outputs["cls_logits"], dim=-1)
 
         num_classes = pred_scores.get_legacy_shape()[-1]
 
-        detections: List[Dict[str, tt_lib.tensor.Tensor]] = []
+        detections: List[Dict[str, ttnn.Tensor]] = []
 
         boxes = tt_to_torch_tensor(bbox_regression).to(torch.float).squeeze(0).squeeze(0)
         anchors = tt_to_torch_tensor(image_anchors[0]).squeeze(0).squeeze(0)
@@ -168,9 +167,9 @@ class TtSSD(nn.Module):
 
     def forward(
         self,
-        image: tt_lib.tensor.Tensor,
-        targets: Optional[List[Dict[str, tt_lib.tensor.Tensor]]] = None,
-    ) -> List[Dict[str, tt_lib.tensor.Tensor]]:
+        image: ttnn.Tensor,
+        targets: Optional[List[Dict[str, ttnn.Tensor]]] = None,
+    ) -> List[Dict[str, ttnn.Tensor]]:
         original_image_sizes: List[tuple[int, int]] = []
 
         val = image.get_legacy_shape()[-2:]
@@ -182,13 +181,13 @@ class TtSSD(nn.Module):
         image = torch_to_tt_tensor_rm(image.tensors, self.device)
         features = self.Ttbackbone(image)
 
-        if isinstance(features, tt_lib.tensor.Tensor):
+        if isinstance(features, ttnn.Tensor):
             features = OrderedDict([("0", features)])
 
         features = list(features.values())
         head_outputs = self.Ttssdhead(features)
         anchors = self.anchor_generator(image, features)
-        detections: List[Dict[str, tt_lib.tensor.Tensor]] = []
+        detections: List[Dict[str, ttnn.Tensor]] = []
 
         detections = self.postprocess_detections(head_outputs, anchors, image_shape[0])
         detections = self.transform.postprocess(detections, image_shape, original_image_sizes)

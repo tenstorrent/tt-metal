@@ -7,13 +7,13 @@ from loguru import logger
 import torch
 import ttnn
 
-from models.experimental.llama2_70b.reference.llama.llama.model import precompute_freqs_cis, apply_rotary_emb
+from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis, apply_rotary_emb
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.utility_functions import skip_for_grayskull
 
-from models.experimental.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
+from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
 
 
 def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
@@ -46,7 +46,7 @@ class TtLlamaRotary(torch.nn.Module):
         # n_head = 1 for K
 
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            # math_fidelity=ttl.tensor.MathFidelity.LoFi,
+            # math_fidelity=ttnn.MathFidelity.LoFi,
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
             fp32_dest_acc_en=(True if self.head_dim <= 128 else False),

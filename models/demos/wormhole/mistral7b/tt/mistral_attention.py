@@ -369,12 +369,12 @@ class TtMistralAttention(nn.Module):
                     keys_sliced_T_shape = keys_sliced_T.shape
                     keys_sliced_T = ttnn.reshape(keys_sliced_T, ttnn.Shape([32, 8, 128, keys_sliced_T_shape[3]]))
 
-                attn = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+                attn = ttnn.experimental.group_attn_matmul(
                     q_heads,
                     keys_sliced_T,
                     compute_with_storage_grid_size=self.attention_grid,
-                    output_mem_config=self.model_config["QK_MM_OUTPUT_MEMCFG"],
-                    output_dtype=ttnn.bfloat16,  # Force bfloat16 for higher accuracy
+                    memory_config=self.model_config["QK_MM_OUTPUT_MEMCFG"],
+                    dtype=ttnn.bfloat16,  # Force bfloat16 for higher accuracy
                 )  # seqlen, n_heads, batch, cache_len + seqlen
 
                 ttnn.deallocate(keys_sliced_T)
@@ -391,12 +391,12 @@ class TtMistralAttention(nn.Module):
                     values_sliced_shape = values.shape
                     values = ttnn.reshape(values, ttnn.Shape([32, 8, values_sliced_shape[2], 128]))
                 values_sliced = values[:, :, :layer_slice, :]
-                attn_output = ttnn.experimental.operations.primary.transformers.group_attn_matmul(
+                attn_output = ttnn.experimental.group_attn_matmul(
                     attn_sliced,
                     values_sliced,
                     compute_with_storage_grid_size=self.attention_grid,
-                    output_mem_config=self.model_config["QKV_MM_OUTPUT_MEMCFG"],
-                    output_dtype=ttnn.bfloat8_b,  # Force bfloat16 for higher accuracy
+                    memory_config=self.model_config["QKV_MM_OUTPUT_MEMCFG"],
+                    dtype=ttnn.bfloat8_b,  # Force bfloat16 for higher accuracy
                 )  # seqlen, n_heads, batch, dhead
 
                 ttnn.deallocate(attn_sliced)
@@ -587,12 +587,12 @@ class TtMistralAttention(nn.Module):
             v_fill = ttnn.experimental.tensor.interleaved_to_sharded(
                 v_fill, sharded_mem_config=self.model_config["KV_PREFILL_MEM_CFG"](seq_len)
             )
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             keys_BKSD,
             k_fill,
             user_id,
         )
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             values_BKSD,
             v_fill,
             user_id,
@@ -608,7 +608,7 @@ class TtMistralAttention(nn.Module):
         q_heads_84SD = ttnn.reshape(
             q_heads_1QSD, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
         )
-        attn_output_84SD = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+        attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_84SD,
             k_heads_K1SD,
             v_heads_V1SD,

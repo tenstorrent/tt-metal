@@ -7,6 +7,7 @@
 
 #include "core.hpp"
 #include "device.hpp"
+#include "events.hpp"
 #include "multi_device.hpp"
 #include "types.hpp"
 #include "reports.hpp"
@@ -17,10 +18,15 @@
 #include "ttnn/deprecated/tt_lib/csrc/tt_lib_bindings.hpp"
 #include "operations/__init__.hpp"
 
+#include "ttnn/graph_processor_pybind.hpp"
+
 namespace py = pybind11;
 
 PYBIND11_MODULE(_ttnn, module) {
     module.doc() = "Python bindings for TTNN";
+
+    auto m_graph = module.def_submodule("graph", "Contains graph capture functions");
+    ttnn::py_graph_module(m_graph);
 
     auto m_deprecated = module.def_submodule("deprecated", "Contains deprecated tt_lib bindings for tensor, device, profiler");
     tt::bind_deprecated(m_deprecated);
@@ -39,6 +45,9 @@ PYBIND11_MODULE(_ttnn, module) {
 
     auto m_multi_device = module.def_submodule("multi_device", "ttnn multi_device");
     ttnn::multi_device::py_module(m_multi_device);
+
+    auto m_events = module.def_submodule("events", "ttnn events");
+    ttnn::events::py_module(m_events);
 
     auto m_reports = module.def_submodule("reports", "ttnn reports");
     ttnn::reports::py_module(m_reports);

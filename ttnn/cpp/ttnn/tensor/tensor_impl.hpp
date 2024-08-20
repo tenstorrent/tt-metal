@@ -213,7 +213,7 @@ static std::vector<uint32_t> to_vector(const Shape& shape) {
 
 template <typename T, template <typename> typename BufferType>
 inline std::vector<T> convert_layout_row_major_to_tile(const Shape& shape, const BufferType<T>& data_to_convert) {
-    TT_ASSERT(
+    TT_FATAL(
         (shape[-2] % tt::constants::TILE_HEIGHT == 0 && shape[-1] % tt::constants::TILE_WIDTH == 0),
         "Unsupported shape for tensor conversion");
     return convert_layout(
@@ -275,7 +275,7 @@ inline void read_data_from_device_buffer(DeviceBuffer device_buffer, vector<T>& 
 // ======================================================================================
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking = true);
+Tensor to_host(const Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
 Tensor to_host_sharded(const Tensor& tensor);

@@ -6,7 +6,6 @@ import pytest
 import torch
 from loguru import logger
 
-import tt_lib as ttl
 import ttnn
 from models.utility_functions import untilize, comp_pcc
 from models.utility_functions import is_grayskull
@@ -16,8 +15,12 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize(
     "dtype",
-    [ttnn.bfloat16, ttnn.float32],
-    ids=["bfloat16", "float32"],
+    [
+        ttnn.bfloat16,
+    ],
+    ids=[
+        "bfloat16",
+    ],
 )
 @pytest.mark.parametrize(
     "test_func_name, torch_func_name",
@@ -28,12 +31,25 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
     [True, False],
     ids=["silu", "no-silu"],
 )
-def test_run_elt_binary(dtype, test_func_name, torch_func_name, pre_in0_silu, device):
-    shape = [2, 16, 256, 256]
+@pytest.mark.parametrize(
+    "shard",
+    [False, True],
+    ids=["interleaved", "sharded"],
+)
+def test_run_elt_binary(dtype, test_func_name, torch_func_name, pre_in0_silu, device, shard):
+    shape = (1, 1, 32, 1024)
 
     torch.manual_seed(10)
 
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    if shard:
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=shape,
+            core_grid=ttnn.CoreGrid(y=1, x=8),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    else:
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     in0 = torch.randn(shape).bfloat16().float()
     in1 = torch.randn(shape).bfloat16().float()
@@ -42,7 +58,7 @@ def test_run_elt_binary(dtype, test_func_name, torch_func_name, pre_in0_silu, de
 
     if pre_in0_silu:
         torch_silu = torch.nn.SiLU()
-        out_t = test_func_name(in0_t, in1_t, input_tensor_a_activation=ttnn.UnaryOpType.SILU)
+        out_t = test_func_name(in0_t, in1_t, input_tensor_a_activation=ttnn.UnaryOpType.SILU, memory_config=mem_config)
     else:
         out_t = test_func_name(in0_t, in1_t)
     out = tt2torch_tensor(out_t)

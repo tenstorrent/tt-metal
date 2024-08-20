@@ -2,8 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Union
 import time
 import ttnn
+from ttnn import ConcatMeshToTensor
 import tt_lib
 import torch
 import numpy as np
@@ -193,45 +195,26 @@ def torch2tt_tensor(
     return tt_tensor
 
 
-def tt_tensors_to_torch_tensors(tt_tensors_device):
-    # Convert tensors to interleaved, assume all devices have same memory layout
-    if tt_tensors_device[0].is_sharded():
-        for i in range(len(tt_tensors_device)):
-            tt_tensors_device[i] = tt_lib.tensor.sharded_to_interleaved(tt_tensors_device[i])
+def tt_tensors_to_torch_tensors(
+    tt_tensors_device: ttnn.Tensor, device_mesh: Union[ttnn.DeviceMesh, ttnn.Device], concat_dim: int = 0
+):
+    # Convert tensors to interleaved
+    if tt_tensors_device.is_sharded():
+        tt_tensors_device = ttnn.experimental.tensor.sharded_to_interleaved(tt_tensors_device)
 
-    # Convert tensors to RM layout, assume all devices have same layout/dtype
-    if tt_tensors_device[0].layout == tt_lib.tensor.Layout.TILE:
+    # Convert tensors to RM layout
+    if tt_tensors_device.layout == ttnn.TILE_LAYOUT:
         # Convert to bfloat16 to ensure untilize works
-        if tt_tensors_device[0].dtype != tt_lib.tensor.DataType.BFLOAT16:
-            for i in range(len(tt_tensors_device)):
-                tt_tensors_device[i] = tt_lib.tensor.clone(
-                    tt_tensors_device[i], output_dtype=tt_lib.tensor.DataType.BFLOAT16
-                )
-        # Untilize using singlecore since multicore version runs out of l1 memory (TODO: change when multicore untilize is fixed)
-        for i in range(len(tt_tensors_device)):
-            tt_tensors_device[i] = ttnn.untilize(tt_tensors_device[i], use_multicore=False)
+        if tt_tensors_device.dtype != ttnn.bfloat16:
+            tt_tensors_device = ttnn.clone(tt_tensors_device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Untilize using singlecore since multicore version runs out of l1 memory (Issue #9022)
+        tt_tensors_device = ttnn.untilize(tt_tensors_device, use_multicore=False)
 
-    # Issue non-blocking reads across all devices. This allows for reads across devices to overlap
-    tensors_on_host = [tt_tensor_device.cpu(False) for tt_tensor_device in tt_tensors_device]
-    # Flush each device and stall until each tensor is populated
-    for i, tensor in enumerate(tensors_on_host):
-        tensor.sync()
-        tt_lib.device.Synchronize(tt_tensors_device[i].device())
-    # Return torch tensors
-    return [tensor.to_torch() for tensor in tensors_on_host]
+    tt_tensors_device = ttnn.to_torch(
+        tt_tensors_device, mesh_composer=ConcatMeshToTensor(device_mesh, dim=concat_dim), device=device_mesh
+    )
 
-
-def torch_tensors_to_tt_tensors(torch_tensors, layout, dtype, mem_config, devices):
-    tt_host_tensors = []
-    tt_device_tensors = []
-    # Offload layout conversion to workers
-    for i, torch_tensor in enumerate(torch_tensors):
-        size = list(torch_tensor.size())
-        while len(size) < 4:
-            size.insert(0, 1)
-        tt_host_tensors.append(tt_lib.tensor.Tensor(torch_tensor.reshape(size), dtype).to(layout, devices[i]))
-    # Issue writes using workers
-    return [tt_host_tensors[i].to(device, mem_config) for i, device in enumerate(devices)]
+    return tt_tensors_device
 
 
 def tt2torch_tensor(tt_tensor):

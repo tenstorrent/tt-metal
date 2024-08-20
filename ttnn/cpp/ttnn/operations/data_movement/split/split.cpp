@@ -6,7 +6,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
 #include "device/split_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape/reshape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
 
@@ -33,13 +33,13 @@ namespace detail {
         }
 
         const int W = 1, Z = shape[0] * shape[1], Y = shape[2], X = shape[3];
-        const Tensor &reshaped_tensor = reshape(input_tensor, 1, -1, Y, X, mem_config);
+        const Tensor &reshaped_tensor = ttnn::reshape_on_device(input_tensor, 1, -1, Y, X, mem_config);
 
         auto part_reshaped = impl_split_last_dim_two_chunks_tiled(reshaped_tensor, mem_config);
 
         std::vector<Tensor> results;
         results.reserve(part_reshaped.size());
-        for (auto &part : part_reshaped) results.emplace_back(reshape(part, -1, shape[1], Y, X / 2, mem_config));
+        for (auto &part : part_reshaped) results.emplace_back(ttnn::reshape_on_device(part, -1, shape[1], Y, X / 2, mem_config));
 
         return results;
     }
@@ -63,7 +63,7 @@ std::vector<Tensor> split_dim_two_chunks_tiled(
 }
 
 
-std::vector<ttnn::Tensor> SplitOperation::operator()(
+std::vector<ttnn::Tensor> SplitOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     int64_t& num_splits,
@@ -76,16 +76,16 @@ std::vector<ttnn::Tensor> SplitOperation::operator()(
 
 }
 
-std::vector<ttnn::Tensor> SplitOperation::operator()(
+std::vector<ttnn::Tensor> SplitOperation::invoke(
     const ttnn::Tensor& input_tensor,
     int64_t& num_splits,
     int64_t& dim,
     const std::optional<MemoryConfig>& memory_config) {
-    return operator()(DefaultQueueId, input_tensor, num_splits, dim, memory_config);
+    return invoke(DefaultQueueId, input_tensor, num_splits, dim, memory_config);
 }
 
-std::vector<ttnn::Tensor> SplitOperation::operator()(const ttnn::Tensor& input_tensor, int64_t& num_splits,  int64_t& dim) {
-    return operator()(DefaultQueueId, input_tensor, num_splits, dim, std::nullopt);
+std::vector<ttnn::Tensor> SplitOperation::invoke(const ttnn::Tensor& input_tensor, int64_t& num_splits,  int64_t& dim) {
+    return invoke(DefaultQueueId, input_tensor, num_splits, dim, std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace

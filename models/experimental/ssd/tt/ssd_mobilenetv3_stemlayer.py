@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import tt_lib
+import ttnn
 from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import (
     TtMobileNetV3ConvLayer,
 )
@@ -51,7 +51,7 @@ class TtMobileNetV3Stem(nn.Module):
             device=device,
         )
 
-    def forward(self, features: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, features: ttnn.Tensor) -> ttnn.Tensor:
         features = self.conv_3x3(features)
         features = self.reduce_1x1(features)
         return features

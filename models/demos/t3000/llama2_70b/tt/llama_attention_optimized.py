@@ -263,15 +263,15 @@ class TtLlamaAttention_optimized:
     ):
         # K CACHE UPDATE
         keys = self.layer_past[0]
-        ttnn.experimental.tensor.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
+        ttnn.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
         key_layer.deallocate(True)
 
         # V CACHE UPDATE
         values = self.layer_past[1]
-        ttnn.experimental.tensor.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
+        ttnn.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
         value_layer.deallocate(True)
 
-        attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention_decode(
+        attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
             query_layer,
             keys,
             values,
@@ -279,7 +279,7 @@ class TtLlamaAttention_optimized:
             scale=self.scale,
             program_config=self.model_config["SDPA_DECODE_PROGRAM_CONFIG"],
             compute_kernel_config=self.model_config["SDPA_COMPUTE_KERNEL_CONFIG"],
-            output_mem_config=self.model_config["SDPA_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["SDPA_OUTPUT_MEMCFG"],
         )
         return attn_output
 
@@ -392,20 +392,16 @@ class TtLlamaAttention_optimized:
         keys = self.layer_past[0]
         # Fill cache expects batch in dim0
         keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.experimental.tensor.fill_cache(
-            keys_reshaped, ttnn.experimental.tensor.typecast(key_layer, ttnn.bfloat8_b), user_id
-        )
+        ttnn.fill_cache(keys_reshaped, ttnn.experimental.tensor.typecast(key_layer, ttnn.bfloat8_b), user_id)
 
         # FILL V CACHE
         values = self.layer_past[1]
         # Fill cache expects batch in dim0
         values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.experimental.tensor.fill_cache(
-            values_reshaped, ttnn.experimental.tensor.typecast(value_layer, ttnn.bfloat8_b), user_id
-        )
+        ttnn.fill_cache(values_reshaped, ttnn.experimental.tensor.typecast(value_layer, ttnn.bfloat8_b), user_id)
 
-        # SPDA
-        attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+        # SDPA
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
             query_layer,
             key_layer,
             value_layer,

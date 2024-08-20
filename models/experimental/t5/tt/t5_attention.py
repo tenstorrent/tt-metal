@@ -7,7 +7,6 @@ import torch
 from torch import nn
 
 import ttnn
-import tt_lib
 
 from loguru import logger
 from models.utility_functions import (
@@ -26,7 +25,7 @@ def t5_shape_tt(states, batch_size, n_heads, key_value_proj_dim, device):
         states = states.transpose(1, 2)
         tt_out = torch2tt_tensor(states, device)
     else:
-        tt_out = tt_lib.tensor.reshape(states, batch_size, -1, n_heads, key_value_proj_dim)
+        tt_out = ttnn.reshape_on_device(states, batch_size, -1, n_heads, key_value_proj_dim)
         tt_out = ttnn.transpose(tt_out, 1, -2)
 
     return tt_out
@@ -57,7 +56,7 @@ def t5_unshape_tt(states, batch_size, inner_dim, device):
         tt_out = torch2tt_tensor(states, device)
     else:
         states = ttnn.transpose(states, 1, -2)
-        tt_out = tt_lib.tensor.reshape(states, 1, batch_size, -1, inner_dim)
+        tt_out = ttnn.reshape_on_device(states, 1, batch_size, -1, inner_dim)
 
     return tt_out
 
@@ -317,9 +316,7 @@ class TtT5Attention(nn.Module):
         self.dropout = config["dropout_rate"]
         self.inner_dim = self.n_heads * self.key_value_proj_dim
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
 
         self.q_weights = torch2tt_tensor(state_dict[f"{base_address}.q.weight"], device)
         self.k_weights = torch2tt_tensor(state_dict[f"{base_address}.k.weight"], device)

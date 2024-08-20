@@ -111,8 +111,19 @@ std::vector<tt::tt_metal::Shape> SliceDeviceOperation::compute_output_shapes(con
 std::vector<Tensor> SliceDeviceOperation::create_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
     const auto &input_tensor_a = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor_a.get_dtype(), input_tensor_a.get_layout(), this->output_mem_config);
+    const auto shapes = compute_output_shapes(input_tensors);
+
+    if (input_tensor_a.is_sharded()) {
+        return {create_device_tensor(
+            shapes[0],
+            input_tensor_a.get_dtype(),
+            input_tensor_a.get_layout(),
+            input_tensor_a.device(),
+            this->output_mem_config)};
+    } else {
+        return operation::generic_create_output_tensors(
+            *this, input_tensors, input_tensor_a.get_dtype(), input_tensor_a.get_layout(), this->output_mem_config);
+    }
 }
 
 operation::ProgramWithCallbacks SliceDeviceOperation::create_program(

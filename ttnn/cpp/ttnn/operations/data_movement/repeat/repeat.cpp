@@ -12,7 +12,7 @@
 namespace ttnn::operations::data_movement {
 
 
-ttnn::Tensor RepeatOperation::operator()(
+ttnn::Tensor RepeatOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const Shape & repeat_dims,
@@ -44,15 +44,15 @@ ttnn::Tensor RepeatOperation::operator()(
 
 }
 
-ttnn::Tensor RepeatOperation::operator()(
+ttnn::Tensor RepeatOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const Shape & repeat_dims,
     const std::optional<MemoryConfig>& memory_config) {
-    return operator()(DefaultQueueId, input_tensor, repeat_dims, memory_config);
+    return invoke(DefaultQueueId, input_tensor, repeat_dims, memory_config);
 }
 
-ttnn::Tensor RepeatOperation::operator()(const ttnn::Tensor& input_tensor, const Shape & repeat_dims) {
-    return operator()(DefaultQueueId, input_tensor, repeat_dims, std::nullopt);
+ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor, const Shape & repeat_dims) {
+    return invoke(DefaultQueueId, input_tensor, repeat_dims, std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace

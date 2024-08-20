@@ -5,16 +5,16 @@
 from typing import Optional, Tuple, Union
 import torch.nn as nn
 
-import tt_lib
+import ttnn
 from dataclasses import dataclass
 from models.experimental.distilbert.tt.distilbert_transformer_block import TtTransformerBlock
 
 
 @dataclass
 class TtBaseModelOutput:
-    last_hidden_state: tt_lib.tensor.Tensor = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    last_hidden_state: ttnn.Tensor = None
+    hidden_states: Optional[Tuple[ttnn.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.Tensor]] = None
 
 
 class TtTransformer(nn.Module):
@@ -40,13 +40,13 @@ class TtTransformer(nn.Module):
 
     def forward(
         self,
-        input: tt_lib.tensor.Tensor,
-        attn_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        input: ttnn.Tensor,
+        attn_mask: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
         return_dict: Optional[bool] = None,
-    ) -> Union[TtBaseModelOutput, Tuple[tt_lib.tensor.Tensor, ...]]:
+    ) -> Union[TtBaseModelOutput, Tuple[ttnn.Tensor, ...]]:
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
 
@@ -65,28 +65,20 @@ class TtTransformer(nn.Module):
 
             if output_attentions:
                 if len(layer_outputs) != 2:
-                    raise ValueError(
-                        f"The length of the layer_outputs should be 2, but it is {len(layer_outputs)}"
-                    )
+                    raise ValueError(f"The length of the layer_outputs should be 2, but it is {len(layer_outputs)}")
 
                 attentions = layer_outputs[0]
                 all_attentions = all_attentions + (attentions,)
 
             else:
                 if len(layer_outputs) != 1:
-                    raise ValueError(
-                        f"The length of the layer_outputs should be 1, but it is {len(layer_outputs)}"
-                    )
+                    raise ValueError(f"The length of the layer_outputs should be 1, but it is {len(layer_outputs)}")
 
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_state,)
 
         if return_dict:
-            return tuple(
-                v
-                for v in [hidden_state, all_hidden_states, all_attentions]
-                if v is not None
-            )
+            return tuple(v for v in [hidden_state, all_hidden_states, all_attentions] if v is not None)
         return TtBaseModelOutput(
             last_hidden_state=hidden_state,
             hidden_states=all_hidden_states,
