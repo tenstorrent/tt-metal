@@ -1,8 +1,6 @@
 name: "ttnn - Run sweeps"
 
 on:
-  schedule:
-    - cron: "0 1,7,13,19 * * *"
   workflow_dispatch:
   workflow_call:
 
