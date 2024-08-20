@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 
+#include "core_config.h"
 #include "circular_buffer.h"
 #include "debug/sanitize_noc.h"
 #include "debug/status.h"
@@ -1169,14 +1170,16 @@ FORCE_INLINE void noc_async_write_tile(
     s.noc_async_write_tile(id, src_local_l1_addr);
 }
 
+template <ProgrammableCoreType type = ProgrammableCoreType::TENSIX>
 FORCE_INLINE
 uint32_t get_semaphore(uint32_t semaphore_id) {
-    return SEMAPHORE_BASE + semaphore_id * L1_ALIGNMENT;
-}
-
-FORCE_INLINE
-uint32_t eth_get_semaphore(uint32_t semaphore_id) {
-    return eth_l1_mem::address_map::SEMAPHORE_BASE + semaphore_id * L1_ALIGNMENT;
+    if constexpr (type == ProgrammableCoreType::TENSIX) {
+        return SEMAPHORE_BASE + semaphore_id * L1_ALIGNMENT;
+    } else if constexpr (type == ProgrammableCoreType::ACTIVE_ETH) {
+        return eth_l1_mem::address_map::SEMAPHORE_BASE + semaphore_id * L1_ALIGNMENT;
+    } else if constexpr (type == ProgrammableCoreType::IDLE_ETH) {
+        return SEMAPHORE_BASE + semaphore_id * L1_ALIGNMENT;
+    }
 }
 
 inline
