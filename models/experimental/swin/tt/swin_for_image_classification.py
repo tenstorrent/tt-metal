@@ -12,18 +12,18 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
-import tt_lib
+import ttnn
 from models.experimental.swin.swin_helper_funcs import linear as TtLinear
 from models.experimental.swin.tt.swin_model import TtSwinModel
 
 
 @dataclass
 class TtSwinImageClassifierOutput:
-    loss: Optional[tt_lib.tensor.Tensor] = None
-    logits: tt_lib.tensor.Tensor = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    reshaped_hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    loss: Optional[ttnn.Tensor] = None
+    logits: ttnn.Tensor = None
+    hidden_states: Optional[Tuple[ttnn.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.Tensor]] = None
+    reshaped_hidden_states: Optional[Tuple[ttnn.Tensor]] = None
 
 
 class TtSwinForImageClassification(nn.Module):
@@ -34,13 +34,11 @@ class TtSwinForImageClassification(nn.Module):
         self.num_labels = self.config.num_labels
         self.swin = TtSwinModel(self.config, state_dict, base_address, self.device)
 
-        self.weight = torch_to_tt_tensor_rm(
-            state_dict["classifier.weight"], self.device
-        )
+        self.weight = torch_to_tt_tensor_rm(state_dict["classifier.weight"], self.device)
         self.bias = torch_to_tt_tensor_rm(state_dict["classifier.bias"], self.device)
 
     # Classifier head
-    def classifier(self, pooled_output: tt_lib.tensor.Tensor):
+    def classifier(self, pooled_output: ttnn.Tensor):
         if self.config.num_labels > 0:
             return TtLinear(pooled_output, self.weight, self.bias)
         else:
@@ -52,16 +50,14 @@ class TtSwinForImageClassification(nn.Module):
 
     def forward(
         self,
-        pixel_values: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        pixel_values: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, TtSwinImageClassifierOutput]:
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         outputs = self.swin(
             pixel_values,
@@ -80,9 +76,7 @@ class TtSwinForImageClassification(nn.Module):
             if self.config.problem_type is None:
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (
-                    labels.dtype == torch.long or labels.dtype == torch.int
-                ):
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
                     self.config.problem_type = "single_label_classification"
                 else:
                     self.config.problem_type = "multi_label_classification"
