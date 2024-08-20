@@ -449,7 +449,7 @@ namespace ttnn {
         } else {
             // lets connect capture_start with capture_end
             // it means we didn't capture any functions
-            TT_ASSERT(current_op_id.size(), "Graph size could not be 0. It means track_function_end called more then begin.");
+            TT_ASSERT(current_op_id.size(), "Graph size cannot be 0. This means that track_end_function was called more than begin.");
             graph[0].connections.push_back(counter);
         }
         clean_hook();
