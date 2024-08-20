@@ -14,7 +14,9 @@ jobs:
       TT_METAL_DOCKER_IMAGE: tt-metalium/ubuntu-20.04-amd64
       TT_METAL_DOCKER_IMAGE_TAG: ${{ github.sha }}
     environment: dev
-    runs-on: build-docker
+    runs-on:
+      - build-docker
+      - in-service
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Login to GitHub Container Registry
@@ -38,4 +40,4 @@ jobs:
         run: |
           GITHUB_REPO_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ env.TT_METAL_DOCKER_IMAGE }}:${{ env.IMAGE_TAG }}
           docker tag ${{ env.TT_METAL_DOCKER_IMAGE }}:${{ env.TT_METAL_DOCKER_IMAGE_TAG }} $GITHUB_REPO_DOCKER_IMAGE_TAG
-          docker push $GITHUB_REPO_DOCKER_IMAGE_TAG 
+          docker push $GITHUB_REPO_DOCKER_IMAGE_TAG

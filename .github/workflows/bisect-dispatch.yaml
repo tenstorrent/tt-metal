@@ -9,6 +9,7 @@ on:
         options:
           - grayskull
           - wormhole_b0
+          - blackhole
       runner-label:
         required: true
         type: string
