@@ -148,14 +148,33 @@ void DumpDeviceProfileResults(Device *device, bool lastDump) {
     auto device_id = device->id();
     auto device_num_hw_cqs = device->num_hw_cqs();
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-    for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_type)) {
-        const CoreCoord curr_core = device->worker_core_from_logical_core(core);
-        workerCores.push_back(curr_core);
+
+    const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+    if (USE_FAST_DISPATCH)
+    {
+        for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_type)) {
+            const CoreCoord curr_core = device->worker_core_from_logical_core(core);
+            workerCores.push_back(curr_core);
+        }
+        for (const CoreCoord& core : device->get_active_ethernet_cores(true)){
+            auto physicalCore = device->physical_core_from_logical_core(core, CoreType::ETH);
+            workerCores.push_back(physicalCore);
+        }
     }
-    for (const CoreCoord& core : device->get_active_ethernet_cores(true)){
-        auto physicalCore = device->physical_core_from_logical_core(core, CoreType::ETH);
-        workerCores.push_back(physicalCore);
+    else
+    {
+        CoreCoord logicalGridSize = device->logical_grid_size();
+        for (int x=0; x < logicalGridSize.x ; x++)
+        {
+            for (int y=0; y < logicalGridSize.y ; y++)
+            {
+                CoreCoord curr_logical_core(x,y);
+                const CoreCoord curr_core = device->worker_core_from_logical_core(curr_logical_core);
+                workerCores.push_back(curr_core);
+            }
+        }
     }
+
     DumpDeviceProfileResults(device, workerCores, lastDump);
 #endif
 }
