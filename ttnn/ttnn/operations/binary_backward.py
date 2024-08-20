@@ -19,30 +19,6 @@ THIS_MODULE = sys.modules[__name__]
 __all__ = []
 
 
-def _golden_function(grad_tensor, input_index, weights, input_shapes, *args, **kwargs):
-    import torch
-
-    batch_size = input_shapes[0]
-    no_of_embeddings = input_shapes[1] * input_shapes[2]
-    embedding_dim = input_shapes[3]
-
-    weights.retain_grad()
-
-    pyt_y = torch.nn.functional.embedding(
-        input_index.reshape((batch_size, no_of_embeddings)),
-        weights.reshape((batch_size * no_of_embeddings, embedding_dim)),
-    ).reshape((1, 1, batch_size * no_of_embeddings, embedding_dim))
-
-    pyt_y.backward(gradient=grad_tensor)
-
-    golden_output_tensor_a = weights.grad
-
-    return golden_output_tensor_a
-
-
-ttnn.attach_golden_function(ttnn.embedding_bw, golden_function=_golden_function)
-
-
 def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 

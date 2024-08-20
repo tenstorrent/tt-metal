@@ -672,18 +672,6 @@ void py_module(py::module& module) {
         |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
         +----------------------------+---------------------------------+-------------------+)doc");
 
-    detail::bind_binary_backward_ops(
-        module,
-        ttnn::embedding_bw,
-        R"doc(Performs backward operations for embedding_bw function and it returns specific indices of the embedding table specified by the :attr:`grad_tensor`.
-        The input tensor( :attr:`input_tensor_a`, :attr:`input_tensor_b`) should be unique.)doc",
-        R"doc(
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       ROW_MAJOR, TILE           |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
-
     detail::bind_binary_backward_float_default(
         module,
         ttnn::subalpha_bw,
