@@ -18,7 +18,7 @@
 extern "C" {
 #endif
 
-void ApplicationHandler(void) __attribute__((__section__(".init")));
+  void ApplicationHandler(void);
 
 #ifdef __cplusplus
 }
