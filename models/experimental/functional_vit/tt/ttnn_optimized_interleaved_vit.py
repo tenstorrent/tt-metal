@@ -46,7 +46,9 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     # ttnn.deallocate(pixel_values)
 
     patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
-    patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, patch_size_sq_trpl))
+    patch_embedding_output = ttnn.reshape_on_device(
+        patch_embedding_output, batch_size, patch_count_all, patch_size_sq_trpl
+    )
 
     return patch_embedding_output
 
@@ -63,10 +65,7 @@ def vit_embeddings(
     # cls_token = parameters.cls_token
     # position_embeddings = parameters.position_embeddings
 
-    l1_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
-    )
+    l1_memory_config = ttnn.L1_MEMORY_CONFIG
 
     patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters=parameters.patch_embeddings)
 

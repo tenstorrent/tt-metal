@@ -80,7 +80,7 @@ def cache_weights_in_weka(device, model_location_generator):
                 ttnn.bfloat16,
                 ttnn.ROW_MAJOR_LAYOUT,
             )
-        ttnn.experimental.tensor.dump_tensor(file_name + str(key) + ".bin", value)
+        ttnn.dump_tensor(file_name + str(key) + ".bin", value)
 
 
 def store_weights(model_version, file_name, dtype, base_addresses):
@@ -114,7 +114,7 @@ def store_weights(model_version, file_name, dtype, base_addresses):
                 ttnn.ROW_MAJOR_LAYOUT,
             )
 
-        ttnn.experimental.tensor.dump_tensor(file_name + str(key) + str(dtype) + ".bin", value)
+        ttnn.dump_tensor(file_name + str(key) + str(dtype) + ".bin", value)
 
 
 def get_tt_cache_path(model_version):
