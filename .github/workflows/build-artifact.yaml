@@ -21,7 +21,7 @@ on:
       arch:
         required: false
         type: string
-        default: '["wormhole_b0"]'
+        default: '["grayskull", "wormhole_b0"]'
       build-type:
         required: false
         type: choice
@@ -36,6 +36,7 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+
 jobs:
   build-artifact:
     strategy:
@@ -64,6 +65,8 @@ jobs:
         with:
           path: build/
           key: build-${{ inputs.build-type }}-${{ matrix.arch }}-${{ inputs.tracy && 'tracy' || 'notracy' }}-${{ github.sha }}
+          restore-keys:
+            build-${{ inputs.build-type }}-${{ matrix.arch }}-${{ inputs.tracy && 'tracy' || 'notracy' }}
       - name: Re-generate CMake project
         run: nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
       - name: Build tt-metal and libs
@@ -79,6 +82,8 @@ jobs:
           path: ttm_${{ matrix.arch }}.tar
       - name: Remove files for incremental builds
         run: |
+          # Pre-compiled headers and CMakeCache rely on mtime and build host paths respectively, so
+          # hard to transfer between machines
           find build/ -type f -name "*hxx*"
           rm -rf $(find build/ -type f -name "*hxx*")
           rm build/CMakeCache.txt
