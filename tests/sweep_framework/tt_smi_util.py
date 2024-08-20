@@ -20,9 +20,12 @@ def run_tt_smi(arch: str):
     ]
     args = GRAYSKULL_ARGS if arch == "grayskull" else WORMHOLE_ARGS
 
-    while len(smi_options) != 0:
-        executable = shutil.which(smi_options.pop())
+    for smi_option in smi_options:
+        executable = shutil.which(smi_option)
         if executable is not None:
+            # Corner case for newer version of tt-smi, -tr and -wr are removed on this version (tt-smi-metal).
+            if smi_option == "tt-smi-metal":
+                args = ["-r", "all"]
             smi_process = subprocess.run([executable, *args])
             if smi_process.returncode == 0:
                 print("SWEEPS: TT-SMI Reset Complete Successfully")
