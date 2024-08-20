@@ -23,11 +23,10 @@ struct circular_buffer_attributes_t {
     CoreRangeSet core_spec = {{}};
     uint32_t total_size;
     uint32_t page_size;
-    // uint8_t buffer_index;
     tt::DataFormat data_format;
 
-    // this needs better solution as we now have input tensors (std::vector) and output tensor so index is not great
-    std::optional<int> set_globally_allocated_address = std::nullopt; // an index to io_tensors that will set globally allocated address on CB
+    std::optional<int> set_globally_allocated_address = std::nullopt;   // an index to io_tensors that will set globally allocated address on CB
+                                                                        // output tensor is matched to last index of the io_tensors
 };
 
 struct data_movement_attributes_t {
@@ -36,7 +35,10 @@ struct data_movement_attributes_t {
     tt::tt_metal::DataMovementConfig config;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> runtime_args_per_core = {};
 
+    // TBD. do we need core_spec variant for performance?
     // std::variant<CoreCoord, CoreRange, CoreRangeSet> core_spec;
+
+    // TBD. shall we go with shared_ptr / vector<shared_ptr> for runtime_args per core for performance?
     // std::shared_ptr<RuntimeArgs> runtime_args;
     // std::vector<std::shared_ptr<RuntimeArgs>> runtime_args;
 
@@ -46,9 +48,9 @@ struct compute_attributes_t {
     CoreRangeSet core_spec = {{}};
     std::string  kernel_path;
     tt::tt_metal::ComputeConfig config;
-    // std::vector<uint32_t> runtime_args = {};
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> runtime_args_per_core = {};
 
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> runtime_args_per_core = {};
+    // same question as in data_movement_attributes_t
 };
 
 struct GenericOpDeviceOperation {
@@ -74,22 +76,13 @@ struct GenericOpDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct tensor_args_t {
-        // std::vector<std::reference_wrapper<Tensor>> io_tensors;
         std::vector<Tensor> io_tensors;
-        // std::vector<Tensor> input_tensors; // this might not be the best thing?
-        // const std::vector<Tensor>& input_tensors;
-        // const Tensor& input_tensor;
-        // Tensor& output_tensor;
-        // reflections assume there are no two params of the same type?
-        // note: in instantiation of function template specialization 'reflect::size<ttnn::operations::generic::GenericOpDeviceOperation::tensor_args_t>' requested here
     };
 
     // Program factories
     struct GenericProgram {
-        // to refactor this when we implement caching
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            // to refactor shared_variables as we implement caching
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

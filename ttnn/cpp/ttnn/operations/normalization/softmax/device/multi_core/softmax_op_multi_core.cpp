@@ -89,7 +89,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     tt::log_debug("math_fidelity: {}", math_fidelity);
     tt::log_debug("math_approx_mode: {}", math_approx_mode);
     tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
-    tt::log_debug("causal mask {}", causal_mask);
 
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
@@ -154,7 +153,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     if (causal_mask) {
         softmax_defines["CAUSAL_MASK"] = "1";
     }
-
     auto reader_kernels_id = CreateKernel(
         program, "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_device_cores,
         tt::tt_metal::ReaderDataMovementConfig(
