@@ -154,7 +154,7 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
         const auto input_tensor_a = ttnn::zeros(params.a_Shape, ttnn::bfloat16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
         const auto input_tensor_b = ttnn::zeros(params.b_Shape, ttnn::bfloat16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
 
-        ttnn::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::FAKE);
+        ttnn::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
         {
             const auto output_tensor = ttnn::add(input_tensor_a, input_tensor_b);
         }
