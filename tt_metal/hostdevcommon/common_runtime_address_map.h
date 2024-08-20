@@ -22,6 +22,12 @@ constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_BARRIER_BASE + DRAM_B
 
 constexpr static std::uint32_t L1_ALIGNMENT = NOC_L1_READ_ALIGNMENT_BYTES >= NOC_L1_WRITE_ALIGNMENT_BYTES ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES;
 
+// Take max alignment to satisfy NoC rd/wr constraints
+// Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
+// PCIe/DRAM -> Tensix/Eth src and dst addrs must be DRAM_ALIGNMENT aligned
+// Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
+constexpr static std::uint32_t ALLOCATOR_ALIGNMENT = DRAM_ALIGNMENT >= L1_ALIGNMENT ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+
 // TODO: these could be moved to even lower addresses -- 5 RISC-V hexes combined don't need 100 KB
 constexpr static std::uint32_t PROFILER_L1_MARKER_UINT32_SIZE = 2;
 constexpr static std::uint32_t PROFILER_L1_MARKER_BYTES_SIZE = PROFILER_L1_MARKER_UINT32_SIZE * sizeof(uint32_t);
