@@ -67,11 +67,9 @@ class T3kMultiDeviceFixture : public ::testing::Test {
         if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
         }
-        const auto T3K_DEVICE_IDS = DeviceIds{0, 4, 5, 1, 2, 6, 7, 3};
         constexpr auto DEFAULT_NUM_COMMAND_QUEUES = 1;
         device_mesh_ = std::make_unique<DeviceMesh>(
             DeviceGrid{1, num_devices},
-            T3K_DEVICE_IDS,
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             DEFAULT_NUM_COMMAND_QUEUES,

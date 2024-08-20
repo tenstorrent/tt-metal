@@ -11,14 +11,13 @@
 
 namespace tt::tt_metal {
 
-DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type)
-    : device_grid(device_grid)
-{
+DeviceMesh::DeviceMesh(
+    const DeviceGrid& device_grid, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type) :
+    device_grid(device_grid) {
     auto [num_rows, num_cols] = device_grid;
     auto num_requested_devices = num_rows * num_cols;
     auto num_available_devices = tt::tt_metal::GetNumAvailableDevices();
     TT_ASSERT(num_requested_devices <= num_available_devices, "Requested more devices than available");
-    TT_ASSERT(num_requested_devices <= device_ids.size(), "User provided insufficient number of device_ids for DeviceMesh");
 
     this->is_galaxy_ = tt::Cluster::instance().is_galaxy_cluster();
     if (this->is_galaxy_) {
@@ -48,13 +47,17 @@ DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_id
         }
         managed_devices = tt::tt_metal::detail::CreateDevices(galaxy_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
         for (int i = 0; i < num_requested_devices; i++) {
-            mesh_devices.emplace_back(device_ids[i], managed_devices.at(galaxy_device_ids[i]));
+            mesh_devices.emplace_back(i, managed_devices.at(galaxy_device_ids[i]));
         }
         this->view = std::make_unique<tt::tt_metal::DeviceMeshView>(*this);
     } else {
+        DeviceIds device_ids;
+        for (int i = 0; i < num_requested_devices; i++) {
+            device_ids.push_back(i);
+        }
         managed_devices = tt::tt_metal::detail::CreateDevices(device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
         for (int i = 0; i < num_requested_devices; i++) {
-            mesh_devices.emplace_back(device_ids[i], managed_devices.at(device_ids[i]));
+            mesh_devices.emplace_back(i, managed_devices.at(i));
         }
     }
 
@@ -62,7 +65,6 @@ DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_id
         log_debug(tt::LogMetal, "TTNN Dev {}: Metal Dev {}", dev_id, dev->id());
     }
 }
-
 
 DeviceMesh::~DeviceMesh() {
     if (not managed_devices.empty()) {
@@ -121,6 +123,15 @@ std::vector<Device*> DeviceMesh::get_devices_on_ring() const {
     TT_ASSERT(not devices.empty(), "No devices in the mesh");
 
     return this->view->get_devices_on_ring(devices, devices[0]->id(), devices.size());
+}
+
+void DeviceMesh::reorder_devices_to_ring() {
+    // Temporary api to reorder devices to ring
+    const auto& ring_devices = this->get_devices_on_ring();
+    int swap_index = 0;
+    for (int i = 0; i < ring_devices.size(); i++) {
+        this->mesh_devices[i].second = ring_devices[i];
+    }
 }
 
 const DeviceIds DeviceMesh::get_device_ids() const

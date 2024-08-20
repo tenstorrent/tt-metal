@@ -25,7 +25,8 @@ public:
     std::vector<std::pair<int, Device *>> mesh_devices;
     std::shared_ptr<DeviceMeshView> view;
 
-    DeviceMesh(const DeviceGrid &device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type);
+    DeviceMesh(
+        const DeviceGrid &device_grid, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type);
     ~DeviceMesh();
 
     DeviceMesh(const DeviceMesh &) = delete;
@@ -40,6 +41,8 @@ public:
     std::vector<Device *> get_devices_on_row(int row_idx) const;
     std::vector<Device *> get_devices_on_column(int col_idx) const;
     std::vector<Device *> get_devices_on_ring() const;
+
+    void reorder_devices_to_ring();
 
     const DeviceIds get_device_ids() const;
 

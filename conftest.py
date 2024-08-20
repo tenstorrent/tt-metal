@@ -139,6 +139,7 @@ def pcie_devices(request, device_params):
 
 @pytest.fixture(scope="function")
 def all_devices(request, device_params):
+    # Todo: #11680 remove this fixture
     import tt_lib as ttl
 
     num_devices = ttl.device.GetNumAvailableDevices()
@@ -199,7 +200,7 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
     device_mesh = ttnn.open_device_mesh(
-        device_grid, device_ids[:num_devices_requested], dispatch_core_type=get_dispatch_core_type(), **device_params
+        device_grid, dispatch_core_type=get_dispatch_core_type(), **device_params
     )
 
     logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
@@ -227,7 +228,6 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     device_mesh = ttnn.open_device_mesh(
         ttnn.DeviceGrid(1, num_pcie_devices_requested),
-        device_ids[:num_pcie_devices_requested],
         dispatch_core_type=get_dispatch_core_type(),
         **device_params,
     )
@@ -249,7 +249,7 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 
     if ttnn.get_num_devices() < 8:
         pytest.skip()
-    device_ids = [0, 4, 5, 1, 2, 6, 7, 3]
+    device_ids = ttnn.get_device_ids()
     try:
         num_devices_requested = min(request.param, len(device_ids))
     except (ValueError, AttributeError):
@@ -259,10 +259,10 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 
     device_mesh = ttnn.open_device_mesh(
         ttnn.DeviceGrid(1, num_devices_requested),
-        device_ids[:num_devices_requested],
         dispatch_core_type=get_dispatch_core_type(),
         **device_params,
     )
+    device_mesh.reorder_devices_to_ring()
 
     logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
     yield device_mesh

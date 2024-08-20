@@ -19,10 +19,9 @@ namespace multi_device {
 void py_module(py::module& module) {
     py::class_<DeviceMesh>(module, "DeviceMesh")
         .def(
-            py::init<DeviceGrid, std::vector<int>, size_t, size_t, size_t, DispatchCoreType>(),
+            py::init<DeviceGrid, size_t, size_t, size_t, DispatchCoreType>(),
             py::kw_only(),
             py::arg("device_grid"),
-            py::arg("device_ids"),
             py::arg("l1_small_size"),
             py::arg("trace_region_size"),
             py::arg("num_command_queues"),
@@ -64,6 +63,13 @@ void py_module(py::module& module) {
                 List[Device]: The devices on a row in the device mesh.
         )doc")
         .def(
+            "reorder_devices_to_ring",
+            &DeviceMesh::reorder_devices_to_ring,
+            R"doc(
+            Reorder the devices in the device mesh to form a ring.
+
+        )doc")
+        .def(
             "compute_with_storage_grid_size",
             &DeviceMesh::compute_with_storage_grid_size,
             R"doc(
@@ -72,15 +78,19 @@ void py_module(py::module& module) {
             Returns:
                 CoreCoord: The compute grid size of the first device in the device mesh.
         )doc")
-        .def("dram_grid_size", &DeviceMesh::dram_grid_size,
-        R"doc(
+        .def(
+            "dram_grid_size",
+            &DeviceMesh::dram_grid_size,
+            R"doc(
             Get the dram grid size (x, y) of the first device in the device mesh.
 
             Returns:
                 CoreCoord: The dram grid size of the first device in the device mesh.
         )doc")
-        .def("arch", &DeviceMesh::arch,
-        R"doc(
+        .def(
+            "arch",
+            &DeviceMesh::arch,
+            R"doc(
             Get the arch of the first device in the device mesh.
 
             Returns:
@@ -98,7 +108,6 @@ void py_module(py::module& module) {
         &open_device_mesh,
         py::kw_only(),
         py::arg("device_grid"),
-        py::arg("device_ids"),
         py::arg("l1_small_size"),
         py::arg("trace_region_size"),
         py::arg("num_command_queues"),
