@@ -9,7 +9,6 @@ from torch import nn
 from torch.nn import functional as F
 
 import ttnn
-import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 from tests.tt_eager.python_api_testing.fused_ops.softmax import softmax as TtSoftmax
 
@@ -56,9 +55,7 @@ class TtCrossAttention(nn.Module):
         self.upcast_softmax = upcast_softmax
         self.device = device
         self.host = host
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         self.scale = dim_head**-0.5
 
@@ -137,11 +134,11 @@ class TtCrossAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states: ttl.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         encoder_hidden_states=None,
         attention_mask=None,
         **cross_attention_kwargs,
-    ) -> ttl.tensor.Tensor:
+    ) -> ttnn.Tensor:
         # The `CrossAttention` class can call different attention processors / attention functions
         # here we simply pass along all tensors to the selected processor class
         # For standard processors that are defined here, `**cross_attention_kwargs` is empty
@@ -153,7 +150,7 @@ class TtCrossAttention(nn.Module):
             **cross_attention_kwargs,
         )
 
-    def batch_to_head_dim(self, tensor: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def batch_to_head_dim(self, tensor: ttnn.Tensor) -> ttnn.Tensor:
         head_size = self.heads
         _, batch_size, seq_len, dim = tensor.get_legacy_shape()
         tensor = fallback_ops.reshape(tensor, batch_size // head_size, head_size, seq_len, dim)
@@ -161,7 +158,7 @@ class TtCrossAttention(nn.Module):
         tensor = fallback_ops.reshape(tensor, 1, batch_size // head_size, seq_len, dim * head_size)
         return tensor
 
-    def head_to_batch_dim(self, tensor: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def head_to_batch_dim(self, tensor: ttnn.Tensor) -> ttnn.Tensor:
         head_size = self.heads
         _, batch_size, seq_len, dim = tensor.get_legacy_shape()
         tensor = fallback_ops.reshape(tensor, batch_size, seq_len, head_size, dim // head_size)
@@ -169,14 +166,12 @@ class TtCrossAttention(nn.Module):
         tensor = fallback_ops.reshape(tensor, 1, batch_size * head_size, seq_len, dim // head_size)
         return tensor
 
-    def get_attention_scores(
-        self, query: ttl.tensor.Tensor, key: ttl.tensor.Tensor, attention_mask=None
-    ) -> ttl.tensor.Tensor:
+    def get_attention_scores(self, query: ttnn.Tensor, key: ttnn.Tensor, attention_mask=None) -> ttnn.Tensor:
         t_key = ttnn.transpose(key, -2, -1)
 
         temp = ttnn.matmul(query, t_key)
         # Aaron: TODO: intentionally keeping this here!
-        # scale_tensor = ttl.tensor.fill_rm(temp.get_legacy_shape()[0],
+        # scale_tensor = ttnn.fill_rm(temp.get_legacy_shape()[0],
         #                                 temp.get_legacy_shape()[1],
         #                                 temp.get_legacy_shape()[2],
         #                                 temp.get_legacy_shape()[3],
@@ -208,9 +203,9 @@ class TtCrossAttention(nn.Module):
 
 
 def CrossAttnProcessor(
-    attn: TtCrossAttention, hidden_states: ttl.tensor.Tensor, encoder_hidden_states=None, attention_mask=None
-) -> ttl.tensor.Tensor:
-    out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    attn: TtCrossAttention, hidden_states: ttnn.Tensor, encoder_hidden_states=None, attention_mask=None
+) -> ttnn.Tensor:
+    out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
     _, batch_size, sequence_length, _ = hidden_states.get_legacy_shape()
     attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length)

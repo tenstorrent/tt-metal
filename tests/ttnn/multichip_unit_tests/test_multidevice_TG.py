@@ -738,7 +738,7 @@ class TestUpdateCache:
                 mesh_mapper=ReplicateTensorToMesh(device_mesh),
             )
 
-            cachett = ttnn.experimental.tensor.fill_cache(cachett, xt, i)
+            cachett = ttnn.fill_cache(cachett, xt, i)
             cache[i : i + 1, :, : x.shape[-2], :] = x
 
         tt_got_back = ttnn.to_torch(cachett, mesh_composer=ListMeshToTensor(device_mesh))[0]
@@ -814,7 +814,7 @@ class TestUpdateCache:
             mesh_mapper=ReplicateTensorToMesh(device_mesh),
         )
 
-        cachett = ttnn.experimental.tensor.update_cache(cachett, xt, cache_idx, batch_offset=batch_offset)
+        cachett = ttnn.update_cache(cachett, xt, cache_idx, batch_offset=batch_offset)
         cache[0:num_users, 0:num_heads, cache_idx : cache_idx + x.shape[-2], 0 : x.shape[-1]] = x
 
         tt_got_back = ttnn.to_torch(cachett, mesh_composer=ListMeshToTensor(device_mesh))[0]

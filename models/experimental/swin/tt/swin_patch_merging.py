@@ -13,7 +13,6 @@ from models.utility_functions import (
 )
 
 from models.experimental.swin.swin_helper_funcs import linear as TtLinear
-import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 import ttnn
 
@@ -51,7 +50,7 @@ class TtSwinPatchMerging(nn.Module):
 
         return input_feature
 
-    def forward(self, input_feature: tt_lib.tensor.Tensor, input_dimensions: Tuple[int, int]) -> tt_lib.tensor.Tensor:
+    def forward(self, input_feature: ttnn.Tensor, input_dimensions: Tuple[int, int]) -> ttnn.Tensor:
         height, width = input_dimensions
         _, batch_size, dim, num_channels = input_feature.get_legacy_shape()
 

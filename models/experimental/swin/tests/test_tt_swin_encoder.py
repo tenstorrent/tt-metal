@@ -14,7 +14,6 @@ from models.utility_functions import (
     comp_allclose,
     comp_pcc,
 )
-import tt_lib
 from models.experimental.swin.tt.swin_encoder import TtSwinEncoder
 from transformers import SwinModel
 

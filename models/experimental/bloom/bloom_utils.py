@@ -4,12 +4,11 @@
 
 import torch
 import json
-import tt_lib
 import ttnn
 
 from models.generation_utils import get_logits_processor
 
-mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+mem_config = ttnn.L1_MEMORY_CONFIG
 
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
@@ -18,15 +17,15 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
     while len(size) < 4:
         size.insert(0, 1)
 
-    tt_tensor = tt_lib.tensor.Tensor(py_tensor.reshape(size), tt_lib.tensor.DataType.BFLOAT16).to(tt_device)
+    tt_tensor = ttnn.Tensor(py_tensor.reshape(size), ttnn.bfloat16).to(tt_device)
 
     return tt_tensor
 
 
 def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
-    if tt_output.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-        tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
+    if tt_output.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        tt_output = tt_output.to(ttnn.ROW_MAJOR_LAYOUT)
     return tt_output.to_torch()
 
 

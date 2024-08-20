@@ -994,4 +994,12 @@ op_map = {
         "tt_op": ttnn_ops.complex_conj_bw,
         "pytorch_op": pytorch_ops.complex_conj_bw,
     },
+    "eltwise-celu": {
+        "tt_op": ttnn_ops.eltwise_celu,
+        "pytorch_op": pytorch_ops.celu,
+    },
+    "eltwise-bias_gelu_unary": {
+        "tt_op": ttnn_ops.eltwise_bias_gelu_unary,
+        "pytorch_op": pytorch_ops.bias_gelu_unary,
+    },
 }

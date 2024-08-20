@@ -4750,3 +4750,10 @@ def complex_conj_bw(
     return torch.complex(
         ttnn_tensor_to_torch(t2.real).to(torch.float32), ttnn_tensor_to_torch(t2.imag).to(torch.float32)
     )
+
+
+def eltwise_bias_gelu_unary(x, *args, bias, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.bias_gelu(t0, bias, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)

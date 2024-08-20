@@ -6,7 +6,6 @@ from torch import nn
 
 
 import ttnn
-import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm
 from models.helper_funcs import Linear as TtLinear
 from models.experimental.deit.tt.deit_config import DeiTConfig
@@ -21,7 +20,7 @@ class TtDeiTPooler(nn.Module):
 
         self.activation = ttnn.tanh()
 
-    def forward(self, hidden_states: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         first_token_tensor = hidden_states[:, 0]
         pooled_output = self.dense(first_token_tensor)
         pooled_output = ttnn.tanh(pooled_output)

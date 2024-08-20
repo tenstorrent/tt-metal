@@ -394,12 +394,12 @@ class TtLlamaAttention_galaxy:
     ):
         # K CACHE UPDATE
         keys = self.layer_past[0]
-        ttnn.experimental.tensor.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
+        ttnn.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
         key_layer.deallocate(True)
 
         # V CACHE UPDATE
         values = self.layer_past[1]
-        ttnn.experimental.tensor.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
+        ttnn.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
         value_layer.deallocate(True)
 
         program_config = ttnn.SDPAProgramConfig(

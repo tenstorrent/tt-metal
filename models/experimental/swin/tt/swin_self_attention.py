@@ -13,7 +13,6 @@ from models.utility_functions import (
 )
 from models.experimental.swin.swin_helper_funcs import linear as TtLinear
 from models.experimental.swin.swin_utils import meshgrid
-import tt_lib
 import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
@@ -72,7 +71,7 @@ class TtSwinSelfAttention(nn.Module):
     def const_tensor(self, shape, value):
         return ttnn.full(shape, value)
 
-    def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def transpose_for_scores(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # x must be 4d originaly
         # 1 is appended to the beggining
         # so create tensor shape by ommiting the first dimension
@@ -86,11 +85,11 @@ class TtSwinSelfAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        hidden_states: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.Tensor]:
         _, batch_size, dim, num_channels = hidden_states.get_legacy_shape()
         mixed_query_layer = TtLinear(hidden_states, self.query_weight, self.query_bias)
 
