@@ -13,7 +13,7 @@ from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
 from statuses import TestStatus, VectorValidity, VectorStatus
-import architecture
+import tt_smi_util
 from elasticsearch import Elasticsearch, NotFoundError
 from elastic_config import *
 
@@ -125,9 +125,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                 print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
                 p.terminate()
                 p = None
-                smi_process = subprocess.run(architecture.tt_smi_command(ARCH))
-                if smi_process.returncode == 0:
-                    print("SWEEPS: TT-SMI Reset Complete Successfully")
+                tt_smi_util.run_tt_smi(ARCH)
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
         result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         result["host"] = get_hostname()
