@@ -9,7 +9,6 @@ from typing import Optional, Tuple, Union
 from transformers import DeiTForImageClassificationWithTeacher
 
 import ttnn
-import tt_lib
 
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_model import TtDeiTModel
@@ -47,8 +46,8 @@ class TtDeiTForImageClassificationWithTeacher(nn.Module):
 
     def forward(
         self,
-        pixel_values: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        pixel_values: Optional[ttnnr.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,

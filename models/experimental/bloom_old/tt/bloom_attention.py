@@ -6,7 +6,6 @@ import torch
 import math
 from torch.nn import functional as F
 
-import tt_lib as ttm
 import ttnn
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.baddbmm as baddbmm
@@ -260,18 +259,22 @@ class TtBloomAttention(torch.nn.Module):
 
         query_layer = query_layer.transpose(1, 2)
         query_layer = bloom_utils.torch2tt_tensor(query_layer, device)
-        reshaped_query_layer = ttm.tensor.reshape(query_layer, 1, batch_size * self.num_heads, q_length, self.head_dim)
+        reshaped_query_layer = ttnn.reshape_on_device(
+            query_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
+        )
 
         # key_layer = key_layer.permute(0, 2, 3, 1).reshape(batch_size * self.num_heads, self.head_dim, q_length)
         key_layer = key_layer.permute(0, 2, 3, 1)
 
         key_layer = bloom_utils.torch2tt_tensor(key_layer, device)
-        reshaped_key_layer = ttm.tensor.reshape(key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length)
+        reshaped_key_layer = ttnn.reshape_on_device(key_layer, 1, batch_size * self.num_heads, self.head_dim, q_length)
 
         # value_layer = value_layer.transpose(1, 2).reshape(batch_size * self.num_heads, q_length, self.head_dim)
         value_layer = value_layer.transpose(1, 2)
         value_layer = bloom_utils.torch2tt_tensor(value_layer, device)
-        reshaped_value_layer = ttm.tensor.reshape(value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim)
+        reshaped_value_layer = ttnn.reshape_on_device(
+            value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
+        )
 
         _, _, _, kv_length = reshaped_key_layer.get_legacy_shape()
 
@@ -285,7 +288,7 @@ class TtBloomAttention(torch.nn.Module):
         )
 
         # change view to [batch_size, num_heads, q_length, kv_length]
-        attention_scores = ttm.tensor.reshape(matmul_result, batch_size, self.num_heads, q_length, kv_length)
+        attention_scores = ttnn.reshape_on_device(matmul_result, batch_size, self.num_heads, q_length, kv_length)
         attention_scores = bloom_utils.tt2torch_tensor(attention_scores)
 
         attn_weights = torch.masked_fill(
@@ -300,15 +303,15 @@ class TtBloomAttention(torch.nn.Module):
 
         if head_mask is not None:
             head_mask = bloom_utils.torch2tt_tensor(head_mask, device)
-            attention_probs = ttm.mul(attention_probs, head_mask)
+            attention_probs = ttnn.mul(attention_probs, head_mask)
 
         # change view [batch_size x num_heads, q_length, kv_length]
-        attention_probs_reshaped = ttm.tensor.reshape(
+        attention_probs_reshaped = ttnn.reshape_on_device(
             attention_probs, 1, batch_size * self.num_heads, q_length, kv_length
         )
 
         # matmul: [batch_size * num_heads, q_length, head_dim]
-        context_layer = ttm.tensor.bmm(attention_probs_reshaped, reshaped_value_layer)
+        context_layer = ttnn.bmm(attention_probs_reshaped, reshaped_value_layer)
         context_layer = bloom_utils.tt2torch_tensor(context_layer)
 
         context_layer = context_layer.squeeze(0)
@@ -320,7 +323,7 @@ class TtBloomAttention(torch.nn.Module):
 
         # Dropout is used in training only
         # output_tensor = F.dropout(output_tensor, p=self.hidden_dropout, training=False)
-        output_tensor = ttm.tensor.add(residual, output_tensor)
+        output_tensor = ttnn.add(residual, output_tensor)
 
         outputs = (output_tensor, present)
 

@@ -10,7 +10,6 @@ import evaluate
 from models.experimental.bloom.bloom_utils import pad_input_32
 
 from transformers import BloomTokenizerFast, BloomForQuestionAnswering
-import tt_lib
 from models.experimental.bloom.tt.bloom_qa import TtBloomForQuestionAnswering
 
 

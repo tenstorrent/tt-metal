@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttm
 
 from transformers import BloomForCausalLM
 from models.utility_functions import print_diff_argmax
@@ -16,9 +15,7 @@ import models.experimental.bloom_old.tt.bloom_mlp as bloom_mlp
 
 def run_bloom_mlp_test(device):
     # Prepare input
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
-        "bigscience/bloom-560m", torchscript=False
-    )
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()
 
     block = 6

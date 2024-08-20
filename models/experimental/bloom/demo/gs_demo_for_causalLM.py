@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
-
 from transformers import BloomForCausalLM, BloomTokenizerFast
 import numpy as np
 import pytest

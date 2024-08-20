@@ -6,7 +6,7 @@ from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeach
 import torch
 from loguru import logger
 import pytest
-import tt_lib
+import ttnn
 
 from models.experimental.deit.tt.deit_for_image_classification_with_teacher import (
     deit_for_image_classification_with_teacher,
@@ -46,14 +46,14 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
 
         profiler.start(first_key)
         tt_output = tt_model(tt_inputs)[0]
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
 
         enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         tt_output = tt_model(tt_inputs)[0]
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
 
     first_iter_time = profiler.get(first_key)

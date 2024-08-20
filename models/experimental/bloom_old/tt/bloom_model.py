@@ -6,7 +6,6 @@ import torch
 import math
 from torch.nn import functional as F
 
-import tt_lib as ttm
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.bloom_block as bloom_block
 

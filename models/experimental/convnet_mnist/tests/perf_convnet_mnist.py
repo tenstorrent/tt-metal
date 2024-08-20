@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn
 import pytest
 from loguru import logger
 
@@ -36,17 +36,17 @@ def test_perf(device, use_program_cache, expected_inference_time, expected_compi
     tt_model, pt_model = convnet_mnist(device)
     test_input, images = get_test_data(64)
 
-    tt_input = torch2tt_tensor(test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_input = torch2tt_tensor(test_input, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
     with torch.no_grad():
         profiler.start(cpu_key)
         pt_model(test_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
         tt_model_outputs = tt_model(tt_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_model_outputs
 
@@ -54,7 +54,7 @@ def test_perf(device, use_program_cache, expected_inference_time, expected_compi
 
         profiler.start(second_key)
         tt_model_outputs = tt_model(tt_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
         del tt_model_outputs
 
