@@ -20,6 +20,7 @@ from models.utility_functions import (
     pad_and_fold_conv_filters_for_unity_stride,
     enable_memory_reports,
     skip_for_grayskull,
+    skip_for_wormhole_b0,
 )
 
 from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import load_resnet50_model
@@ -266,6 +267,7 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
 
 
 @skip_for_grayskull("Only works for Wormhole")
+@skip_for_wormhole_b0(reason_str="#11667: Hangs")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
