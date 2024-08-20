@@ -144,13 +144,13 @@ def pad_and_fold_with_permute_and_reshape_on_device(
 def pad_and_fold_with_permute_and_reshape_on_device_sharded(
     device, torch_input_tensor, pad_h, pad_w, stride_h, stride_w
 ):
-    # pad on host
+    ##################################### pad on host #####################################################
     n, c, h, w = torch_input_tensor.shape
     target_h = h // stride_h
     target_w = target_h
     C = _nearest_y(c, 4)
     activation_pyt_padded_shape = [n, C, h + w - h, w]
-    # send sharded tensor to device
+    ##################################### send sharded tensor to device #####################################
     in_sharded_memory_config = ttnn.create_sharded_memory_config(
         torch_input_tensor.shape,
         core_grid=ttnn.CoreGrid(y=8, x=6),
@@ -160,7 +160,7 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_sharded_memory_config
     )
-    # pad on device to 256, 256
+    ##################################### pad on device to 256, 256 #####################################
     pad_sharded_memory_config = ttnn.create_sharded_memory_config(
         activation_pyt_padded_shape,
         core_grid=ttnn.CoreGrid(y=8, x=8),
@@ -171,15 +171,7 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(
     tt_output_tensor = ttnn.pad(
         tt_input_tensor, padding=((0, C - c), (0, w - h), (0, 0)), value=0, memory_config=pad_sharded_memory_config
     )
-    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, (0, 0, 0, w - h, 0, C - c))
-    passing, output = comp_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
-    logger.info(output)
-    assert passing
-    tt_output_tensor = ttnn.from_torch(
-        tt_output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=pad_sharded_memory_config
-    )
-    # transpose
+    ##################################### transpose ######################################################
     tphw_sharded_memory_config = ttnn.create_sharded_memory_config(
         tt_output_tensor.shape,
         core_grid=ttnn.CoreGrid(y=8, x=8),
@@ -188,15 +180,7 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(
     )
     print("transpose hw " + str(tt_output_tensor.shape))
     tt_output_tensor = ttnn.transpose(tt_output_tensor, 2, 3, memory_config=tphw_sharded_memory_config)
-    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    torch_output_tensor = torch_output_tensor.transpose(2, 3)
-    passing, output = comp_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
-    logger.info(output)
-    assert passing
-    tt_output_tensor = ttnn.from_torch(
-        tt_output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=pad_sharded_memory_config
-    )
-    # transpose
+    ##################################### transpose ######################################################
     tphc_sharded_memory_config = ttnn.create_sharded_memory_config(
         tt_output_tensor.shape,
         core_grid=ttnn.CoreGrid(y=8, x=8),
@@ -205,29 +189,10 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(
     )
     print("transpose hc " + str(tt_output_tensor.shape))
     tt_output_tensor = ttnn.transpose(tt_output_tensor, 1, 2, memory_config=tphc_sharded_memory_config)
-    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    torch_output_tensor = torch_output_tensor.transpose(1, 2)
-    passing, output = comp_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
-    logger.info(output)
-    assert passing
-    tt_output_tensor = ttnn.from_torch(
-        tt_output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=pad_sharded_memory_config
-    )
-    # reshape
-    reshape_sharded_memory_config = ttnn.create_sharded_memory_config(
-        tt_output_tensor.shape,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    ##################################### reshape ######################################################
     n, w, c, h = tt_output_tensor.shape
     tt_output_tensor = tt_output_tensor.reshape(n, w // stride_w, c * stride_w, h)
-    tt_output_tensor = ttnn.from_torch(
-        tt_output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=reshape_sharded_memory_config
-    )
-    torch_output_tensor = torch_output_tensor.reshape(n, w // stride_w, c * stride_w, h)
-    # transpose
+    ##################################### transpose ####################################################
     tphw_sharded_memory_config = ttnn.create_sharded_memory_config(
         tt_output_tensor.shape,
         core_grid=ttnn.CoreGrid(y=8, x=8),
@@ -236,20 +201,10 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(
     )
     print("transpose hw " + str(tt_output_tensor.shape))
     tt_output_tensor = ttnn.transpose(tt_output_tensor, 2, 3, memory_config=tphw_sharded_memory_config)
-    # reshape
-    reshape_sharded_memory_config = ttnn.create_sharded_memory_config(
-        tt_output_tensor.shape,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    ##################################### reshape #######################################################
     n, w, h, c = tt_output_tensor.shape
     tt_output_tensor = tt_output_tensor.reshape(n, w, h // stride_h, c * stride_h)
-    tt_output_tensor = ttnn.from_torch(
-        tt_output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=reshape_sharded_memory_config
-    )
-    # transpose
+    ##################################### transpose #####################################################
     tphc_sharded_memory_config = ttnn.create_sharded_memory_config(
         tt_output_tensor.shape,
         core_grid=ttnn.CoreGrid(y=8, x=8),
@@ -258,14 +213,18 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(
     )
     print("transpose hc " + str(tt_output_tensor.shape))
     tt_output_tensor = ttnn.transpose(tt_output_tensor, 1, 2, memory_config=tphc_sharded_memory_config)
-    # slice
-    slice_sharded_memory_config = ttnn.create_sharded_memory_config(
-        tt_output_tensor.shape,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
+    ##################################### slice #########################################################
     n, h, w, c = tt_output_tensor.shape
+    num_cores_x = 8
+    num_cores_y = 8
+    shard_h = (n * target_h * target_w + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
+    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, c), ttnn.ShardOrientation.ROW_MAJOR, False)
+    slice_sharded_memory_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
     tt_output_tensor = ttnn.slice(
         tt_output_tensor,
         (0, 0, 0, 0),
@@ -273,7 +232,6 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(
         memory_config=slice_sharded_memory_config,
     )
     print("output " + str(tt_output_tensor.shape))
-
     return tt_output_tensor
 
 
@@ -304,7 +262,6 @@ def test_fold_with_permute_reshape_on_device_sharded(device, n, c, h, w, pad_h, 
     tt_output_tensor = pad_and_fold_with_permute_and_reshape_on_device_sharded(
         device, torch_input_tensor_padded, pad_h, pad_w, stride_h, stride_w
     )
-
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
 
