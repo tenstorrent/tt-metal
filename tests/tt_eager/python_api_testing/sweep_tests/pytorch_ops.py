@@ -757,7 +757,7 @@ def silu(x, *args, **kwargs):
     return torch.nn.functional.silu(x)
 
 
-def div(x, y, *args, accurate_mode, round_mode, **kwargs):
+def div(x, y, *args, accurate_mode=None, round_mode=None, **kwargs):
     if round_mode == "None":
         return torch.div(x, y)
     return torch.div(x, y, rounding_mode=round_mode)
@@ -2457,3 +2457,8 @@ def complex_conj_bw(x, y, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
+
+
+def complex_div_no_nan(x, y, *args, **kwargs):
+    result = torch.where(y.real == 0 and y.imag == 0, 0, x / y)
+    return result

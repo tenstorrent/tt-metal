@@ -1026,4 +1026,8 @@ op_map = {
         "tt_op": ttnn_ops.complex_eltwise_add,
         "pytorch_op": pytorch_ops.add,
     },
+    "complex-eltwise-divide": {
+        "tt_op": ttnn_ops.complex_eltwise_divide,
+        "pytorch_op": pytorch_ops.div,
+    },
 }

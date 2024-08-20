@@ -4859,6 +4859,33 @@ def eltwise_remainder(
     return ttnn_tensor_to_torch(t2)
 
 
+def complex_eltwise_divide(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = ttnn.complex_tensor(
+        setup_ttnn_tensor(x.real, device, layout[0], input_mem_config[0], dtype[0]),
+        setup_ttnn_tensor(x.imag, device, layout[0], input_mem_config[0], dtype[0]),
+    )
+
+    t1 = ttnn.complex_tensor(
+        setup_ttnn_tensor(y.real, device, layout[1], input_mem_config[1], dtype[1]),
+        setup_ttnn_tensor(y.imag, device, layout[1], input_mem_config[1], dtype[1]),
+    )
+
+    t2 = ttnn.divide(t0, t1, memory_config=output_mem_config)
+
+    return torch.complex(ttnn_tensor_to_torch(t2.real).to(torch.float), ttnn_tensor_to_torch(t2.imag).to(torch.float))
+
+
+
 def unary_remainder_bw(
     x,  # grad_tensor
     y,  # input_tensor
@@ -4880,10 +4907,3 @@ def unary_remainder_bw(
     return ttnn_tensor_to_torch(t2)
 
 
-def bcast_add_h(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    t2 = ttnn.add(t0, t1, memory_config=output_mem_config)
-
-    return ttnn_tensor_to_torch(t2)
