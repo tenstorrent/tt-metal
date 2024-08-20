@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 from loguru import logger
-import tt_lib
+import ttnn
 import pytest
 import numpy as np
 import evaluate
@@ -60,12 +60,12 @@ def test_perf(device, expected_inference_time, expected_compile_time, iterations
 
         profiler.start(cpu_key)
         pt_out = pt_model(test_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
         tt_out = tt_model(tt_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_out
 
@@ -73,7 +73,7 @@ def test_perf(device, expected_inference_time, expected_compile_time, iterations
 
         profiler.start(second_key)
         tt_out = tt_model(tt_input)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
         del tt_out
 
@@ -81,7 +81,7 @@ def test_perf(device, expected_inference_time, expected_compile_time, iterations
         golden_label = []
         profiler.start(third_key)
         accuracy_metric = evaluate.load("accuracy")
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         for idx, (image, label) in enumerate(dataloader):
             if idx == iterations:
                 break

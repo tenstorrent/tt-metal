@@ -8,9 +8,9 @@ These instructions will guide you through the installation of Tenstorrent system
 
 ### Step 1. Driver & Firmware
 
-Follow the Software Setup instructions for your specific board or system provided on our [general docs](https://docs.tenstorrent.com/tenstorrent).
+Follow the Software Setup instructions for your specific board or system provided on our [general docs](https://docs.tenstorrent.com).
 
-If you have purchased a Grayskull card, you will find the instructions [here](https://docs.tenstorrent.com/tenstorrent/add-in-boards-and-cooling-kits/grayskull-tm-e75-e150/software-setup).
+If you have purchased a Grayskull card, you will find the instructions [here](https://docs.tenstorrent.com/aibs/grayskull/installation.html).
 
 Note the current compatability matrix:
 
@@ -153,7 +153,7 @@ pip install -r tt_metal/python_env/requirements-dev.txt
 
 5. Start coding
 
-You are all set! Visit the [TT-NN Basic examples page](https://tenstorrent.github.io/ttnn/latest/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://tenstorrent.github.io/tt-metalium/latest//tt_metal/examples/index.html).
+You are all set! Visit the [TT-NN Basic examples page](https://docs.tenstorrent.com/ttnn/latest/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html).
 
 ---
 

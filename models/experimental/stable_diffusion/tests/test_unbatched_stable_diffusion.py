@@ -20,7 +20,7 @@ from models.utility_functions import (
     tt_to_torch_tensor,
     skip_for_wormhole_b0,
 )
-import tt_lib as ttl
+import ttnn
 from models.experimental.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
 )
@@ -220,10 +220,10 @@ def test_unbatched_stable_diffusion(device):
         # predict the noise residual
         with torch.no_grad():
             tt_noise_pred_cond = tt_unet(tt_conditioned, _t_cond, encoder_hidden_states=tt_text_embeddings)
-            ttl.device.Synchronize(device)
+            ttnn.synchronize_device(device)
 
             tt_noise_pred_uncond = tt_unet(tt_unconditioned, _t_uncond, encoder_hidden_states=tt_uncond_embeddings)
-            ttl.device.Synchronize(device)
+            ttnn.synchronize_device(device)
             noise_pred_cond = tt_to_torch_tensor(tt_noise_pred_cond)
             noise_pred_uncond = tt_to_torch_tensor(tt_noise_pred_uncond)
         # perform guidance

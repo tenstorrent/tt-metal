@@ -10,22 +10,16 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 from models.experimental.swin.swin_helper_funcs import linear as TtLinear
-import tt_lib
+import ttnn
 
 
 class TtSwinSelfOutput(nn.Module):
     def __init__(self, config, dim, state_dict, base_address, device):
         super().__init__()
         self.device = device
-        self.dense_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.dense.weight"], self.device
-        )
-        self.dense_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.dense.bias"], self.device
-        )
+        self.dense_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.weight"], self.device)
+        self.dense_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.dense.bias"], self.device)
 
-    def forward(
-        self, hidden_states: tt_lib.tensor.Tensor, input_tensor: tt_lib.tensor.Tensor
-    ) -> tt_lib.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         hidden_states = TtLinear(hidden_states, self.dense_weight, self.dense_bias)
         return hidden_states

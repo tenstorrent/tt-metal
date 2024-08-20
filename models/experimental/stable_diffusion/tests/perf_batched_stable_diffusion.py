@@ -18,7 +18,7 @@ from models.utility_functions import (
 )
 from models.utility_functions import Profiler
 from models.perf.perf_utils import prep_perf_report
-import tt_lib as ttl
+import ttnn
 from models.experimental.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
 )
@@ -225,7 +225,7 @@ def test_perf(device, expected_inference_time, expected_compile_time):
         # predict the noise residual
         with torch.no_grad():
             tt_noise_pred = tt_unet(tt_latent_model_input, _t, encoder_hidden_states=tt_text_embeddings)
-            ttl.device.Synchronize(device)
+            ttnn.synchronize_device(device)
             noise_pred = tt_to_torch_tensor(tt_noise_pred)
 
         # perform guidance

@@ -6,7 +6,7 @@ import torch.nn as nn
 from typing import (
     List,
 )
-import tt_lib
+import ttnn
 import tt_lib.fallback_ops as fallback_ops
 
 from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import (
@@ -60,7 +60,7 @@ class TtSSDregressionhead(nn.Module):
             )
             self.regression_head.append(self.convolution)
 
-    def _get_result_from_module_list(self, x: tt_lib.tensor.Tensor, idx: int):
+    def _get_result_from_module_list(self, x: ttnn.Tensor, idx: int):
         out = x
         for i, module in enumerate(self.regression_head):
             if i == idx:
@@ -70,7 +70,7 @@ class TtSSDregressionhead(nn.Module):
 
         return out
 
-    def forward(self, x: List[tt_lib.tensor.Tensor]) -> tt_lib.tensor.Tensor:
+    def forward(self, x: List[ttnn.Tensor]) -> ttnn.Tensor:
         all_results = []
         for i in range(len(x)):
             result = self._get_result_from_module_list(x[i], i * 2)

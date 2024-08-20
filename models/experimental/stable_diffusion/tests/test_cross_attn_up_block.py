@@ -11,7 +11,7 @@ from loguru import logger
 import pytest
 
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,
@@ -190,7 +190,7 @@ def test_run_cross_attn_up_block_inference(device):
         cross_attention_kwargs=cross_attention_kwargs,
     )
 
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
 
     tt_output = tt_to_torch_tensor(tt_output)
 

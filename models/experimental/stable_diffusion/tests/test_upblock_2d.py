@@ -7,7 +7,7 @@ from diffusers import StableDiffusionPipeline
 from loguru import logger
 
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,
@@ -59,7 +59,7 @@ def test_run_upblock_real_input_inference(device, model_location_generator):
     tt_out = tt_upblock(tt_sample, tt_res_samples, tt_emb, None)
     tt_output = tt_to_torch_tensor(tt_out)
 
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     passing = comp_pcc(torch_output, tt_output, pcc=0.988)
     logger.info(comp_allclose_and_pcc(tt_output, torch_output))
 
