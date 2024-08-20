@@ -71,15 +71,15 @@ def run_line_all_gather(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        # (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
+        (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
         (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),
         # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
         (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
-        # (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR),
+        (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR),
         (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR),
-        # (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE),
+        (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE),
         (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE),
         (4, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
     ],
@@ -202,17 +202,11 @@ def run_line_all_gather_instances(
 @pytest.mark.parametrize(
     "num_devices, num_instances, num_links, input_shape, dim, layout",
     [
-        # (4, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
-        # (8, 1, [8, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
-        # # (8, 1, [8, 1, 256, 32], 0, ttl.tensor.Layout.TILE),
-        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.ROW_MAJOR),
-        # (4, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
-        # (8, 1, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
-        # (4, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR),
-        # (8, 1, [8, 5, 13, 512], 3, ttl.tensor.Layout.ROW_MAJOR),
-        # (4, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE),
-        # (8, 1, [8, 5, 32, 512], 3, ttl.tensor.Layout.TILE),
-        # (4, 1, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
+        (4, 1, 1, [4, 1, 33, 256], 0, ttl.tensor.Layout.ROW_MAJOR),
+        # (4, 1, 2, [8, 8, 256, 384], 1, ttl.tensor.Layout.TILE),
+        (4, 1, 1, [8, 5, 13, 384], 3, ttl.tensor.Layout.ROW_MAJOR),
+        (4, 1, 1, [8, 5, 32, 384], 3, ttl.tensor.Layout.TILE),
+        (4, 1, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
         (4, 2, 1, [1, 1, 32, 16384], 3, ttl.tensor.Layout.TILE),
     ],
 )
@@ -220,14 +214,14 @@ def run_line_all_gather_instances(
     "input_dtype",
     [
         ttl.tensor.DataType.BFLOAT16,
-        # ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.DataType.BFLOAT8_B,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM),
-        # ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("enable_async", [True, False])
