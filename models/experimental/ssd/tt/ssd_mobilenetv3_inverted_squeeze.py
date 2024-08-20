@@ -4,7 +4,7 @@
 
 from typing import Union
 import torch.nn as nn
-import tt_lib
+import ttnn
 from models.experimental.ssd.tt.ssd_mobilenetv3_convlayer import (
     TtMobileNetV3ConvLayer,
 )
@@ -48,9 +48,7 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
                 use_activation=use_activation,
                 activation=activation,
                 state_dict=state_dict,
-                base_address=f"{base_address}.block.0"
-                if not self.prune_conv
-                else f"{base_address}.1",
+                base_address=f"{base_address}.block.0" if not self.prune_conv else f"{base_address}.1",
                 device=device,
             )
 
@@ -66,9 +64,7 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
             use_activation=use_activation,
             activation=activation,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.1"
-            if not self.prune_conv
-            else f"{base_address}.1",
+            base_address=f"{base_address}.block.1" if not self.prune_conv else f"{base_address}.1",
             device=device,
         )
 
@@ -80,9 +76,7 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
             stride=1,
             padding=0,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.2"
-            if not self.prune_conv
-            else f"{base_address}.2",
+            base_address=f"{base_address}.block.2" if not self.prune_conv else f"{base_address}.2",
             device=device,
         )
 
@@ -95,13 +89,11 @@ class TtMobileNetV3InvertedSqueeze(nn.Module):
             padding=0,
             use_activation=False,
             state_dict=state_dict,
-            base_address=f"{base_address}.block.3"
-            if not self.prune_conv
-            else f"{base_address}.3",
+            base_address=f"{base_address}.block.3" if not self.prune_conv else f"{base_address}.3",
             device=device,
         )
 
-    def forward(self, features: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, features: ttnn.Tensor) -> ttnn.Tensor:
         if not self.prune_conv:
             features = self.expand_1x1(features)
         features = self.conv_3x3(features)

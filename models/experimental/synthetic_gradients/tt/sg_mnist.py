@@ -11,7 +11,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 
-import tt_lib
+import ttnn
 from models.utility_functions import (
     pad_activation,
     pad_weight,
@@ -146,7 +146,7 @@ class TtMnistModel(nn.Module):
         x_ = tilize_to_list(x)
 
         # x is a pytorch tensor,... need to convert to a buda tensor
-        inp = tt_lib.tensor.Tensor(x_, x.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.TILE, device)
+        inp = ttnn.Tensor(x_, x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         # breakpoint()
         lin1_out = self.lin1(inp)
         bn1_out = self.batchnorm1d_1(lin1_out)

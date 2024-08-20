@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from diffusers import StableDiffusionPipeline
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 from models.utility_functions import comp_allclose_and_pcc, comp_pcc
 
@@ -44,7 +44,7 @@ def test_run_downsample2d_inference(device):
         base_address="down_blocks.0.downsamplers.0",
     )
     tt_out = tt_down(tt_input)
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     tt_output = tt_to_torch_tensor(tt_out)
 
     passing = comp_pcc(torch_output, tt_output)

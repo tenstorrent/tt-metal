@@ -15,7 +15,6 @@ from models.experimental.swin.tt.swin_stage import TtSwinStage
 from models.experimental.swin.tt.swin_patch_merging import TtSwinPatchMerging
 
 import ttnn
-import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 
 from dataclasses import dataclass
@@ -23,10 +22,10 @@ from dataclasses import dataclass
 
 @dataclass
 class TtSwinEncoderOutput:
-    last_hidden_state: tt_lib.tensor.Tensor = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    reshaped_hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    last_hidden_state: ttnn.Tensor = None
+    hidden_states: Optional[Tuple[ttnn.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.Tensor]] = None
+    reshaped_hidden_states: Optional[Tuple[ttnn.Tensor]] = None
 
 
 class TtSwinEncoder(nn.Module):
@@ -66,9 +65,9 @@ class TtSwinEncoder(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         input_dimensions: Tuple[int, int],
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: Optional[bool] = False,
         output_hidden_states: Optional[bool] = False,
         output_hidden_states_before_downsampling: Optional[bool] = False,

@@ -10,7 +10,6 @@ from torchvision.models.detection import (
     SSDLite320_MobileNet_V3_Large_Weights,
     ssdlite320_mobilenet_v3_large as pretrained,
 )
-import tt_lib
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.utility_functions import (
     comp_allclose,
@@ -74,9 +73,7 @@ def test_ssd_backbone_inference(device, pcc, reset_seeds):
     tt_tensor.append(input_tensor6)
     for i in range(len(tt_tensor)):
         if i == 2 or i == 3 or i == 5:
-            tt_tensor[i] = torch_to_tt_tensor_rm(
-                tt_tensor[i], device, put_on_device=False
-            )
+            tt_tensor[i] = torch_to_tt_tensor_rm(tt_tensor[i], device, put_on_device=False)
         else:
             tt_tensor[i] = torch_to_tt_tensor_rm(tt_tensor[i], device)
 

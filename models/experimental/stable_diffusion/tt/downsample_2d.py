@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
-import tt_lib as ttl
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.stable_diffusion.tt.experimental_ops import Conv2d
 
@@ -71,7 +71,7 @@ class TtDownsample2D(nn.Module):
         else:
             self.conv = conv
 
-    def forward(self, hidden_states: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         assert hidden_states.get_legacy_shape()[1] == self.in_channels
         if self.use_conv and self.padding == 0:
             pad = (0, 1, 0, 1)

@@ -6,7 +6,7 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
-import tt_lib
+import ttnn
 
 from models.experimental.swin.tt.swin_self_attention import (
     TtSwinSelfAttention,
@@ -35,23 +35,17 @@ class TtSwinAttention(nn.Module):
             base_address=f"{base_address}.self",
             device=device,
         )
-        self.output = TtSwinSelfOutput(
-            config, dim, state_dict, f"{base_address}.output", device
-        )
+        self.output = TtSwinSelfOutput(config, dim, state_dict, f"{base_address}.output", device)
         self.pruned_heads = set()
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        hidden_states: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
-        self_outputs = self.self(
-            hidden_states, attention_mask, head_mask, output_attentions
-        )
+    ) -> Tuple[ttnn.Tensor]:
+        self_outputs = self.self(hidden_states, attention_mask, head_mask, output_attentions)
         attention_output = self.output(self_outputs[0], hidden_states)
-        outputs = (attention_output,) + self_outputs[
-            1:
-        ]  # add attentions if we output them
+        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
         return outputs

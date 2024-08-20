@@ -10,7 +10,7 @@ from diffusers import StableDiffusionPipeline
 from loguru import logger
 
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,
@@ -51,7 +51,7 @@ def test_run_embedding_inference(device):
     tt_model.eval()
 
     tt_output = tt_model(tt_input)
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     tt_output = tt_to_torch_tensor(tt_output)
 
     passing = comp_pcc(torch_output, tt_output)

@@ -7,8 +7,7 @@ from torch import nn
 from torch.nn import functional as F
 import numpy as np
 
-import tt_lib as ttl
-from tt_lib.fallback_ops import fallback_ops
+import ttnn
 
 from models.experimental.stable_diffusion.tt.upsample_nearest2d import TtUpsampleNearest2d
 from models.experimental.stable_diffusion.tt.experimental_ops import Conv2d
@@ -46,7 +45,7 @@ class TtUpsample2D(nn.Module):
                 padding=1,
             )
 
-    def forward(self, hidden_states: ttl.tensor.Tensor, output_size=None) -> ttl.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor, output_size=None) -> ttnn.Tensor:
         assert hidden_states.get_legacy_shape()[1] == self.in_channels
 
         if output_size is None:

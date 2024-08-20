@@ -13,7 +13,7 @@ from models.utility_functions import (
 )
 
 from models.experimental.swin.tt.swin_layer import TtSwinLayer
-import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
 
@@ -67,12 +67,12 @@ class TtSwinStage(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         input_dimensions: Tuple[int, int],
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: Optional[bool] = False,
         always_partition: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.Tensor]:
         height, width = input_dimensions
         for i, layer_module in enumerate(self.blocks):
             layer_head_mask = head_mask[i] if head_mask is not None else None
@@ -91,9 +91,7 @@ class TtSwinStage(nn.Module):
         if self.downsample is not None:
             height_downsampled, width_downsampled = (height + 1) // 2, (width + 1) // 2
             output_dimensions = (height, width, height_downsampled, width_downsampled)
-            hidden_states = self.downsample(
-                hidden_states_before_downsampling, input_dimensions
-            )
+            hidden_states = self.downsample(hidden_states_before_downsampling, input_dimensions)
         else:
             output_dimensions = (height, width, height, width)
 

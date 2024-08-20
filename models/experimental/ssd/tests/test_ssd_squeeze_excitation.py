@@ -20,8 +20,6 @@ from torchvision.models.detection import (
     ssdlite320_mobilenet_v3_large as pretrained,
 )
 
-import tt_lib
-
 
 @pytest.mark.parametrize(
     "pcc",
@@ -35,9 +33,7 @@ def test_ssd_sequeeze_excitation_inference(device, pcc, reset_seeds):
     LAYER_INDEX = 4
     BLOCK_INDEX = 2
     # torch squeeze_exitation
-    torch_model = TV_model.backbone.features[FEATURE_INDEX][LAYER_INDEX].block[
-        BLOCK_INDEX
-    ]
+    torch_model = TV_model.backbone.features[FEATURE_INDEX][LAYER_INDEX].block[BLOCK_INDEX]
 
     # Tt ssd_squeeze_exitation
     config = {"in_channels": 72, "fc_channels": 24}

@@ -4,7 +4,7 @@
 
 import torch
 from torch import nn
-import tt_lib
+import ttnn
 import math
 from typing import (
     List,
@@ -50,8 +50,8 @@ class TtDefaultBoxGenerator(nn.Module):
     def _generate_wh_pairs(
         self,
         num_outputs: int,
-    ) -> List[tt_lib.tensor.Tensor]:
-        _wh_pairs: List[tt_lib.tensor.Tensor] = []
+    ) -> List[ttnn.Tensor]:
+        _wh_pairs: List[ttnn.Tensor] = []
         for k in range(num_outputs):
             # Adding the 2 default width-height pairs for aspect ratio 1 and scale s'k
             s_k = self.scales[k]
@@ -68,11 +68,11 @@ class TtDefaultBoxGenerator(nn.Module):
             for row in wh_pairs:
                 for element in row:
                     wh_pairs_list.append(element)
-            tt_wh_pairs = tt_lib.tensor.Tensor(
+            tt_wh_pairs = ttnn.Tensor(
                 wh_pairs_list,
                 [1, 1, len(wh_pairs), len(wh_pairs[0])],
-                tt_lib.tensor.DataType.BFLOAT16,
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
                 self.device,
             )
             _wh_pairs.append(tt_wh_pairs)
@@ -87,7 +87,7 @@ class TtDefaultBoxGenerator(nn.Module):
         self,
         grid_sizes: List[List[int]],
         image_size: List[int],
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         default_boxes = []
         for k, f_k in enumerate(grid_sizes):
             # Now add the default boxes for each width-height pair
@@ -121,9 +121,7 @@ class TtDefaultBoxGenerator(nn.Module):
         default_boxes_tensor = torch_to_tt_tensor_rm(default_boxes_tensor, self.device)
         return default_boxes_tensor
 
-    def forward(
-        self, image: tt_lib.tensor.Tensor, feature_maps: List[tt_lib.tensor.Tensor]
-    ) -> List[tt_lib.tensor.Tensor]:
+    def forward(self, image: ttnn.Tensor, feature_maps: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         grid_sizes = [feature_map.get_legacy_shape()[-2:] for feature_map in feature_maps]
         image_size = image.get_legacy_shape()[-2:]
         image_sizes = [image_size]

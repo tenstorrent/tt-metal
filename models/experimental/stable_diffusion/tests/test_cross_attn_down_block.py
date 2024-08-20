@@ -12,7 +12,7 @@ from functools import wraps
 import pytest
 
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,
@@ -177,7 +177,7 @@ def test_run_cross_attn_down_block_inference(device):
         attention_mask=attention_mask,
         cross_attention_kwargs=cross_attention_kwargs,
     )
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     tt_output = tt_to_torch_tensor(tt_output)
 
     passing = comp_pcc(torch_output, tt_output, pcc=0.95)

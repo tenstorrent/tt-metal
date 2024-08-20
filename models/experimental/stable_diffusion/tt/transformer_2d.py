@@ -10,7 +10,6 @@ import torch.nn as nn
 import torch
 
 import ttnn
-import tt_lib as ttl
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.stable_diffusion.tt.cross_attention import TtCrossAttention
 from models.experimental.stable_diffusion.tt.feedforward import TtFeedForward
@@ -63,9 +62,7 @@ class TtBasicTransformerBlock(nn.Module):
         self.host = host
         self.only_cross_attention = only_cross_attention
         self.base_address = base_address
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         self.use_ada_layer_norm_zero = (num_embeds_ada_norm is not None) and norm_type == "ada_norm_zero"
         self.use_ada_layer_norm = (num_embeds_ada_norm is not None) and norm_type == "ada_norm"
@@ -220,13 +217,13 @@ class TtBasicTransformerBlock(nn.Module):
 
     def forward(
         self,
-        hidden_states: ttl.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         encoder_hidden_states=None,
         timestep=None,
         attention_mask=None,
         cross_attention_kwargs=None,
         class_labels=None,
-    ) -> ttl.tensor.Tensor:
+    ) -> ttnn.Tensor:
         if self.use_ada_layer_norm:
             assert False, "AdaLayerNorm not supported and not used in stable diffusion"
         elif self.use_ada_layer_norm_zero:
@@ -319,9 +316,7 @@ class TtTransformer2DModel(nn.Module):
         self.use_linear_projection = use_linear_projection
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         inner_dim = num_attention_heads * attention_head_dim
 
@@ -443,7 +438,7 @@ class TtTransformer2DModel(nn.Module):
 
     def forward(
         self,
-        hidden_states: ttl.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         encoder_hidden_states=None,
         timestep=None,
         class_labels=None,

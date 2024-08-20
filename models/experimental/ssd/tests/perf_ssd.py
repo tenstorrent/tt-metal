@@ -4,7 +4,6 @@
 
 import torch
 from loguru import logger
-import tt_lib
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
     disable_persistent_kernel_cache,
