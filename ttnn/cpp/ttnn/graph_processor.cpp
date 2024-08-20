@@ -458,7 +458,7 @@ namespace ttnn {
 
     void GraphProcessor::clean_hook() {
         if (hook) {
-            /* If we installed hooks then we must clean*/
+            // If we installed hooks then we must clean
             hook = nullptr;
             tt::tt_metal::GraphTracker::instance().clear_hook();
         }
