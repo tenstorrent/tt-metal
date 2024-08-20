@@ -143,4 +143,22 @@ const tt::tt_metal::operation::Hash Unary::compute_program_hash(const std::vecto
 }
 
 
+Tensor Unary::operator()(
+    const Tensor& input_tensor,
+    const std::vector<UnaryWithParam>& op_chain,
+    const MemoryConfig& output_mem_config,
+    bool fp32_dest_acc_en,
+    bool preserve_fp32_precision,
+    DataType output_dtype
+) {
+    return operation::run(
+        Unary{op_chain, output_mem_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype},
+        {input_tensor},
+        {},
+        {},
+        0)
+        .at(0);
+}
+
+
 }  // namespace ttnn::operations::unary

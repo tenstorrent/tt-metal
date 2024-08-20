@@ -6,6 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn {
@@ -340,3 +341,8 @@ constexpr auto div_sfpu = ttnn::register_operation_with_auto_launch_op<
         ttnn::operations::unary::UnaryOpType::DIV_UNARY_SFPU,
         ttnn::operations::unary::UnaryOpType::RDIV>>();
 }  // namespace ttnn
+
+
+
+
+TTNN_REGISTER_OPERATION(ttnn::prim, unary, ttnn::operations::unary::Unary);
