@@ -104,7 +104,10 @@ std::pair<int, int> count_intermediate_and_output_tensors(const nlohmann::json& 
     TT_ASSERT(last_end_found);
 
     for(int index : trace[last_end_index]["connections"]) {
-        output_tensors.insert(index);
+        // It can be tensor or some other node like
+        if(trace[index]["name"].get<std::string>().find("tensor") != std::string::npos) {
+            output_tensors.insert(index);
+        }
     }
 
     for(int index : output_tensors) {
@@ -160,7 +163,7 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
         }
         auto json_trace = ttnn::GraphProcessor::end_graph_capture();
 
-        // tt::log_info("Trace: {}", json_trace.dump(4));
+        tt::log_info("Trace: {}", json_trace.dump(4));
 
         EXPECT_EQ(extract_calltrace(json_trace), params.expected_calltrace);
         EXPECT_EQ(extract_peak_memory_usage(json_trace), params.expected_peak_memory_usage);
