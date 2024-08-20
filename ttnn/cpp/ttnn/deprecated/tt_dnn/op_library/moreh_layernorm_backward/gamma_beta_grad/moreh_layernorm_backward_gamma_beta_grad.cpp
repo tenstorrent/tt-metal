@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    const DeviceComputeKernelConfig compute_kernel_config,
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad) {
     ////////////////////////////////////////////////////////////////////////////

@@ -38,13 +38,13 @@ constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {
     {1, 1},                          // subblock_hw = 1
 }};
 
-inline bool get_fp32_dest_acc_en(const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+inline bool get_fp32_dest_acc_en(const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     bool fp32_dest_acc_en = false;
     if (compute_kernel_config) {
         std::visit(
             [&](auto&& compute_kernel_config) {
                 using T = std::decay_t<decltype(compute_kernel_config)>;
-                if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+                if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
                     fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                 }
             },
@@ -83,7 +83,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<Tensor>& output_tensors,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& in_a_shape = input_tensors.at(0).get_shape();
     const auto& in_b_shape = input_tensors.at(1).get_shape();
     const auto& out_shape = output_tensors.at(0).get_shape();
@@ -108,9 +108,9 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
     std::visit(
         [&](auto&& compute_kernel_config) {
             using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+            if constexpr (std::is_same_v<T, ttnn::GrayskullComputeKernelConfig>) {
                 math_fidelity = compute_kernel_config.math_fidelity;
-            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+            } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
                 math_fidelity = compute_kernel_config.math_fidelity;
             } else {
                 TT_FATAL("arch not supported");
@@ -428,7 +428,7 @@ MatmulProgramConfig create_matmul_program_config(
     const Tensor& input_tensor_b,
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<UnaryWithParam> fused_activation,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto a_shape = input_tensor_a.get_shape();
     auto b_shape = input_tensor_b.get_shape();
     auto a_padded_shape = a_shape.with_tile_padding();
@@ -570,7 +570,7 @@ MatmulProgramConfig get_matmul_program_config(
     const std::optional<UnaryWithParam> fused_activation,
     const bool matmul,
     const std::optional<const CoreCoord> user_core_coord,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     TT_FATAL(input_tensor_a.is_sharded());
     bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
     // TODO: allow overwriting of grid size by user_core_coord after allowing support of arbitrary compute grid and more
@@ -735,7 +735,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const MemoryConfig& mem_config,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<UnaryWithParam> user_fused_activation,
     const bool user_run_batched) {

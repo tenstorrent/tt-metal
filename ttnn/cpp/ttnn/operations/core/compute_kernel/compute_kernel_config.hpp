@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
 
 struct GrayskullComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::LoFi;
@@ -26,7 +26,7 @@ using BlackholeComputeKernelConfig = WormholeComputeKernelConfig;
 using DeviceComputeKernelConfig = std::variant<GrayskullComputeKernelConfig, WormholeComputeKernelConfig>;
 
 DeviceComputeKernelConfig init_device_compute_kernel_config(
-    ARCH arch,
+    tt::ARCH arch,
     const std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
     const MathFidelity default_fidelity = MathFidelity::LoFi,
     bool default_approx_mode = true,
@@ -35,6 +35,6 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
 
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
-std::tuple<MathFidelity, bool, bool, bool> get_compute_kernel_config_args(ARCH arch, const DeviceComputeKernelConfig compute_kernel_config);
+std::tuple<MathFidelity, bool, bool, bool> get_compute_kernel_config_args(tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config);
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

@@ -9,7 +9,6 @@
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
@@ -286,18 +285,18 @@ void TensorModule(py::module& m_tensor) {
         m_tensor, "borrowed_buffer_for_bfloat16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<bfloat16>, bfloat16>(py_borrowed_buffer_for_bfloat16_t);
 
-    py::class_<DeviceComputeKernelConfig>(m_tensor, "DeviceComputeKernelConfig");
+    py::class_<ttnn::DeviceComputeKernelConfig>(m_tensor, "DeviceComputeKernelConfig");
 
-    py::class_<GrayskullComputeKernelConfig>(m_tensor, "GrayskullComputeKernelConfig")
+    py::class_<ttnn::GrayskullComputeKernelConfig>(m_tensor, "GrayskullComputeKernelConfig")
         .def(
             py::init<MathFidelity, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::Invalid,
             py::arg("math_approx_mode") = true)
-        .def_readwrite("math_fidelity", &GrayskullComputeKernelConfig::math_fidelity)
-        .def_readwrite("math_approx_mode", &GrayskullComputeKernelConfig::math_approx_mode);
+        .def_readwrite("math_fidelity", &ttnn::GrayskullComputeKernelConfig::math_fidelity)
+        .def_readwrite("math_approx_mode", &ttnn::GrayskullComputeKernelConfig::math_approx_mode);
 
-    py::class_<WormholeComputeKernelConfig>(m_tensor, "WormholeComputeKernelConfig")
+    py::class_<ttnn::WormholeComputeKernelConfig>(m_tensor, "WormholeComputeKernelConfig")
         .def(
             py::init<MathFidelity, bool, bool, bool>(),
             py::kw_only(),
@@ -305,10 +304,10 @@ void TensorModule(py::module& m_tensor) {
             py::arg("math_approx_mode") = true,
             py::arg("fp32_dest_acc_en") = false,
             py::arg("packer_l1_acc") = false)
-        .def_readwrite("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
-        .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
-        .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
-        .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc);
+        .def_readwrite("math_fidelity", &ttnn::WormholeComputeKernelConfig::math_fidelity)
+        .def_readwrite("math_approx_mode", &ttnn::WormholeComputeKernelConfig::math_approx_mode)
+        .def_readwrite("fp32_dest_acc_en", &ttnn::WormholeComputeKernelConfig::fp32_dest_acc_en)
+        .def_readwrite("packer_l1_acc", &ttnn::WormholeComputeKernelConfig::packer_l1_acc);
 
     // TMs
     m_tensor.def(
