@@ -318,7 +318,7 @@ TEST_F(DeviceFixture, ComputePackUntilize1x4) {
 }
 
 TEST_F(DeviceFixture, ComputeUnpackUntilize2x2) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 2,
         .num_tiles_c = 2,
@@ -329,7 +329,7 @@ TEST_F(DeviceFixture, ComputeUnpackUntilize2x2) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilize2x2) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 2,
         .num_tiles_c = 2,
@@ -340,7 +340,7 @@ TEST_F(DeviceFixture, ComputePackUntilize2x2) {
 }
 
 TEST_F(DeviceFixture, ComputeUnpackUntilize4x1) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 4,
         .num_tiles_c = 1,
@@ -351,7 +351,7 @@ TEST_F(DeviceFixture, ComputeUnpackUntilize4x1) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilize4x1) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 4,
         .num_tiles_c = 1,
@@ -362,7 +362,7 @@ TEST_F(DeviceFixture, ComputePackUntilize4x1) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeShortInit1x4) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .short_init = true,
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 1,
@@ -374,7 +374,7 @@ TEST_F(DeviceFixture, ComputePackUntilizeShortInit1x4) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeShortInit2x2) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .short_init = true,
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 2,
@@ -386,7 +386,7 @@ TEST_F(DeviceFixture, ComputePackUntilizeShortInit2x2) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeShortInit4x1) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .short_init = true,
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 4,
@@ -398,7 +398,7 @@ TEST_F(DeviceFixture, ComputePackUntilizeShortInit4x1) {
 }
 
 TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit1x4) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .short_init = true,
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 1,
@@ -410,7 +410,7 @@ TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit1x4) {
 }
 
 TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit2x2) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .short_init = true,
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 2,
@@ -422,7 +422,7 @@ TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit2x2) {
 }
 
 TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit4x1) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .short_init = true,
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 4,
@@ -434,7 +434,7 @@ TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit4x1) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeDst1x4) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 1,
         .num_tiles_c = 4,
@@ -445,7 +445,7 @@ TEST_F(DeviceFixture, ComputePackUntilizeDst1x4) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeDst2x2) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 2,
         .num_tiles_c = 2,
@@ -456,7 +456,7 @@ TEST_F(DeviceFixture, ComputePackUntilizeDst2x2) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeDst4x1) {
-    unit_tests::compute::tilize::TilizeConfig test_config = {
+    unit_tests::compute::tilize::TestConfig test_config = {
         .single_tile_size = 2 * 1024,
         .num_tiles_r = 4,
         .num_tiles_c = 1,
