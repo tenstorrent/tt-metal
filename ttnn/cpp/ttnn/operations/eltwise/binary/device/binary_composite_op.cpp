@@ -303,14 +303,6 @@ Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optio
         result);
 }
 
-Tensor _logical_and_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::logical_and(input_a, input_b, std::nullopt, output_mem_config, input_a);
-}
-
-Tensor _logical_or_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::logical_or(input_a, input_b, std::nullopt, output_mem_config, input_a);
-}
-
 Tensor _logical_xor_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor in_a_eq_zero = ttnn::eqz(input_a, output_mem_config, input_a );
     Tensor in_b_eq_zero = ttnn::nez(input_b, output_mem_config, input_b );
