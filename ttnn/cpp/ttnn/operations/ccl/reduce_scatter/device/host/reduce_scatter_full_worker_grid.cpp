@@ -765,8 +765,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     auto worker_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range, 0);
     auto worker_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range, 0);
 
-    uint32_t cb_num_pages =
-        (cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes() / op_config.get_page_size()) * 2;
+    uint32_t cb_num_pages = std::min(input_tensor_num_units_per_tensor_slice,
+        (cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes() / op_config.get_page_size())) * 2;
     uint32_t cb_num_pages_per_packet = cb_num_pages / 2;
     log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
     auto const& [cb_src0_workers, cb_src1_workers, cb_dst0_sender_workers, cb_short_circuit_sender_workers] =
