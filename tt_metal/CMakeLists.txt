@@ -36,7 +36,7 @@ target_precompile_headers(tt_metal PRIVATE
     <vector>
 )
 
-target_link_libraries(tt_metal PUBLIC compiler_flags linker_flags $<$<BOOL:${ENABLE_TRACY}>:TracyClient>)  # linker_flags = -rdynamic if tracy enabled
+target_link_libraries(tt_metal PUBLIC compiler_flags $<$<BOOL:${ENABLE_TRACY}>:TracyClient>)
 target_include_directories(tt_metal PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}

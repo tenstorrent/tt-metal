@@ -22,7 +22,7 @@ jobs:
           {
             name: "T3000 profiler tests",
             arch: wormhole_b0,
-            runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "pipeline-perf"],
+            runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "pipeline-perf"],
             cmd: './tests/scripts/run_profiler_regressions.sh'
           },
         ]

@@ -19,6 +19,7 @@ PIPELINE_CSV_FIELDS = (
     "project",
     "trigger",
     "vcs_platform",
+    "git_branch_name",
     "git_commit_hash",
     "git_author",
     "orchestrator",
@@ -104,6 +105,8 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
     logger.warning("Using hardcoded value github for vcs_platform value")
     vcs_platform = "github"
 
+    git_branch_name = github_pipeline_json["head_branch"]
+
     git_commit_hash = github_pipeline_json["head_sha"]
 
     git_author = github_pipeline_json["head_commit"]["author"]["name"]
@@ -121,6 +124,7 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
         "project": project,
         "trigger": trigger,
         "vcs_platform": vcs_platform,
+        "git_branch_name": git_branch_name,
         "git_commit_hash": git_commit_hash,
         "git_author": git_author,
         "orchestrator": orchestrator,
@@ -185,11 +189,11 @@ def get_job_row_from_github_job(github_job):
         logger.info("Seems to have no config- label, so assuming no special config requested")
         detected_config = None
 
-    if labels_have_overlap(["grayskull", "arch-grayskull"], labels):
+    if labels_have_overlap(["E150", "grayskull", "arch-grayskull"], labels):
         detected_arch = "grayskull"
-    elif labels_have_overlap(["wormhole_b0", "arch-wormhole_b0"], labels):
+    elif labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0"], labels):
         detected_arch = "wormhole_b0"
-    elif labels_have_overlap(["arch-blackhole"], labels):
+    elif labels_have_overlap(["BH", "arch-blackhole"], labels):
         detected_arch = "blackhole"
     else:
         detected_arch = None

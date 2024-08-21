@@ -18,17 +18,17 @@ jobs:
       matrix:
         test-group: [
           {
-            name: "TGG LLM model perf tests", 
+            name: "TGG LLM model perf tests",
             model-type: "LLM",
-            arch: wormhole_b0, 
-            runs-on: [arch-wormhole_b0, "config-tgg", "in-service", "runner-test", "bare-metal", "pipeline-perf"],
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "config-tgg", "in-service", "bare-metal", "pipeline-perf"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type llm_model_perf_tgg_device --dispatch-mode ""'
           },
           {
-            name: "TGG CNN model perf tests", 
+            name: "TGG CNN model perf tests",
             model-type: "CNN",
-            arch: wormhole_b0, 
-            runs-on: [arch-wormhole_b0, "config-tgg", "in-service", "runner-test", "bare-metal", "pipeline-perf"],
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "config-tgg", "in-service", "bare-metal", "pipeline-perf"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tgg_device --dispatch-mode ""'
           },
         ]
