@@ -752,7 +752,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     //////////////////
     tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
     // Issue #10978: CCLs need to be tagged as having multi-device dependencies, when running on Galaxy.
-    program.capture_multi_device_dependencies();
+    tt::tt_metal::detail::CaptureMultiDeviceDependencies(program);
     const auto& device = local_chip_tensor.device();
 
     auto const& topology_config =

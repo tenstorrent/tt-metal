@@ -27,7 +27,7 @@ struct CachedProgram {
     // Cached program needs to share shared_variables between create and override_runtime_arguments functions
     shared_variables_t shared_variables;
 
-    CachedProgram(tt::tt_metal::Program*& program, shared_variables_t&& shared_variables) :
+    CachedProgram(tt::tt_metal::Program* program, shared_variables_t&& shared_variables) :
         program{program}, shared_variables{shared_variables} {}
 };
 
@@ -337,8 +337,7 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
         auto program = std::visit(
             [&operation_attributes, &tensor_args, &tensor_return_value](auto&& program_factory) {
                 using program_factory_t = std::decay_t<decltype(program_factory)>;
-                return std::make_shared<tt::tt_metal::Program>(
-                    program_factory_t::create(operation_attributes, tensor_args, tensor_return_value).program);
+                return program_factory_t::create(operation_attributes, tensor_args, tensor_return_value).program;
             },
             program_factory
         );
@@ -363,7 +362,7 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
             device_operation_t{},
             operation_id,
             device->id(),
-            *program,
+            program,
             operation_attributes,
             tensor_args,
             tensor_return_value);

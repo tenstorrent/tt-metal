@@ -345,17 +345,6 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     CircularBufferConfig cb_out0_config = CircularBufferConfig(out0_tiles*out_single_tile_size, {{CB::c_out0, out_data_format}}).set_page_size(CB::c_out0, out_single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_out0_config );
 
-    // Log all circular buffers with program.circular_buffers_on_corerange(all_cores), which returns std::vector<std::shared_ptr<CircularBuffer>>
-
-    for (const auto& cb : program.circular_buffers_on_corerange(*all_cores.ranges().begin())) {
-        for (const auto index : cb->buffer_indices()) {
-            log_debug("cb_id {}", index);
-            log_debug("page_size: {}", cb->page_size(index));
-            log_debug("num_pages: {}", cb->num_pages(index));
-            log_debug("data_format: {}", cb->data_format(index));
-        }
-    }
-
     uint32_t curr_row = 0;
     float winv = 1.0f / (W * num_devices); // bcast-w scaler
     bfloat16 bfloat_winv_value = bfloat16(winv);

@@ -598,6 +598,18 @@ bool EventQuery(std::shared_ptr<Event> event);
  */
 void Synchronize(Device *device, const std::optional<uint8_t> cq_id = std::nullopt);
 
+/**
+ * Register a Buffer to a Program. The Buffer will be kept alive for the lifetime of the Program.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | program      | The program to register the buffer to.                                 | Program *                     |                                    | Yes      |
+ * | buffer       | The buffer to register                                                 | std::shared_ptr<Buffer>       |                                    | Yes      |
+ */
+void RegisterBuffer(Program *program, std::shared_ptr<Buffer> buffer);
+
 }  // namespace tt_metal
 
 }  // namespace tt

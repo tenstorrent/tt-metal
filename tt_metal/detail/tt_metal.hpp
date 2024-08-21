@@ -120,6 +120,16 @@ namespace tt::tt_metal {
         // - Takes the device out of reset
         bool ConfigureDeviceWithProgram(Device *device, Program *program, bool fd_bootloader_mode = false);
 
+        /**
+         * Flags a program as having multi-device dependencies.
+         *
+         * Return value: void
+         *
+         * | Argument            | Description                                                            | Type                          | Valid Range                        | Required |
+         * |---------------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+         * | program             | The program to flag with multi-device dependencies.                    |       Program *               |                                    | Yes      |
+         */
+        void CaptureMultiDeviceDependencies(Program *program);
 
         /**
          * Clear profiler control buffer
@@ -252,5 +262,8 @@ namespace tt::tt_metal {
         void AllocateBuffer(Buffer* buffer, bool bottom_up);
 
         void DeallocateBuffer(Buffer *buffer);
+
+        // Get a json rep of kernels in a program, used by profiler.
+        nlohmann::json GetKernelsJSON(Program *program);
     }
 }

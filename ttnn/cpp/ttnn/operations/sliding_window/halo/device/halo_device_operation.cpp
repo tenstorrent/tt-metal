@@ -97,9 +97,9 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(const std::v
 
     Program *program = CreateProgram();
 
-    program.add_config_buffer(pad_config_device_tensor.device_buffer());
-    program.add_config_buffer(local_config_device_tensor.device_buffer());
-    program.add_config_buffer(remote_config_device_tensor.device_buffer());
+    tt::tt_metal::RegisterBuffer(program, pad_config_device_tensor.device_buffer());
+    tt::tt_metal::RegisterBuffer(program, local_config_device_tensor.device_buffer());
+    tt::tt_metal::RegisterBuffer(program, remote_config_device_tensor.device_buffer());
 
     return {data_movement::detail::untilize_with_halo_multi_core_v2(
         program,

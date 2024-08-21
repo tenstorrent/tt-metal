@@ -153,6 +153,9 @@ class MetalProgram {
     uint32_t get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
 
+    // Get a json representation of the kernels in this program, used by profiler.
+    nlohmann::json get_kernels_json() const;
+
    private:
     void populate_dispatch_data(Device *device);
 

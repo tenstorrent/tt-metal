@@ -560,6 +560,10 @@ bool ConfigureDeviceWithProgram(Device *device, Program *program, bool fd_bootlo
     return device->configure_with_program(program->metal_program, fd_bootloader_mode);
 }
 
+void CaptureMultiDeviceDependencies(Program *program) {
+    program->metal_program->capture_multi_device_dependencies();
+}
+
 void WriteRuntimeArgsToDevice(Device *device, Program *program, bool force_slow_dispatch) {
     return device->write_runtime_args(program->metal_program, force_slow_dispatch);
 }
@@ -591,7 +595,9 @@ void DeallocateBuffer(Buffer *buffer) {
         false);
 }
 
-
+nlohmann::json GetKernelsJSON(Program *program) {
+    return program->metal_program->get_kernels_json();
+}
 
 }  // namespace detail
 
@@ -830,6 +836,10 @@ void Synchronize(Device *device, const std::optional<uint8_t> cq_id) {
 
 void EnqueueProgram(CommandQueue& cq, Program *program, bool blocking) {
     EnqueueProgram(cq, program->metal_program, blocking);
+}
+
+void RegisterBuffer(Program *program, std::shared_ptr<Buffer> buffer) {
+    program->metal_program->add_config_buffer(buffer);
 }
 
 }  // namespace tt_metal

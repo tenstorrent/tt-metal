@@ -80,6 +80,8 @@ namespace detail {
 
 void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
 
+void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
+
 }  // namespace detail
 
 std::atomic<uint64_t> MetalProgram::program_counter = 0;
@@ -1187,6 +1189,32 @@ uint32_t MetalProgram::get_sem_size(Device *device, CoreCoord logical_core, Core
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].sem_size;
+}
+
+nlohmann::json MetalProgram::get_kernels_json() const {
+    std::vector<nlohmann::json> computeKernels;
+    std::vector<nlohmann::json> datamovementKernels;
+    for (size_t kernel_id = 0; kernel_id < this->num_kernels(); kernel_id++) {
+        auto kernel = this->get_kernel(kernel_id).get();
+        if (kernel->processor() == RISCV::COMPUTE) {
+            ComputeKernel* computeKernel = static_cast<ComputeKernel*>(kernel);
+            MathFidelity mathFidelity = std::get<ComputeConfig>(computeKernel->config()).math_fidelity;
+            nlohmann::json computeKernelObj;
+            computeKernelObj["math_fidelity"] = fmt::format("{}", magic_enum::enum_name(mathFidelity));
+            computeKernelObj["path"] = computeKernel->kernel_path_file_name();
+            computeKernelObj["name"] = computeKernel->get_full_kernel_name();
+            computeKernels.push_back(computeKernelObj);
+        } else {
+            nlohmann::json datamovementKernelObj;
+            datamovementKernelObj["path"] = kernel->kernel_path_file_name();
+            datamovementKernelObj["name"] = kernel->get_full_kernel_name();
+            datamovementKernels.push_back(datamovementKernelObj);
+        }
+    }
+    nlohmann::json ret;
+    ret["compute_kernels"] = computeKernels;
+    ret["datamovement_kernels"] = datamovementKernels;
+    return ret;
 }
 
 MetalProgram::~MetalProgram() {}

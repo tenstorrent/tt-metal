@@ -150,32 +150,6 @@ static void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) 
 static void tracy_frame() { FrameMark; }
 
 #if defined(TRACY_ENABLE)
-static inline json get_kernels_json(const MetalProgram& program) {
-    std::vector<json> computeKernels;
-    std::vector<json> datamovementKernels;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = program.get_kernel(kernel_id).get();
-        if (kernel->processor() == RISCV::COMPUTE) {
-            ComputeKernel* computeKernel = static_cast<ComputeKernel*>(kernel);
-            MathFidelity mathFidelity = std::get<ComputeConfig>(computeKernel->config()).math_fidelity;
-            json computeKernelObj;
-            computeKernelObj["math_fidelity"] = fmt::format("{}", magic_enum::enum_name(mathFidelity));
-            computeKernelObj["path"] = computeKernel->kernel_path_file_name();
-            computeKernelObj["name"] = computeKernel->get_full_kernel_name();
-            computeKernels.push_back(computeKernelObj);
-        } else {
-            json datamovementKernelObj;
-            datamovementKernelObj["path"] = kernel->kernel_path_file_name();
-            datamovementKernelObj["name"] = kernel->get_full_kernel_name();
-            datamovementKernels.push_back(datamovementKernelObj);
-        }
-    }
-    json ret;
-    ret["compute_kernels"] = computeKernels;
-    ret["datamovement_kernels"] = datamovementKernels;
-    return ret;
-}
-
 static inline json get_tensor_json(const Tensor& tensor) {
     json ret;
     std::string tensorStorageStr;
@@ -345,7 +319,7 @@ inline std::string op_meta_data_serialized_json(
         j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
         j["device_id"] = device_id;
         j["op_hash"] = program_hash;
-        j["kernel_info"] = get_kernels_json(program);
+        j["kernel_info"] = detail::GetKernelsJSON(program);
 
         j["optional_input_tensors"] = std::vector<json>{};
 
