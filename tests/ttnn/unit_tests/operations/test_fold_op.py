@@ -245,6 +245,8 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(
 @pytest.mark.parametrize("stride_h", [2])
 @pytest.mark.parametrize("stride_w", [2])
 def test_fold_with_permute_reshape_on_device_sharded(device, n, c, h, w, pad_h, pad_w, stride_h, stride_w):
+    if device.core_grid.y < 8:
+        pytest.skip("n300 does not have 8x8 grid")
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = pad_and_fold_conv_activation_for_unity_stride(
         torch_input_tensor, pad_h, pad_w, stride_h, stride_w
