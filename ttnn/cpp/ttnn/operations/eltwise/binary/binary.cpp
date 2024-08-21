@@ -487,6 +487,14 @@ Tensor InplaceRelationalBinary<binary_op_type>::invoke(
     return RelationalBinary<binary_op_type>::invoke(input_tensor_a, scalar, std::nullopt, std::nullopt, input_tensor_a, std::nullopt, std::nullopt);
 }
 
+template <BinaryOpType binary_op_type>
+Tensor InplaceLogicalBinary<binary_op_type>::invoke(
+    const Tensor &input_tensor_a_arg,
+    const Tensor &input_tensor_b_arg) {
+
+    return BinaryOperation<binary_op_type, false>::invoke(input_tensor_a_arg, input_tensor_b_arg, std::nullopt, std::nullopt, input_tensor_a_arg, std::nullopt, std::nullopt);
+}
+
 template struct BinaryOperationOverload<BinaryOpType::ADD, false>;
 template struct BinaryOperation<BinaryOpType::ADD, true>;
 template struct BinaryOperationOverload<BinaryOpType::SUB, false>;
@@ -514,5 +522,8 @@ template struct InplaceRelationalBinary<BinaryOpType::LT>;
 template struct InplaceRelationalBinary<BinaryOpType::GTE>;
 template struct InplaceRelationalBinary<BinaryOpType::LTE>;
 
+
+template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_AND>;
+template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_OR>;
 
 }  // namespace ttnn::operations::binary

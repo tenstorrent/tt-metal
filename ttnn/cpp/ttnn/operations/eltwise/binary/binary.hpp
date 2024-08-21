@@ -171,6 +171,13 @@ struct InplaceRelationalBinary {
         const float scalar);
 };
 
+template <BinaryOpType binary_op_type>
+struct InplaceLogicalBinary {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b);
+};
+
 }  // binary
 }  // operations
 
@@ -243,6 +250,12 @@ constexpr auto le_ = ttnn::register_operation_with_auto_launch_op<
 constexpr auto lt_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::lt_",
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::LT>>();
+constexpr auto logical_and_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::logical_and_",
+    operations::binary::InplaceLogicalBinary<operations::binary::BinaryOpType::LOGICAL_AND>>();
+constexpr auto logical_or_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::logical_or_",
+    operations::binary::InplaceLogicalBinary<operations::binary::BinaryOpType::LOGICAL_OR>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {
