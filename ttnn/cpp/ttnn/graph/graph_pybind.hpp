@@ -6,6 +6,7 @@
 #include "pybind11/pybind_fwd.hpp"
 
 namespace ttnn {
-    namespace py = pybind11;
-    void py_graph_module(py::module& m);
+
+void py_graph_module(pybind11::module& m);
+
 }
