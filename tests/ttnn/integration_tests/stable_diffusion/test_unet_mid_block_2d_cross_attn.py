@@ -8,7 +8,7 @@ import pytest
 from diffusers import StableDiffusionPipeline
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
@@ -22,6 +22,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 
 
 @skip_for_grayskull()
+@skip_for_wormhole_b0(reason_str="#10923: Hangs on init")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "hidden_state_shapes,",
@@ -36,8 +37,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 )
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 def test_unet_mid_block_2d_cross_attn_512x512(device, model_name, hidden_state_shapes, reset_seeds):
-    # TODO
-    pytest.skip()
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
