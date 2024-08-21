@@ -19,6 +19,7 @@ PIPELINE_CSV_FIELDS = (
     "project",
     "trigger",
     "vcs_platform",
+    "git_branch_name",
     "git_commit_hash",
     "git_author",
     "orchestrator",
@@ -104,6 +105,8 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
     logger.warning("Using hardcoded value github for vcs_platform value")
     vcs_platform = "github"
 
+    git_branch_name = github_pipeline_json["head_branch"]
+
     git_commit_hash = github_pipeline_json["head_sha"]
 
     git_author = github_pipeline_json["head_commit"]["author"]["name"]
@@ -121,6 +124,7 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
         "project": project,
         "trigger": trigger,
         "vcs_platform": vcs_platform,
+        "git_branch_name": git_branch_name,
         "git_commit_hash": git_commit_hash,
         "git_author": git_author,
         "orchestrator": orchestrator,
