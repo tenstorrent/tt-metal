@@ -304,7 +304,6 @@ struct registered_operation_t {
         tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
     }
-
 };
 
 template<reflect::fixed_string cpp_fully_qualified_name>
