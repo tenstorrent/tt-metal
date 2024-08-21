@@ -5,7 +5,7 @@
 #include "untilize_op.hpp"
 
 #include "ttnn/run_operation.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/core/work_split/work_split.hpp"
 #include "untilize_program_factory.hpp"
 
 namespace ttnn::operations::data_movement {

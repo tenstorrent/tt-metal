@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/pool/maxpool/max_pool.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp" // for reduce_op_utils
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/core/work_split/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {

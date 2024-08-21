@@ -7,7 +7,7 @@
 #include "common/constants.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace tt {
 namespace operations {

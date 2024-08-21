@@ -5,7 +5,7 @@
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
 
 #include "ttnn/common/constants.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/cpp/ttnn/operations/core/work_split/work_split.hpp"
 
 namespace ttnn::operations::experimental::ssm::detail {
 

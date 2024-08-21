@@ -6,7 +6,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "nlp_create_qkv_heads_device_operation.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/cpp/ttnn/operations/core/work_split/work_split.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

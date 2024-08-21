@@ -8,7 +8,8 @@
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
+#include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "type_caster.hpp"
 

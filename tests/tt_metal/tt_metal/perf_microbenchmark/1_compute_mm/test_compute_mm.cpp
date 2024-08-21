@@ -26,7 +26,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/core/work_split/work_split.hpp"
 
 using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////

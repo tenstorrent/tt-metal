@@ -7,7 +7,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/cb_utils.hpp"
 #include "paged_cache_operation.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/cpp/ttnn/operations/core/work_split/work_split.hpp"
 #include "ttnn/operations/experimental/paged_cache/device/paged_fill_cache_program_factory.hpp"
 
 namespace ttnn::operations::experimental::paged_cache::detail {
