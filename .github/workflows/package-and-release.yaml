@@ -11,8 +11,24 @@ permissions:
   packages: write
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      tracy: true
   single-card-demos:
-    uses: ./.github/workflows/single-card-demo-tests.yaml
+    needs: build-artifact
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    secrets: inherit
+  single-card-device-perf:
+    needs: build-artifact-profiler
+    uses: ./.github/workflows/perf-device-models-impl.yaml
+    secrets: inherit
+  t3000-demos:
+    needs: build-artifact
+    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     secrets: inherit
   get-params:
     runs-on: ubuntu-latest

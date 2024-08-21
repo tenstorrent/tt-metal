@@ -1,4 +1,4 @@
-name: "Device perf regressions and output report"
+name: "(Single-card) Device perf regressions"
 
 on:
   workflow_dispatch:
@@ -14,55 +14,5 @@ jobs:
     secrets: inherit
   device-perf:
     needs: build-artifact-profiler
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        test-info: [
-          {name: "GS", arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal", timeout: 40},
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["arch-wormhole_b0", "N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal", timeout: 30},
-        ]
-    name: "${{ matrix.test-info.name }} device perf"
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.test-info.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    environment: dev
-    runs-on: ${{ matrix.test-info.runs-on }}
-    steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Ensure weka mount is active
-        run: |
-          sudo systemctl restart mnt-MLPerf.mount
-          sudo /etc/rc.local
-          ls -al /mnt/MLPerf/bit_error_tests
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
-        with:
-          name: TTMetal_build_${{ matrix.test-info.arch }}_profiler
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
-      - name: Run device performance regressions
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        run: |
-          source python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.test-info.machine-type }}
-      - name: Check device perf report exists
-        id: check-device-perf-report
-        if: ${{ !cancelled() }}
-        run: |
-          ls -hal
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_$(date +%Y_%m_%d).csv
-          ls -hal $DEVICE_PERF_REPORT_FILENAME
-          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
-      - name: Upload device perf report
-        if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: device-perf-report-csv-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
-          path: "${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}"
+    secrets: inherit
+    uses: ./.github/workflows/perf-device-models-impl.yaml
