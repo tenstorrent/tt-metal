@@ -64,7 +64,7 @@ def export_suite_vectors(module_name, suite_name, vectors):
             query={
                 "bool": {
                     "must": [
-                        {"match": {"status": str(VectorStatus.CURRENT)}},
+                        {"match": {"status.keyword": str(VectorStatus.CURRENT)}},
                         {"match": {"suite_name.keyword": suite_name}},
                     ]
                 }
@@ -99,7 +99,7 @@ def export_suite_vectors(module_name, suite_name, vectors):
             f"SWEEPS: New vectors found for module {module_name}, suite {suite_name}. Archiving old vectors and saving new suite. This step may take several minutes."
         )
         for old_vector_id in old_vector_ids:
-            client.update(index=index_name, id=old_vector_id, doc={"status.keyword": str(VectorStatus.ARCHIVED)})
+            client.update(index=index_name, id=old_vector_id, doc={"status": str(VectorStatus.ARCHIVED)})
         for new_vector_id in serialized_vectors.keys():
             client.index(index=index_name, id=new_vector_id, body=serialized_vectors[new_vector_id])
         print(f"SWEEPS: Generated {len(serialized_vectors)} test vectors for suite {suite_name}.")
