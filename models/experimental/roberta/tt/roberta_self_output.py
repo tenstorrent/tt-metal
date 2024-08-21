@@ -7,7 +7,6 @@ import torch.nn as nn
 from functools import partial
 
 import ttnn
-import tt_lib
 
 from models.helper_funcs import Linear as TTLinear
 from models.utility_functions import (
@@ -18,9 +17,7 @@ from models.utility_functions import (
 class TtRobertaSelfOutput(nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
         self.device = device
 
         self.dense_weight = pad_by_zero(state_dict[f"{base_address}.dense.weight"], self.device)[0]
@@ -49,7 +46,7 @@ class TtRobertaSelfOutput(nn.Module):
         )
         return x
 
-    def forward(self, hidden_states: tt_lib.tensor.Tensor, input_tensor: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         hidden_states = self.dense_linear(hidden_states)
         # TODO: Add dropout when supported
         # hidden_states = self.dropout(hidden_states)
