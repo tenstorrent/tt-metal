@@ -333,7 +333,7 @@ set(TTNN_PUBLIC_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/deprecated # symlink to tt_eager; should become native folder once merge complete
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt)
-set(TTNN_PUBLIC_LINK_LIBRARIES compiler_flags metal_header_directories metal_common_libs tt_metal linker_flags) # linker_flags = -rdynamic if tracy enabled
+set(TTNN_PUBLIC_LINK_LIBRARIES compiler_flags metal_header_directories metal_common_libs tt_metal)
 set(TTNN_PUBLIC_LINK_DIRS "")
 
 set(TTNN_PRECOMPILED_HEADERS
