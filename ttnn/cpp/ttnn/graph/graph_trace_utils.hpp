@@ -19,15 +19,12 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace);
 
 std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace);
 
-struct OutputSizes {
-    size_t total_L1_size = 0;
-    size_t total_DRAM_size = 0;
-
-    std::vector<uint32_t> L1_sizes;
-    std::vector<uint32_t> DRAM_sizes;
+struct TensorInfo {
+    ttnn::Shape shape;
+    uint32_t size = 0;
+    tt::tt_metal::BufferType type = tt::tt_metal::BufferType::DRAM;
 };
-OutputSizes extract_output_sizes(const nlohmann::json& trace);
 
-std::vector<ttnn::Shape> extract_output_shapes(const nlohmann::json& trace);
+vector<TensorInfo> extract_output_info(const nlohmann::json& trace);
 
 } // namespace ttnn::graph

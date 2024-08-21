@@ -15,6 +15,36 @@
 
 namespace ttnn::graph {
 
+namespace {
+ttnn::Shape parse_shape(const std::string_view& shape_string) {
+    // Extract shape values from string like "ttnn.Shape([1, 3, 32, 32])"
+    auto start = shape_string.find('[') + 1;
+    auto end = shape_string.find(']');
+    std::string_view shape_values = shape_string.substr(start, end - start);
+
+    // Vector to hold the parsed shape values
+    std::vector<uint32_t> shape;
+    const char* str = shape_values.data();
+    const char* end_str = str + shape_values.size();
+
+    while (str < end_str) {
+        char* next;
+        uint32_t value = std::strtoul(str, &next, 10);
+        if (str == next) break; // no conversion happened
+        shape.push_back(value);
+        str = next;
+        if (*str == ',') {
+            ++str; // skip the comma
+        }
+        if (*str == ' ') {
+            ++str; // skip spaces, assume a single space
+        }
+    }
+
+    return ttnn::Shape(shape);
+}
+} // namespace
+
 uint32_t extract_peak_memory_usage(const nlohmann::json& trace) {
     uint32_t total_cb = 0;
     uint32_t total_buffer = 0;
@@ -154,77 +184,32 @@ std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace)
     return output_tensors;
 }
 
-OutputSizes extract_output_sizes(const nlohmann::json& trace)
+std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace)
 {
-    OutputSizes output;
+    std::vector<TensorInfo> output;
     auto output_tensors = extract_output_tensors(trace);
 
     for (const auto& node : trace) {
         if (node["name"] != "buffer" )
             continue;
 
-        for (const auto& tensor_id : node["connections"]) {
+        auto connections = node["connections"].get<std::vector<uint32_t>>();
+        for (const auto& tensor_id : connections) {
             if (output_tensors.find(tensor_id) == output_tensors.end())
                 continue;
 
-            auto size = node["params"]["size"].get<size_t>();
-            if(node["params"]["type"] == "L1") {
-                output.total_L1_size += size;
-                output.L1_sizes.push_back(size);
-            }
-            else {
-                output.total_DRAM_size += size;
-                output.DRAM_sizes.push_back(size);
-            }
+            const auto type = node["params"]["type"] == "L1" ? tt::tt_metal::BufferType::L1 : tt::tt_metal::BufferType::DRAM;
+            const auto size = node["params"]["size"].get<uint32_t>();
+
+            const auto& tensor = trace[tensor_id];
+            const std::string shape_string = tensor["params"]["shape"].get<std::string>();
+            const auto shape = parse_shape(shape_string);
+
+            output.emplace_back(TensorInfo {.shape = shape, .size = size, .type = type});
         }
     }
 
     return output;
-}
-
-namespace {
-ttnn::Shape parse_shape(const std::string_view& shape_string) {
-    // Extract shape values from string like "ttnn.Shape([1, 3, 32, 32])"
-    auto start = shape_string.find('[') + 1;
-    auto end = shape_string.find(']');
-    std::string_view shape_values = shape_string.substr(start, end - start);
-
-    // Vector to hold the parsed shape values
-    std::vector<uint32_t> shape;
-    const char* str = shape_values.data();
-    const char* end_str = str + shape_values.size();
-
-    while (str < end_str) {
-        char* next;
-        uint32_t value = std::strtoul(str, &next, 10);
-        if (str == next) break; // no conversion happened
-        shape.push_back(value);
-        str = next;
-        if (*str == ',') {
-            ++str; // skip the comma
-        }
-        if (*str == ' ') {
-            ++str; // skip spaces, assume a single space
-        }
-    }
-
-    return ttnn::Shape(shape);
-}
-} // namespace
-
-std::vector<ttnn::Shape> extract_output_shapes(const nlohmann::json& trace)
-{
-    auto output_tensors = extract_output_tensors(trace);
-
-    std::vector<ttnn::Shape> output_shapes;
-    for (const auto& tensor_id : output_tensors) {
-        const auto& tensor = trace[tensor_id];
-        std::string shape_string = tensor["params"]["shape"].get<std::string>();
-        auto shape = parse_shape(shape_string);
-        output_shapes.push_back(shape);
-    }
-
-    return output_shapes;
 }
 
 

@@ -33,13 +33,13 @@ auto query_peak_memory_load(Callable&& callable) {
 }
 
 template <class Callable>
-auto query_output_sizes(Callable&& callable) {
+auto query_output_info(Callable&& callable) {
     ttnn::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
     {
         auto output = callable();
     }
     auto json_trace = ttnn::GraphProcessor::end_graph_capture();
-    return graph::extract_output_sizes(json_trace);
+    return graph::extract_output_info(json_trace);
 }
 
 } // namespace ttnn::graph
