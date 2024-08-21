@@ -18,7 +18,7 @@
 #include "ttnn/deprecated/tt_lib/csrc/tt_lib_bindings.hpp"
 #include "operations/__init__.hpp"
 
-#include "ttnn/graph_processor_pybind.hpp"
+#include "ttnn/graph/graph_pybind.hpp"
 
 namespace py = pybind11;
 
