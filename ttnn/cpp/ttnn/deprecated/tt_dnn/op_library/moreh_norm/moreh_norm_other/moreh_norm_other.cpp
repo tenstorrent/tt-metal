@@ -13,7 +13,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_norm/moreh_norm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/core/work_split/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_concat_heads_decode_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/core/work_split/work_split.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

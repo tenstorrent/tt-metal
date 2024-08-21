@@ -13,7 +13,7 @@
 
 #include "tt_metal/tt_stl/reflection.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/core/work_split/work_split.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
