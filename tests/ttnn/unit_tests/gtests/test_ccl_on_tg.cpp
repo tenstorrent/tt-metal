@@ -17,10 +17,10 @@ using namespace tt_metal;
 // We use this to dispatch a single device operation asynchronously
 // Needed to reproduce the deadlock scenario with a very specific pattern of commands
 // This can go away once device_operation::run will be made async and ccl op is moved to the new tmp-based DeviceOperation
-namespace detail {
+namespace async_detail {
 template<typename OpConfig>
 std::vector<Tensor> run_operation(
-    queue_id cq_id,
+    uint8_t cq_id,
     OpConfig devop,
     const tt::tt_metal::operation::Tensors& input_tensors,
     const tt::tt_metal::operation::OptionalConstTensors& optional_input_tensors = {},
@@ -41,7 +41,7 @@ std::vector<Tensor> run_operation(
     }
     return outputs;
 }
-} // namespace detail
+} // namespace async_detail
 
 TEST(TGTests, TestAllGatherDeadlock) {
     if (not tt::Cluster::instance().is_galaxy_cluster()) {
@@ -112,7 +112,7 @@ TEST(TGTests, TestAllGatherDeadlock) {
                 auto all_gather_op = ttnn::LineAllGather{
                                         3, 2, num_devices_in_tunnel, dev_idx, receiver_device_id, sender_device_id, input_tensor.memory_config(), ttnn::all_gather_op::Topology::Linear};
                 // Send CCL to this device. All CCLs will complete simultaneously.
-                output_tensors.push_back(detail::run_operation(0, all_gather_op, {input_tensor}).at(0));
+                output_tensors.push_back(async_detail::run_operation(0, all_gather_op, {input_tensor}).at(0));
                 // Expose deadlock: After the CCL is sent to the first device in the tunnel, send enough data to it to backpressure prefetch_h. This will block the
                 // demux, which will prevent the CCL from being sent to additional chips. If the CCL has been tagged as having multi-device dependencies, deadlock should
                 // get bypassed.
@@ -221,7 +221,7 @@ TEST(TGTests, TestReduceScatterDeadlock) {
             auto all_gather_op = ttnn::ReduceScatter{
                                     ttnn::operations::binary::BinaryOpType::ADD, scatter_dim, 1, static_cast<uint32_t>(ring_devices.size()), dev_idx, receiver_device_id, sender_device_id, input_tensor.memory_config(), ttnn::all_gather_op::Topology::Ring};
             // Send CCL to this device. All CCLs will complete simultaneously.
-            output_tensors.push_back(detail::run_operation(0, all_gather_op, {input_tensor}).at(0));
+            output_tensors.push_back(async_detail::run_operation(0, all_gather_op, {input_tensor}).at(0));
             // Expose deadlock: After the CCL is sent to a device in the first tunnel, send enough data to it to backpressure prefetch_h. This will block the
             // demux, which will prevent the CCL from being sent to additional chips on the tunnel. If the CCL has been tagged as having multi-device dependencies, deadlock should
             // get bypassed.
