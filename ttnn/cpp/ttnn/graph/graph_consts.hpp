@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 namespace ttnn::graph {
     // Vertex struct
     constexpr auto kNodeName = "node_name";
