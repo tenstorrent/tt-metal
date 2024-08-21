@@ -521,6 +521,8 @@ template struct InplaceRelationalBinary<BinaryOpType::GT>;
 template struct InplaceRelationalBinary<BinaryOpType::LT>;
 template struct InplaceRelationalBinary<BinaryOpType::GTE>;
 template struct InplaceRelationalBinary<BinaryOpType::LTE>;
+template struct InplaceRelationalBinary<BinaryOpType::EQ>;
+template struct InplaceRelationalBinary<BinaryOpType::NE>;
 
 
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_AND>;
