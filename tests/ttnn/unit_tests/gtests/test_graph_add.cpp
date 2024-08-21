@@ -35,7 +35,7 @@ struct AddOpGraphTestParam {
     uint32_t expected_peak_memory_usage = 0;
     uint32_t expected_intermediate_tensors_count = 0;
     uint32_t expected_output_tensors_count = 0;
-    uint32_t expected_output_L1_size = 0;
+    graph::OutputSizes expected_output_sizes;
     ttnn::Shape expected_output_shape;
 };
 
@@ -70,19 +70,19 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             EXPECT_EQ(intermediate_tensors_count, params.expected_intermediate_tensors_count);
             EXPECT_EQ(output_tensors_count, params.expected_output_tensors_count);
 
-            EXPECT_EQ(graph::extract_output_L1_size(json_trace), params.expected_output_L1_size);
+            EXPECT_EQ(graph::extract_output_sizes(json_trace), params.expected_output_sizes);
         }
 
         // Query calls
         {
             auto peak_memory_load = graph::query_peak_memory_load(call);
-            auto output_L1_size = graph::query_output_L1_size(call);
-            auto output_shape = graph::query_output_shape(call);
+            auto output_sizes = graph::query_output_sizes(call);
+            auto output_shapes = graph::query_output_shapes(call);
 
             EXPECT_EQ(peak_memory_load, params.expected_peak_memory_usage);
-            EXPECT_EQ(output_L1_size, params.expected_output_L1_size);
-            EXPECT_EQ(output_shape.size(), 1);
-            EXPECT_EQ(output_shape[0], params.expected_output_shape);
+            EXPECT_EQ(output_sizes, params.expected_output_sizes);
+            EXPECT_EQ(output_shapes.size(), 1);
+            EXPECT_EQ(output_shapes[0], params.expected_output_shape);
         }
     }
 }
@@ -101,7 +101,12 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_peak_memory_usage = 30720,
                 .expected_intermediate_tensors_count = 0,
                 .expected_output_tensors_count = 1,
-                .expected_output_L1_size = 30720,
+                .expected_output_sizes = graph::OutputSizes {
+                    .total_L1_size = 30720,
+                    .total_DRAM_size = 0,
+                    .L1_sizes = {30720},
+                    .DRAM_sizes = {}
+                },
                 .expected_output_shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
             },
             AddOpGraphTestParam{
@@ -112,7 +117,12 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_peak_memory_usage = 92160,
                 .expected_intermediate_tensors_count = 1,
                 .expected_output_tensors_count = 1,
-                .expected_output_L1_size = 30720,
+                .expected_output_sizes = graph::OutputSizes {
+                    .total_L1_size = 61440,
+                    .total_DRAM_size = 0,
+                    .L1_sizes = {61440},
+                    .DRAM_sizes = {}
+                },
                 .expected_output_shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
             }
         ),

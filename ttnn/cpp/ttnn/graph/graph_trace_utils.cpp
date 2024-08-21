@@ -154,23 +154,32 @@ std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace)
     return output_tensors;
 }
 
-size_t extract_output_L1_size(const nlohmann::json& trace)
+OutputSizes extract_output_sizes(const nlohmann::json& trace)
 {
+    OutputSizes output;
     auto output_tensors = extract_output_tensors(trace);
 
-    // Calculate the total size of L1 buffers for output tensors
-    size_t output_size = 0;
     for (const auto& node : trace) {
-        if (node["name"] == "buffer" && node["params"]["type"] == "L1") {
-            for (const auto& tensor_id : node["connections"]) {
-                if (output_tensors.find(tensor_id) != output_tensors.end()) {
-                    output_size += node["params"]["size"].get<size_t>();
-                }
+        if (node["name"] != "buffer" )
+            continue;
+
+        for (const auto& tensor_id : node["connections"]) {
+            if (output_tensors.find(tensor_id) == output_tensors.end())
+                continue;
+
+            auto size = node["params"]["size"].get<size_t>();
+            if(node["params"]["type"] == "L1") {
+                output.total_L1_size += size;
+                output.L1_sizes.push_back(size);
+            }
+            else {
+                output.total_DRAM_size += size;
+                output.DRAM_sizes.push_back(size);
             }
         }
     }
 
-    return output_size;
+    return output;
 }
 
 namespace {
@@ -203,12 +212,13 @@ ttnn::Shape parse_shape(const std::string_view& shape_string) {
 }
 } // namespace
 
-std::vector<ttnn::Shape> extract_output_shape(const nlohmann::json& trace)
+std::vector<ttnn::Shape> extract_output_shapes(const nlohmann::json& trace)
 {
     auto output_tensors = extract_output_tensors(trace);
 
     std::vector<ttnn::Shape> output_shapes;
-    for (const auto& tensor : output_tensors) {
+    for (const auto& tensor_id : output_tensors) {
+        const auto& tensor = trace[tensor_id];
         std::string shape_string = tensor["params"]["shape"].get<std::string>();
         auto shape = parse_shape(shape_string);
         output_shapes.push_back(shape);
