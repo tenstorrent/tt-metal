@@ -146,18 +146,19 @@ struct AddOpGraphTestParam {
 };
 
 class AddOpGraphTestFixture : public TTNNFixtureWithDevice,
-                              public testing::WithParamInterface<AddOpGraphTestParam> {};
+                              public testing::WithParamInterface<std::tuple<AddOpGraphTestParam, tt::tt_metal::IGraphProcessor::RunMode>> {};
 
 
 TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
-    auto params = GetParam();
-    const auto device_id = 0;
+    auto param_combination = GetParam();
+    auto params = std::get<0>(param_combination);
+    auto run_mode = std::get<1>(param_combination);
 
     {
         const auto input_tensor_a = ttnn::zeros(params.a_Shape, ttnn::bfloat16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
         const auto input_tensor_b = ttnn::zeros(params.b_Shape, ttnn::bfloat16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
 
-        ttnn::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+        ttnn::GraphProcessor::begin_graph_capture(run_mode);
         {
             const auto output_tensor = ttnn::add(input_tensor_a, input_tensor_b);
         }
@@ -177,26 +178,29 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
 INSTANTIATE_TEST_SUITE_P(
     AddOpGraphTests, // Prefix for the instantiated test suite
     AddOpGraphTestFixture, // Test suite name
-    ::testing::Values(
-        // AddOpGraphTestParam instances for different test cases
-        AddOpGraphTestParam{
-            .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
-            .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
-            .memory_config = ttnn::L1_MEMORY_CONFIG,
-            .expected_calltrace = { "ttnn::add", "ttnn::prim::binary", "Device Operation", "create_device_tensor" },
-            .expected_peak_memory_usage = 30720,
-            .expected_intermediate_tensors_count = 0,
-            .expected_output_tensors_count = 1
-        },
-        AddOpGraphTestParam{
-            .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
-            .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
-            .memory_config = ttnn::L1_MEMORY_CONFIG,
-            .expected_calltrace = { "ttnn::add", "ttnn::repeat", "ttnn::prim::old_infra_device_operation", "Device Operation", "create_device_tensor", "ttnn::prim::binary", "Device Operation", "create_device_tensor"},
-            .expected_peak_memory_usage = 96256,
-            .expected_intermediate_tensors_count = 1,
-            .expected_output_tensors_count = 1
-        }
+    ::testing::Combine(
+        ::testing::Values(
+            // AddOpGraphTestParam instances for different test cases
+            AddOpGraphTestParam{
+                .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
+                .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
+                .memory_config = ttnn::L1_MEMORY_CONFIG,
+                .expected_calltrace = { "ttnn::add", "ttnn::prim::binary", "Device Operation", "create_device_tensor" },
+                .expected_peak_memory_usage = 30720,
+                .expected_intermediate_tensors_count = 0,
+                .expected_output_tensors_count = 1,
+            },
+            AddOpGraphTestParam{
+                .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
+                .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
+                .memory_config = ttnn::L1_MEMORY_CONFIG,
+                .expected_calltrace = { "ttnn::add", "ttnn::repeat", "ttnn::prim::old_infra_device_operation", "Device Operation", "create_device_tensor", "ttnn::prim::binary", "Device Operation", "create_device_tensor"},
+                .expected_peak_memory_usage = 92160,
+                .expected_intermediate_tensors_count = 1,
+                .expected_output_tensors_count = 1,
+            }
+        ),
+        ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH, tt::tt_metal::IGraphProcessor::RunMode::NORMAL)
     )
 );
 

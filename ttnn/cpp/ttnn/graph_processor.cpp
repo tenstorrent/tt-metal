@@ -170,10 +170,14 @@ namespace ttnn {
     }
 
     void GraphProcessor::track_program(tt::tt_metal::Program* program) {
+        // All previous CBs are deallocated before a new program run
+        track_deallocate_cb();
+
         if (run_mode == RunMode::NORMAL) {
             // we will track real buffer allocations during program run
             return;
         }
+
         for (auto& cb : program->circular_buffers()) {
             track_allocate_cb(cb->core_ranges(), 0, cb->size());
         }
