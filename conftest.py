@@ -45,6 +45,16 @@ def is_ci_env():
     return False
 
 
+@pytest.fixture(scope="function")
+def is_single_card_n300(device):
+    import tt_lib as ttl
+
+    num_pcie = ttl.device.GetNumPCIeDevices()
+    num_devices = ttl.device.GetNumAvailableDevices()
+    # N150 has 1 chip; N300 has 2 chips (1 pcie); T3000 has 8 chips (4 pcie)
+    return num_pcie == 1 and num_devices == 2 and device.arch().name == "WORMHOLE_B0"
+
+
 @pytest.fixture(scope="session")
 def model_location_generator():
     def model_location_generator_(model_version, model_subdir=""):

@@ -130,7 +130,7 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
     )
 
 
-def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num_batches, print_to_file):
+def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num_batches, print_to_file, is_n300):
     # Create batch output file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_directory = "models/demos/wormhole/mistral7b/demo/output"
@@ -529,7 +529,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
     #     measurements["token_verification"] = float(token_check_does_pass)
 
     # Save benchmark data for CI dashboard
-    if is_ci_env:
+    if is_ci_env and is_n300:
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
         benchmark_data.prep_csvs(
             profiler,
@@ -574,7 +574,9 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
         "instruct_weights-5_batch",
     ],
 )
-def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
+def test_mistral7B_demo(
+    device, use_program_cache, input_prompts, instruct_weights, is_ci_env, is_single_card_n300, num_batches
+):
     if (is_ci_env and instruct_weights == False) or (is_ci_env and not (num_batches == 1 or num_batches == 3)):
         pytest.skip(
             "CI demo test only runs instruct weights (1 and 3 batches) to reduce CI pipeline load (both are supported)"
@@ -588,4 +590,5 @@ def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weigh
         is_ci_env=is_ci_env,
         num_batches=num_batches,
         print_to_file=False,
+        is_n300=is_single_card_n300,
     )
