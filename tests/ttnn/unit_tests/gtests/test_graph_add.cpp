@@ -68,7 +68,7 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             EXPECT_EQ(intermediate_tensors_count, params.expected_intermediate_tensors_count);
             EXPECT_EQ(output_tensors_count, params.expected_outputs.size());
 
-            EXPECT_EQ(graph::extract_output(json_trace), params.expected_outputs);
+            EXPECT_EQ(graph::extract_output_info(json_trace), params.expected_outputs);
         }
 
         // Query calls
