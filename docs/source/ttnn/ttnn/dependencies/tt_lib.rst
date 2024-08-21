@@ -112,8 +112,6 @@ To wait for kernels to complete, either read a tensor from device to host with:
 
 or to perform only a wait, use:
 
-.. autofunction:: tt_lib.device.Synchronize
-
 
 Program Caching
 ===============

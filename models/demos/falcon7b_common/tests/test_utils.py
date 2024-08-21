@@ -326,4 +326,4 @@ def dump_device_profiler(device):
     # device is either a ttnn.DeviceMesh or a ttnn.Device
     devices = get_devices(device)
     for device in devices:
-        ttnn.experimental.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)

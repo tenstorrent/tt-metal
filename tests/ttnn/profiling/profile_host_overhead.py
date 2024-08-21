@@ -42,7 +42,7 @@ NUM_REPEATS = 5
 
 
 def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
-    tt_lib.device.Synchronize(device)
+    ttnn.synchronize_device(device)
 
     if not is_warmup:
         signpost(header=f"start {op_name}")
@@ -51,7 +51,7 @@ def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup
     for _ in range(num_call_to_stack):
         op_func()
 
-    tt_lib.device.Synchronize(device)
+    ttnn.synchronize_device(device)
 
     duration = 1000 * (time.time() - start_time)
     avg_op_time = duration / num_call_to_stack
@@ -64,7 +64,7 @@ def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup
         # signpost(header=f"ending {op_name}")
 
     dispatch_end_time = time.time()
-    tt_lib.device.Synchronize(device)
+    ttnn.synchronize_device(device)
 
     sync_time = 1000 * (time.time() - dispatch_end_time)
     dispatch_time = 1000 * (dispatch_end_time - start_time)

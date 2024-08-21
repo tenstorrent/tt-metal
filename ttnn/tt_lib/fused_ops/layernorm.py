@@ -5,7 +5,7 @@
 import torch
 
 import ttnn
-from tt_lib import tensor, device
+from tt_lib import tensor
 from tt_lib.utils import (
     pad_activation,
     pad_weight,
@@ -186,7 +186,7 @@ def ref_layernorm(x, eps, gamma, beta, H, W):
 
 if __name__ == "__main__":
     # Initialize the device
-    device = device.CreateDevice(0)
+    device = ttnn.CreateDevice(0)
 
     H = 64
     W = 96
@@ -213,4 +213,4 @@ if __name__ == "__main__":
     print("Layernorm max absdiff=")
     print_diff_argmax(tt_got_back, ref_lnorm)
 
-    device.CloseDevice(device)
+    ttnn.CloseDevice(device)
