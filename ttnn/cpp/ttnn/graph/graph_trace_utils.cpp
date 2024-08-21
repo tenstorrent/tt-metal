@@ -16,7 +16,7 @@
 namespace ttnn::graph {
 
 namespace {
-ttnn::Shape parse_shape(const std::string_view& shape_string) {
+ttnn::Shape parse_shape(std::string_view shape_string) {
     // Extract shape values from string like "ttnn.Shape([1, 3, 32, 32])"
     auto start = shape_string.find('[') + 1;
     auto end = shape_string.find(']');
@@ -199,7 +199,7 @@ std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace)
                 continue;
 
             const auto type = node["params"]["type"] == "L1" ? tt::tt_metal::BufferType::L1 : tt::tt_metal::BufferType::DRAM;
-            const auto size = node["params"]["size"].get<uint32_t>();
+            const auto size = stoi(node["params"]["size"].get<std::string>());
 
             const auto& tensor = trace[tensor_id];
             const std::string shape_string = tensor["params"]["shape"].get<std::string>();

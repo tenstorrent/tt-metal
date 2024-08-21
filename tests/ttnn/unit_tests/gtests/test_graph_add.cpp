@@ -34,7 +34,7 @@ struct AddOpGraphTestParam {
     std::vector<std::string> expected_calltrace;
     uint32_t expected_peak_memory_usage = 0;
     uint32_t expected_intermediate_tensors_count = 0;
-    std::vector<graph::TensorInfo> expected_outputs;
+    std::vector<graph::TensorInfo> expected_output_info;
 };
 
 class AddOpGraphTestFixture : public TTNNFixtureWithDevice,
@@ -66,18 +66,37 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
 
             auto [intermediate_tensors_count, output_tensors_count] = graph::count_intermediate_and_output_tensors(json_trace);
             EXPECT_EQ(intermediate_tensors_count, params.expected_intermediate_tensors_count);
-            EXPECT_EQ(output_tensors_count, params.expected_outputs.size());
-
-            EXPECT_EQ(graph::extract_output_info(json_trace), params.expected_outputs);
+            EXPECT_EQ(output_tensors_count, params.expected_output_info.size());
         }
 
         // Query calls
         {
             auto peak_memory_load = graph::query_peak_memory_load(call);
-            auto output = graph::query_output_info(call);
+            auto output_info = graph::query_output_info(call);
 
             EXPECT_EQ(peak_memory_load, params.expected_peak_memory_usage);
-            EXPECT_EQ(outputs, params.expected_outputs);
+
+
+            if(output_info.size() != params.expected_output_info.size()) {
+                auto print = [](const auto& infos){
+                    for (const auto& info : infos) {
+                        tt::log_info("{}", info);
+                    }
+                };
+
+                tt::log_info("Output info size mismatch. Expected {} but got {}", params.expected_output_info.size(), output_info.size());
+
+                tt::log_info("Expected output info:");
+                print(params.expected_output_info);
+
+                tt::log_info("Actual output info:");
+                print(output_info);
+                ASSERT_TRUE(false);
+            }
+
+            for (int i = 0; i < output_info.size(); ++i) {
+                EXPECT_EQ(output_info[i], params.expected_output_info[i]);
+            }
         }
     }
 }
@@ -95,7 +114,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_calltrace = { "ttnn::add", "ttnn::prim::binary", "Device Operation", "create_device_tensor" },
                 .expected_peak_memory_usage = 30720,
                 .expected_intermediate_tensors_count = 0,
-                .expected_outputs = {
+                .expected_output_info = {
                     graph::TensorInfo{
                         .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                         .size = 30720,
@@ -108,7 +127,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_calltrace = { "ttnn::add", "ttnn::repeat", "ttnn::prim::old_infra_device_operation", "Device Operation", "create_device_tensor", "ttnn::prim::binary", "Device Operation", "create_device_tensor"},
                 .expected_peak_memory_usage = 92160,
                 .expected_intermediate_tensors_count = 1,
-                .expected_outputs = {
+                .expected_output_info = {
                     graph::TensorInfo{
                         .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
                         .size = 61440,
