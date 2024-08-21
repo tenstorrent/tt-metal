@@ -583,9 +583,9 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 If a Tenstorrent chip seems to hang and/or is producing unexpected behaviour,
 you may try a software reset of the board.
 
-For Grayskull: `tt-smi -tr all`
+For single-card: `tt-smi -r 0`
 
-For Wormhole: `tt-smi -wr all wait`
+For T3000 (QuietBox, LoudBox etc.): `tt-smi -r 0,1,2,3`
 
 If the software reset does not work, unfortunately you will have to power cycle
 the board. This usually means rebooting the host of a board.
