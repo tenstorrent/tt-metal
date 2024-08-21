@@ -14,6 +14,35 @@
 using namespace tt;
 using namespace tt_metal;
 
+// We use this to dispatch a single device operation asynchronously
+// Needed to reproduce the deadlock scenario with a very specific pattern of commands
+// This can go away once device_operation::run will be made async and ccl op is moved to the new tmp-based DeviceOperation
+namespace detail {
+template<typename OpConfig>
+std::vector<Tensor> run_operation(
+    queue_id cq_id,
+    OpConfig devop,
+    const tt::tt_metal::operation::Tensors& input_tensors,
+    const tt::tt_metal::operation::OptionalConstTensors& optional_input_tensors = {},
+    const tt::tt_metal::operation::OptionalTensors& optional_output_tensors = {}) {
+    static_assert(tt::tt_metal::operation::detail::is_device_operation<OpConfig>(), "ttnn::run_operation can only dispatch Device Operations!");
+    // Create output tensor vector by examining the number of output shapes created by the device operation
+    std::vector<Tensor> outputs(tt::tt_metal::operation::DeviceOperation<tt::tt_metal::operation::Tensors>(devop).compute_output_shapes(input_tensors).size());
+    // Populate the workers of the output tensors, based on the input tensors. This is needed for the async engine.
+    for (int i = 0; i < outputs.size(); i++) {
+        outputs[i] = Tensor(tt::tt_metal::operation::get_workers_for_op_output(std::move(input_tensors), std::move(optional_input_tensors)));
+    }
+    // Send the operation to the async engine, which will populate the output tensors.
+    for (auto worker : outputs.at(0).workers) {
+        tt::tt_metal::operation::launch_op(
+            [devop, worker, cq_id] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+                return operation::run(std::move(devop), input_tensors, optional_input_tensors, optional_output_tensors, cq_id);
+            }, input_tensors, outputs, optional_input_tensors, optional_output_tensors);
+    }
+    return outputs;
+}
+} // namespace detail
+
 TEST(TGTests, TestAllGatherDeadlock) {
     if (not tt::Cluster::instance().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
@@ -83,7 +112,7 @@ TEST(TGTests, TestAllGatherDeadlock) {
                 auto all_gather_op = ttnn::LineAllGather{
                                         3, 2, num_devices_in_tunnel, dev_idx, receiver_device_id, sender_device_id, input_tensor.memory_config(), ttnn::all_gather_op::Topology::Linear};
                 // Send CCL to this device. All CCLs will complete simultaneously.
-                output_tensors.push_back(ttnn::run_operation(0, all_gather_op, {input_tensor}).at(0));
+                output_tensors.push_back(detail::run_operation(0, all_gather_op, {input_tensor}).at(0));
                 // Expose deadlock: After the CCL is sent to the first device in the tunnel, send enough data to it to backpressure prefetch_h. This will block the
                 // demux, which will prevent the CCL from being sent to additional chips. If the CCL has been tagged as having multi-device dependencies, deadlock should
                 // get bypassed.
@@ -192,7 +221,7 @@ TEST(TGTests, TestReduceScatterDeadlock) {
             auto all_gather_op = ttnn::ReduceScatter{
                                     ttnn::operations::binary::BinaryOpType::ADD, scatter_dim, 1, static_cast<uint32_t>(ring_devices.size()), dev_idx, receiver_device_id, sender_device_id, input_tensor.memory_config(), ttnn::all_gather_op::Topology::Ring};
             // Send CCL to this device. All CCLs will complete simultaneously.
-            output_tensors.push_back(ttnn::run_operation(0, all_gather_op, {input_tensor}).at(0));
+            output_tensors.push_back(detail::run_operation(0, all_gather_op, {input_tensor}).at(0));
             // Expose deadlock: After the CCL is sent to a device in the first tunnel, send enough data to it to backpressure prefetch_h. This will block the
             // demux, which will prevent the CCL from being sent to additional chips on the tunnel. If the CCL has been tagged as having multi-device dependencies, deadlock should
             // get bypassed.
