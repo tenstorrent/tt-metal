@@ -39,29 +39,29 @@ struct MatmulOperation {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const bool transpose_a,
-        const bool transpose_b,
-        const MemoryConfig& memory_config,
-        const std::optional<const DataType> dtype,
-        const std::optional<const MatmulProgramConfig> program_config,
-        const std::optional<const std::string>& activation,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-        const std::optional<const CoreGrid> core_grid);
+        const bool transpose_a = false,
+        const bool transpose_b = false,
+        const std::optional<const MemoryConfig> memory_config = std::nullopt,
+        const std::optional<const DataType> dtype = std::nullopt,
+        const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
+        const std::optional<const std::string>& activation = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<const CoreGrid> core_grid = std::nullopt);
 };
 
 struct LinearOperation {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const std::optional<const Tensor>& bias,
-        const bool transpose_a,
-        const bool transpose_b,
-        const MemoryConfig& memory_config,
-        const std::optional<const DataType> dtype,
-        const std::optional<const MatmulProgramConfig> program_config,
-        const std::optional<const std::string>& activation,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-        const std::optional<const CoreGrid> core_grid);
+        const std::optional<const Tensor>& bias = std::nullopt,
+        const bool transpose_a = false,
+        const bool transpose_b = false,
+        const std::optional<const MemoryConfig> memory_config = std::nullopt,
+        const std::optional<const DataType> dtype = std::nullopt,
+        const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
+        const std::optional<const std::string>& activation = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<const CoreGrid> core_grid = std::nullopt);
 };
 
 }  // namespace matmul

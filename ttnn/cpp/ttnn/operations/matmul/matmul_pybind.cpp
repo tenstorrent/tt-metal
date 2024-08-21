@@ -146,7 +146,7 @@ void py_module(py::module& module) {
         module,
         ::ttnn::matmul,
         R"doc(
-    matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig=ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, program_config: Optional[MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, transpose_a[boolean] = False, transpose_b[boolean] = False) -> ttnn.Tensor
+    matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, program_config: Optional[MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, transpose_a[boolean] = False, transpose_b[boolean] = False) -> ttnn.Tensor
 
     Returns the matrix product of two tensors.
 
@@ -191,7 +191,7 @@ void py_module(py::module& module) {
         * :attr:`input_tensor_b` (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
 
     Keyword Arguments:
-        * :attr:`memory_config` (ttnn.MemoryConfig): the memory configuration of the output tensor. Defaults to ttnn.DRAM_MEMORY_CONFIG
+        * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): the memory configuration of the output tensor. Defaults to None, which will result in using ttnn.DRAM_MEMORY_CONFIG
         * :attr:`dtype` (ttnn.DataType): the data type of the output tensor. Defaults to None
         * :attr:`core_grid` (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
         * :attr:`program_config` (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to None
@@ -237,7 +237,7 @@ void py_module(py::module& module) {
                const ttnn::Tensor& input_tensor_b,
                const bool transpose_a,
                const bool transpose_b,
-               const ttnn::MemoryConfig& memory_config,
+               const std::optional<const ttnn::MemoryConfig> memory_config,
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig> program_config,
                const std::optional<const std::string>& activation,
@@ -260,7 +260,7 @@ void py_module(py::module& module) {
             py::kw_only(),
             py::arg("transpose_a") = false,
             py::arg("transpose_b") = false,
-            py::arg("memory_config") = DRAM_MEMORY_CONFIG,
+            py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("program_config") = std::nullopt,
             py::arg("activation") = std::nullopt,
@@ -272,7 +272,7 @@ void py_module(py::module& module) {
         module,
         ::ttnn::linear,
         R"doc(
-    linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias: Optional[ttnn.Tensor] = None, memory_config: ttnn.MemoryConfig=ttnn.DRAM_MEMORY_CONFIG, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, program_config: Optional[MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, transpose_a[boolean] = False, transpose_b[boolean] = False) -> ttnn.Tensor
+    linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, bias: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, program_config: Optional[MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, transpose_a[boolean] = False, transpose_b[boolean] = False) -> ttnn.Tensor
 
     Returns the linear transformation of the inputs
 
@@ -282,7 +282,7 @@ void py_module(py::module& module) {
 
     Keyword Arguments:
         * :attr:`bias` (Optional[ttnn.Tensor]): the bias tensor to be added. If specified, needs to be on the device. Defaults to None
-        * :attr:`memory_config` (ttnn.MemoryConfig): the memory configuration of the output tensor. Defaults to ttnn.DRAM_MEMORY_CONFIG
+        * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): the memory configuration of the output tensor. Defaults to None, which will result in using ttnn.DRAM_MEMORY_CONFIG
         * :attr:`dtype` (Optional[ttnn.DataType]): the data type of the output tensor. Defaults to None
         * :attr:`core_grid` (Optional[ttnn.CoreGrid]): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to None
         * :attr:`program_config` (Optional[MatmulProgramConfig]): the program configuration for the matmul operation. Defaults to None
@@ -305,7 +305,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::Tensor>& bias,
                const bool transpose_a,
                const bool transpose_b,
-               const ttnn::MemoryConfig& memory_config,
+               const std::optional<const ttnn::MemoryConfig> memory_config,
                const std::optional<const DataType> dtype,
                const std::optional<const MatmulProgramConfig> program_config,
                const std::optional<const std::string>& activation,
@@ -330,7 +330,7 @@ void py_module(py::module& module) {
             py::arg("bias") = std::nullopt,
             py::arg("transpose_a") = false,
             py::arg("transpose_b") = false,
-            py::arg("memory_config") = DRAM_MEMORY_CONFIG,
+            py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("program_config") = std::nullopt,
             py::arg("activation") = std::nullopt,

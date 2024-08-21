@@ -78,7 +78,7 @@ ttnn.attach_golden_function(
 )
 
 
-ttnn.Tensor.__matmul__ = lambda self, *args, **kwargs: matmul(self, *args, **kwargs)
+ttnn.Tensor.__matmul__ = lambda self, *args, **kwargs: ttnn.matmul(self, *args, **kwargs)
 
 
 __all__ = []
