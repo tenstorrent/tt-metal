@@ -48,10 +48,10 @@ namespace ttnn {
 
         void track_program(tt::tt_metal::Program* program) override;
 
-        void track_begin_function(std::string_view function_name, std::span<std::any> args) override;
+        void track_function_start(std::string_view function_name, std::span<std::any> args) override;
 
-        void track_end_function() override;
-        void track_end_function(const std::any& output) override;
+        void track_function_end() override;
+        void track_function_end(const std::any& output) override;
 
         void begin_capture(RunMode mode) override;
 
@@ -96,7 +96,7 @@ namespace ttnn {
         void end_function_process_tensor(const std::any& any_val);
         void end_function_process_optional_tensor(const std::any& any_val);
 
-        void track_end_function_impl();
+        void track_function_end_impl();
 
         void clean_hook();
 
