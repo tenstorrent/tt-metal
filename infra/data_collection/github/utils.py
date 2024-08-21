@@ -189,11 +189,11 @@ def get_job_row_from_github_job(github_job):
         logger.info("Seems to have no config- label, so assuming no special config requested")
         detected_config = None
 
-    if labels_have_overlap(["grayskull", "arch-grayskull"], labels):
+    if labels_have_overlap(["E150", "grayskull", "arch-grayskull"], labels):
         detected_arch = "grayskull"
-    elif labels_have_overlap(["wormhole_b0", "arch-wormhole_b0"], labels):
+    elif labels_have_overlap(["N150", "N300", "wormhole_b0", "arch-wormhole_b0"], labels):
         detected_arch = "wormhole_b0"
-    elif labels_have_overlap(["arch-blackhole"], labels):
+    elif labels_have_overlap(["BH", "arch-blackhole"], labels):
         detected_arch = "blackhole"
     else:
         detected_arch = None
