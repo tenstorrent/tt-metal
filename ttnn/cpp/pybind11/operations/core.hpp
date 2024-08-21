@@ -282,6 +282,30 @@ void py_module(py::module& module) {
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("device") = nullptr});
+
+    py::class_<DeviceComputeKernelConfig>(module, "DeviceComputeKernelConfig");
+
+    py::class_<GrayskullComputeKernelConfig>(module, "GrayskullComputeKernelConfig")
+        .def(
+            py::init<MathFidelity, bool>(),
+            py::kw_only(),
+            py::arg("math_fidelity") = MathFidelity::Invalid,
+            py::arg("math_approx_mode") = true)
+        .def_readwrite("math_fidelity", &GrayskullComputeKernelConfig::math_fidelity)
+        .def_readwrite("math_approx_mode", &GrayskullComputeKernelConfig::math_approx_mode);
+
+    py::class_<WormholeComputeKernelConfig>(module, "WormholeComputeKernelConfig")
+        .def(
+            py::init<MathFidelity, bool, bool, bool>(),
+            py::kw_only(),
+            py::arg("math_fidelity") = MathFidelity::Invalid,
+            py::arg("math_approx_mode") = true,
+            py::arg("fp32_dest_acc_en") = false,
+            py::arg("packer_l1_acc") = false)
+        .def_readwrite("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
+        .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
+        .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
+        .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc);
 }
 
 }  // namespace core
