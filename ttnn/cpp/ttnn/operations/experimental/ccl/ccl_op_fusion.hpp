@@ -11,6 +11,14 @@ namespace ttnn {
 namespace experimental {
 namespace ccl {
 
+struct CoreSemPair{
+    CoreCoord core;
+    uint32_t sem_id;
+
+    CoreSemPair() {}
+    CoreSemPair(CoreCoord core, uint32_t sem_id) : core(core), sem_id(sem_id) {}
+};
+
 struct AllGatherFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal;
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
@@ -49,7 +57,8 @@ struct AllGatherFusedOpSignaler {
     void emit_all_gather_fused_op_rt_args(
         std::vector<uint32_t>& rt_args,
 
-        bool all_gather_direction
+        uint32_t all_gather_direction,
+        std::optional<CoreSemPair> start_signal_core_sem_pair = {}
     );
 
     static uint32_t get_num_ct_args() { return 3; }
@@ -99,6 +108,7 @@ struct MatmulFusedOpSignaler {
         std::vector<uint32_t>& ct_args
     );
 
+    static uint32_t get_num_ct_args() { return 10; }
 };
 
 

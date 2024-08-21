@@ -207,6 +207,12 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();
+
+    // Need a seperate signaler for the sender workers, to handle the first tensor slice that is locally available
+    std::optional<experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers;
+    if (fuse_op) {
+        fused_op_signaler_sender_workers = fused_op_signaler.value();
+    }
     auto const& all_gather_config = AllGatherConfig(input_tensor, output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, fuse_op);
     auto const& topology_config = ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
@@ -475,6 +481,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             /* All gather fusion */
             if (fuse_op) {
                 fused_op_signaler->init_all_gather(program, device, receiver_workers, receiver_worker_cores);
+                fused_op_signaler_sender_workers->init_all_gather(program, device, sender_workers, sender_worker_cores);
+
             }
 
             {
@@ -723,11 +731,23 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).x),
                             static_cast<uint32_t>(device->ethernet_core_from_logical_core(worker_eth_sender_core).y),
                             static_cast<uint32_t>(cb_num_pages / 2),
-                            static_cast<uint32_t>(num_edm_buffers_per_channel)
+                            static_cast<uint32_t>(num_edm_buffers_per_channel),
+
+                            static_cast<bool>(fuse_op)
                         };
 
                         if (is_sharded) {
                             emit_sharded_tensor_kernel_ct_args(device, output_tensor, worker_writer_sender_ct_args, output_pages_per_shard_y, output_pages_per_shard_x);
+                        }
+
+                        if (fuse_op) {
+                            uint32_t global_num_workers_per_direction = global_num_workers / num_full_send_directions;
+                            fused_op_signaler_sender_workers->emit_all_gather_fused_op_ct_args(worker_writer_sender_ct_args, global_num_workers_per_direction, b);
+                        } else {
+                            // Push dummy args so that kernel doesn't error out at compile time from the lack of args when fuse_op=false
+                            for (uint32_t w = 0; w < experimental::ccl::AllGatherFusedOpSignaler::get_num_ct_args(); ++w) {
+                                worker_writer_sender_ct_args.push_back(static_cast<uint32_t>(0));
+                            }
                         }
                         log_trace(tt::LogOp, "Worker {} SW CT args", b);
                         log_trace(tt::LogOp, "\tall_gather_config.is_output_dram(): {}", all_gather_config.is_output_dram());
@@ -769,6 +789,17 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
                         if (is_sharded) {
                             emit_sharded_tensor_kernel_rt_args(device, output_tensor, worker_writer_sender_rt_args);
+                        }
+
+                        if (fuse_op) {
+                            fused_op_signaler_sender_workers->emit_all_gather_fused_op_rt_args(
+                                worker_writer_sender_rt_args,
+                                is_clockwise_direction ? 0 : 1,
+                                std::make_optional<experimental::ccl::CoreSemPair>(
+                                    {fused_op_signaler->all_gather_worker_cores_noc[0],
+                                    fused_op_signaler->all_gather_worker_sync_semaphore}
+                                )
+                            );
                         }
 
                         log_trace(tt::LogOp, "Worker {} SW rt args", b);

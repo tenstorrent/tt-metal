@@ -57,7 +57,8 @@ void AllGatherFusedOpSignaler::emit_all_gather_fused_op_ct_args(
 void AllGatherFusedOpSignaler::emit_all_gather_fused_op_rt_args(
     std::vector<uint32_t>& rt_args,
 
-    bool all_gather_direction
+    uint32_t all_gather_direction,
+    std::optional<CoreSemPair> start_signal_core_sem_pair
 ) {
     TT_ASSERT(initialized_fused_op && initialized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
 
@@ -76,12 +77,23 @@ void AllGatherFusedOpSignaler::emit_all_gather_fused_op_rt_args(
         rt_args.push_back(static_cast<uint32_t>(core.y));
     }
 
-    // Push the fused op signal semaphore addrs
-    // Direction 0: clockwise
-    // Direction 1: counter-clockwise
+    // Push the fused op signal semaphore addrs. Direction 0: clockwise, Direction 1: counter-clockwise
     rt_args.push_back(
         static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[all_gather_direction])
     );
+
+    // Push the params for the start signal
+    bool wait_for_start_signal = !start_signal_core_sem_pair.has_value() && all_gather_direction == 0;
+    bool send_start_signal = start_signal_core_sem_pair.has_value() && all_gather_direction == 0;
+
+    rt_args.push_back(static_cast<uint32_t>(wait_for_start_signal));
+    rt_args.push_back(static_cast<uint32_t>(send_start_signal));
+
+    if (send_start_signal) {
+        rt_args.push_back(static_cast<uint32_t>(start_signal_core_sem_pair->core.x));
+        rt_args.push_back(static_cast<uint32_t>(start_signal_core_sem_pair->core.y));
+        rt_args.push_back(static_cast<uint32_t>(start_signal_core_sem_pair->sem_id));
+    }
 
 }
 

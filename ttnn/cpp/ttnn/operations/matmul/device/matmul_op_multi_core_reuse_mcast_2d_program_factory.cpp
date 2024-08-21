@@ -540,8 +540,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             fused_op_signaler->emit_matmul_fused_op_ct_args(in1_sender_writer_compile_time_args);
         } else {
             // Push false for fuse_op param
-            in0_sender_compile_time_args.push_back(static_cast<bool>(false));
-            in1_sender_writer_compile_time_args.push_back(static_cast<bool>(false));
+            for (uint32_t fused_param_idx = 0; fused_param_idx < ttnn::experimental::ccl::MatmulFusedOpSignaler::get_num_ct_args(); fused_param_idx++) {
+                in0_sender_compile_time_args.push_back(static_cast<bool>(false));
+                in1_sender_writer_compile_time_args.push_back(static_cast<bool>(false));
+            }
         }
 
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(

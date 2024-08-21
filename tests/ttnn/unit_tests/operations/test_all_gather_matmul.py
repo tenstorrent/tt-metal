@@ -64,7 +64,7 @@ def run_all_gather_matmul_on_t3000_impl(
     core_grid = (8, 4)
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=core_grid,
-        in0_block_w=1,  # how much inner dim you take each time
+        in0_block_w=min(16, hidden_dim // 32 // core_grid[0]),  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
         per_core_M=max(1, input_shape[2] // 32 // core_grid[1]),  # M / TILE_HEIGHT / Grid_Size
@@ -83,11 +83,11 @@ def run_all_gather_matmul_on_t3000_impl(
     # Perform the ops
     for i in range(num_iters):
         # # all_gather
-        # tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
+        # tt_all_gather_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
 
         # # matmul
         # tt_matmul_output = ttnn.matmul(
-        #     tt_out_tensor,
+        #     tt_all_gather_out_tensor,
         #     weight_tt,
         #     memory_config=mem_config,
         #     program_config=program_config,
@@ -107,18 +107,6 @@ def run_all_gather_matmul_on_t3000_impl(
         )
 
         logger.info(f"Done iteration {i}")
-
-    # print("Checking outputs for All Gather")
-    # for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-    #     tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    #     if input_dtype == ttl.tensor.DataType.BFLOAT16:
-    #         eq, output = comp_equal(tt_output_tensor, input_tensor)
-    #     else:
-    #         eq, output = comp_pcc(tt_output_tensor, input_tensor)
-    #     logger.info(f"Output {i}: {output}")
-    #     if not eq:
-    #         logger.error(f"output mismatch for tensor {i}")
-    #     assert eq, f"{i} FAILED: {output}"
 
     print("Checking outputs for All Gather Matmul (All Gather)")
     for i, t in enumerate(ttnn.get_device_tensors(tt_all_gather_out_tensor)):
