@@ -581,6 +581,18 @@ class TtLlamaAttention_galaxy:
 
         return query_layer_ret, key_layer_ret, value_layer
 
+    def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
+        tensor_copy = ttnn.clone(key_or_value_layer)
+        # Get all tensors from multi-device tensor
+        tensors = ttnn.get_device_tensors(tensor_copy)
+        # Get only tensors from specific column chips
+        # Get every 4th tensor starting from user_id // 8
+        single_column_tensors = tensors[user_id // 8 :: 4]
+        # Create multi-device tensor
+        multi_device_tensor = ttnn.aggregate_as_tensor(single_column_tensors)
+
+        return multi_device_tensor
+
     def prefill_attn_mqa(
         self,
         query_layer,
@@ -592,21 +604,30 @@ class TtLlamaAttention_galaxy:
         # FILL K CACHE
         keys = self.layer_past[0]
         # Fill cache expects batch in dim0
-        keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
+        keys_reshaped = ttnn.reshape(keys, [self.batch_size_per_device_group, self.n_local_kv_heads, -1, self.head_dim])
+
+        single_user_key_layer = self.prefill_prepare_tensor_for_kv_cache(key_layer, user_id)
+
+        # Fill cache with multi-device tensor
         ttnn.experimental.tensor.fill_cache(
             keys_reshaped,
-            ttnn.experimental.typecast(key_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            user_id,
+            ttnn.experimental.typecast(single_user_key_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            user_id % 8,
         )
 
         # FILL V CACHE
         values = self.layer_past[1]
         # Fill cache expects batch in dim0
-        values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
+        values_reshaped = ttnn.reshape(
+            values, [self.batch_size_per_device_group, self.n_local_kv_heads, -1, self.head_dim]
+        )
+
+        single_user_value_layer = self.prefill_prepare_tensor_for_kv_cache(value_layer, user_id)
+
         ttnn.experimental.tensor.fill_cache(
             values_reshaped,
-            ttnn.experimental.typecast(value_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            user_id,
+            ttnn.experimental.typecast(single_user_value_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            user_id % 8,
         )
 
         # SDPA
