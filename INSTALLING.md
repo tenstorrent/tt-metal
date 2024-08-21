@@ -30,7 +30,7 @@ Note the current compatability matrix:
 
 ```sh
 sudo apt update
-sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv libhwloc-dev graphviz patchelf
+sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv libhwloc-dev graphviz patchelf cmake=3.16.3-1ubuntu1.20.04.1 ninja-build
 
 wget https://apt.llvm.org/llvm.sh
 chmod u+x llvm.sh
@@ -161,7 +161,7 @@ Please follow the next additional steps if you want to contribute to the codebas
 1. Install dependencies
 
 ```sh
-sudo apt install cmake=3.16.3-1ubuntu1.20.04.1 pandoc libtbb-dev libcapstone-dev pkg-config ninja-build
+sudo apt install pandoc libtbb-dev libcapstone-dev pkg-config
 ```
 
 2. Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
