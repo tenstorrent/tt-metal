@@ -439,7 +439,7 @@ namespace ttnn {
         const std::lock_guard<std::mutex> lock(mutex);
         int counter = graph.size();
         graph.push_back(Vertex{
-            .counter = 0,
+            .counter = counter,
             .name = "capture_end",
             .params = {},
             .connections = {}
