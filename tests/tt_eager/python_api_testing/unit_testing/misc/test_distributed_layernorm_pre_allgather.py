@@ -77,15 +77,11 @@ def ln_pre_allgather_op(xs, n_devices, is_rmsnorm, out_dtpe):
     for d in range(n_devices):
         if is_rmsnorm:
             tt_out.append(
-                ttnn.experimental.operations.primary.rmsnorm_pre_allgather(
-                    xs[d], compute_kernel_config=kernel_config, output_dtype=out_dtpe
-                )
+                ttnn.rms_norm_pre_all_gather(xs[d], compute_kernel_config=kernel_config, output_dtype=out_dtpe)
             )
         else:
             tt_out.append(
-                ttnn.experimental.operations.primary.layernorm_pre_allgather(
-                    xs[d], compute_kernel_config=kernel_config, output_dtype=out_dtpe
-                )
+                ttnn.layer_norm_pre_all_gather(xs[d], compute_kernel_config=kernel_config, output_dtype=out_dtpe)
             )
     return tt_out
 

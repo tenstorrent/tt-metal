@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
+#include "layernorm_post_all_gather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
@@ -19,12 +19,10 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn::operations::normalization {
 
 void LayerNormPostAllGather::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(input_tensors.size() == 2 and optional_input_tensors.size() <= 2, "Must have between 1 to 4 input tensors");
+    TT_FATAL(input_tensors.size() == 2 and optional_input_tensors.size() <= 2, "Must have between 12 to 4 input tensors");
     auto& a = input_tensors.at(0);
     auto& stats = input_tensors.at(1);
     const auto& gamma = optional_input_tensors.at(0);
@@ -60,7 +58,7 @@ void LayerNormPostAllGather::validate(const std::vector<Tensor> &input_tensors, 
         TT_FATAL(a.device() == gamma_tensor.device());
         TT_FATAL(gamma_tensor.get_dtype() == DataType::BFLOAT16);
     }
-    const bool is_layernorm = this->norm_type == LayerNormType::LAYERNORM;
+    const bool is_layernorm = this->norm_type == LayerNormDistributedType::LAYERNORM;
     const bool has_beta = beta.has_value();
     TT_FATAL(is_layernorm == has_beta); // TODO: Is this a necessary check?
 
@@ -83,7 +81,7 @@ void LayerNormPostAllGather::validate(const std::vector<Tensor> &input_tensors, 
     }
 }
 
-std::vector<Shape> LayerNormPostAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::Shape> LayerNormPostAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {input_tensor.get_legacy_shape()};
 }
@@ -108,6 +106,4 @@ operation::ProgramWithCallbacks LayerNormPostAllGather::create_program(
         a, stats, gamma, beta, output_tensor, this->norm_type, this->eps, this->compute_kernel_config
     );
 }
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace ttnn::operations::normalization
