@@ -100,8 +100,7 @@ class UNet(nn.Module):
         # Output layer
         self.output_layer = nn.Conv2d(16 * groups, 1 * groups, kernel_size=1)
 
-    def forward(self, x):
-        # Contracting Path
+    def downblock1(self, x):
         c1 = self.c1(x)
         b1 = self.b1(c1)
         r1 = self.r1(b1)
@@ -109,7 +108,9 @@ class UNet(nn.Module):
         b1_2 = self.b1_2(c1_2)
         r1_2 = self.r1_2(b1_2)
         p1 = self.p1(r1_2)
+        return p1, r1_2
 
+    def downblock2(self, p1):
         c2 = self.c2(p1)
         b2 = self.b2(c2)
         r2 = self.r2(b2)
@@ -117,7 +118,9 @@ class UNet(nn.Module):
         b2_2 = self.b2_2(c2_2)
         r2_2 = self.r2_2(b2_2)
         p2 = self.p2(r2_2)
+        return p2, r2_2
 
+    def downblock3(self, p2):
         c3 = self.c3(p2)
         b3 = self.b3(c3)
         r3 = self.r3(b3)
@@ -125,7 +128,9 @@ class UNet(nn.Module):
         b3_2 = self.b3_2(c3_2)
         r3_2 = self.r3_2(b3_2)
         p3 = self.p3(r3_2)
+        return p3, r3_2
 
+    def downblock4(self, p3):
         c4 = self.c4(p3)
         b4 = self.b4(c4)
         r4 = self.r4(b4)
@@ -133,6 +138,13 @@ class UNet(nn.Module):
         b4_2 = self.b4_2(c4_2)
         r4_2 = self.r4_2(b4_2)
         p4 = self.p4(r4_2)
+        return p4, r4_2
+
+    def forward(self, x):
+        p1, r1_2 = self.downblock1(x)
+        p2, r2_2 = self.downblock2(p1)
+        p3, r3_2 = self.downblock3(p2)
+        p4, r4_2 = self.downblock4(p3)
 
         bnc = self.bnc(p4)
         bnb = self.bnb(bnc)

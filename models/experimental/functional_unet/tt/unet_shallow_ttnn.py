@@ -5,6 +5,7 @@
 import ttnn
 
 from tt_lib import profiler
+from loguru import logger
 
 
 # Unet reshard wrapper

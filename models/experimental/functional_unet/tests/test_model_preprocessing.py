@@ -3,63 +3,60 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 import ttnn
-from typing import Any
-from dataclasses import dataclass
+from loguru import logger
 
-from ttnn.model_preprocessing import infer_ttnn_module_args
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.experimental.functional_unet.unet_utils import create_unet_input_tensors
 from models.experimental.functional_unet.tt import unet_shallow_torch
 from models.experimental.functional_unet.tt import unet_shallow_ttnn2
+from models.experimental.functional_unet.tt import model_preprocessing
 
 
-@dataclass
-class UNetParameters:
-    module: torch.nn.Module
-    parameter: dict
-
-
+@pytest.mark.parametrize("batch", [2])
+@pytest.mark.parametrize("groups", [1])
+@pytest.mark.parametrize("perf_mode", [1])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_model_preprocessing(device):
-    groups = 1
-    batch = 2
-    perf_mode = False
-
-    torch_input_tensor, ttnn_input_tensor = create_unet_input_tensors(device, batch, groups)
-
+def test_unet_downblocks(batch, groups, perf_mode, device):
+    torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=1)
 
-    parameters = infer_ttnn_module_args(model=model, run_model=lambda model: model(torch_input_tensor), device=None)
-    assert parameters is not None
-    for key in parameters.keys():
-        parameters[key].module = getattr(model, key)
-
-    parameters.c1["conv_blocking_and_parallelization_config_override"] = (
-        {"act_block_h": 32} if groups > 1 else ({"act_block_h": 5 * 32})
-    )
-    parameters.c1_2["conv_blocking_and_parallelization_config_override"] = (
-        {"act_block_h": 32} if groups > 1 else ({"act_block_h": 5 * 32})
-    )
-    parameters.c4["conv_blocking_and_parallelization_config_override"] = {"num_cores_nhw": 42} if groups > 1 else None
-    parameters.c4_2["conv_blocking_and_parallelization_config_override"] = {"num_cores_nhw": 42} if groups > 1 else None
-
-    parameters.bnc["conv_blocking_and_parallelization_config_override"] = None
-    parameters.bnc_2["conv_blocking_and_parallelization_config_override"] = None
-
-    parameters.c5["conv_blocking_and_parallelization_config_override"] = {"num_cores_nhw": 42} if groups > 1 else None
-    parameters.c5_2["conv_blocking_and_parallelization_config_override"] = {"num_cores_nhw": 42} if groups > 1 else None
-    parameters.c5_3["conv_blocking_and_parallelization_config_override"] = {"num_cores_nhw": 42} if groups > 1 else None
-
-    parameters.c7["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
-    parameters.c7_2["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c7_3["conv_blocking_and_parallelization_config_override"] = None
-
-    parameters.c8["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
-    parameters.c8_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
-    parameters.c8_3["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
-    parameters.output_layer["conv_blocking_and_parallelization_config_override"] = None
-
+    parameters = model_preprocessing.create_unet_model_parameters(model, torch_input, groups=groups, device=device)
     ttnn_model = unet_shallow_ttnn2.UNet(parameters, device)
-    output_tensor = ttnn_model(device, ttnn_input_tensor, list(torch_input_tensor.shape), perf_mode=perf_mode)
+
+    def check_pcc_conv(torch_tensor, ttnn_tensor, pcc=0.99):
+        B, C, H, W = torch_tensor.shape
+        ttnn_tensor = ttnn.to_torch(ttnn_tensor).reshape(B, H, W, C).permute(0, 3, 1, 2)
+        assert_with_pcc(torch_tensor, ttnn_tensor, pcc)
+
+    def check_pcc_pool(torch_tensor, ttnn_tensor, pcc=0.99):
+        B, C, H, W = torch_tensor.shape
+        ttnn_tensor = ttnn.to_torch(ttnn_tensor).reshape(B, H, W, -1).permute(0, 3, 1, 2)[:, :C, :, :]
+        assert_with_pcc(torch_tensor, ttnn_tensor, pcc)
+
+    logger.info("Verifying UNet downblock1")
+    torch_output, torch_residual = model.downblock1(torch_input)
+    ttnn_output, ttnn_residual = ttnn_model.downblock1(ttnn_input, perf_mode=perf_mode)
+    check_pcc_pool(torch_output, ttnn_output)
+    check_pcc_conv(torch_residual, ttnn_residual)
+
+    logger.info("Verifying UNet downblock2")
+    torch_output, torch_residual = model.downblock2(torch_output)
+    ttnn_output, ttnn_residual = ttnn_model.downblock2(ttnn_output, perf_mode=perf_mode)
+    check_pcc_pool(torch_output, ttnn_output)
+    check_pcc_conv(torch_residual, ttnn_residual)
+
+    logger.info("Verifying UNet downblock3")
+    torch_output, torch_residual = model.downblock3(torch_output)
+    ttnn_output, ttnn_residual = ttnn_model.downblock3(ttnn_output, perf_mode=perf_mode)
+    check_pcc_pool(torch_output, ttnn_output)
+    check_pcc_conv(torch_residual, ttnn_residual)
+
+    logger.info("Verifying UNet downblock4")
+    torch_output, torch_residual = model.downblock4(torch_output)
+    ttnn_output, ttnn_residual = ttnn_model.downblock4(ttnn_output, perf_mode=perf_mode)
+    check_pcc_pool(torch_output, ttnn_output)
+    check_pcc_conv(torch_residual, ttnn_residual)
+
+    # output_tensor = ttnn_model(device, ttnn_input_tensor, list(torch_input_tensor.shape), perf_mode=perf_mode)
