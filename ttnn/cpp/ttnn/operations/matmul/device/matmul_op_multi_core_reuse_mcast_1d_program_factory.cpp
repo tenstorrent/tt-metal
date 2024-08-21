@@ -121,14 +121,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
-        num_cores_to_corerange_set(start_core, num_cores, compute_with_storage_grid_size, row_major);
+        ttnn::operations::core::work_split::num_cores_to_corerange_set(start_core, num_cores, compute_with_storage_grid_size, row_major);
 
     CoreRangeSet in0_mcast_sender_cores =
-        num_cores_to_corerange_set(in0_sender_num_cores, compute_with_storage_grid_size, row_major);
+        ttnn::operations::core::work_split::num_cores_to_corerange_set(in0_sender_num_cores, compute_with_storage_grid_size, row_major);
     CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
 
     CoreRangeSet all_cores_with_work =
-        num_cores_to_corerange_set(num_cores_with_work, compute_with_storage_grid_size, row_major);
+        ttnn::operations::core::work_split::num_cores_to_corerange_set(num_cores_with_work, compute_with_storage_grid_size, row_major);
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
     uint32_t in0_mcast_receiver_num_dests = std::min(
@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             uint32_t core_idx_x = num_cores_with_work % num_cores_c;
             uint32_t core_idx_y = num_cores_with_work / num_cores_c;
             CoreCoord start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            in0_mcast_cores_without_work_and_in_receiver_grid = num_cores_to_corerange_set(
+            in0_mcast_cores_without_work_and_in_receiver_grid = ttnn::operations::core::work_split::num_cores_to_corerange_set(
                 start_core,
                 in0_mcast_cores_without_work_and_in_receiver_grid_num_cores,
                 compute_with_storage_grid_size,
@@ -163,7 +163,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             uint32_t core_idx_x = in0_mcast_receiver_num_dests % num_cores_c;
             uint32_t core_idx_y = in0_mcast_receiver_num_dests / num_cores_c;
             CoreCoord start_core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
-            in0_mcast_cores_without_work_and_not_in_receiver_grid = num_cores_to_corerange_set(
+            in0_mcast_cores_without_work_and_not_in_receiver_grid = ttnn::operations::core::work_split::num_cores_to_corerange_set(
                 start_core,
                 in0_mcast_cores_without_work_and_not_in_receiver_grid_num_cores,
                 compute_with_storage_grid_size,
@@ -184,7 +184,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             auto receiver_start_core = start_core.x != (compute_with_storage_grid_size.x - 1)
                                            ? CoreCoord{start_core.x + 1, start_core.y}
                                            : CoreCoord{start_core.x, start_core.y + 1};
-            in0_mcast_receivers = num_cores_to_corerange_set(
+            in0_mcast_receivers = ttnn::operations::core::work_split::num_cores_to_corerange_set(
                 receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
         }
     }
@@ -927,7 +927,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
-        num_cores_to_corerange_set(start_core, num_cores, compute_with_storage_grid_size, row_major);
+        ttnn::operations::core::work_split::num_cores_to_corerange_set(start_core, num_cores, compute_with_storage_grid_size, row_major);
     CoreRange in1_mcast_receiver_cores_bounding_box = all_cores.bounding_box();
     uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
@@ -938,7 +938,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                                        ? CoreCoord{start_core.x + 1, start_core.y}
                                        : CoreCoord{start_core.x, start_core.y + 1};
         in1_mcast_receivers =
-            num_cores_to_corerange_set(receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
+            ttnn::operations::core::work_split::num_cores_to_corerange_set(receiver_start_core, num_cores - 1, compute_with_storage_grid_size, row_major);
     }
 
     // Mcast args

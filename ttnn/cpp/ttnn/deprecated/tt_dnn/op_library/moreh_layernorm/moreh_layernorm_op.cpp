@@ -115,7 +115,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
          core_group_1,
          core_group_2,
          num_rows_per_core_group_1,
-         num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_outer);
+         num_rows_per_core_group_2] = ttnn::operations::core::work_split::split_work_to_cores(grid, num_outer);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =

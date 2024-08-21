@@ -8,7 +8,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "reshard_program_factory.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/cpp/ttnn/operations/core/work_split/work_split.hpp"
 
 using namespace tt::constants;
 

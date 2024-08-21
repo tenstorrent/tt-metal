@@ -85,7 +85,7 @@ operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, con
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_output_tiles);
+         num_cols_per_core_group_2] = ttnn::operations::core::work_split::split_work_to_cores(grid, num_output_tiles);
     const auto intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32: cb_data_format;
     const auto intermed_cb_single_tile_size = (fp32_dest_acc_en) ? single_tile_size*2: single_tile_size;
 
