@@ -8,7 +8,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/common/constants.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::constants;
@@ -1382,9 +1382,9 @@ inline Tensor conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor
                     bool use_address_map, bool use_fast_reader, bool untilize_out, bool has_bias = false, bool fuse_relu = false, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     TT_ASSERT(b.get_layout() == Layout::TILE); // Weights should already be formatted
     auto padded_a_shape = Shape(std::vector<uint32_t>{a.get_legacy_shape()[0], a.get_legacy_shape()[1], a.get_legacy_shape()[2], round_up(a.get_legacy_shape()[3], 16)});
-    FormatParams input_a_format_params = {.pad_shape=padded_a_shape.value, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
-    FormatParams input_b_format_params = {.pad_shape=b.get_legacy_shape(), .pad_value=0.0, .target_layout=Layout::TILE};
-    FormatParams input_bias_format_params = {};
+    ttnn::operations::experimental::auto_format::FormatParams input_a_format_params = {.pad_shape=padded_a_shape.value, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
+    ttnn::operations::experimental::auto_format::FormatParams input_b_format_params = {.pad_shape=b.get_legacy_shape(), .pad_value=0.0, .target_layout=Layout::TILE};
+    ttnn::operations::experimental::auto_format::FormatParams input_bias_format_params = {};
     if (has_bias) {
         input_bias_format_params = {.pad_shape=bias.value().get_legacy_shape(), .pad_value=0, .target_layout=Layout::TILE};
     }

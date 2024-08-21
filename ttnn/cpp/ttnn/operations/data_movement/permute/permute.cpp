@@ -9,12 +9,13 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 
+using ttnn::operations::experimental::auto_format::AutoFormat;
 
 namespace ttnn::operations::data_movement {
 namespace detail {

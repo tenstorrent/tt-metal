@@ -7,11 +7,11 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;
-
+using ttnn::operations::experimental::auto_format::FormatParams;
 namespace ttnn::operations::data_movement {
 
 
@@ -105,7 +105,7 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
             const std::vector<std::optional<Tensor>> &optional_output_tensors) -> std::vector<Tensor> {
             TT_FATAL(input_tensors.size() > 0, "need 1 or more tensors");
             if (input_tensors.size() == 1) {
-                return {AutoFormat::move_tensor_to_mem_config(input_tensors[0], output_mem_config)};
+                return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(input_tensors[0], output_mem_config)};
             }
             uint32_t ref_rank = input_tensors[0].get_legacy_shape().rank();
             uint32_t normalized_dim = input_tensors[0].get_legacy_shape().get_normalized_index(dim);
@@ -141,7 +141,7 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
                             .pad_value = 0.0,
                             .target_layout = target_layout});
                     } else {
-                        tt::tt_metal::Shape pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+                        tt::tt_metal::Shape pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
                         input_format_params.push_back(
                             FormatParams{.pad_shape = pad_shape, .pad_value = 0.0, .target_layout = target_layout});
                     }

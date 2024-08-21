@@ -11,7 +11,7 @@
 #include "tt_stl/reflection.hpp"
 
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
 

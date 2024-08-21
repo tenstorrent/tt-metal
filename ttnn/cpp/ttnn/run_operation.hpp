@@ -7,11 +7,12 @@
 #include <optional>
 #include <ttnn/tensor/tensor.hpp>
 
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/type_name.hpp"
 
+using ttnn::operations::experimental::auto_format::FormatParams;
 namespace tt::tt_metal {
 
 namespace operation {

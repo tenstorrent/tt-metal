@@ -9,6 +9,7 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 
+using ttnn::operations::experimental::auto_format::AutoFormat;
 namespace ttnn {
 namespace operations::reduction {
 

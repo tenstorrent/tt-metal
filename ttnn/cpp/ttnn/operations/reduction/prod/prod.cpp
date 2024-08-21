@@ -6,13 +6,14 @@
 #include "prod.hpp"
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "tt_numpy/functions.hpp"
 #include "ttnn/types.hpp"
 
+using ttnn::operations::experimental::auto_format::AutoFormat;
 namespace ttnn::operations::reduction {
 
 // Autoformat support
