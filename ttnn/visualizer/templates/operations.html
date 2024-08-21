@@ -1,0 +1,71 @@
+{% extends "report_layout.html" %}
+{% block content %}
+
+<html>
+
+<style>
+    tr:nth-child(even) {
+        background-color: #D6EEEE;
+    }
+
+    tr:nth-child(odd) {
+        background-color: #D0FFBC;
+    }
+
+    #operation_header th {
+        padding: 15px;
+        position: sticky;
+        z-index: 100;
+        top: 20px;
+    }
+
+    th {
+        background-color: white;
+
+    }
+
+    td {
+        padding: 15px;
+    }
+</style>
+
+<body>
+    <ul>
+        <div>
+            <table>
+                <tr id="operation_header">
+                    <th>Id</th>
+                    <th>Name</th>
+                    <th>Stack Trace</th>
+                    <th>Buffer Report</th>
+                    <th>Operation Graph</th>
+                    <th>Matches Golden Locally</th>
+                    <th>Matches Golden Globally</th>
+                    <th>Underlying Operations</th>
+                </tr>
+                {% for operation in operations %}
+                <tr>
+                    <td>{{operation.operation_id}}</td>
+                    <td>{{operation.name}}</td>
+                    <td><a href=" /operation_stack_trace/{{ operation.operation_id}}">Open Stack Trace</a> </td>
+                    <td><a href=" /operation_buffer_report/{{ operation.operation_id}}">Open Buffer Report</a> </td>
+                    <td><a href=" /operation_graph_report/{{ operation.operation_id}}">Open Graph Report</a> </td>
+                    <td bgcolor="{{comparison_color(" local_tensor_comparison_records", operation.operation_id)}}"> <a
+                            href=" /operation_tensor_report/{{ operation.operation_id}}">Open Tensor Report</a> <br> {{
+                                get_actual_pccs("local_tensor_comparison_records", operation.operation_id)}}</td>
+                        <td bgcolor="{{comparison_color(" global_tensor_comparison_records", operation.operation_id)}}"> <a
+                            href=" /operation_tensor_report/{{ operation.operation_id}}">Open Tensor Report</a> <br> {{
+                                get_actual_pccs("global_tensor_comparison_records", operation.operation_id)}}</td>
+                    <td>{{ load_underlying_operations(operation.operation_id) | safe
+                        }}
+                    </td>
+                </tr>
+                {% endfor %}
+                </table>
+                </div>
+    </ul>
+</body>
+
+</html>
+
+{% endblock %}

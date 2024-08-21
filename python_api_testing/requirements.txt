@@ -1,3 +1,0 @@
-torch==1.13.1
-datasets==2.9.0
-torchvision==0.14.1

@@ -1,0 +1,30 @@
+---
+test-list:
+  transpose-wh:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_equal
+    output-file: transpose_wh_parallelization_equal_stresstest_range_32_to_7712.csv
+  transpose-hc:
+    shape:
+      start-shape: [1, 32, 32, 32]
+      end-shape: [1, 7712, 7712, 32]
+      interval: 512
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_equal
+    output-file: transpose_hc_parallelization_equal_stresstest_range_32_to_7712.csv

@@ -1,7 +1,30 @@
 [submodule "src/ckernels/sfpi"]
-	path = src/ckernels/sfpi
-	url = git@github.com:tenstorrent-accel/sfpi-rel.git
-
+	path = tt_metal/third_party/sfpi
+	url = https://github.com/tenstorrent-metal/sfpi-rel-temp.git
 [submodule "third_party/pybind11"]
-	path = third_party/pybind11
+	path = tt_metal/third_party/pybind11
 	url = https://github.com/pybind/pybind11.git
+[submodule "third_party/lfs"]
+	path = tt_metal/third_party/lfs
+	url = https://github.com/tenstorrent-metal/lfs.git
+[submodule "tt_metal/third_party/taskflow"]
+	path = tt_metal/third_party/taskflow
+	url = https://github.com/taskflow/taskflow
+[submodule "tt_metal/third_party/tracy"]
+	path = tt_metal/third_party/tracy
+	url = https://github.com/tenstorrent-metal/tracy.git
+[submodule "tt_metal/third_party/umd"]
+	path = tt_metal/third_party/umd
+	url = https://github.com/tenstorrent/tt-umd.git
+[submodule "tt_metal/third_party/tt_llk_grayskull"]
+	path = tt_metal/third_party/tt_llk_grayskull
+	url = https://github.com/tenstorrent/tt-llk-gs.git
+[submodule "tt_metal/third_party/tt_llk_wormhole_b0"]
+	path = tt_metal/third_party/tt_llk_wormhole_b0
+	url = https://github.com/tenstorrent/tt-llk-wh-b0.git
+[submodule "models/demos/t3000/llama2_70b/reference/llama"]
+	path = models/demos/t3000/llama2_70b/reference/llama
+	url = https://github.com/tenstorrent-metal/llama.git
+[submodule "tt_metal/third_party/tt_llk_blackhole"]
+	path = tt_metal/third_party/tt_llk_blackhole
+	url = https://github.com/tenstorrent/tt-llk-bh.git

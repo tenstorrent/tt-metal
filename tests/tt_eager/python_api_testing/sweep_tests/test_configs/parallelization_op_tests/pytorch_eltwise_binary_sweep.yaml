@@ -1,0 +1,44 @@
+---
+test-list:
+  eltwise-add:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: eltwise_add_parallelization_pcc_stresstest_range_32_to_7712.csv
+  eltwise-sub:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: eltwise_sub_parallelization_pcc_stresstest_range_32_to_7712.csv
+  eltwise-mul:
+    shape:
+      start-shape: [1, 1, 32, 32]
+      end-shape: [1, 1, 7712, 7712]
+      interval: 512
+      num-shapes: 2
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: eltwise_mul_parallelization_pcc_stresstest_range_32_to_7712.csv

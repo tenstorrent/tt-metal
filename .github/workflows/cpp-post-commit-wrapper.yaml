@@ -1,0 +1,28 @@
+name: "[post-commit] C++ tests"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  static-checks:
+    uses: ./.github/workflows/all-static-checks.yaml
+    secrets: inherit
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  cpp-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: grayskull, runner-label: E150 },
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch}}
+      runner-label: ${{ matrix.test-group.runner-label}}

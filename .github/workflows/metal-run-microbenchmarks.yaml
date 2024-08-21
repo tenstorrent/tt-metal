@@ -1,0 +1,48 @@
+name: "metal - Run microbenchmarks"
+
+on:
+  schedule:
+    - cron: "0 1,15 * * *"
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  run-microbenchmarks:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        runner-info: [
+          {arch: grayskull, runs-on: ["arch-grayskull", "E150", "pipeline-perf", "bare-metal", "in-service"]},
+          # Do not run N150 on microbenchmarks for now as we do not have the machines for it
+          # {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "self-reset"]},
+          # N300
+          {arch: wormhole_b0, runs-on: ["arch-wormhole_b0", "N300", "pipeline-perf", "bare-metal", "in-service"]},
+        ]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      # Use BM for microbenchmarks
+      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    environment: dev
+    runs-on: ${{ matrix.runner-info.runs-on }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal and libs
+        run: |
+          ./scripts/build_scripts/build_with_profiler_opt.sh
+          ./create_venv.sh
+      - name: Build tests
+        run: cmake --build build --target tests -- -j`nproc`
+      - name: Run microbenchmark tests
+        timeout-minutes: 90
+        run: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type microbenchmarks
+      - name: Upload microbenchmark report csvs
+        uses: actions/upload-artifact@v4
+        with:
+          name: microbenchmark-report-csv-${{ matrix.runner-info.arch }}
+          path: generated/profiler/.logs

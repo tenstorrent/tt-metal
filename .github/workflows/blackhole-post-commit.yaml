@@ -1,0 +1,80 @@
+name: "Blackhole post-commit tests"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */2 * * *"
+  # Pause this since not enough runners to support every commit to main
+  # push:
+  #  branches: ["main"]
+
+permissions:
+  actions: read
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  static-checks:
+    uses: ./.github/workflows/all-static-checks.yaml
+    secrets: inherit
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      arch: '["blackhole"]'
+#   build-artifact-profiler:
+#     uses: ./.github/workflows/build-artifact.yaml
+#     with:
+#       profiler-build: true
+#     secrets: inherit
+  umd-unit-tests:
+    secrets: inherit
+    uses: ./.github/workflows/umd-unit-tests.yaml
+    with:
+      arch: blackhole
+      runner-label: BH
+  sd-unit-tests:
+    needs: build-artifact
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    secrets: inherit
+    with:
+      arch: blackhole
+      runner-label: BH
+      timeout: 30
+  # fd-unit-tests:
+  #   needs: build-artifact
+  #   uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+  #   secrets: inherit
+  #   with:
+  #     arch: blackhole
+  #     runner-label: BH
+  # FD C++ Unit Tests
+  cpp-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: BH
+      timeout: 60
+
+#   profiler-regression:
+#     needs: build-artifact-profiler
+#     uses: ./.github/workflows/run-profiler-regression.yaml
+#     secrets: inherit
+#   eager-package-main:
+#     uses: ./.github/workflows/eager-package-main.yaml
+#     secrets: inherit
+#   build-docs:
+#     needs: build-artifact
+#     uses: ./.github/workflows/docs-latest-public.yaml
+#     secrets: inherit
+#   build:
+#     uses: ./.github/workflows/build.yaml
+#     secrets: inherit
+  # We used to use this for post-commit, but we didn't have enough runners
+  # to support the number of developers running this workflow
+  # build-and-test-measure-perf:
+  # build-and-test-measure-perf-device:

@@ -1,0 +1,25 @@
+name: "[post-commit] Slow Dispatch unit tests"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+
+  sd-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: grayskull, runner-label: E150 },
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/build-and-unit-tests.yaml
+    with:
+      arch: ${{ matrix.test-group.arch}}
+      runner-label: ${{ matrix.test-group.runner-label}}

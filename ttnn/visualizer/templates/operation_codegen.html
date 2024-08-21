@@ -1,0 +1,14 @@
+{% extends "report_layout.html" %}
+{% block content %}
+
+<head>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/10.0.3/styles/default.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/10.0.3/highlight.min.js"></script>
+    <script>hljs.initHighlightingOnLoad();</script>
+</head>
+
+<body>
+    <pre><code class="python">{{ content }}</code></pre>
+</body>
+
+{% endblock %}

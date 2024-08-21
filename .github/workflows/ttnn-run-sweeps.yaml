@@ -1,0 +1,52 @@
+name: "ttnn - Run sweeps"
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '["grayskull"]'
+    secrets: inherit
+
+  ttnn-sweeps:
+    needs: build-artifact
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        arch: [grayskull]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.arch }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    environment: dev
+    runs-on: ${{ matrix.arch }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run ttnn sweeps
+        timeout-minutes: 30
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ttnn_sweeps
+      - name: Assert that csvs exist in expected ttnn results folder
+        run: ls -hal tests/ttnn/sweep_tests/results/*.csv
+      - name: Upload ttnn sweep reports csvs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ttnn-sweeps-report-csv-${{ matrix.arch }}
+          path: tests/ttnn/sweep_tests/results/*.csv

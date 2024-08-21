@@ -1,0 +1,93 @@
+# Anything using [[#, #]] is logical coordinates (Can be relative)
+# relative index: 0 means first row, -1 means last row of functional grid...
+
+# product name:
+#   num of HW command queues:
+#     core descriptor config
+
+galaxy:
+  1:
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [7, 7]
+
+    storage_cores:
+      []
+
+    dispatch_cores:
+      [[0, 10], [0, 11], [0, 12], [0, 13]]
+
+    dispatch_core_type:
+      "ethernet"
+
+  2:
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [7, 7]
+
+    storage_cores:
+      []
+
+    dispatch_cores:
+      [[0, 10], [0, 11], [0, 12], [0, 13]]
+
+    dispatch_core_type:
+      "ethernet"
+
+nebula_x1:
+  1:
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [7, 7]
+
+    storage_cores:
+      []
+
+    dispatch_cores:
+      [[0, 10], [0, 11], [0, 12], [0, 13]]
+
+    dispatch_core_type:
+      "ethernet"
+
+  2:
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [7, 7]
+
+    storage_cores:
+      []
+
+    dispatch_cores:
+      [[0, 10], [0, 11], [0, 12], [0, 13]]
+
+    dispatch_core_type:
+      "ethernet"
+
+nebula_x2:
+  1:
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [7, 7]
+
+    storage_cores: # Relative to grid of tensix cores
+      []
+
+    dispatch_cores:
+      [[0, 4], [0, 5], [0, 10], [0, 11], [0, 12], [0, 13]]
+
+    dispatch_core_type:
+      "ethernet"
+
+  2:
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [7, 7]
+
+    storage_cores: # Relative to grid of tensix cores
+      []
+
+    dispatch_cores:
+      [[0, 4], [0, 5], [0, 10], [0, 11], [0, 12], [0, 13]]
+
+    dispatch_core_type:
+      "ethernet"

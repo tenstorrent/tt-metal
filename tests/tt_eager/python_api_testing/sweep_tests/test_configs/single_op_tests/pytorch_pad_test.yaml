@@ -1,0 +1,18 @@
+---
+test-list:
+  pad:
+    shape:
+      start-shape: [1, 1, 1, 2]
+      end-shape: [10, 10, 100, 100]
+      interval: [1, 1, 1, 2]
+      num-samples: 1000
+      num-shapes: 1
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    args-gen: gen_pad_args
+    comparison:
+      function: comp_equal
+    output-file: pad_sweep.csv

@@ -1,3 +1,0 @@
-Eltwise binary
-==============
-

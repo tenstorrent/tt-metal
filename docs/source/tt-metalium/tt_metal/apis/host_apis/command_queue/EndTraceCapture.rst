@@ -1,0 +1,4 @@
+EndTraceCapture
+===============
+
+.. doxygenfunction:: EndTraceCapture

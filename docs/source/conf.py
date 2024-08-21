@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 # Configuration file for the Sphinx documentation builder.
 #
 # This file only contains a selection of the most common options. For a full
@@ -10,16 +14,29 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
-# import os
-# import sys
-# sys.path.insert(0, os.path.abspath('.'))
+import os
+import sys
+import collections
 
+sys.path.insert(0, os.path.abspath("."))
+
+MetalSphinxConfig = collections.namedtuple("MetalSphinxConfig", ["fullname", "shortname"])
+
+config_lookup = {
+    "tt-metalium": MetalSphinxConfig(fullname="TT-Metalium", shortname="tt-metalium"),
+    "ttnn": MetalSphinxConfig(fullname="TT-NN", shortname="ttnn"),
+}
+
+if "REQUESTED_DOCS_PKG" not in os.environ:
+    raise Exception("REQUESTED_DOCS_PKG needs to be supplied, either tt-metalium or ttnn")
+
+metal_sphinx_config = config_lookup[os.environ["REQUESTED_DOCS_PKG"]]
 
 # -- Project information -----------------------------------------------------
 
-project = 'TBD'
-copyright = '2023, Pathfinding SW Team'
-author = 'Pathfinding SW Team'
+project = metal_sphinx_config.fullname
+copyright = "Tenstorrent"
+author = "Tenstorrent"
 
 
 # -- General configuration ---------------------------------------------------
@@ -28,11 +45,22 @@ author = 'Pathfinding SW Team'
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx.ext.autosummary',
-    'sphinx.ext.napoleon',
-    'sphinxcontrib.email'
+    "nbsphinx",
+    "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
+    "sphinx.ext.napoleon",
+    "sphinxcontrib.email",
+    "sphinx.ext.mathjax",
+    "breathe",
+    "myst_parser",
 ]
+
+# For markdown and RST files
+source_suffix = {
+    ".rst": "restructuredtext",
+    ".txt": "markdown",
+    ".md": "markdown",
+}
 
 # Napoleon settings
 napoleon_google_docstring = False
@@ -54,7 +82,7 @@ napoleon_attr_annotations = True
 email_automode = True
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = ["_templates"]
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -67,14 +95,21 @@ exclude_patterns = []
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'sphinx_rtd_theme'
-html_logo = 'images/tt_logo.svg'
-html_favicon = 'images/cropped-favicon-32x32.png'
+html_theme = "sphinx_rtd_theme"
+html_logo = "images/tt_logo.svg"
+html_favicon = "images/cropped-favicon-32x32.png"
+html_baseurl = f"/{metal_sphinx_config.shortname}/" + os.environ["DOCS_VERSION"]
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+html_static_path = ["_static"]
+
 
 def setup(app):
-    app.add_css_file('tt_theme.css')
+    app.add_css_file("tt_theme.css")
+
+
+# Breathe configs
+breathe_projects = {"ttmetaldoxygen": "../../doxygen_build/xml/"}
+breathe_default_project = "ttmetaldoxygen"

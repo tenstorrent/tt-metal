@@ -1,0 +1,47 @@
+name: "[internal] metal - Run profiler regression impl"
+
+on:
+  workflow_call:
+
+jobs:
+  profiler-regression:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        runner-info: [
+          # E150
+          {arch: grayskull, runs-on: ["cloud-virtual-machine", "arch-grayskull", "E150", "in-service"], name: E150},
+          # N150
+          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N150", "in-service"], name: N150},
+          # N300
+          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "arch-wormhole_b0", "N300", "in-service"], name: N300},
+        ]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    environment: dev
+    runs-on: ${{ matrix.runner-info.runs-on }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}_profiler
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run profiler regression tests
+        timeout-minutes: 30
+        run: |
+          ./tests/scripts/run_profiler_regressions.sh
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U0593J2RQRZ # Bill Teng

@@ -1,0 +1,18 @@
+---
+test-list:
+  permute:
+    shape:
+      start-shape: [2, 2, 2, 2]
+      end-shape: [64, 64, 64, 64]
+      interval: [2, 2, 2, 2]
+      num-shapes: 1
+      num-samples: 100
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    args-gen: gen_permute_args
+    comparison:
+      function: comp_equal
+    output-file: permute_sweep.csv

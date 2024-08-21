@@ -1,0 +1,87 @@
+{% extends "report_layout.html" %}
+{% block content %}
+
+<html>
+
+<style>
+    tr:nth-child(6n+2) {
+        background-color: #D6EEEE;
+    }
+
+    tr:nth-child(6n+3) {
+        background-color: #D6EEEE;
+    }
+
+    tr:nth-child(6n+4) {
+        background-color: #D6EEEE;
+    }
+
+    tr:nth-child(6n+5) {
+        background-color: #D0FFBC;
+    }
+
+    tr:nth-child(6n+6) {
+        background-color: #D0FFBC;
+    }
+
+    tr:nth-child(6n+7) {
+        background-color: #D0FFBC;
+    }
+
+    table,
+    th,
+    td {
+        border: 1px solid;
+    }
+
+    th {
+        padding: 15px;
+        background-color: white;
+        position: sticky;
+        z-index: 100;
+        top: 20px;
+    }
+
+    td {
+        padding: 15px;
+    }
+</style>
+
+<body>
+    <ul>
+        <div>
+            <table>
+                <tr>
+                    <th>Id</th>
+                    <th>Name</th>
+                    <th>Stack Trace</th>
+                    <th>Buffer Report</th>
+                    <th>Graph Report</th>
+                </tr>
+                {% for operation in operations %}
+                <tr>
+                    <td>{{operation.operation_id}}</td>
+                    <td>{{operation.name}}</td>
+                    <td><a href=" /operation_stack_trace/{{ operation.operation_id}}">Open Stack Trace</a> </td>
+                    <td><a href=" /operation_buffer_report/{{ operation.operation_id}}">Open Buffer Report</a> </td>
+                    <td><a href=" /operation_graph_report/{{ operation.operation_id}}">Open Graph Report</a> </td>
+                </tr>
+                <tr>
+                    <td colspan="100%">
+                        <pre><code class="python">{{ stack_traces[operation.operation_id]|safe }}</code></pre>
+                    </td>
+                </tr>
+                <tr>
+                    <td colspan="100%"> {{ l1_reports[operation.operation_id][0]|safe }} {{
+                        l1_reports[operation.operation_id][1] | safe }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+    </ul>
+</body>
+
+</html>
+
+{% endblock %}

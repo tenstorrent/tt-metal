@@ -1,0 +1,77 @@
+name: "Custom test dispatch"
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - grayskull
+          - wormhole_b0
+      runner-label:
+        required: true
+        type: string
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - CI
+      tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Build with tracy enabled"
+      command:
+        required: true
+        type: string
+      description:
+        type: string
+        default: "Custom test dispatch"
+        required: false
+
+run-name: ${{ inputs.description }}
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '[ "${{ inputs.arch }}" ]'
+      build-type: ${{ inputs.build-type }}
+      tracy: ${{ inputs.tracy }}
+    secrets: inherit
+  test-dispatch:
+    needs: build-artifact
+    timeout-minutes: 1440
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ inputs.arch }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    environment: dev
+    runs-on: ${{ inputs.runner-label }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Ensure weka mount is active
+        timeout-minutes: 3
+        run: |
+          sudo systemctl restart mnt-MLPerf.mount
+          sudo /etc/rc.local
+          ls -al /mnt/MLPerf/bit_error_tests
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name:  TTMetal_build_${{ inputs.arch }}${{ (inputs.tracy && '_profiler') || '' }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ inputs.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run pre/post regression tests in a loop
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          pip install pytest-repeat
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ${{ inputs.command }}

@@ -1,0 +1,48 @@
+---
+test-list:
+  - ttnn-eltwise-signbit:
+      shape:
+        start-shape: [1, 1, 32, 32]
+        end-shape: [6, 12, 256, 256]
+        interval: [1, 1, 32, 32]
+        num-dims: [2, 3, 4]
+        num-shapes: 1
+        num-samples: 64
+        args-sampling-strategy: "all"
+      datagen:
+        function: gen_rand
+        args:
+          low: -100
+          high: 100
+      comparison:
+        function: comp_equal
+      args-gen: gen_dtype_layout_device
+      args:
+        data-layout: ["TILE"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        buffer-type: ["DRAM", "L1"]
+        out-buffer-type: ["DRAM", "L1"]
+      output-file: eltwise_signbit_sweep.csv
+  - ttnn-eltwise-signbit:
+      shape:
+        start-shape: [1, 1, 2, 2]
+        end-shape: [6, 12, 256, 256]
+        interval: [1, 1, 1, 2]
+        num-dims: [2, 3, 4]
+        num-shapes: 1
+        num-samples: 64
+        args-sampling-strategy: "all"
+      datagen:
+        function: gen_rand
+        args:
+          low: -100
+          high: 100
+      comparison:
+        function: comp_equal
+      args-gen: gen_dtype_layout_device
+      args:
+        data-layout: ["ROW_MAJOR"]
+        data-type: ["BFLOAT16"]
+        buffer-type: ["DRAM", "L1"]
+        out-buffer-type: ["DRAM", "L1"]
+      output-file: eltwise_signbit_sweep.csv

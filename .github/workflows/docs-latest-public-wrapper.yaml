@@ -1,0 +1,13 @@
+name: "[post-commit] Docs build and deploy to GitHub pages on main"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  build-docs:
+    needs: build-artifact
+    uses: ./.github/workflows/docs-latest-public.yaml
+    secrets: inherit

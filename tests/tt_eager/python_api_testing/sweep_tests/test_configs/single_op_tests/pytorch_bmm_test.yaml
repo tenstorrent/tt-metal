@@ -1,0 +1,21 @@
+---
+test-list:
+  bmm:
+    shape:
+      start-shape:
+        - [1, 1, 32, 32]
+        - [1, 1, 32, 32]
+      end-shape:
+        - [1, 1, 2048, 2048]
+        - [1, 1, 2048, 2048]
+      interval: 32
+      num-shapes: 2
+      method: matmul
+    datagen:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    comparison:
+      function: comp_pcc
+    output-file: bmm_sweep.csv

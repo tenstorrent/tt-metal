@@ -1,0 +1,65 @@
+
+set(UNIT_TESTS_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/test_free_list_allocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/test_l1_banking_allocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/basic/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/basic/initialize_semaphores.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/basic/runtime_args.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/basic/test_noc.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/basic/test_soc_descriptor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffer/test_banked.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffer/test_buffer_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffer/test_sharded_l1.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffer/test_simple_dram_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffer/test_simple_l1_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_allocation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_creation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_golden_impls.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_reduce.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_single_core_binary_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_single_core_matmul_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_sfpu_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_dropout_sfpu_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_untilize_tilize.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_transpose.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_adjacent.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_contains.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_intersects.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_iterator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_merge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_construct.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_merge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dram/direct.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_apis/test_tilize_untilize.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/multichip/basic_eth_kernels.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/multichip/buffer_movement_kernels.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/multichip/device_cluster_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/multichip/erisc_app_direct_send.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/multichip/ring_gather_kernels.cpp
+)
+
+add_executable(unit_tests ${UNIT_TESTS_SRC} $<TARGET_OBJECTS:unit_tests_common_o>)
+add_executable(unit_tests_galaxy ${CMAKE_CURRENT_SOURCE_DIR}/multichip/galaxy_cluster_api.cpp)
+
+target_link_libraries(unit_tests PRIVATE test_metal_common_libs Boost::smart_ptr)
+target_link_libraries(unit_tests_galaxy PRIVATE test_metal_common_libs Boost::smart_ptr)
+
+target_include_directories(unit_tests PRIVATE
+    ${UMD_HOME}
+    ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/tt_metal
+    ${PROJECT_SOURCE_DIR}/tests
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/common
+    ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer
+)
+target_include_directories(unit_tests_galaxy PRIVATE
+    ${UMD_HOME}
+    ${PROJECT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/tt_metal
+    ${PROJECT_SOURCE_DIR}/tests
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+
+set_target_properties(unit_tests unit_tests_galaxy PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tt_metal)

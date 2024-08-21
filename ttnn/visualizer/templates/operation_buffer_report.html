@@ -1,0 +1,130 @@
+{% extends "report_layout.html" %}
+{% block content %}
+
+<html>
+
+{{ current_summarized_l1_report_script|safe }}
+{{ previous_summarized_l1_report_script|safe }}
+{{ current_detailed_l1_report_script|safe }}
+
+<style>
+    /* Control the left side */
+    #left {
+        width: 50%;
+        float: left;
+    }
+
+    /* Control the right side */
+    #right {
+        width: 50%;
+        float: right;
+    }
+
+    table,
+    th,
+    td {
+        border: 1px solid;
+    }
+
+    th {
+        padding: 15px;
+        position: sticky;
+        z-index: 100;
+        top: 0;
+        background-color: white;
+    }
+
+    td {
+        padding: 15px;
+    }
+
+    .fa {
+
+        color: black;
+        font-size: 48px;
+        padding-right: 15px;
+    }
+
+</style>
+
+<body>
+    <div>
+        <h1>Operation Buffer Report</h1>
+        {%if previous_operation %}
+        <a href=" /operation_buffer_report/{{previous_operation.operation_id}}"><i class="fa fa-arrow-left"></i></a>
+        {% endif %}
+        {%if next_operation %}
+        <a href=" /operation_buffer_report/{{next_operation.operation_id}}"><i class="fa fa-arrow-right"></i></a>
+        <br>
+        {% endif %}
+        <h2>{{ operation.operation_id }}: {{ operation.name }}</h1>
+        <br>
+    </div>
+    <div>
+        <pre><code class="python">{{ stack_trace }}</code></pre>
+        <a href=" /operation_stack_trace/{{ operation.operation_id}}">Open Full Stack Trace</a>
+        <a href=" /operation_graph_report/{{ operation.operation_id}}">Open Graph Report</a>
+    </div>
+    <div id="left">
+        <div>
+            <h2>Previous Summarized L1 Report</h2>
+            {{ previous_summarized_l1_report_div|safe }}
+        </div>
+        <div>
+            <h2>Current Summarized L1 Report</h2>
+            {{ current_summarized_l1_report_div|safe }}
+            </div>
+            <div>
+            <h2>Current Detailed L1 Report</h2>
+            {{ current_detailed_l1_report_div|safe }}
+        </div>
+    </div>
+    <div id="right">
+        <ul>
+            <div>
+                {% if input_tensors %}
+                <table>
+                    <caption>Input Tensors</caption>
+                    <tr>
+                        <th>Index</th>
+                        <th>Address</th>
+                        <th>Buffer Type</th>
+                    </tr>
+                    {% for tensor in input_tensors %}
+                    <tr bgcolor={{get_tensor_color(tensor)}}>
+                        <td>{{loop.index0}}</td>
+                        <td>{{tensor.address}}</td>
+                        <td>{{tensor.buffer_type}}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+                {% endif %}
+
+                <br>
+                <br>
+                <br>
+                {% if output_tensors %}
+                <table>
+                    <caption>Output Tensors</caption>
+                    <tr>
+                        <th>Index</th>
+                        <th>Address</th>
+                        <th>Buffer Type</th>
+                    </tr>
+                    {% for tensor in output_tensors %}
+                    <tr bgcolor={{get_tensor_color(tensor)}}>
+                        <td>{{loop.index0}}</td>
+                        <td>{{tensor.address}}</td>
+                        <td>{{tensor.buffer_type}}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+                {% endif %}
+            </div>
+        </ul>
+    </div>
+</body>
+
+</html>
+
+{% endblock %}

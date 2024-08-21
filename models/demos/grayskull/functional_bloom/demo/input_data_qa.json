@@ -1,0 +1,90 @@
+[
+    {
+        "context" : "All of Chopin's compositions include the piano. Most are for solo piano, though he also wrote two piano concertos, a few chamber pieces, and some songs to Polish lyrics. His keyboard style is highly individual and often technically demanding; his own performances were noted for their nuance and sensitivity. Chopin invented the concept of instrumental ballade. His major piano works also include mazurkas, waltzes, nocturnes, polonaises, études, impromptus, scherzos, preludes and sonatas, some published only after his death. Influences on his compositional style include Polish folk music, the classical tradition of J. S. Bach, Mozart and Schubert, the music of all of whom he admired, as well as the Paris salons where he was a frequent guest. His innovations in style, musical form, and harmony, and his association of music with nationalism, were influential throughout and after the late Romantic period.",
+        "question" : "Chopin's performances were known for what?"
+    },
+    {
+        "context" : "All of Chopin's compositions include the piano. Most are for solo piano, though he also wrote two piano concertos, a few chamber pieces, and some songs to Polish lyrics. His keyboard style is highly individual and often technically demanding; his own performances were noted for their nuance and sensitivity. Chopin invented the concept of instrumental ballade. His major piano works also include mazurkas, waltzes, nocturnes, polonaises, études, impromptus, scherzos, preludes and sonatas, some published only after his death. Influences on his compositional style include Polish folk music, the classical tradition of J. S. Bach, Mozart and Schubert, the music of all of whom he admired, as well as the Paris salons where he was a frequent guest. His innovations in style, musical form, and harmony, and his association of music with nationalism, were influential throughout and after the late Romantic period.",
+        "question" : "What three composers did Chopin take inspiration from?"
+    },
+    {
+        "context" : "In his native Poland, in France, where he composed most of his works, and beyond, Chopin's music, his status as one of music's earliest superstars, his association (if only indirect) with political insurrection, his love life and his early death have made him, in the public consciousness, a leading symbol of the Romantic era. His works remain popular, and he has been the subject of numerous films and biographies of varying degrees of historical accuracy.",
+        "question" : "Chopin is closely associated with what era?"
+    },
+    {
+        "context" : "In his native Poland, in France, where he composed most of his works, and beyond, Chopin's music, his status as one of music's earliest superstars, his association (if only indirect) with political insurrection, his love life and his early death have made him, in the public consciousness, a leading symbol of the Romantic era. His works remain popular, and he has been the subject of numerous films and biographies of varying degrees of historical accuracy.",
+        "question" : "Chopin was indirectly related to what?"
+    },
+    {
+        "context" : "Beyoncé and her mother introduced House of Deréon, a contemporary women's fashion line, in 2005. The concept is inspired by three generations of women in their family, the name paying tribute to Beyoncé's grandmother, Agnèz Deréon, a respected seamstress. According to Tina, the overall style of the line best reflects her and Beyoncé's taste and style. Beyoncé and her mother founded their family's company Beyond Productions, which provides the licensing and brand management for House of Deréon, and its junior collection, Deréon. House of Deréon pieces were exhibited in Destiny's Child's shows and tours, during their Destiny Fulfilled era. The collection features sportswear, denim offerings with fur, outerwear and accessories that include handbags and footwear, and are available at department and specialty stores across the US and Canada.",
+        "question" : "Beyonce's family's company name is what?"
+    },
+    {
+        "context" : "When finally Edward the Confessor returned from his father's refuge in 1041, at the invitation of his half-brother Harthacnut, he brought with him a Norman-educated mind. He also brought many Norman counsellors and fighters, some of whom established an English cavalry force. This concept never really took root, but it is a typical example of the attitudes of Edward. He appointed Robert of Jumièges archbishop of Canterbury and made Ralph the Timid earl of Hereford. He invited his brother-in-law Eustace II, Count of Boulogne to his court in 1051, an event which resulted in the greatest of early conflicts between Saxon and Norman and ultimately resulted in the exile of Earl Godwin of Wessex.",
+        "question" : "Who did Edward make archbishop of Canterbury?"
+    },
+    {
+        "context" : "At Saint Evroul, a tradition of singing had developed and the choir achieved fame in Normandy. Under the Norman abbot Robert de Grantmesnil, several monks of Saint-Evroul fled to southern Italy, where they were patronised by Robert Guiscard and established a Latin monastery at Sant'Eufemia. There they continued the tradition of singing.",
+        "question" : "Where did the monks flee to?"
+    },
+    {
+        "context" : "Closely related fields in theoretical computer science are analysis of algorithms and computability theory. A key distinction between analysis of algorithms and computational complexity theory is that the former is devoted to analyzing the amount of resources needed by a particular algorithm to solve a problem, whereas the latter asks a more general question about all possible algorithms that could be used to solve the same problem. More precisely, it tries to classify problems that can or cannot be solved with appropriately restricted resources. In turn, imposing restrictions on the available resources is what distinguishes computational complexity from computability theory: the latter theory asks what kind of problems can, in principle, be solved algorithmically.",
+        "question" : "What two fields of theoretical computer science closely mirror computational complexity theory?"
+    },
+    {
+        "context" : "As of the 2010 United States Census, southern California has a population of 22,680,010. Despite a reputation for high growth rates, southern California's rate grew less than the state average of 10.0% in the 2000s as California's growth became concentrated in the northern part of the state due to a stronger, tech-oriented economy in the Bay Area and an emerging Greater Sacramento region.",
+        "question" : "What does southern California have a reputation for?"
+    },
+    {
+        "context" : "The efficiency of a Rankine cycle is usually limited by the working fluid. Without the pressure reaching supercritical levels for the working fluid, the temperature range the cycle can operate over is quite small; in steam turbines, turbine entry temperatures are typically 565 °C (the creep limit of stainless steel) and condenser temperatures are around 30 °C. This gives a theoretical Carnot efficiency of about 63% compared with an actual efficiency of 42% for a modern coal-fired power station. This low turbine entry temperature (compared with a gas turbine) is why the Rankine cycle is often used as a bottoming cycle in combined-cycle gas turbine power stations.[citation needed]",
+        "question" : "What is the turbine entry temperature of a steam turbine, in degrees Celsius?"
+    },
+    {
+        "context" : "Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art.",
+        "question" : "What discipline did Winkelmann create?"
+    },
+    {
+        "context" : "The Norman dynasty had a major political, cultural and military impact on medieval Europe and even the Near East. The Normans were famed for their martial spirit and eventually for their Christian piety, becoming exponents of the Catholic orthodoxy into which they assimilated. They adopted the Gallo-Romance language of the Frankish land they settled, their dialect becoming known as Norman, Normaund or Norman French, an important literary language. The Duchy of Normandy, which they formed by treaty with the French crown, was a great fief of medieval France, and under Richard I of Normandy was forged into a cohesive and formidable principality in feudal tenure. The Normans are noted both for their culture, such as their unique Romanesque architecture and musical traditions, and for their significant military accomplishments and innovations. Norman adventurers founded the Kingdom of Sicily under Roger II after conquering southern Italy on the Saracens and Byzantines, and an expedition on behalf of their duke, William the Conqueror, led to the Norman conquest of England at the Battle of Hastings in 1066. Norman cultural and military influence spread from these new European centres to the Crusader states of the Near East, where their prince Bohemond I founded the Principality of Antioch in the Levant, to Scotland and Wales in Great Britain, to Ireland, and to the coasts of north Africa and the Canary Islands.",
+        "question" : "Who ruled the duchy of Normandy"
+    },
+    {
+        "context" : "In many countries, there is a Gender pay gap in favor of males in the labor market. Several factors other than discrimination may contribute to this gap. On average, women are more likely than men to consider factors other than pay when looking for work, and may be less willing to travel or relocate. Thomas Sowell, in his book Knowledge and Decisions, claims that this difference is due to women not taking jobs due to marriage or pregnancy, but income studies show that that does not explain the entire difference. A U.S. Census's report stated that in US once other factors are accounted for there is still a difference in earnings between women and men. The income gap in other countries ranges from 53% in Botswana to -40% in Bahrain.",
+        "question" : "Who does a gender pay gap tend to favor?"
+    },
+    {
+        "context" : "Most of the Huguenot congregations (or individuals) in North America eventually affiliated with other Protestant denominations with more numerous members. The Huguenots adapted quickly and often married outside their immediate French communities, which led to their assimilation. Their descendants in many families continued to use French first names and surnames for their children well into the nineteenth century. Assimilated, the French made numerous contributions to United States economic life, especially as merchants and artisans in the late Colonial and early Federal periods. For example, E.I. du Pont, a former student of Lavoisier, established the Eleutherian gunpowder mills.",
+        "question" : "How were Huguenot settlers assimilated into North American society at large?"
+    },
+    {
+        "context" : "In the laboratory, biostratigraphers analyze rock samples from outcrop and drill cores for the fossils found in them. These fossils help scientists to date the core and to understand the depositional environment in which the rock units formed. Geochronologists precisely date rocks within the stratigraphic section in order to provide better absolute bounds on the timing and rates of deposition. Magnetic stratigraphers look for signs of magnetic reversals in igneous rock units within the drill cores. Other scientists perform stable isotope studies on the rocks to gain information about past climate.",
+        "question" : "Who analyzes rock samples from drill cores in the lab?"
+    },
+    {
+        "context" : "Neutrophils and macrophages are phagocytes that travel throughout the body in pursuit of invading pathogens. Neutrophils are normally found in the bloodstream and are the most abundant type of phagocyte, normally representing 50% to 60% of the total circulating leukocytes. During the acute phase of inflammation, particularly as a result of bacterial infection, neutrophils migrate toward the site of inflammation in a process called chemotaxis, and are usually the first cells to arrive at the scene of infection. Macrophages are versatile cells that reside within tissues and produce a wide array of chemicals including enzymes, complement proteins, and regulatory factors such as interleukin 1. Macrophages also act as scavengers, ridding the body of worn-out cells and other debris, and as antigen-presenting cells that activate the adaptive immune system.",
+        "question" : "What is the process in which neutrophils move towards the site of inflammation called?"
+    },
+    {
+        "context" : "In Afghanistan, the mujahideen's victory against the Soviet Union in the 1980s did not lead to justice and prosperity, due to a vicious and destructive civil war between political and tribal warlords, making Afghanistan one of the poorest countries on earth. In 1992, the Democratic Republic of Afghanistan ruled by communist forces collapsed, and democratic Islamist elements of mujahdeen founded the Islamic State of Afghanistan. In 1996, a more conservative and anti-democratic Islamist movement known as the Taliban rose to power, defeated most of the warlords and took over roughly 80% of Afghanistan.",
+        "question" : "When did the Democratic Republic of Afghanistan collapse?"
+    },
+    {
+        "context" : "The largest single sensory feature is the aboral organ (at the opposite end from the mouth). Its main component is a statocyst, a balance sensor consisting of a statolith, a solid particle supported on four bundles of cilia, called \"balancers\", that sense its orientation. The statocyst is protected by a transparent dome made of long, immobile cilia. A ctenophore does not automatically try to keep the statolith resting equally on all the balancers. Instead its response is determined by the animal's \"mood\", in other words the overall state of the nervous system. For example, if a ctenophore with trailing tentacles captures prey, it will often put some comb rows into reverse, spinning the mouth towards the prey.",
+        "question" : "What is the main component of the aboral organ?"
+    },
+    {
+        "context": "Mark Rothko was a Latvian-born American abstract painter. He is best known for his color field paintings that depicted irregular and painterly rectangular regions of color, which he produced from 1949 to 1970. Although Rothko did not personally subscribe to any one school, he is associated with the American Abstract Expressionist movement of modern art. Originally emigrating to Portland, Oregon, from Russian Empire (Latvia) with his family, Rothko later moved to New York City where his youthful period of artistic production dealt primarily with urban scenery.",
+        "question": "what is Rothko best known for?"
+    },
+    {
+        "context": "Malignant narcissism is a psychological syndrome that could include aspects of narcissistic personality disorder (NPD) alongside a mix of antisocial, paranoid and sadistic personality disorder traits. The importance of malignant narcissism and of projection as a defense mechanism has been confirmed in paranoia, as well as the patient's vulnerability to malignant narcissistic regression. A person with malignant narcissism exhibits paranoia in addition to the symptoms of a Narcissistic Personality Disorder. Because a malignant narcissist's personality cannot tolerate any criticism, being mocked typically causes paranoia.",
+        "question": "What symptoms a malignant narcissist might exhibit in addition to the symptoms of a NPD patient?"
+    },
+    {
+        "context": "The 14 July Revolution, also known as the 1958 Iraqi military coup, was a coup d'état that took place on 14 July 1958 in Iraq which resulted in the toppling of King Faisal II and the overthrow of the Hashemite-led Kingdom of Iraq. The Iraqi Republic established in its wake ended the Hashemite Arab Federation between Iraq and Jordan that had been established just six months earlier. In July 1958, units of the Royal Iraqi Army were dispatched to Jordan in support of King Hussein. A group of Iraqi Free Officers, led by Brigadier Abd al-Karim Qasim and Colonel Abdul Salam Arif, took advantage of the opportunity and instead marched on Baghdad. On 14 July, revolutionary forces seized control of the capital and proclaimed a new republic, headed by a Revolutionary Council.",
+        "question": "When was the Hashemite Arab Federation formed?"
+    },
+    {
+        "context": "The Tasmanian devil is a carnivorous marsupial of the family Dasyuridae. It was formerly present across mainland Australia, but became extinct there around 3,500 years ago. The size of a small dog, the Tasmanian devil became the largest carnivorous marsupial in the world following the extinction of the thylacine in 1936. It is related to quolls, and distantly related to the thylacine. It is characterised by its stocky and muscular build, black fur, pungent odour, extremely loud and disturbing screech, keen sense of smell, and ferocity when feeding. The Tasmanian devil's large head and neck allow it to generate among the strongest bites per unit body mass of any extant predatory land mammal. It hunts prey and scavenges on carrion.",
+        "question": "What allows Tasmanian devil to generate strong bites?"
+    }
+]
