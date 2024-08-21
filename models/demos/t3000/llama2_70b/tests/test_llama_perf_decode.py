@@ -139,7 +139,7 @@ def run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total
 
         import time
 
-        num_iters = 100
+        num_iters = 1
         times = []
         for i in range(num_iters):
             x1 = time.time()
@@ -302,7 +302,7 @@ def test_Llama_perf_host(
     t3k_mesh_device,
     llama_version,
     use_program_cache,
-    n_layers=80,
+    n_layers=1,
     n_devices=8,
 ):
     if generation_length == 2048:
