@@ -60,4 +60,5 @@ class TestRemainder:
             comparison_func,
             device,
             test_args,
+            ttnn_op=True,
         )
