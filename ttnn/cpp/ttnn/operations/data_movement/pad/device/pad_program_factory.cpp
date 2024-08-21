@@ -920,7 +920,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
         // issue more reads before calling barrier
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
-            num_sticks_per_core_read = merge_num_sticks_to_read(num_sticks_per_core, W_bytes, max_read_size);
+            num_sticks_per_core_read = ttnn::operations::core::work_split::merge_num_sticks_to_read(num_sticks_per_core, W_bytes, max_read_size);
             num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
         }
 
@@ -1003,7 +1003,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_padded_per_core_group_1, num_sticks_padded_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_padded_per_core_group_1, num_sticks_padded_per_core_group_2] = ttnn::operations::core::work_split::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
 
     uint32_t src0_cb_index = 0;
     auto num_sticks = num_sticks_padded_per_core_group_1 > num_sticks_padded_per_core_group_2 ? num_sticks_padded_per_core_group_1 : num_sticks_padded_per_core_group_2;

@@ -229,7 +229,7 @@ void TensorModule(py::module& m_tensor) {
 
     m_tensor.def(
         "num_cores_to_core_range_set",
-        &num_cores_to_core_range_set,
+        &ttnn::operations::core::work_split::num_cores_to_core_range_set,
         py::arg().noconvert(),
         py::arg().noconvert(),
         py::arg("row_wise").noconvert() = false,
@@ -342,7 +342,7 @@ void TensorModule(py::module& m_tensor) {
 
     m_tensor.def(
         "num_cores_to_corerange_set",
-        py::overload_cast<const uint32_t, const CoreCoord, const bool>(&num_cores_to_corerange_set),
+        py::overload_cast<const uint32_t, const CoreCoord, const bool>(&ttnn::operations::core::work_split::num_cores_to_corerange_set),
         R"doc(
             Create a CoreRangeSet containing the specified number of cores
         )doc");

@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, Wt);
+         num_cols_per_core_group_2] = ttnn::operations::core::work_split::split_work_to_cores(grid, Wt);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

@@ -7,7 +7,7 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/cb_utils.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/cpp/ttnn/operations/core/work_split/work_split.hpp"
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 
 using namespace tt;
@@ -68,7 +68,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     // We split work based on the number of tiles in the embedding dimension
     auto grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(grid_size, embedding_tiles);
+        ttnn::operations::core::work_split::split_work_to_cores(grid_size, embedding_tiles);
     uint32_t max_tiles_per_core = std::max(num_tiles_per_core_group_1, num_tiles_per_core_group_2);
 
     log_debug(LogType::LogOp, "Embedding hidden size tiles: {}", embedding_tiles);

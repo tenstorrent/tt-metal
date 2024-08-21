@@ -309,7 +309,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
         uint32_t num_new_sticks_per_core_read = 0, num_new_sticks_read_per_barrier = 0, num_new_sticks_per_cb_push = 0;
         if (old_stick_size > new_stick_size) {
             if (num_old_sticks_per_core != 0) {
-                num_old_sticks_per_core_read = merge_num_sticks_to_read(num_old_sticks_per_core, old_stick_size, max_read_size);
+                num_old_sticks_per_core_read = ttnn::operations::core::work_split::merge_num_sticks_to_read(num_old_sticks_per_core, old_stick_size, max_read_size);
                 num_old_sticks_read_per_barrier = num_old_sticks_per_core / num_old_sticks_per_core_read;
                 num_old_sticks_per_cb_push = num_old_sticks_read_per_barrier * old_new_stick_size_ratio;
 
@@ -319,7 +319,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
             }
         } else {
             if (num_new_sticks_per_core != 0) {
-                num_new_sticks_per_core_read = merge_num_sticks_to_read(num_new_sticks_per_core, new_stick_size, max_read_size);
+                num_new_sticks_per_core_read = ttnn::operations::core::work_split::merge_num_sticks_to_read(num_new_sticks_per_core, new_stick_size, max_read_size);
                 num_new_sticks_read_per_barrier = num_new_sticks_per_core / num_new_sticks_per_core_read;
                 num_new_sticks_per_cb_push = num_new_sticks_read_per_barrier;
 
@@ -392,7 +392,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
     bool split_work_by_old_sticks = old_stick_size > new_stick_size;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, old_stick_size > new_stick_size ? num_old_sticks : num_new_sticks);
+        ttnn::operations::core::work_split::split_work_to_cores(compute_with_storage_grid_size, old_stick_size > new_stick_size ? num_old_sticks : num_new_sticks);
 
     uint32_t src0_cb_index = 0;
     auto num_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
@@ -489,7 +489,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
         bool split_work_by_old_sticks = old_stick_size > new_stick_size;
 
         auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, old_stick_size > new_stick_size ? num_old_sticks : num_new_sticks);
+        ttnn::operations::core::work_split::split_work_to_cores(compute_with_storage_grid_size, old_stick_size > new_stick_size ? num_old_sticks : num_new_sticks);
         auto all_runtime_args = get_runtime_args_rm_multi_core(src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, num_sticks_per_core_group_1, core_group_2, num_sticks_per_core_group_2, split_work_by_old_sticks);
 
         for(uint32_t i = 0; i < num_cores_total; i++) {

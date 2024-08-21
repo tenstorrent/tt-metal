@@ -100,7 +100,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     }, compute_kernel_config);
 
-    uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
+    uint32_t block_size = fp32_dest_acc_en ? ttnn::operations::core::work_split::find_max_divisor(Wt, 4) : ttnn::operations::core::work_split::find_max_divisor(Wt, 8);
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -190,7 +190,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = ttnn::operations::core::work_split::split_work_to_cores(grid_size, num_tile_rows, true);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -632,7 +632,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             all_core_grid_size = grid_size;
             none_core_grid_size = grid_size;
         }
-        all_to_all_cores = num_cores_to_corerange_set(start_core, num_cores_all_to_all, all_core_grid_size, row_wise);
+        all_to_all_cores = ttnn::operations::core::work_split::num_cores_to_corerange_set(start_core, num_cores_all_to_all, all_core_grid_size, row_wise);
         if (row_wise) {
             if (use_mcast) {
                 CoreCoord all_start_core;
@@ -650,7 +650,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                         all_start_core = {end_core.x + 1, end_core.y};
                     }
                 }
-                all_to_all_workers_except_sender = num_cores_to_corerange_set(all_start_core, num_cores_all_to_all - 1, all_core_grid_size, row_wise);
+                all_to_all_workers_except_sender = ttnn::operations::core::work_split::num_cores_to_corerange_set(all_start_core, num_cores_all_to_all - 1, all_core_grid_size, row_wise);
             }
             if (num_none_all_to_all_workers > 0) {
                 if (use_two_stage_reduce) {
@@ -667,7 +667,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                     } else {
                         none_start_core = {end_core.x + 1, end_core.y};
                     }
-                    not_all_to_all_workers = num_cores_to_corerange_set(none_start_core, num_none_all_to_all_workers, none_core_grid_size, row_wise);
+                    not_all_to_all_workers = ttnn::operations::core::work_split::num_cores_to_corerange_set(none_start_core, num_none_all_to_all_workers, none_core_grid_size, row_wise);
                 }
             }
         } else {
@@ -687,7 +687,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                         all_start_core = {end_core.x, end_core.y + 1};
                     }
                 }
-                all_to_all_workers_except_sender = num_cores_to_corerange_set(CoreCoord{start_core.x, start_core.y + 1}, num_cores_all_to_all - 1, all_core_grid_size, row_wise);
+                all_to_all_workers_except_sender = ttnn::operations::core::work_split::num_cores_to_corerange_set(CoreCoord{start_core.x, start_core.y + 1}, num_cores_all_to_all - 1, all_core_grid_size, row_wise);
             }
             if (num_none_all_to_all_workers > 0) {
                 if (use_two_stage_reduce) {
@@ -704,7 +704,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                     } else {
                         none_start_core = {end_core.x, end_core.y + 1};
                     }
-                    not_all_to_all_workers = num_cores_to_corerange_set(none_start_core, num_none_all_to_all_workers, none_core_grid_size, row_wise);
+                    not_all_to_all_workers = ttnn::operations::core::work_split::num_cores_to_corerange_set(none_start_core, num_none_all_to_all_workers, none_core_grid_size, row_wise);
                 }
             }
         }

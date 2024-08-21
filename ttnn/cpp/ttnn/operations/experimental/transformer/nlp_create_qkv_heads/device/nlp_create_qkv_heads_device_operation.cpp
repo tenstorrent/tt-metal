@@ -105,11 +105,11 @@ NlpCreateHeadsDeviceOperation::tensor_return_value_t NlpCreateHeadsDeviceOperati
     }
     if (operation_attributes.output_mem_config.is_sharded()) {
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-        auto q_shard_grid = num_cores_to_corerange_set(operation_attributes.num_q_heads, core_grid, true);
+        auto q_shard_grid = ttnn::operations::core::work_split::num_cores_to_corerange_set(operation_attributes.num_q_heads, core_grid, true);
         ShardSpec q_shard_spec{q_shard_grid, {TILE_HEIGHT, operation_attributes.head_dim}};
         auto q_mem_config = operation_attributes.output_mem_config;
         q_mem_config.shard_spec = q_shard_spec;
-        auto kv_shard_grid = num_cores_to_corerange_set(operation_attributes.num_kv_heads, core_grid, true);
+        auto kv_shard_grid = ttnn::operations::core::work_split::num_cores_to_corerange_set(operation_attributes.num_kv_heads, core_grid, true);
         ShardSpec kv_shard_spec{kv_shard_grid, {TILE_HEIGHT, operation_attributes.head_dim}};
         auto kv_mem_config = operation_attributes.output_mem_config;
         kv_mem_config.shard_spec = kv_shard_spec;
