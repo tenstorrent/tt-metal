@@ -7,11 +7,12 @@ import torch
 from models.utility_functions import (
     is_grayskull,
     is_wormhole_b0,
+    _nearest_y,
     pad_and_fold_conv_activation_for_unity_stride,
 )
 from typing import List
 from loguru import logger
-
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 use_new_maxpool2d = True
 
@@ -615,6 +616,7 @@ class resnet50:
             enable_split_reader=True if whb0_and_b16 else False,
             enable_subblock_padding=False,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            reshard_if_not_optimal=False,
         )
         if whb0_and_b16:
             self.conv1_config.act_block_h_override = 64
@@ -665,27 +667,21 @@ class resnet50:
             )
         return layers
 
-    def preprocessing(self, torch_input_tensor, inputs_mesh_mapper=None):
-        resnet50_first_conv_kernel_size = 3
-        resnet50_first_conv_stride = 2
-        input_tensor = pad_and_fold_conv_activation_for_unity_stride(
-            torch_input_tensor,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_kernel_size,
-            resnet50_first_conv_stride,
-            resnet50_first_conv_stride,
-        )
-        input_tensor = torch.permute(input_tensor, (0, 2, 3, 1))
-        input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper)
-        return input_tensor
-
-    def __call__(self, input_tensor, device, ops_parallel_config) -> ttnn.Tensor:
+    def __call__(self, input_tensor, input_shape_unpadded, stride, pad, device, ops_parallel_config) -> ttnn.Tensor:
         return self.run(
-            input_tensor, device, ops_parallel_config, {} if not ops_parallel_config else self.conv_op_cache
+            input_tensor,
+            input_shape_unpadded,
+            stride,
+            pad,
+            device,
+            ops_parallel_config,
+            {} if not ops_parallel_config else self.conv_op_cache,
         )
 
     ## merged runs (first and optimized)
-    def run(self, input_tensor, device, ops_parallel_config, conv_op_cache={}) -> ttnn.Tensor:
+    def run(
+        self, input_tensor, input_shape_unpadded, stride, pad, device, ops_parallel_config, conv_op_cache={}
+    ) -> ttnn.Tensor:
         is_first_run = False
         if not ops_parallel_config:
             is_first_run = True
@@ -693,8 +689,50 @@ class resnet50:
         else:
             logger.debug(f"==== Optimized run")
 
+        # fold on device
+        TILE_HEIGHT = 32
+        stride_h = stride
+        stride_w = stride
+        n, c, h, w = input_shape_unpadded
+        h += pad * 2
+        w += pad * 2
+        C = _nearest_y(c, 4)
+        num_cores_x = 8
+        num_cores_y = 8
+        num_cores = num_cores_x * num_cores_y
+        # override the shard height to make it consistent with first conv
+        output_tensor_height = n * (h // stride_h) * (w // stride_w)
+        output_tensor_width = C * (stride_h * stride_w)
+        num_cores_mul_tile_h = num_cores * TILE_HEIGHT
+        output_tensor_height_padded = num_cores_mul_tile_h * (
+            (output_tensor_height + num_cores_mul_tile_h - 1) // num_cores_mul_tile_h
+        )
+        override_shard_height = output_tensor_height_padded // num_cores
+
+        logger.debug(f"==== fold on device")
+
+        # run fold
+        fold_output_tensor = ttnn.fold(
+            input_tensor,
+            stride_h,
+            stride_w,
+            use_transpose_as_fold=True,
+            output_shape=(n, h // stride_h, w // stride_w, C * (stride_h * stride_w)),
+            pad_c=C - c,
+            pad_h=0,
+            pad_w=0,
+            grid_size=(num_cores_x, num_cores_y),
+            override_shard_height=override_shard_height,
+        )
+        fold_output_tensor = ttnn.reshape(fold_output_tensor, (1, 1, output_tensor_height, output_tensor_width))
+
+        ttnn.deallocate(input_tensor)
+
+        logger.debug(f"==== first conv")
+
+        # first conv
         x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
-            input_tensor=input_tensor,
+            input_tensor=fold_output_tensor,
             weight_tensor=self.conv1_weight_tensor,
             in_channels=self.conv1_input_channels,
             out_channels=self.conv1_output_channels,

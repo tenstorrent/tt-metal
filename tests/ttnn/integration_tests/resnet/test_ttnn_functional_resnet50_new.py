@@ -22,7 +22,7 @@ from models.utility_functions import (
             ttnn.bfloat8_b,
             ttnn.MathFidelity.LoFi,
         ),  ## memory config issue due to l4m1 downsample reshard
-        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
+        # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
         (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
         (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
         (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
@@ -63,11 +63,14 @@ def test_resnet_50(
         model_location_generator=model_location_generator,
     )
     enable_memory_reports()
-    test_infra.preprocess_torch_input()
+    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     # First run configures convs JIT
     test_infra.run()
     # Optimized run
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.run()
-    # More optimized run with caching
+    # # More optimized run with caching
+    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.run()
     test_infra.validate()

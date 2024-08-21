@@ -11,6 +11,10 @@ import ttnn
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
+from models.utility_functions import (
+    divup,
+    _nearest_y,
+)
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
@@ -180,6 +184,9 @@ class ResNet50TestInfra:
         self.weights_mesh_mapper = weights_mesh_mapper
         self.output_mesh_composer = output_mesh_composer
 
+        self.resnet50_first_conv_kernel_size = 3
+        self.resnet50_first_conv_stride = 2
+
         torch_model = (
             load_resnet50_model(model_location_generator).eval()
             if use_pretrained_weight
@@ -223,14 +230,62 @@ class ResNet50TestInfra:
         )
         self.ops_parallel_config = {}
 
-    def preprocess_torch_input(self, torch_input_tensor=None):
+    def setup_l1_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
+        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-        self.input_tensor = self.ttnn_resnet50_model.preprocessing(torch_input_tensor, self.inputs_mesh_mapper)
+        pad_h = self.resnet50_first_conv_kernel_size
+        pad_w = self.resnet50_first_conv_kernel_size
+        w = torch_input_tensor.shape[-1]
+        pad_w_right = (w + 2 * pad_w + 31) // 32 * 32 - (w + pad_w)
+        torch_input_tensor_padded = torch.nn.functional.pad(torch_input_tensor, (pad_w, pad_w_right, pad_h, pad_h))
+        if num_devices > 1:
+            n, c, h, w = torch_input_tensor_padded.shape
+            n_per_device = n // num_devices
+            torch_input_tensor_padded = torch_input_tensor_padded.reshape(num_devices, n_per_device, c, h, w)
+        # sharded mem config for fold input
+        input_mem_config = ttnn.create_sharded_memory_config(
+            torch_input_tensor_padded.shape,
+            core_grid=ttnn.CoreGrid(y=8, x=6),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        tt_inputs_host = ttnn.from_torch(
+            torch_input_tensor_padded, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mesh_mapper
+        )
+        return tt_inputs_host, input_mem_config
 
-    def run(self, torch_input_tensor=None):
-        # Note: currently not including the time to flip from torch to ttnn tensors.
-        # self.preprocess_torch_input(torch_input_tensor)
-        self.output_tensor = self.ttnn_resnet50_model(self.input_tensor, self.device, self.ops_parallel_config)
+    def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
+        torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
+        tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(
+            device, torch_input_tensor, mesh_mapper=mesh_mapper, mesh_composer=mesh_composer
+        )
+        dram_grid_size = device.dram_grid_size()
+        dram_shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
+            ),
+            [
+                divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], dram_grid_size.x),
+                tt_inputs_host.shape[-1],
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        )
+        sharded_mem_config_DRAM = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
+        )
+
+        return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
+
+    def run(self, tt_input_tensor=None):
+        self.output_tensor = self.ttnn_resnet50_model(
+            self.input_tensor,
+            self.torch_input_tensor.shape,
+            self.resnet50_first_conv_stride,
+            self.resnet50_first_conv_kernel_size,
+            self.device,
+            self.ops_parallel_config,
+        )
         return self.output_tensor
 
     def validate(self, output_tensor=None):

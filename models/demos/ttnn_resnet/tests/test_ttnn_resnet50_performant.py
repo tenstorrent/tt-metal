@@ -86,10 +86,7 @@ def test_run_resnet50_inference(
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
-    test_infra.preprocess_torch_input()
-    tt_inputs_host, input_mem_config = setup_l1_sharded_input(
-        device, test_infra.input_tensor, test_infra.ttnn_resnet50_model
-    )
+    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
 
     # First run configures convs JIT
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
@@ -141,10 +138,7 @@ def test_run_resnet50_trace_inference(
         final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
-    test_infra.preprocess_torch_input()
-    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
-        device, test_infra.input_tensor, test_infra.ttnn_resnet50_model
-    )
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
     # First run configures convs JIT
@@ -199,10 +193,7 @@ def test_run_resnet50_2cqs_inference(
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
-    test_infra.preprocess_torch_input()
-    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
-        device, test_infra.input_tensor, test_infra.ttnn_resnet50_model
-    )
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
     op_event = ttnn.create_event(device)
     write_event = ttnn.create_event(device)
@@ -284,10 +275,7 @@ def test_run_resnet50_trace_2cqs_inference(
         final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
-    test_infra.preprocess_torch_input()
-    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = setup_dram_sharded_input(
-        device, test_infra.input_tensor, test_infra.ttnn_resnet50_model
-    )
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
     op_event = ttnn.create_event(device)
     write_event = ttnn.create_event(device)
@@ -300,6 +288,9 @@ def test_run_resnet50_trace_2cqs_inference(
     ttnn.record_event(1, write_event)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
+    shape = test_infra.input_tensor.shape
+    dtype = test_infra.input_tensor.dtype
+    layout = test_infra.input_tensor.layout
     ttnn.record_event(0, op_event)
     test_infra.run()
     test_infra.validate()
@@ -324,15 +315,15 @@ def test_run_resnet50_trace_2cqs_inference(
     ttnn.record_event(0, op_event)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
-    test_infra.input_tensor = ttnn.allocate_tensor_on_device(
-        test_infra.input_tensor.shape,
-        test_infra.input_tensor.dtype,
-        test_infra.input_tensor.layout,
+    input_tensor = ttnn.allocate_tensor_on_device(
+        shape,
+        dtype,
+        layout,
         device,
         input_mem_config,
     )
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert first_out_addr == test_infra.input_tensor.buffer_address()
+    assert first_out_addr == input_tensor.buffer_address()
     test_infra.validate()
 
     # More optimized run with caching
@@ -345,7 +336,7 @@ def test_run_resnet50_trace_2cqs_inference(
         ttnn.record_event(1, write_event)
         ttnn.wait_for_event(0, write_event)
         # TODO: Add in place support to ttnn to_memory_config
-        test_infra.input_tensor = ttnn.reshard(tt_image_res, input_mem_config, test_infra.input_tensor)
+        input_tensor = ttnn.reshard(tt_image_res, input_mem_config, input_tensor)
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(ttnn.from_device(test_infra.output_tensor, blocking=False))
