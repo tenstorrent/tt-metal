@@ -141,6 +141,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                 p = None
                 tt_smi_util.run_tt_smi(ARCH)
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
+                result["e2e_perf"] = None
         result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         result["host"] = get_hostname()
         result["user"] = get_username()
