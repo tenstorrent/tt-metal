@@ -1021,7 +1021,7 @@ op_map = {
     "backward-unary-remainder": {
         "tt_op": ttnn_ops.unary_remainder_bw,
         "pytorch_op": pytorch_ops.unary_remainder_bw,
-    }
+    },
     "complex-eltwise-add": {
         "tt_op": ttnn_ops.complex_eltwise_add,
         "pytorch_op": pytorch_ops.add,

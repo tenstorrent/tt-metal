@@ -4808,7 +4808,6 @@ def unary_remainder(
     output_mem_config,
     **kwargs,
 ):
-    
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.remainder(t0, scalar, memory_config=output_mem_config)
 
