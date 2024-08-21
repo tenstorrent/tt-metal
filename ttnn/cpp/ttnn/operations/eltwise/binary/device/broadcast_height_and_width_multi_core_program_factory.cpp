@@ -93,7 +93,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
     }
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles, row_major);
+        ttnn::operations::core::work_split::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
@@ -308,7 +308,7 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
         row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
     }
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles, row_major);
+        ttnn::operations::core::work_split::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 

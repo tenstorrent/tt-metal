@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         row_major = true;
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
-            split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
+            ttnn::operations::core::work_split::split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
         num_input_tiles = 2 * Wt;
         num_output_tiles = num_input_tiles;
     }
