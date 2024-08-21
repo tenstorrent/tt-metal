@@ -6,6 +6,7 @@ import ttnn
 import math
 from loguru import logger
 from pathlib import Path
+from transformers import FalconConfig
 from models.utility_functions import is_grayskull, is_wormhole_b0
 
 OP_KEYS = (
@@ -77,6 +78,8 @@ NO_DTYPE = (
 )
 
 ACCEPTABLE_MODEL_CONFIG_STRS = ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED")
+
+model_config_entries = FalconConfig.from_pretrained("tiiuae/falcon-7b-instruct")
 
 
 def find_subblock_w(block_w, max_value):
@@ -204,7 +207,7 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
         ln_block_sharded_mem_config_decode,
         ln_block_sharded_prog_config_decode,
         ln_compute_kernel_config_decode,
-    ) = get_ln_block_sharded_config(decode_batch_size, model_config_entries["hidden_size"])
+    ) = get_ln_block_sharded_config(decode_batch_size, model_config_entries.hidden_size)
 
     model_config["LAYERNORM_BLOCK_SHARDED_MEM_CFG"] = {}
     model_config["LAYERNORM_BLOCK_SHARDED_PROG_CFG"] = {}
@@ -429,42 +432,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         ln_block_sharded_mem_config_prefill,
         ln_block_sharded_prog_config_prefill,
         ln_compute_kernel_config_prefill,
-    ) = get_ln_block_sharded_config(seq_len, model_config_entries["hidden_size"])
+    ) = get_ln_block_sharded_config(seq_len, model_config_entries.hidden_size)
     model_config["LAYERNORM_BLOCK_SHARDED_MEM_CFG"][seq_len] = ln_block_sharded_mem_config_prefill
     model_config["LAYERNORM_BLOCK_SHARDED_PROG_CFG"][seq_len] = ln_block_sharded_prog_config_prefill
     model_config["LAYERNORM_BLOCK_SHARDED_COMPUTE_KERNEL_CONFIG"][seq_len] = ln_compute_kernel_config_prefill
-
-
-model_config_entries = {
-    "_name_or_path": "tiiuae/falcon-7b-instruct",
-    "alibi": False,
-    "apply_residual_connection_post_layernorm": False,
-    "architectures": ["FalconForCausalLM"],
-    "attention_dropout": 0.0,
-    "auto_map": {
-        "AutoConfig": "configuration_falcon.FalconConfig",
-        "AutoModel": "modeling_falcon.FalconModel",
-        "AutoModelForCausalLM": "modeling_falcon.FalconForCausalLM",
-        "AutoModelForQuestionAnswering": "modeling_falcon.FalconForQuestionAnswering",
-        "AutoModelForSequenceClassification": "modeling_falcon.FalconForSequenceClassification",
-        "AutoModelForTokenClassification": "modeling_falcon.FalconForTokenClassification",
-    },
-    "bias": False,
-    "bos_token_id": 11,
-    "eos_token_id": 11,
-    "hidden_dropout": 0.0,
-    "hidden_size": 4544,
-    "initializer_range": 0.02,
-    "layer_norm_epsilon": 1e-05,
-    "model_type": "falcon",
-    "multi_query": True,
-    "new_decoder_architecture": False,
-    "num_attention_heads": 71,
-    "num_hidden_layers": 32,
-    "num_kv_heads": 71,
-    "parallel_attn": True,
-    "torch_dtype": "bfloat16",
-    "transformers_version": "4.28.1",
-    "use_cache": True,
-    "vocab_size": 65024,
-}
