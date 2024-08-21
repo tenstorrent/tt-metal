@@ -72,6 +72,8 @@ option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 
 option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
 
+option(ENABLE_LIBCXX "Enable using libc++" ON)
+
 
 option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace)" OFF)
 if(ENABLE_BUILD_TIME_TRACE)
@@ -123,7 +125,7 @@ add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd)
 #   in order to propogate to the rest of tt_metal, tt_eager, etc.
 ############################################################################################################################
 add_library(stdlib INTERFACE)
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
     find_library(LIBC++ c++)
     find_library(LIBC++ABI c++abi)
     if(NOT LIBC++ OR NOT LIBC++ABI)
@@ -134,6 +136,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(stdlib INTERFACE -stdlib=libc++)
 else()
     target_link_libraries(stdlib INTERFACE stdc++)
+    target_compile_options(stdlib INTERFACE -fsized-deallocation)
 endif()
 
 add_library(metal_common_libs INTERFACE)
