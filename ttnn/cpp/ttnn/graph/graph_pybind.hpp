@@ -5,7 +5,7 @@
 #pragma once
 #include "pybind11/pybind_fwd.hpp"
 
-namespace ttnn {
+namespace ttnn::graph {
 
 void py_graph_module(pybind11::module& m);
 

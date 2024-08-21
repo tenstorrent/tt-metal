@@ -7,7 +7,7 @@
 #include "graph_processor.hpp"
 
 
-namespace ttnn {
+namespace ttnn::graph {
 
 namespace py = pybind11;
 using IGraphProcessor = tt::tt_metal::IGraphProcessor;

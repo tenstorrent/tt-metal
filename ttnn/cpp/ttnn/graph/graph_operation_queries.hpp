@@ -14,31 +14,31 @@ namespace ttnn::graph {
 
 template <class Callable>
 auto query_trace(Callable&& callable) {
-    ttnn::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
     {
         auto output = callable();
     }
-    auto json_trace = ttnn::GraphProcessor::end_graph_capture();
+    auto json_trace = GraphProcessor::end_graph_capture();
     return json_trace;
 }
 
 template <class Callable>
 auto query_peak_L1_memory_usage(Callable&& callable) {
-    ttnn::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
     {
         auto output = callable();
     }
-    auto json_trace = ttnn::GraphProcessor::end_graph_capture();
+    auto json_trace = GraphProcessor::end_graph_capture();
     return graph::extract_peak_L1_memory_usage(json_trace);
 }
 
 template <class Callable>
 auto query_output_info(Callable&& callable) {
-    ttnn::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
     {
         auto output = callable();
     }
-    auto json_trace = ttnn::GraphProcessor::end_graph_capture();
+    auto json_trace = GraphProcessor::end_graph_capture();
     return graph::extract_output_info(json_trace);
 }
 
