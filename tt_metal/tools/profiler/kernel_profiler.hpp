@@ -83,6 +83,12 @@ namespace kernel_profiler{
         return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
     }
 
+    enum class ProgramNocCoord
+    {
+        RESTORE_NOC_COORD,
+        OVERWRITE_NOC_COORD
+    };
+
 #define SrcLocNameToHash( name ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME( name ));
 
     __attribute__((noinline)) void init_profiler(uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0)
@@ -429,7 +435,7 @@ namespace kernel_profiler{
     }
 
 
-    template<uint32_t timer_id, bool dispatch = false>
+    template<uint32_t timer_id, bool dispatch = false, ProgramNocCoord program_noc_coord = ProgramNocCoord::OVERWRITE_NOC_COORD>
     struct profileScope
     {
         bool start_marked = false;
@@ -468,7 +474,17 @@ namespace kernel_profiler{
             {
                 if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE)))
                 {
+                    uint32_t nocCoord;
+                    if constexpr (program_noc_coord == ProgramNocCoord::RESTORE_NOC_COORD)
+                    {
+                        nocCoord = NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE);
+                    }
                     quick_push();
+                    if constexpr (program_noc_coord == ProgramNocCoord::RESTORE_NOC_COORD))
+                    {
+                        while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
+                        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE, nocCoord);
+                    }
                 }
             }
         }
@@ -525,9 +541,13 @@ namespace kernel_profiler{
 
 #if (defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_NCRISC) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
 
-#define DeviceZoneScopedND( name , nocBuffer, nocIndex ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScope<hash,true> zone = kernel_profiler::profileScope<hash,true>(); kernel_profiler::nocWriteBuffer = nocBuffer; kernel_profiler::nocWriteIndex = &nocIndex;
+#define DeviceZoneScopedNDC( name , nocBuffer, nocIndex, programNocCoord ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScope<hash,true> zone = kernel_profiler::profileScope<hash,true,programNocCoord>(); kernel_profiler::nocWriteBuffer = nocBuffer; kernel_profiler::nocWriteIndex = &nocIndex;
+
+#define DeviceZoneScopedND( name , nocBuffer, nocIndex ) DeviceZoneScopedNDC( name , nocBuffer, nocIndex, ProgramNocCoord::OVERWRITE_NOC_COORD )
 
 #else
+
+#define DeviceZoneScopedNDC( name , nocBuffer, nocIndex, programNocCoord )
 
 #define DeviceZoneScopedND( name , nocBuffer, nocIndex )
 
@@ -554,6 +574,8 @@ namespace kernel_profiler{
 #define DeviceZoneScopedSumN1( name )
 
 #define DeviceZoneScopedSumN2( name )
+
+#define DeviceZoneScopedNDC( name , nocBuffer, nocIndex, programNocCoord )
 
 #define DeviceZoneScopedND( name , nocBuffer, nocIndex )
 
