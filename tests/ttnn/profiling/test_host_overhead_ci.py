@@ -40,7 +40,7 @@ def test_host_overhead_ci():
 
         elif float(measured_durations[op]) > measuring_tolerance * float(reference_durations[op]):
             failed_ops.append(
-                f"{op}: measured duration {measured_durations[op]}ms, reference duraion {reference_durations[op]}ms"
+                f"{op}: measured duration {measured_durations[op]}ms, reference duration {reference_durations[op]}ms"
             )
 
     for failed_op in failed_ops:
