@@ -404,16 +404,16 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
             iteration_time = time() - iteration_time_start
             tokens_per_second_per_user = 1 / iteration_time
             # Print out generated outputs for each user at the end of every iteration
-            # if not is_ci_env:
-            #     if len(user_input) == 1:
-            #         logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-            #     else:
-            #         for user in range(batch_size):
-            #             text = "".join(tokenizer.decode(all_outputs[user]))
-            #             if len(text) > 100:
-            #                 text = "..." + text[-97:]
-            #             text = text.replace("\n", " ")
-            #             logger.info("[User {}] {}".format(user, text))
+            if not is_ci_env:
+                if len(user_input) == 1:
+                    logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+                else:
+                    for user in range(batch_size):
+                        text = "".join(tokenizer.decode(all_outputs[user]))
+                        if len(text) > 100:
+                            text = "..." + text[-97:]
+                        text = text.replace("\n", " ")
+                        logger.info("[User {}] {}".format(user, text))
 
             # Always print perf at every iteration
             logger.info(
