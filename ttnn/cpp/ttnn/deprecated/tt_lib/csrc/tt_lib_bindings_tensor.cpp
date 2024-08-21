@@ -285,30 +285,6 @@ void TensorModule(py::module& m_tensor) {
         m_tensor, "borrowed_buffer_for_bfloat16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<borrowed_buffer::Buffer<bfloat16>, bfloat16>(py_borrowed_buffer_for_bfloat16_t);
 
-    py::class_<ttnn::DeviceComputeKernelConfig>(m_tensor, "DeviceComputeKernelConfig");
-
-    py::class_<ttnn::GrayskullComputeKernelConfig>(m_tensor, "GrayskullComputeKernelConfig")
-        .def(
-            py::init<MathFidelity, bool>(),
-            py::kw_only(),
-            py::arg("math_fidelity") = MathFidelity::Invalid,
-            py::arg("math_approx_mode") = true)
-        .def_readwrite("math_fidelity", &ttnn::GrayskullComputeKernelConfig::math_fidelity)
-        .def_readwrite("math_approx_mode", &ttnn::GrayskullComputeKernelConfig::math_approx_mode);
-
-    py::class_<ttnn::WormholeComputeKernelConfig>(m_tensor, "WormholeComputeKernelConfig")
-        .def(
-            py::init<MathFidelity, bool, bool, bool>(),
-            py::kw_only(),
-            py::arg("math_fidelity") = MathFidelity::Invalid,
-            py::arg("math_approx_mode") = true,
-            py::arg("fp32_dest_acc_en") = false,
-            py::arg("packer_l1_acc") = false)
-        .def_readwrite("math_fidelity", &ttnn::WormholeComputeKernelConfig::math_fidelity)
-        .def_readwrite("math_approx_mode", &ttnn::WormholeComputeKernelConfig::math_approx_mode)
-        .def_readwrite("fp32_dest_acc_en", &ttnn::WormholeComputeKernelConfig::fp32_dest_acc_en)
-        .def_readwrite("packer_l1_acc", &ttnn::WormholeComputeKernelConfig::packer_l1_acc);
-
     // TMs
     m_tensor.def(
         "convert_conv_weight_tensor_to_tiled_layout",
