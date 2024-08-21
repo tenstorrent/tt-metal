@@ -256,6 +256,12 @@ constexpr auto logical_and_ = ttnn::register_operation_with_auto_launch_op<
 constexpr auto logical_or_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logical_or_",
     operations::binary::InplaceLogicalBinary<operations::binary::BinaryOpType::LOGICAL_OR>>();
+constexpr auto eq_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::eq_",
+    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::EQ>>();
+constexpr auto ne_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::ne_",
+    operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::NE>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor &input_tensor_a, InputBType scalar) {

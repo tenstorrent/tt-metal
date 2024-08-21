@@ -421,4 +421,22 @@ def _golden_function_ge_(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn._ttnn.operations.binary.ge_, golden_function=_golden_function_ge_)
 
 
+def _golden_function_eq_(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return input_tensor_a.eq_(input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.eq_, golden_function=_golden_function_eq_)
+
+
+def _golden_function_ne_(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return input_tensor_a.ne_(input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn._ttnn.operations.binary.ne_, golden_function=_golden_function_ne_)
+
+
 __all__ = []
