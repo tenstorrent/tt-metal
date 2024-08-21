@@ -130,7 +130,7 @@ jobs:
       - uses: ./.github/actions/retry-command
         with:
           timeout-seconds: 100
-          max-retries: 3
+          max-retries: 10
           backoff-seconds: 60
           command: ./.github/scripts/cloud_utils/mount_weka.sh
       - name: Set up dyanmic env vars for build

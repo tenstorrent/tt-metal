@@ -266,8 +266,8 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     )
 
 
+@pytest.mark.timeout(600)
 @skip_for_grayskull("Only works for Wormhole")
-@skip_for_wormhole_b0(reason_str="#11667: Hangs")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
