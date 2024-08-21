@@ -123,42 +123,46 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace){
 
 size_t extract_output_L1_size(const nlohmann::json& trace)
 {
-    auto find_function_end_node = [](const auto& trace){
+    // Lambda to find the last 'function_end' node
+    auto find_function_end_node = [](const auto& trace) -> const nlohmann::json& {
         for(int i = trace.size() - 1; i >= 0; --i) {
             const auto& v = trace[i];
             if (v["name"] == "function_end") {
                 return v;
             }
         }
-        TT_ASSERT(false, "function_end node not found");
+        throw std::runtime_error("function_end node not found");
     };
-    const auto function_end_node = find_function_end_node(trace);
 
+    const auto& function_end_node = find_function_end_node(trace);
 
-    auto extract_output_tensors = [](const auto& function_end_node){
-        std::unordered_set<uint32_t> output
-        for(auto output_id : function_end_node["connections"])
-        {
-            if(trace[output_id]["name"].get<std::string>().find("tensor") != std::string::npos)
-                output.push_back(output_id);
+    // Lambda to extract output tensors from the 'function_end' node
+    auto extract_output_tensors = [&trace](const auto& function_end_node) {
+        std::unordered_set<uint32_t> output;
+        for (const auto& output_id : function_end_node["connections"]) {
+            if (trace[output_id]["name"].get<std::string>().find("tensor") != std::string::npos) {
+                output.insert(output_id);
+            }
         }
         return output;
     };
+
     const auto output_tensors = extract_output_tensors(function_end_node);
 
-
+    // Calculate the total size of L1 buffers for output tensors
     size_t output_size = 0;
-    for(const auto& node : trace) {
-        if(node["name"] == "buffer") {
-            for(auto tensor_id : node["connections"])
-            {
-                if(output_tensors.find(tensor_id) != output_tensors.end() && node["params"]["type"] == "L1")
+    for (const auto& node : trace) {
+        if (node["name"] == "buffer" && node["params"]["type"] == "L1") {
+            for (const auto& tensor_id : node["connections"]) {
+                if (output_tensors.find(tensor_id) != output_tensors.end()) {
                     output_size += node["params"]["size"].get<size_t>();
+                }
             }
         }
     }
 
     return output_size;
 }
+
 
 } // namespace ttnn::graph
