@@ -326,6 +326,8 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
     } else {
         auto program_hash = 0;
         bool program_cache_hit = false;
+        device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+
         log_operation<device_operation_t>(operation_attributes, tensor_args, program_hash, program_cache_hit);
 
         tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
