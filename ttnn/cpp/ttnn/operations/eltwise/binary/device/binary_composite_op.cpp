@@ -361,7 +361,7 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
         }
     }
 
-    return ttnn::operations::matmul::matmul(a_slim, b_slim);
+    return ttnn::matmul(a_slim, b_slim, /*transpose_a=*/false, /*transpose_b=*/false, /*memory_config=*/ttnn::DRAM_MEMORY_CONFIG, /*dtype=*/std::nullopt, /*program_config=*/std::nullopt, /*activation=*/std::nullopt, /*compute_kernel_config=*/std::nullopt, /*core_grid=*/std::nullopt);
 }
 
 Tensor _polyval(const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
