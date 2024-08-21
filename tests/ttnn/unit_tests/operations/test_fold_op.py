@@ -259,8 +259,25 @@ def test_fold_with_permute_reshape_on_device_sharded(device, n, c, h, w, pad_h, 
     pad_w_right = w_pad32 - (w + pad_w)
     torch_input_tensor_padded = torch.nn.functional.pad(torch_input_tensor, (pad_w, pad_w_right, pad_h, pad_h))
     # on device
-    tt_output_tensor = pad_and_fold_with_permute_and_reshape_on_device_sharded(
-        device, torch_input_tensor_padded, pad_h, pad_w, stride_h, stride_w
+    in_sharded_memory_config = ttnn.create_sharded_memory_config(
+        torch_input_tensor_padded.shape,
+        core_grid=ttnn.CoreGrid(y=8, x=6),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor_padded, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_sharded_memory_config
+    )
+    tt_output_tensor = ttnn.fold(
+        tt_input_tensor,
+        stride_h,
+        stride_w,
+        use_transpose_as_fold=True,
+        output_shape=(n, padded_h // stride_h, padded_w // stride_w, C * (stride_h * stride_w)),
+        pad_c=C - c,
+        pad_h=0,
+        pad_w=0,
+        grid_size=(8, 8),
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
@@ -300,7 +317,7 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
         use_transpose_as_fold=True,
         output_shape=(n, padded_h // stride_h, padded_w // stride_w, C * (stride_h * stride_w)),
         pad_c=C - c,
-        pad_h=pad_h,
+        pad_h=0,
         pad_w=0,
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
