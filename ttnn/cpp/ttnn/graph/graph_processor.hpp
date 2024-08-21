@@ -59,7 +59,7 @@ namespace ttnn::graph {
 
         struct Vertex {
             int counter = 0;
-            std::string node_name;
+            std::string node_type;
             std::unordered_map<std::string, std::string> params;
             std::vector<int> connections;
         };

@@ -56,7 +56,7 @@ std::type_info const& get_type_in_var(const Variant& v){
 nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
     nlohmann::json j;
     j[ttnn::graph::kCounter] = data.counter;
-    j[ttnn::graph::kNodeName] = data.node_name;
+    j[ttnn::graph::kNodeType] = data.node_type;
     j[ttnn::graph::kParams] = data.params;
     j[ttnn::graph::kConnections] = data.connections;
     return j;
@@ -107,7 +107,7 @@ void GraphProcessor::track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up
     {
         graph.push_back(Vertex{
             .counter = counter,
-            .node_name = kNodeBufferAllocate,
+            .node_type = kNodeBufferAllocate,
             .params = params,
             .connections = {buf_id}
         });
@@ -127,7 +127,7 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
     {
         graph.push_back(Vertex{
             .counter = counter,
-            .node_name = kNodeBufferDeallocate,
+            .node_type = kNodeBufferDeallocate,
             .params = params,
             .connections = {buffer_idx}
         });
@@ -147,7 +147,7 @@ void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint6
     {
         graph.push_back({
             .counter = counter,
-            .node_name = kNodeCBAllocate,
+            .node_type = kNodeCBAllocate,
             .params = params,
             .connections = {}
         });
@@ -162,7 +162,7 @@ void GraphProcessor::track_deallocate_cb() {
     {
         graph.push_back(Vertex{
             .counter = counter,
-            .node_name = kNodeCBDeallocateAll,
+            .node_type = kNodeCBDeallocateAll,
             .params = {},
             .connections = {current_op_id.top()}
         });
@@ -195,7 +195,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
     {
         graph.push_back(Vertex{
             .counter = counter,
-            .node_name = kNodeFunctionStart,
+            .node_type = kNodeFunctionStart,
             .params = params,
             .connections = {/*current_op_id.top()*/}
         });
@@ -208,7 +208,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
 
     }
 
-    for (int i = 0; auto& any : input_parameters) {
+    for (auto& any : input_parameters) {
         std::type_index any_type = any.type();
         auto it = begin_function_any_map.find(any_type);
 
@@ -217,7 +217,6 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         } else {
             tt::log_info("input any type name ignored: {}", demangle(any.type().name()));
         }
-        i++;
     }
 
 }
@@ -230,7 +229,7 @@ void GraphProcessor::track_function_end_impl() {
     {
         graph.push_back(Vertex{
             .counter = counter,
-            .node_name = kNodeFunctionEnd,
+            .node_type = kNodeFunctionEnd,
             .params = {{kName, name}},
             .connections = {}
         });
@@ -288,7 +287,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     if (id_to_counter.count(alloc_id) == 0) {
         graph.push_back(Vertex{
             .counter = tensor_counter,
-            .node_name = kNodeTensor,
+            .node_type = kNodeTensor,
             .params = params,
             .connections = {}
         });
@@ -317,7 +316,7 @@ int GraphProcessor::add_buffer(tt::tt_metal::Buffer* buffer) {
 
         graph.push_back(Vertex{
             .counter = counter,
-            .node_name = kNodeBuffer,
+            .node_type = kNodeBuffer,
             .params = params,
             .connections = {}
         });
@@ -429,7 +428,7 @@ void GraphProcessor::begin_capture(RunMode mode) {
     id_to_counter.clear();
     graph.push_back(Vertex{
         .counter = 0,
-        .node_name = kNodeCaptureStart,
+        .node_type = kNodeCaptureStart,
         .params = {},
         .connections = {}
     });
@@ -446,7 +445,7 @@ nlohmann::json GraphProcessor::end_capture() {
     int counter = graph.size();
     graph.push_back(Vertex{
         .counter = counter,
-        .node_name = kNodeCaptureEnd,
+        .node_type = kNodeCaptureEnd,
         .params = {},
         .connections = {}
     });

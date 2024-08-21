@@ -6,7 +6,7 @@
 
 namespace ttnn::graph {
     // Vertex struct
-    constexpr auto kNodeName = "node_name";
+    constexpr auto kNodeType = "node_type";
     constexpr auto kCounter = "counter";
     constexpr auto kConnections = "connections";
     constexpr auto kParams = "params";
