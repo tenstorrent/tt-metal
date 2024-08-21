@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2043 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 
 #include <pybind11/pybind11.h>
