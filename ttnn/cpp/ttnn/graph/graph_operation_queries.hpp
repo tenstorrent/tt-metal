@@ -23,13 +23,13 @@ auto query_trace(Callable&& callable) {
 }
 
 template <class Callable>
-auto query_peak_memory_load(Callable&& callable) {
+auto query_peak_L1_memory_usage(Callable&& callable) {
     ttnn::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
     {
         auto output = callable();
     }
     auto json_trace = ttnn::GraphProcessor::end_graph_capture();
-    return graph::extract_peak_memory_usage(json_trace);
+    return graph::extract_peak_L1_memory_usage(json_trace);
 }
 
 template <class Callable>

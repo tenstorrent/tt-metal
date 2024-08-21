@@ -10,7 +10,7 @@
 
 namespace ttnn::graph {
 
-uint32_t extract_peak_memory_usage(const nlohmann::json& trace);
+uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace);
 
 // Returns count of intermediate and output tensors
 std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohmann::json& trace);

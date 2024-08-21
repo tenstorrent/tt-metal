@@ -45,7 +45,7 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
 }
 } // namespace
 
-uint32_t extract_peak_memory_usage(const nlohmann::json& trace) {
+uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
     uint32_t total_cb = 0;
     uint32_t total_buffer = 0;
     uint32_t peak_memory_usage = 0;
@@ -121,7 +121,8 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
     TT_ASSERT(first_begin_found);
     TT_ASSERT(last_end_found);
 
-    for(int index : trace[last_end_index]["connections"]) {
+    auto connections = trace[last_end_index]["connections"].get<std::unordered_set<uint32_t>>();
+    for(auto index : connections) {
         // It can be tensor or some other node like
         if(trace[index]["name"].get<std::string>().find("tensor") != std::string::npos) {
             output_tensors.insert(index);
@@ -170,7 +171,7 @@ std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace)
     // Lambda to extract output tensors from the 'function_end' node
     auto extract_output_tensors = [&trace](const nlohmann::json& function_end_node) {
         std::unordered_set<uint32_t> output;
-        auto connections = function_end_node["connections"].get<std::vector<uint32_t>>();
+        auto connections = function_end_node["connections"].get<std::unordered_set<uint32_t>>();
         for (const auto& output_id : connections) {
             const auto& output_node = trace[output_id];
             if (output_node["name"].template get<std::string>().find("tensor") != std::string::npos) {
@@ -193,7 +194,7 @@ std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace)
         if (node["name"] != "buffer" )
             continue;
 
-        auto connections = node["connections"].get<std::vector<uint32_t>>();
+        auto connections = node["connections"].get<std::unordered_set<uint32_t>>();
         for (const auto& tensor_id : connections) {
             if (output_tensors.find(tensor_id) == output_tensors.end())
                 continue;
