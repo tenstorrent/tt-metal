@@ -14,7 +14,7 @@
 #include "tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/utils.hpp"
-#include "tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/core/work_split/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
