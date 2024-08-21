@@ -10,6 +10,7 @@
 
 #include <unordered_set>
 #include <string>
+#include <cstdlib> // std::strtoul
 
 
 namespace ttnn::graph {
@@ -121,7 +122,7 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace){
     return op_calls;
 }
 
-size_t extract_output_L1_size(const nlohmann::json& trace)
+std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace)
 {
     // Lambda to find the last 'function_end' node
     auto find_function_end_node = [](const auto& trace) -> const nlohmann::json& {
@@ -131,16 +132,18 @@ size_t extract_output_L1_size(const nlohmann::json& trace)
                 return v;
             }
         }
-        throw std::runtime_error("function_end node not found");
+        TT_FATAL(false, "No function_end node found in the trace");
     };
 
     const auto& function_end_node = find_function_end_node(trace);
 
     // Lambda to extract output tensors from the 'function_end' node
-    auto extract_output_tensors = [&trace](const auto& function_end_node) {
+    auto extract_output_tensors = [&trace](const nlohmann::json& function_end_node) {
         std::unordered_set<uint32_t> output;
-        for (const auto& output_id : function_end_node["connections"]) {
-            if (trace[output_id]["name"].get<std::string>().find("tensor") != std::string::npos) {
+        auto connections = function_end_node["connections"].get<std::vector<uint32_t>>();
+        for (const auto& output_id : connections) {
+            const auto& output_node = trace[output_id];
+            if (output_node["name"].template get<std::string>().find("tensor") != std::string::npos) {
                 output.insert(output_id);
             }
         }
@@ -148,6 +151,12 @@ size_t extract_output_L1_size(const nlohmann::json& trace)
     };
 
     const auto output_tensors = extract_output_tensors(function_end_node);
+    return output_tensors;
+}
+
+size_t extract_output_L1_size(const nlohmann::json& trace)
+{
+    auto output_tensors = extract_output_tensors(trace);
 
     // Calculate the total size of L1 buffers for output tensors
     size_t output_size = 0;
@@ -162,6 +171,50 @@ size_t extract_output_L1_size(const nlohmann::json& trace)
     }
 
     return output_size;
+}
+
+namespace {
+ttnn::Shape parse_shape(const std::string_view& shape_string) {
+    // Extract shape values from string like "ttnn.Shape([1, 3, 32, 32])"
+    auto start = shape_string.find('[') + 1;
+    auto end = shape_string.find(']');
+    std::string_view shape_values = shape_string.substr(start, end - start);
+
+    // Vector to hold the parsed shape values
+    std::vector<uint32_t> shape;
+    const char* str = shape_values.data();
+    const char* end_str = str + shape_values.size();
+
+    while (str < end_str) {
+        char* next;
+        uint32_t value = std::strtoul(str, &next, 10);
+        if (str == next) break; // no conversion happened
+        shape.push_back(value);
+        str = next;
+        if (*str == ',') {
+            ++str; // skip the comma
+        }
+        if (*str == ' ') {
+            ++str; // skip spaces, assume a single space
+        }
+    }
+
+    return ttnn::Shape(shape);
+}
+} // namespace
+
+std::vector<ttnn::Shape> extract_output_shape(const nlohmann::json& trace)
+{
+    auto output_tensors = extract_output_tensors(trace);
+
+    std::vector<ttnn::Shape> output_shapes;
+    for (const auto& tensor : output_tensors) {
+        std::string shape_string = tensor["params"]["shape"].get<std::string>();
+        auto shape = parse_shape(shape_string);
+        output_shapes.push_back(shape);
+    }
+
+    return output_shapes;
 }
 
 

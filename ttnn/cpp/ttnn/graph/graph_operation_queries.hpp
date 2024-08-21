@@ -9,7 +9,6 @@
 #include "graph_trace_utils.hpp"
 
 #include <vector>
-#include <pair>
 
 namespace ttnn::graph {
 
