@@ -9,17 +9,18 @@ from typing import Optional, Tuple, Union
 from loguru import logger
 from dataclasses import dataclass
 
-import tt_lib
+import ttnn
 
 from models.experimental.roberta.tt.roberta_layer import TtRobertaLayer
 
+
 @dataclass
 class TtBaseModelOutputWithPastAndCrossAttentions:
-    last_hidden_state: tt_lib.tensor.Tensor = None
-    past_key_values: tt_lib.tensor.Tensor = None
-    hidden_states: tt_lib.tensor.Tensor = None
-    attentions: tt_lib.tensor.Tensor = None
-    cross_attentions: tt_lib.tensor.Tensor = None
+    last_hidden_state: ttnn.Tensor = None
+    past_key_values: ttnn.Tensor = None
+    hidden_states: ttnn.Tensor = None
+    attentions: ttnn.Tensor = None
+    cross_attentions: ttnn.Tensor = None
 
 
 # Copied from transformers.models.bert.modeling_bert.BertEncoder with Bert->Roberta
@@ -44,24 +45,20 @@ class TtRobertaEncoder(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        hidden_states: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
+        encoder_hidden_states: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
+        past_key_values: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = False,
         output_hidden_states: Optional[bool] = False,
         return_dict: Optional[bool] = True,
-    ) -> Union[
-        Tuple[tt_lib.tensor.Tensor], TtBaseModelOutputWithPastAndCrossAttentions
-    ]:
+    ) -> Union[Tuple[ttnn.Tensor], TtBaseModelOutputWithPastAndCrossAttentions]:
         all_hidden_states = () if output_hidden_states else None
         all_self_attentions = () if output_attentions else None
-        all_cross_attentions = (
-            () if output_attentions and self.config.add_cross_attention else None
-        )
+        all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
 
         if self.gradient_checkpointing and self.training:
             if use_cache:

@@ -6,7 +6,7 @@ import torch.nn as nn
 
 from typing import Optional, Tuple, Union
 
-import tt_lib
+import ttnn
 
 from models.experimental.roberta.tt.roberta_self_attention import TtRobertaSelfAttention
 from models.experimental.roberta.tt.roberta_self_output import TtRobertaSelfOutput
@@ -14,9 +14,7 @@ from models.experimental.roberta.tt.roberta_self_output import TtRobertaSelfOutp
 
 # Copied from transformers.models.bert.modeling_bert.BertAttention with Bert->Roberta
 class TtRobertaAttention(nn.Module):
-    def __init__(
-        self, config, state_dict, base_address, device, position_embedding_type=None
-    ):
+    def __init__(self, config, state_dict, base_address, device, position_embedding_type=None):
         super().__init__()
         self.device = device
 
@@ -28,9 +26,7 @@ class TtRobertaAttention(nn.Module):
             position_embedding_type=position_embedding_type,
         )
 
-        self.output = TtRobertaSelfOutput(
-            config, state_dict, f"{base_address}.output", device
-        )
+        self.output = TtRobertaSelfOutput(config, state_dict, f"{base_address}.output", device)
         self.pruned_heads = set()
 
     """
@@ -57,14 +53,14 @@ class TtRobertaAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_value: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        hidden_states: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
+        encoder_hidden_states: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
+        past_key_value: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         output_attentions: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.Tensor]:
         self_outputs = self.self(
             hidden_states,
             attention_mask,
@@ -75,7 +71,5 @@ class TtRobertaAttention(nn.Module):
             output_attentions,
         )
         attention_output = self.output(self_outputs[0], hidden_states)
-        outputs = (attention_output,) + self_outputs[
-            1:
-        ]  # add attentions if we output them
+        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
         return outputs

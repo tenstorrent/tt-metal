@@ -5,7 +5,6 @@
 import torch
 import torch.nn as nn
 
-import tt_lib
 import ttnn
 
 from models.helper_funcs import Linear as TTLinear
@@ -19,9 +18,7 @@ class TtRobertaClassificationHead(nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
 
         self.dense_weight = pad_by_zero(state_dict[f"{base_address}.dense.weight"], self.device)[0]
         self.dense_bias = pad_by_zero(state_dict[f"{base_address}.dense.bias"], self.device)[0]

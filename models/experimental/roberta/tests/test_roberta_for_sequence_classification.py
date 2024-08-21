@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaForSequenceClassification
 
-import tt_lib
 import pytest
 
 from models.experimental.roberta.tt.roberta_for_sequence_classification import TtRobertaForSequenceClassification

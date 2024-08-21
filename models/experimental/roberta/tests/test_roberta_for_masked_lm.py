@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaForMaskedLM
 
-import tt_lib
 import pytest
 
 from models.experimental.roberta.tt.roberta_for_masked_lm import TtRobertaForMaskedLM
