@@ -179,7 +179,7 @@ namespace ttnn {
         }
     }
 
-    void GraphProcessor::track_begin_function(std::string_view function_name, std::span<std::any> input_parameters) {
+    void GraphProcessor::track_function_start(std::string_view function_name, std::span<std::any> input_parameters) {
         const std::lock_guard<std::mutex> lock(mutex);
         tt::log_info("Begin op: {}", function_name);
         std::unordered_map<std::string, std::string> params = {
@@ -190,7 +190,7 @@ namespace ttnn {
         {
             graph.push_back(Vertex{
                 .counter = counter,
-                .name = "begin_function",
+                .name = "function_start",
                 .params = params,
                 .connections = {/*current_op_id.top()*/}
             });
@@ -217,7 +217,7 @@ namespace ttnn {
 
     }
 
-    void GraphProcessor::track_end_function_impl() {
+    void GraphProcessor::track_function_end_impl() {
         auto name = graph[current_op_id.top()].params["name"];
         tt::log_info("End op: {}", name);
 
@@ -225,7 +225,7 @@ namespace ttnn {
         {
             graph.push_back(Vertex{
                 .counter = counter,
-                .name = fmt::format("end_function"),
+                .name = fmt::format("function_end"),
                 .params = {{"name", name}},
                 .connections = {}
             });
@@ -234,16 +234,16 @@ namespace ttnn {
         last_finished_op_id = counter;
     }
 
-    void GraphProcessor::track_end_function() {
+    void GraphProcessor::track_function_end() {
         const std::lock_guard<std::mutex> lock(mutex);
-        this->track_end_function_impl();
+        this->track_function_end_impl();
         current_op_id.pop();
         TT_ASSERT(current_op_id.size() > 0); // we should always have capture_start on top
     }
 
-    void GraphProcessor::track_end_function(const std::any& output_tensors) {
+    void GraphProcessor::track_function_end(const std::any& output_tensors) {
         const std::lock_guard<std::mutex> lock(mutex);
-        this->track_end_function_impl();
+        this->track_function_end_impl();
 
         std::type_index any_type = output_tensors.type();
         auto it = end_function_any_map.find(any_type);
@@ -449,7 +449,7 @@ namespace ttnn {
         } else {
             // lets connect capture_start with capture_end
             // it means we didn't capture any functions
-            TT_ASSERT(current_op_id.size(), "Graph size cannot be 0. This means that track_end_function was called more than begin.");
+            TT_ASSERT(current_op_id.size(), "Graph size cannot be 0. This means that track_function_end was called more than begin.");
             graph[0].connections.push_back(counter);
         }
         clean_hook();

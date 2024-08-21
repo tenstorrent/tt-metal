@@ -34,10 +34,10 @@ namespace tt::tt_metal {
 
         virtual void track_program(tt::tt_metal::Program* program) {};
 
-        virtual void track_begin_function(std::string_view function_name, std::span<std::any> input_parameters) {};
+        virtual void track_function_start(std::string_view function_name, std::span<std::any> input_parameters) {};
 
-        virtual void track_end_function() {};
-        virtual void track_end_function(const std::any& output_tensors) {};
+        virtual void track_function_end() {};
+        virtual void track_function_end(const std::any& output_tensors) {};
 
         virtual void begin_capture(RunMode mode) {};
 
@@ -82,33 +82,33 @@ namespace tt::tt_metal {
         void track_program(Program* program);
 
         template<class... Args>
-        void track_begin_function(std::string_view function_name, Args&&... args) {
+        void track_function_start(std::string_view function_name, Args&&... args) {
             if (processors.empty()) {
                 return;
             }
             std::array<std::any, sizeof...(Args)>  params{std::any(std::ref(args))...};
             for (auto& it : processors) {
-                it->track_begin_function(function_name, params);
+                it->track_function_start(function_name, params);
             }
         }
 
         // Track op that doesn't return anything
-        void track_end_function() {
+        void track_function_end() {
             if (processors.empty()) {
                 return;
             }
             for (auto& it : processors) {
-                it->track_end_function();
+                it->track_function_end();
             }
         }
 
         template<class ReturnType>
-        void track_end_function(ReturnType&& output_tensors) {
+        void track_function_end(ReturnType&& output_tensors) {
             if (processors.empty()) {
                 return;
             }
             for (auto& it : processors) {
-                it->track_end_function(std::ref(output_tensors));
+                it->track_function_end(std::ref(output_tensors));
             }
         }
 

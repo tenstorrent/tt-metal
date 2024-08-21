@@ -503,8 +503,8 @@ typename device_operation_t::tensor_return_value_t invoke(
 
     // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
     // TODO: re-enable the line below
-    // GraphTracker::instance().track_begin_function(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
-    GraphTracker::instance().track_begin_function("Device Operation", operation_attributes, tensor_args);
+    // GraphTracker::instance().track_function_start(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
+    GraphTracker::instance().track_function_start("Device Operation", operation_attributes, tensor_args);
 
     using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
     static_assert(not std::same_as<tensor_return_value_t, void>, "Operation return type cannot be \"void\"");
@@ -527,7 +527,7 @@ typename device_operation_t::tensor_return_value_t invoke(
         },
         storage);
 
-    GraphTracker::instance().track_end_function(tensor_return_value);
+    GraphTracker::instance().track_function_end(tensor_return_value);
     return tensor_return_value;
 }
 

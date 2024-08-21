@@ -36,7 +36,7 @@ uint32_t extract_peak_memory_usage(const nlohmann::json& trace) {
     for (size_t i = 0; i < trace.size(); ++i) {
         const auto& v = trace[i];
 
-        if (v["name"] == "begin_function") {
+        if (v["name"] == "function_start") {
             if (current_op.empty()) {
                 while (++i < trace.size()) {
                     const auto& inner_v = trace[i];
@@ -63,7 +63,7 @@ uint32_t extract_peak_memory_usage(const nlohmann::json& trace) {
             if(buffer["params"]["type"] == "L1") {
                 total_buffer -= stoi(buffer["params"]["size"].get<std::string>());
             }
-        } else if (v["name"] == "end_function") {
+        } else if (v["name"] == "function_end") {
             current_op.pop_back();
         }
 
@@ -86,10 +86,10 @@ std::pair<int, int> count_intermediate_and_output_tensors(const nlohmann::json& 
 
     for (int i = 0; i < trace.size(); ++i) {
         const auto& v = trace[i];
-        if (v["name"] == "begin_function" && !first_begin_found) {
+        if (v["name"] == "function_start" && !first_begin_found) {
             first_begin_found = true;
             first_begin_index = i;
-        } else if (v["name"] == "end_function") {
+        } else if (v["name"] == "function_end") {
             last_end_found = true;
             last_end_index = i;
 
@@ -126,7 +126,7 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace){
         const auto& v = trace[i];
         i++;
 
-        if (v["name"] == "begin_function") {
+        if (v["name"] == "function_start") {
             op_calls.push_back(v["params"]["name"]);
         }
     }
