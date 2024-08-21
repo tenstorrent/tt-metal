@@ -11,7 +11,7 @@ import torch
 
 from models.experimental.yolov3.reference.models.common import autopad
 from models.experimental.yolov3.reference.models.yolo import Conv, Model
-import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import (
     torch2tt_tensor,
@@ -70,14 +70,8 @@ class TtConv2D(torch.nn.Module):
         else:
             self.conv_on_device = False
 
-            self.conv_weight = torch_to_tt_tensor_rm(
-                self.conv_weight, self.device, put_on_device=False
-            )
-            self.conv_bias = (
-                torch_to_tt_tensor_rm(self.conv_bias, self.device)
-                if self.conv_bias is not None
-                else None
-            )
+            self.conv_weight = torch_to_tt_tensor_rm(self.conv_weight, self.device, put_on_device=False)
+            self.conv_bias = torch_to_tt_tensor_rm(self.conv_bias, self.device) if self.conv_bias is not None else None
 
             self.conv = fallback_ops.Conv2d(
                 weights=self.conv_weight,
@@ -97,9 +91,7 @@ class TtConv2D(torch.nn.Module):
             x = tt2torch_tensor(x)
             x = self.conv(x)
             x = x + self.conv_bias
-            x = torch2tt_tensor(
-                x, self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-            )
+            x = torch2tt_tensor(x, self.device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
         else:
             x = self.conv(x)
 

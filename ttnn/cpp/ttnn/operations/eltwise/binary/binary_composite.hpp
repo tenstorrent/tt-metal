@@ -233,12 +233,6 @@ constexpr auto div_no_nan = ttnn::register_operation_with_auto_launch_op<
 constexpr auto floor_div = ttnn::register_operation_with_auto_launch_op<
     "ttnn::floor_div",
     operations::binary::ExecuteDivLikeOps<operations::binary::BinaryCompositeOpType::FLOOR_DIV>>();
-constexpr auto logical_and_ = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::logical_and_",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_AND_>>();
-constexpr auto logical_or_ = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::logical_or_",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_OR_>>();
 constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logical_xor_",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR_>>();

@@ -130,7 +130,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
     model_args.n_layers = 32
 
     logger.info("Loading weights...")
-    state_dict = torch.load(model_args.consolidated_weights_path)
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     state_dict = {
         k: v
         for k, v in state_dict.items()

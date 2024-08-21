@@ -6,7 +6,6 @@
 import torch
 import torch.nn as nn
 
-import tt_lib
 import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
@@ -16,7 +15,7 @@ from models.utility_functions import (
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
-mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+mem_config = ttnn.L1_MEMORY_CONFIG
 
 
 class TtRobertaLMHead(nn.Module):

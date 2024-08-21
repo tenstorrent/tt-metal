@@ -552,7 +552,6 @@ void bind_binary_overload_operation(py::module& module, const binary_operation_t
 
             Keyword Args:
                 * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
 
             Example::
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -626,6 +625,40 @@ void bind_inplace_operation(py::module& module, const binary_operation_t& operat
             py::arg("input_b")},
 
         //tensor and tensor
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+            const Tensor& input_tensor_a,
+            const Tensor& input_tensor_b) {
+                return self(input_tensor_a, input_tensor_b); },
+            py::arg("input_a"),
+            py::arg("input_b")});
+}
+
+template <typename binary_operation_t>
+void bind_logical_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc({0}(input_a: ttnn.Tensor, input_b: ttnn.Tensor) -> ttnn.Tensor
+
+        {2}
+
+            Args:
+                * :attr:`input_a` (ttnn.Tensor)
+                * :attr:`input_b` (ttnn.Tensor)
+
+            Example::
+                >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> output = {1}(tensor1, tensor2)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+
         ttnn::pybind_overload_t{
             [](const binary_operation_t& self,
             const Tensor& input_tensor_a,
@@ -809,7 +842,7 @@ void py_module(py::module& module) {
         R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary_composite(
+    detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_or_,
         R"doc(Compute inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
@@ -821,7 +854,7 @@ void py_module(py::module& module) {
         R"doc(Compute inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
         .. math:: \mathrm{{input\_tensor\_a}}_i || \mathrm{{input\_tensor\_b}}_i)doc");
 
-    detail::bind_binary_composite(
+    detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_and_,
         R"doc(Compute inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
@@ -914,6 +947,18 @@ void py_module(py::module& module) {
         ttnn::le_,
         R"doc(Perform Less than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
         .. math:: \mathrm{{input\_a}}_i <= \mathrm{{input\_b}}_i)doc");
+
+    detail::bind_inplace_operation(
+        module,
+        ttnn::eq_,
+        R"doc(Perform Equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
+        .. math:: \mathrm{{input\_a}}_i = \mathrm{{input\_b}}_i)doc");
+
+    detail::bind_inplace_operation(
+        module,
+        ttnn::ne_,
+        R"doc(Perform Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`
+        .. math:: \mathrm{{input\_a}}_i != \mathrm{{input\_b}}_i)doc");
 
 }
 

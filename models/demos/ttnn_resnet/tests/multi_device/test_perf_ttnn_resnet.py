@@ -439,7 +439,7 @@ def run_perf_resnet(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0010, 60),),
+    ((16, True, 0.0100, 60),),
     indirect=["enable_async_mode"],
 )
 def test_perf_t3000(

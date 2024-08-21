@@ -4,7 +4,7 @@
 
 import os
 import torch
-import tt_lib
+import ttnn
 import pytest
 import numpy as np
 
@@ -75,17 +75,17 @@ def run_perf_yolov3(expected_inference_time, expected_compile_time, model_locati
     if len(im.shape) == 3:
         im = im[None]
 
-    tt_im = torch2tt_tensor(im, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_im = torch2tt_tensor(im, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
     with torch.no_grad():
         profiler.start(cpu_key)
         pt_out = reference_model(im)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
         tt_out = tt_module(tt_im)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
         del tt_out
 
@@ -93,7 +93,7 @@ def run_perf_yolov3(expected_inference_time, expected_compile_time, model_locati
 
         profiler.start(second_key)
         tt_out = tt_module(tt_im)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
         del tt_out
 
@@ -187,7 +187,7 @@ def run_perf_yolov3(expected_inference_time, expected_compile_time, model_locati
             target_cls=gt_classes,
         )
         ap_list.append(ap)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(third_key)
 
     mAP = np.mean(ap_list)
