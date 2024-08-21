@@ -139,7 +139,6 @@ def shapes_and_datagen(
             coregrid=coregrid,
         )
         args = list(args)
-
         # Default "args-sampling-strategy" is "all". If random is not specified test will be run for all generated args
         if shape_dict.get("args-sampling-strategy", "random") == "random" and len(args) > 0:
             generated_test_args = random.choice(args)
@@ -188,16 +187,13 @@ def shapes_and_datagen(
         # Helper method. Generates shapes and arguments. Used in various methods.
         def _gen_shapes_and_args(start_shape, end_shape, interval, shape_transformator):
             all_num_dims = [len(start_shape)] if len(num_dims_settings) == 0 else num_dims_settings
-
             if num_samples == "all":
                 for num_dims in all_num_dims:
                     dim_ranges = [
                         range(start_shape[i], end_shape[i] + interval[i], interval[i]) for i in range(num_dims)
                     ]
-
                     for shape in product(*dim_ranges):
                         input_shapes = shape_transformator(shape)
-
                         for datagen_funcs, generated_test_args in _gen_args(input_shapes):
                             yield input_shapes, datagen_funcs, generated_test_args
 
@@ -213,6 +209,7 @@ def shapes_and_datagen(
                             shape.append(align_to_interval(x, start_shape[i], interval[i]))
 
                         input_shapes = shape_transformator(shape)
+
                         args = _gen_args(input_shapes)
 
                         if len(args) == 0:
