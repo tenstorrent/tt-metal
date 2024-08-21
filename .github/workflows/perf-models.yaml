@@ -18,8 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "GS", arch: grayskull, runs-on: ["arch-grayskull", "E150", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["arch-wormhole_b0", "N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
+          {name: "GS", arch: grayskull, runs-on: ["E150", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
         ]
         model-type: [llm_javelin, cnn_javelin, other]
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
