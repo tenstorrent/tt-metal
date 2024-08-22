@@ -15,6 +15,7 @@ namespace operations::data_movement {
 // We overload over Array1D-8D
 #define PAD_OVERLOAD_DIM(ShapeType) \
     static ttnn::Tensor invoke(uint8_t, const ttnn::Tensor&, const ShapeType&, const ShapeType&, const float, const bool, const std::optional<MemoryConfig>&); \
+    static ttnn::Tensor invoke(const ttnn::Tensor&, const ShapeType&, const ShapeType&, const float, const std::optional<MemoryConfig>&); \
     static ttnn::Tensor invoke(const ttnn::Tensor&, const ShapeType&, const ShapeType&, const float);
 
 struct ExecutePad {
