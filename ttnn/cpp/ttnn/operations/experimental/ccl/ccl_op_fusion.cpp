@@ -107,7 +107,7 @@ void MatmulFusedOpSignaler::init_all_gather(
     uint32_t output_page_offset,
     bool is_clockwise_direction,
 
-    uint32_t weight_tensor_width
+    uint32_t weight_output_page_offset
 ) {
     this->num_transfers = num_transfers;
     this->ring_size = ring_size;
@@ -116,7 +116,7 @@ void MatmulFusedOpSignaler::init_all_gather(
     this->output_page_offset = output_page_offset;
     this->is_clockwise_dir = is_clockwise_direction;
 
-    this->weight_tensor_width = weight_tensor_width;
+    this->weight_output_page_offset = weight_output_page_offset;
 
     initialized_all_gather = true;
 }
@@ -144,21 +144,26 @@ void MatmulFusedOpSignaler::init_fused_op(
     initialized_fused_op = true;
 }
 
-void MatmulFusedOpSignaler::emit_matmul_fused_op_ct_args(
-    std::vector<uint32_t>& ct_args
+void MatmulFusedOpSignaler::emit_matmul_fused_op_rt_args(
+    std::vector<uint32_t>& rt_args,
+    bool use_in1_offset
 ) {
     TT_ASSERT(initialized_all_gather && initialized_fused_op, "MatmulFusedOpSignaler not initialized fully.");
 
-    ct_args.push_back(static_cast<bool>(true));
-    ct_args.push_back(static_cast<uint32_t>(this->num_transfers));
-    ct_args.push_back(static_cast<uint32_t>(this->ring_size));
-    ct_args.push_back(static_cast<uint32_t>(this->start_ring_index));
-    ct_args.push_back(static_cast<uint32_t>(this->tensor_slice_shape_width));
-    ct_args.push_back(static_cast<uint32_t>(this->output_page_offset));
-    ct_args.push_back(static_cast<uint32_t>((this->ring_size - 1) * this->output_page_offset));
-    ct_args.push_back(static_cast<uint32_t>(this->is_clockwise_dir));
-    ct_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
-    ct_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
+    rt_args.push_back(static_cast<uint32_t>(this->num_transfers));
+    rt_args.push_back(static_cast<uint32_t>(this->ring_size));
+    rt_args.push_back(static_cast<uint32_t>(this->start_ring_index));
+    rt_args.push_back(static_cast<uint32_t>(this->tensor_slice_shape_width));
+    if (use_in1_offset) {
+        rt_args.push_back(static_cast<uint32_t>(this->weight_output_page_offset));
+        rt_args.push_back(static_cast<uint32_t>((this->ring_size - 1) * this->weight_output_page_offset));
+    } else {
+        rt_args.push_back(static_cast<uint32_t>(this->output_page_offset));
+        rt_args.push_back(static_cast<uint32_t>((this->ring_size - 1) * this->output_page_offset));
+    }
+    rt_args.push_back(static_cast<uint32_t>(this->is_clockwise_dir));
+    rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
+    rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
 }
 
 

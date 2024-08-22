@@ -80,7 +80,7 @@ struct MatmulFusedOpSignaler {
     uint32_t last_output_page_offset;
     bool is_clockwise_dir;
 
-    uint32_t weight_tensor_width;
+    uint32_t weight_output_page_offset;
 
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
@@ -104,11 +104,10 @@ struct MatmulFusedOpSignaler {
         const CoreRange& core_range_to_signal
     );
 
-    void emit_matmul_fused_op_ct_args(
-        std::vector<uint32_t>& ct_args
+    void emit_matmul_fused_op_rt_args(
+        std::vector<uint32_t>& rt_args,
+        bool use_in1_offset
     );
-
-    static uint32_t get_num_ct_args() { return 10; }
 };
 
 

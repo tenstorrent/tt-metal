@@ -11,17 +11,19 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
+
+    uint32_t rt_args_idx = 0;
     // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(0);
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(1);
+    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
     // in0 mcast args
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(2);
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(3);
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(4);
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(5);
+    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(rt_args_idx++);
 
     // padding args
-    const uint32_t last_block_h = get_arg_val<uint32_t>(6);
+    const uint32_t last_block_h = get_arg_val<uint32_t>(rt_args_idx++);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
@@ -49,21 +51,13 @@ void kernel_main() {
     constexpr uint32_t MtKt = get_compile_time_arg_val(15);  // if 0
     constexpr uint32_t batch = get_compile_time_arg_val(16);
 
-    constexpr bool fuse_op = get_compile_time_arg_val(17);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(17);
 
     MatmulOpReceiver fused_op_receiver;
     if constexpr (fuse_op) {
         fused_op_receiver = MatmulOpReceiver(
             true, /* wait_for_op_signal */
-            get_compile_time_arg_val(18), /* num_transfers */
-            get_compile_time_arg_val(19), /* ring_size */
-            get_compile_time_arg_val(20), /* start_ring_index */
-            get_compile_time_arg_val(21), /* tensor_slice_shape_width */
-            get_compile_time_arg_val(22), /* output_page_offset */
-            get_compile_time_arg_val(23), /* last_output_page_offset */
-            get_compile_time_arg_val(24), /* is_clockwise_direction */
-            get_semaphore(get_compile_time_arg_val(25)), /* signal_op_sem_addr_dir0 */
-            get_semaphore(get_compile_time_arg_val(26)), /* signal_op_sem_addr_dir1 */
+            rt_args_idx,
             num_blocks,
             in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
         );

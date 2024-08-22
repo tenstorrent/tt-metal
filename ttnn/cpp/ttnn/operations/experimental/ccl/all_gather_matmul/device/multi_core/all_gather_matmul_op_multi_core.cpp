@@ -254,7 +254,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         tensor_slicer.num_cols,
         tensor_slicer.output_page_offset,
         is_clockwise_direction,
-        weight_tensor_width
+        tensor_slicer.num_cols * weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */
     );
 
     // Matmul

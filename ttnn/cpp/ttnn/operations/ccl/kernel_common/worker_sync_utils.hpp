@@ -231,33 +231,29 @@ struct MatmulOpReceiver {
 
     MatmulOpReceiver(
         bool wait_for_op_signal,
-        uint32_t num_transfers,
-        uint32_t ring_size,
-        uint32_t start_ring_index,
-        uint32_t tensor_slice_shape_width,
-        uint32_t output_page_offset,
-        uint32_t last_output_page_offset,
-        uint32_t is_clockwise_direction,
-        uint32_t signal_op_sem_addr_dir0,
-        uint32_t signal_op_sem_addr_dir1,
+        uint32_t& rt_args_idx,
         uint32_t num_blocks,
         uint32_t tiles_per_block // Across the same dimension as tensor_slice_shape_width
     ) : wait_for_op_signal(wait_for_op_signal),
-        num_transfers(num_transfers),
-        ring_size(ring_size),
-        tensor_slice_shape_width(tensor_slice_shape_width),
-        output_page_offset(output_page_offset),
-        last_output_page_offset(last_output_page_offset),
         num_blocks(num_blocks)
     {
 
-        this->num_tensor_slices = this->num_transfers * this->num_directions;
+        this->num_transfers = get_arg_val<uint32_t>(rt_args_idx++);
+        this->ring_size = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t start_ring_index = get_arg_val<uint32_t>(rt_args_idx++);
+        this->tensor_slice_shape_width = get_arg_val<uint32_t>(rt_args_idx++);
+        this->output_page_offset = get_arg_val<uint32_t>(rt_args_idx++);
+        this->last_output_page_offset = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t is_clockwise_direction = get_arg_val<uint32_t>(rt_args_idx++);
 
-        // Signal receiver semaphores
         if (this->wait_for_op_signal) {
-            this->signal_op_semaphore_addr_ptrs[0] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_op_sem_addr_dir0);
-            this->signal_op_semaphore_addr_ptrs[1] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_op_sem_addr_dir1);
+            this->signal_op_semaphore_addr_ptrs[0] =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
+            this->signal_op_semaphore_addr_ptrs[1] =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(rt_args_idx++)));
         }
+
+        this->num_tensor_slices = this->num_transfers * this->num_directions;
 
         // Start idxs for the different directions
         this->ring_idxs[0] = start_ring_index;

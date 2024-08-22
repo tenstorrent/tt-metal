@@ -348,6 +348,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)B       // batch
         };
     }
+    in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in1_is_dram,
@@ -394,6 +396,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
         in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
+
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     if (in1_is_sharded and in1_is_dram) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in0_block_w);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in1_single_tile_size);
@@ -533,17 +538,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         if (fuse_op) {
             // Create semaphores
             fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
-            fused_op_signaler->emit_matmul_fused_op_ct_args(in0_sender_compile_time_args);
-
-            // Switch the offesets for the weights
-            fused_op_signaler->output_page_offset = fused_op_signaler->tensor_slice_shape_width * fused_op_signaler->weight_tensor_width;
-            fused_op_signaler->emit_matmul_fused_op_ct_args(in1_sender_writer_compile_time_args);
-        } else {
-            // Push false for fuse_op param
-            for (uint32_t fused_param_idx = 0; fused_param_idx < ttnn::experimental::ccl::MatmulFusedOpSignaler::get_num_ct_args(); fused_param_idx++) {
-                in0_sender_compile_time_args.push_back(static_cast<bool>(false));
-                in1_sender_writer_compile_time_args.push_back(static_cast<bool>(false));
-            }
         }
 
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(
@@ -922,6 +916,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 mm_in0_sender_args.push_back(per_core_M);
             }
 
+            if (fuse_op) {
+                fused_op_signaler->emit_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+            }
+
             tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_0_default
 
             // in0 receiver
@@ -992,7 +990,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back((std::uint32_t)bias_buffer->address());
                     mm_in1_sender_writer_args.push_back(
                         (std::uint32_t)per_core_N * in1_idx);  // in1_tensor_start_tile_id
-                } else {
+                } else if (!fuse_op) { // Don't push the place holder if fused op is present.
                     mm_in1_sender_writer_args.push_back(0);  // Placeholder; not used
                     mm_in1_sender_writer_args.push_back(0);  // Placeholder; not used
                 }
@@ -1057,6 +1055,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                         }
                     }
                     mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 19, num_iter);
+                }
+                if (fuse_op) {
+                    fused_op_signaler->emit_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
                 }
                 tt_metal::SetRuntimeArgs(
                     program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_1_default

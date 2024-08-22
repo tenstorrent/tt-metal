@@ -54,6 +54,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     bool untilize_out) {
     tt_metal::Program program{};
 
+    bool fuse_op = false;
+
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
@@ -260,6 +262,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             (std::uint32_t)B       // batch
         };
     }
+    in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in1_is_dram,
@@ -302,7 +306,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     if (bias_buffer != nullptr) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)in3_is_dram);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
+    } else {
+        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
+        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
+
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
         (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
@@ -823,6 +833,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     bool untilize_out) {
     tt_metal::Program program{};
 
+    bool fuse_op = false;
+
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
     // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
@@ -949,6 +961,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         (std::uint32_t)M * K,  // MtKt
         (std::uint32_t)B       // batch
     };
+    in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in1_is_dram,
@@ -991,7 +1005,13 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     if (bias_buffer != nullptr) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)in3_is_dram);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);
+    } else {
+        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
+        in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
+
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)out_is_dram,
