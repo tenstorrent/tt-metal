@@ -1083,6 +1083,16 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::tt_metal::CircularBufferConfig ex_global_cb_config = tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{ex_global_cb_index, cb_data_format}})
 		.set_page_size(ex_global_cb_index, single_tile_size);
     auto cb_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
+    // ex2_global
+    uint32_t ex2_global_cb_index = tt::CB::dataflow6;
+    tt::tt_metal::CircularBufferConfig ex2_global_cb_config = tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{ex2_global_cb_index, cb_data_format}})
+		.set_page_size(ex2_global_cb_index, single_tile_size);
+    auto cb_ex2_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_global_cb_config);
+    // cb_var
+    uint32_t cb_var_index = tt::CB::c_intermed2;
+    tt::tt_metal::CircularBufferConfig cb_var_config = tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{cb_var_index, cb_data_format}})
+		.set_page_size(cb_var_index, single_tile_size);
+    auto cb_var_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_var_config);
     // ex2pe
     uint32_t cb_ex2pe_index;
     cb_ex2pe_index = tt::CB::c_intermed3;
