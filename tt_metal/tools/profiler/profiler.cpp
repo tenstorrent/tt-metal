@@ -367,7 +367,8 @@ void DeviceProfiler::generateZoneSourceLocationsHashes()
 
 void DeviceProfiler::dumpResults (
         Device *device,
-        const vector<CoreCoord> &worker_cores){
+        const vector<CoreCoord> &worker_cores,
+        bool lastDump){
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -380,7 +381,29 @@ void DeviceProfiler::dumpResults (
     {
         std::vector<uint32_t> profile_buffer(output_dram_buffer->size()/sizeof(uint32_t), 0);
 
-        tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
+        const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+        if (USE_FAST_DISPATCH)
+        {
+            if (lastDump)
+            {
+                if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores())
+                {
+                    tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
+                }
+            }
+            else
+            {
+                EnqueueReadBuffer(device->command_queue(),output_dram_buffer, profile_buffer, true);
+            }
+        }
+        else
+        {
+            if (!lastDump)
+            {
+                tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
+            }
+        }
+
 
         for (const auto &worker_core : worker_cores) {
             readRiscProfilerResults(
