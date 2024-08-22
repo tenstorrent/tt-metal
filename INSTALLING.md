@@ -120,7 +120,10 @@ source python_env/bin/activate
 >
 > Note about Python environments: You do not have to use `create_venv.sh`. If you
 > are less familiar with Python and its various environment tools, just use
-> `create_venv.sh` as shown above and the pre-built environment.
+> `create_venv.sh` as shown above and the pre-built environment. If you choose
+> to install in your custom environment, please note that you may run into
+> compatibility issues between dependencies. It is up to the user to ensure
+> that all the packages in their environment are compatible with each other.
 >
 > If you do choose to manage your own environment, please note that you must
 > use Pip 20.1.1 or lower to install this project. This is the highest version
