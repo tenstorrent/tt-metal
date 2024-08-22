@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 namespace ttnn::operations::binary{
 
@@ -351,7 +352,9 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
     }
     a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
     b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
-    Device* device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
+
+    int device_id = 0;
+    auto device = tt::tt_metal::CreateDevice(device_id);
     if(device != nullptr) {
         if (a_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
             a_slim = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device(a_slim, device);
