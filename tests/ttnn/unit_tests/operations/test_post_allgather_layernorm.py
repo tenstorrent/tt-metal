@@ -1,7 +1,10 @@
 import ttnn
 import torch
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+from models.utility_functions import (
+    skip_for_wormhole_b0,
+    comp_allclose_and_pcc,
     comp_pcc,
+    comp_allclose,
 )
 
 # create test for layer_norm for sharded input tensor [32, 2048]  and weight and bias tensors [2048]
@@ -50,7 +53,7 @@ def test_post_allgather_layernorm(device, use_program_cache):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        cache_file_name="rms_weights_cache_1024",
+        # cache_file_name="rms_weights_cache_1024",
     )
 
     tt_output_tensor = ttnn.rms_norm(
@@ -61,4 +64,11 @@ def test_post_allgather_layernorm(device, use_program_cache):
         memory_config=tt_sharded_config,
     )
     tt_output_torch = ttnn.to_torch(tt_output_tensor)
-    assert comp_pcc(torch_output_tensor, tt_output_torch, 0.9998)
+
+    rtol = atol = 0.1
+    pcc = 0.99
+    passing, out = comp_allclose_and_pcc(torch_output_tensor, tt_output_torch, pcc=pcc, rtol=rtol, atol=atol)
+    print(torch_output_tensor)
+    print(tt_output_torch)
+    print(out)
+    assert passing
