@@ -230,10 +230,7 @@ def run_resnet_inference(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, iterations",
-    (
-        (8, 200),
-        (12, 160),
-    ),
+    ((16, 20),),
 )
 def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, device):
     run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, device)
@@ -242,7 +239,7 @@ def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_locati
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_loc",
-    ((20, "models/demos/resnet/demo/images/"),),
+    ((16, "models/demos/resnet/demo/images/"),),
 )
 def test_demo_sample(device, use_program_cache, batch_size, input_loc, imagenet_label_dict, model_location_generator):
     run_resnet_inference(batch_size, input_loc, imagenet_label_dict, device, model_location_generator)

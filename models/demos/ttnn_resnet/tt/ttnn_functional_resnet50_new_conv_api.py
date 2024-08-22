@@ -575,7 +575,9 @@ class resnet50:
             compute_kernel_config=compute_kernel_config,
         )  # num_classes = 1000
 
-        self.transpose_shards = True
+        self.transpose_shards = False
+        act_block_h_override = 1568
+
         if is_wormhole_b0():
             self.transpose_shards = False
             if batch_size == 16:
