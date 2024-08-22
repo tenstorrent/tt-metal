@@ -308,7 +308,6 @@ def run_conv_with_split(
     assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1, 2])
 @pytest.mark.parametrize(
@@ -334,10 +333,15 @@ def run_conv_with_split(
 )
 @pytest.mark.parametrize(
     "has_bias",
-    [
-        True,
-        # False
-    ],
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b, ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b, ttnn.bfloat16],
 )
 def test_conv_ws(
     device,
@@ -353,11 +357,12 @@ def test_conv_ws(
     act_block_w_div,
     stride,
     has_bias,
+    weights_dtype,
+    activations_dtype,
 ):
     stride_h = stride
     stride_w = stride
     batch_size = 2
-    weights_dtype = ttnn.bfloat16
     fp32_accum = False
     packer_l1_acc = False
     deallocate_activation = False
@@ -462,8 +467,8 @@ def test_conv_ws(
     tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
     # breakpoint()
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
+        dtype=activations_dtype,
+        weights_dtype=weights_dtype,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         input_channels_alignment=32,
@@ -513,9 +518,10 @@ def test_conv_ws(
         pcc = 0.9969
     else:
         pcc = 0.998
-    pcc = 0.95
+    pcc = 0.94
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
-    print("PCC output ", pcc_msg)
+    if not passing:
+        logger.error("Fails with PCC ", pcc_msg)
     assert passing
 
 

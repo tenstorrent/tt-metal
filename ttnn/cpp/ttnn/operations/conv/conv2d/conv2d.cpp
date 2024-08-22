@@ -117,7 +117,7 @@ ParallelConfig determine_parallel_config(
 
     uint32_t num_cores_nhw = calculate_num_cores_nhw();
     const CoreRangeSet& grid = calculate_grid(num_cores_nhw);
-    auto shard_orientation = shard_layout==TensorMemoryLayout::BLOCK_SHARDED?block_shard_orientation : ShardOrientation::ROW_MAJOR;
+    auto shard_orientation = shard_layout == TensorMemoryLayout::BLOCK_SHARDED ? block_shard_orientation : ShardOrientation::ROW_MAJOR;
     ParallelConfig pconfig = {.grid = grid, .shard_scheme = shard_layout, .shard_orientation = shard_orientation};
     return pconfig;
 }
@@ -742,6 +742,36 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             sliding_window_config.pad_hw_.first==0 &&
             sliding_window_config.pad_hw_.second==0
             );
+        if(bypass_halo)
+        {
+            // call conv micro op
+            std::vector<int> conv_params = {
+                (int)kernel_size[0], (int)kernel_size[1], (int)stride[0], (int)stride[1], (int)padding[0], (int)padding[1], (int)groups};
+            auto conv_output = optimized_conv_new(
+                input_tensor_post_tm,
+                weight_tensor_on_device,
+                bias_tensor_on_device,
+                conv_params,
+                out_channels,
+                conv_config.output_layout == Layout::ROW_MAJOR,
+                conv_config.activation == "relu",
+                conv_config.math_fidelity,
+                opt_conv_op_parallel_config,
+                opt_conv_op_block_config,
+                0,
+                conv_out_memory_config,
+                conv_config.dtype,
+                {batch_size, input_height, input_width, in_channels},
+                conv_config.input_channels_alignment == 16,
+                compute_kernel_config,
+                conv_config.enable_act_double_buffer,
+                conv_config.enable_split_reader,
+                conv_config.enable_subblock_padding);
+            if (conv_config.deallocate_activation) {
+                ttnn::operations::core::deallocate(input_tensor_post_tm);
+            }
+            return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        }
         auto halo_output = ttnn::halo(
             DefaultQueueId,
             input_tensor_post_tm,
