@@ -1138,14 +1138,6 @@ std::vector<Tensor> _fmod_bw(
 }
 
 
-std::vector<Tensor> _remainder_bw(
-    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    return grad_tensor;
-}
-
-
 std::vector<Tensor> _div_no_nan_bw(
     const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;

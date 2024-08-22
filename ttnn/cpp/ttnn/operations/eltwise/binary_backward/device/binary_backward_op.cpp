@@ -284,7 +284,7 @@ std::vector<ttnn::Tensor> _logaddexp2_bw(
     return grad_tensor;
 }
 
-std::vector<Tensor> _binary_remainder_bw(
+std::vector<Tensor> ExecuteBackwardRemainder::invoke(
     const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.emplace_back(grad);
@@ -292,6 +292,13 @@ std::vector<Tensor> _binary_remainder_bw(
     result_div = where(ttnn::eq(input, other, std::nullopt, output_mem_config), 1.0f, result_div, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad), result_div, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_b);
+    return grad_tensor;
+}
+
+std::vector<Tensor> ExecuteBackwardRemainder::invoke(
+    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.emplace_back(grad);
     return grad_tensor;
 }
 
