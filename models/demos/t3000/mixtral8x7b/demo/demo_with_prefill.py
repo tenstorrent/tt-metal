@@ -40,7 +40,7 @@ class Emb(torch.nn.Module):
 
 
 @torch.no_grad()
-def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_env):
+def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_prefill_len, is_ci_env):
     if batch_size == 32:
         max_seq_len = 16384
     elif batch_size in [4, 8, 16]:
@@ -110,7 +110,16 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         input_mask_pt,
         prefill_seq_len,
         encoded_prompts,
-    ) = preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instruct_mode, device_mesh)
+    ) = preprocess_inputs_prefill(
+        input_prompts,
+        tokenizer,
+        model_args,
+        dtype,
+        instruct_mode,
+        device_mesh,
+        is_ci_env,
+        max_prefill_len=max_prefill_len,
+    )
     profiler.end("preprocess_prefill_inputs")
 
     if instruct_mode:
@@ -168,8 +177,6 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         model_args,
         current_rot_mat,
         rot_matrix,
-        generation_start_pos,
-        max_generated_tokens,
         dtype,
     )
     profiler.end("cache_attention")
@@ -232,6 +239,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     finished_generation = [False] * batch_size
 
     num_tokens_generated_decode = max_generated_tokens
+    log_total_iterations = max_generated_tokens  # In case all users finish early, for logging purposes
     profiler.start("inference_decode")
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     for iteration in range(max_generated_tokens):
@@ -241,6 +249,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         # Check if all users have finished generating (reached EoS token). If so, stop decoding.
         if all(finished_generation):
             logger.info("All users have finished generating tokens")
+            log_total_iterations = iteration
             break
 
         iteration_time_start = time()
@@ -315,13 +324,16 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
                 all_outputs[user].append(user_tok)
 
         # Print out generated outputs for each user at the end of every iteration
-        # if not is_ci_env:  # Avoid printing every iteration in CI
-        #     if len(user_input) == 1:
-        #         logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-        #     else:
-        #         # for user in range(batch_size):
-        #         for user in range(1):  # TODO Miguel: Remove this
-        #             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
+        if not is_ci_env:  # Avoid printing every iteration in CI
+            if len(user_input) == 1:
+                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+            else:
+                for user in range(batch_size):
+                    text = "".join(tokenizer.decode(all_outputs[user]))
+                    if len(text) > 100:
+                        text = "..." + text[-97:]
+                    text = text.replace("\n", " ")
+                    logger.info("[User {}] {}".format(user, text))
 
         # Always print iteration perf
         logger.info(
@@ -335,25 +347,31 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     profiler.end("inference_decode")
     profiler.end("run")
 
-    # Given the large number of tokens prefilled, just print the user outputs at the final iteration
+    # In CI only print the final generated output to avoid spamming the logs
     if len(user_input) == 1:
         logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
     else:
-        # Miguel Redo this for all users
-        for user in range(1):
+        for user in range(batch_size):
             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
-            logger.info("all_outputs[0]: {}".format(all_outputs[0]))
+
     if is_ci_env:
         # When running in CI, check the output against the expected output to avoid accuracy regressions
-        expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
+        if max_prefill_len == 128:
+            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
+        else:  # max_prefill_len == 16k
+            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_16k.json"
+
         with open(expected_output, "r") as f:
             expected_out = json.load(f)
 
         for i in range(batch_size):
             user_output = "".join(tokenizer.decode(all_outputs[i]))
-            user_expect = expected_out[i]["output_general"]
+            # CI is running instruct weights only
+            user_expect = expected_out[i + batch_size]["output_instruct"]
 
-            assert user_output == user_expect, f"Output for user {i} does not match expected output!"
+            # Only compare the new generated tokens (prefill part will match input)
+            assert user_expect in user_output, f"Output for user {i} does not contain the expected output!"
+
         logger.info("[CI-Only] Output token validation passed!")
 
     # Benchmark metrics
@@ -361,8 +379,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
     compile_decode_time = profiler.get_duration("compile_decode")
     inference_prefill_time = profiler.get_duration("inference_prefill")
     inference_decode_time = profiler.get_duration("inference_decode")
-    # TODO Miguel: Sometimes all users might finish before max_generated tokens. This will fail in that case
-    log_printing_time = sum(profiler.get_duration(f"log_printing_{i}") for i in range(max_generated_tokens))
+    log_printing_time = sum(profiler.get_duration(f"log_printing_{i}") for i in range(log_total_iterations))
 
     # Correct the inference decode time to remove the time spent on compile (1st iteration) and log_printing (at the end of every iteration)
     inference_decode_time = inference_decode_time - compile_decode_time - log_printing_time
@@ -438,28 +455,57 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
 
 
 @pytest.mark.parametrize(
-    "input_prompts, instruct_weights",
+    "input_prompts, max_prefill_len, instruct_weights",
     [
-        ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", False),
-        ("models/demos/t3000/mixtral8x7b/demo/input_data_questions_prefill_128.json", True),
-        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", False),
-        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", True),
+        # General weights
+        ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", 128, False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 4 * 1024, False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 8 * 1024, False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 16 * 1024, False),
+        # Instruct weights
+        ("models/demos/t3000/mixtral8x7b/demo/input_data_questions_prefill_128.json", 128, True),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 4 * 1024, True),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 8 * 1024, True),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 16 * 1024, True),
     ],
-    ids=["general_weights", "instruct_weights", "tale_of_two_cities", "tale_of_two_cities_instruct"],
+    ids=[
+        "128-general",
+        "4k-general",
+        "8k-general",
+        "16k-general",
+        "128-instruct",
+        "4k-instruct",
+        "8k-instruct",
+        "16k-instruct",
+    ],
 )
-def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights, is_ci_env):
-    if is_ci_env and instruct_weights == True:
-        pytest.skip("CI demo test only runs general weights to reduce CI pipeline load (both are supported)")
+def test_mixtral8x7b_demo(
+    t3k_device_mesh, use_program_cache, input_prompts, instruct_weights, max_prefill_len, is_ci_env
+):
+    if is_ci_env and instruct_weights == False:
+        pytest.skip("CI demo test only runs instruct weights with max prefill length of 16k to reduce CI pipeline load")
+
+    if is_ci_env and max_prefill_len != 16 * 1024 and max_prefill_len != 128:
+        pytest.skip("CI demo test only runs instruct weights with max prefill length of 16k to reduce CI pipeline load")
+
+    # Adjust the batch size based on the max prefill length
+    if max_prefill_len >= 16 * 1024:
+        batch_size = 4
+    elif max_prefill_len >= 8 * 1024:
+        batch_size = 8
+    elif max_prefill_len >= 4 * 1024:
+        batch_size = 16
+    else:
+        batch_size = 32
 
     for device in t3k_device_mesh.get_device_ids():
         t3k_device_mesh.get_device(device).enable_async(True)
-
-    batch_size = 4 if "32k" in input_prompts else 32
 
     return run_mixtral_demo(
         user_input=input_prompts,
         batch_size=batch_size,
         device_mesh=t3k_device_mesh,
         instruct_mode=instruct_weights,
+        max_prefill_len=max_prefill_len,
         is_ci_env=is_ci_env,
     )

@@ -71,7 +71,9 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, dev
     return input_tokens_tt, max_prompt_len, input_mask_tt, input_tokens, input_mask_bool
 
 
-def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instruct, device_mesh):
+def preprocess_inputs_prefill(
+    input_prompts, tokenizer, model_args, dtype, instruct, device_mesh, is_ci_env=False, max_prefill_len=16384
+):
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
@@ -85,19 +87,19 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instr
     min_prompt_len = min(prompt_lens)
     max_prompt_len = max(prompt_lens)
 
-    # For very large prompts > 16k tokens, clip to 16k tokens to avoid prefill as decode
+    # The large input demo contains more tokens than the maximum (32k tokens)
+    # To avoid running out of memory, clip to max_prefill_len (16k tokens or value given by the test)
     if min_prompt_len > 1024 * 16:
         logger.info(
-            "Clipping prompts to 16k tokens to avoid prefill-as-decode for the entire demo and instead generate new tokens"
+            f"Clipping prompts to {max_prefill_len} tokens to avoid running out of memory. Also avoids `prefill-as-decode` mode for the entire demo (since it only computes 120 iterations)"
         )
         if instruct:
-            # encoded_prompts = [encod[: (1024 * 16) + 1] + tokenizer.encode(" [/INST]") for encod in encoded_prompts]
-            # Miguel - Change the line below to slice the prompt to the required length (1k,2k,4k,8k,16k)
-            encoded_prompts = [encod[: (1024 * 8)] for encod in encoded_prompts]
+            encoded_prompts = [encod[:max_prefill_len] for encod in encoded_prompts]
             dec_prompts = [tokenizer.decode(encod) + " [/INST]" for encod in encoded_prompts]
             encoded_prompts = [tokenizer.encode(prompt) for prompt in dec_prompts]
         else:
-            encoded_prompts = [encod[: (1024 * 16) + 1] for encod in encoded_prompts]
+            encoded_prompts = [encod[:max_prefill_len] for encod in encoded_prompts]
+
         # Update prompt lengths
         prompt_lens = [len(x) for x in encoded_prompts]
         min_prompt_len = min(prompt_lens)
@@ -111,7 +113,9 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instr
 
     if min_prompt_len < 128:
         prefill_seq_len = 0  # For short prompts do decode-as-prefill instead
-    else:  # Maximum KV-cache length support is 32k. If we prefill 32k tokens, then we can't generate any new tokens after.
+    # Maximum KV-cache length support is 32k. To avoid going over it, the max prefill size is fixed at 16K tokens.
+    # Any tokens beyond 16K in the prompt will be prefilled-as-decode.
+    else:
         if min_prompt_len > 1024 * 16:
             prefill_seq_len = 1024 * 16
         elif min_prompt_len > 1024 * 8:
@@ -127,8 +131,11 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, instr
         # Initial prefill tensor full of pad tokens
         input_tokens_prefill = torch.full((len(input_prompts), prefill_seq_len), tokenizer.pad_id, dtype=torch.int32)
 
+    # Start couting from the first token after prefill
     initial_decode_token = max_prompt_len - prefill_seq_len
-    if initial_decode_token == 0:
+    if (
+        initial_decode_token == 0
+    ):  # Avoid a tensor with dim=0, for the special case where all users have the same prompt length exactly the same size of prefill
         initial_decode_token = 1
     # Initial decode tensor full of pad tokens
     input_tokens_decode = torch.full((len(input_prompts), initial_decode_token), tokenizer.pad_id, dtype=torch.int32)
@@ -258,9 +265,10 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
     return next_token
 
 
-def cache_attention(device_mesh, state_dict, model_args, current_rot_mat, rot_matrix, seq_start, seq_len, dtype):
-    logger.info(f"Caching attention ops for iterations {seq_start} to {seq_start + seq_len}...")
+def cache_attention(device_mesh, state_dict, model_args, current_rot_mat, rot_matrix, dtype):
     from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
+
+    logger.info(f"Caching attention...")
 
     attention_inputs = ttnn.from_torch(
         torch.randn(1, 1, 32, 4096),
@@ -279,8 +287,8 @@ def cache_attention(device_mesh, state_dict, model_args, current_rot_mat, rot_ma
         dtype=dtype,
     )
 
-    for iter in [32, 200, 1024]:  # corresponds to chunk size 32, 256, 512
-        logger.info(f"Caching iteration {iter}...")
+    # SDPA in attention only supports chunk sizes of 32, 256, 512. This loop caches all 3 variants of SDPA
+    for iter in [32, 200, 1024]:
         if iter > 0:
             current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
         pos = iter
@@ -292,8 +300,6 @@ def cache_attention(device_mesh, state_dict, model_args, current_rot_mat, rot_ma
             None,
             current_rot_mat,
         )
-        # ttnn.deallocate(tt_out[0])
-
     logger.info("Attention ops cached")
 
 
