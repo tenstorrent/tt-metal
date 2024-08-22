@@ -70,21 +70,21 @@ void MAIN {
     #endif
     constexpr uint32_t cb_ex_partial = tt::CB::dataflow0; // E[x] partial reduce
     constexpr uint32_t cb_ex = tt::CB::dataflow1; // E[x] global reduce
-    constexpr uint32_t cb_ex_external = tt::CB::dataflow2;
-    constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3; // E[(x-E[x])^2] partial reduce
+    constexpr uint32_t cb_ex_external = tt::CB::dataflow2; // E[x] partials recieved from other cores
+    constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3; // E[x^2] partial reduce
     constexpr uint32_t cb_ex2 = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5;
+    constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5; // E[x^2] partials recieved from other cores
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
-    constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x] global reduce // DONE: Add to host code (1 tile)
+    constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x^2] global reduce
     constexpr uint32_t cb_x2 = cb_x; // x^2
-    constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3; // E[(x-E[x])^2]+eps
+    constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3; // [E[x^2]-E[x]^2]+eps
     constexpr uint32_t cb_fusion = tt::CB::c_intermed1; // stream gamma/beta
     constexpr uint32_t cb_out = tt::CB::c_out0;
 
     #ifdef RMSNORM
     constexpr uint32_t cb_var = cb_ex2;
     #else
-    constexpr uint32_t cb_var = tt::CB::c_intermed2; // Var(x) // DONE: Add to host code (1 tile)
+    constexpr uint32_t cb_var = tt::CB::c_intermed2; // Var(x)
     #endif
     constexpr uint32_t cb_ex_sqr = cb_x2;
 
