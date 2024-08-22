@@ -15,6 +15,8 @@
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+#include "ttnn/common/constants.hpp"
+
 namespace tt {
 
 namespace operations {
@@ -115,7 +117,8 @@ Tensor moreh_sum(
     const bool keep_batch_dim = false,
     const std::optional<const Tensor> output = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    uint8_t queue_id = ttnn::DefaultQueueId);
 
 }  // namespace primary
 

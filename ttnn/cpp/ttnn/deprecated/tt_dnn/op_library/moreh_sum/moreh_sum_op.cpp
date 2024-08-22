@@ -4,6 +4,7 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 
+#include <cstdint>
 #include <numeric>
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
@@ -106,14 +107,15 @@ Tensor _moreh_sum(
     const bool& keep_batch_dim,
     const std::optional<const Tensor>& output,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    uint8_t queue_id = ttnn::DefaultQueueId) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE);
     auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     operation::launch_op(
-        [dim, keep_batch_dim, output_mem_config, kernel_config_val](
+        [dim, keep_batch_dim, output_mem_config, kernel_config_val, queue_id](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -125,7 +127,8 @@ Tensor _moreh_sum(
                     .compute_kernel_config = kernel_config_val},
                 input_tensors,
                 optional_input_tensors,
-                optional_output_tensors);
+                optional_output_tensors,
+                queue_id);
         },
         {input},
         output_tensors,
@@ -242,7 +245,8 @@ Tensor moreh_sum(
     const bool keep_batch_dim,
     const std::optional<const Tensor> output,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    uint8_t queue_id) {
     std::vector<int64_t> dims = get_dim(dim, input.get_legacy_shape().rank());
     std::sort(dims.begin(), dims.end());
 
