@@ -486,7 +486,8 @@ void MAIN {
 
     // const uin32_t idle_core = get_arg_val<uint32_t>(4);
 
-    if (get_arg_val<uint32_t>(0)==42){
+    // idle core
+    if (get_arg_val<uint32_t>(0)==65){
         return;
     }
 

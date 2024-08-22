@@ -54,15 +54,15 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     bool is_q_sharded = input_tensor_q.is_sharded();
     bool is_output_sharded = output_tensor.is_sharded();
 
-    // log_info all of the above
-    log_info("B: {}", B);
-    log_info("S: {}", S);
-    log_info("DH: {}", DH);
-    log_info("St: {}", St);
-    log_info("DHt: {}", DHt);
-    log_info("PNHt: {}", PNHt);
-    log_info("Sk_chunk_t: {}", Sk_chunk_t);
-    log_info("k_chunk_size: {}", k_chunk_size);
+    // log_debug all of the above
+    log_debug("B: {}", B);
+    log_debug("S: {}", S);
+    log_debug("DH: {}", DH);
+    log_debug("St: {}", St);
+    log_debug("DHt: {}", DHt);
+    log_debug("PNHt: {}", PNHt);
+    log_debug("Sk_chunk_t: {}", Sk_chunk_t);
+    log_debug("k_chunk_size: {}", k_chunk_size);
 
     Program program = CreateProgram();
 
@@ -148,11 +148,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         }
     }
 
-    log_info("Parallelization scheme:");
-    log_info("num_cores_available: {}", num_cores_available);
-    log_info("num_cores_per_batch: {}", num_cores_per_batch);
-    log_info("num_active_cores: {}", num_active_cores);
-    log_info("core_group: {}", core_group);
+    log_debug("Parallelization scheme:");
+    log_debug("num_cores_available: {}", num_cores_available);
+    log_debug("num_cores_per_batch: {}", num_cores_per_batch);
+    log_debug("num_active_cores: {}", num_active_cores);
+    log_debug("core_group: {}", core_group);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles  = PNHt * DHt;
@@ -165,13 +165,13 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t statistics_tiles = PNHt; // Single column of values in each iteration
 
     // log all values
-    log_info("q_tiles: {}", q_tiles);
-    log_info("k_tiles: {}", k_tiles);
-    log_info("v_tiles: {}", v_tiles);
-    log_info("qk_tiles: {}", qk_tiles);
-    log_info("out0_t: {}", out0_t);
-    log_info("scale_tiles: {}", scale_tiles);
-    log_info("statistics_tiles: {}", statistics_tiles);
+    log_debug("q_tiles: {}", q_tiles);
+    log_debug("k_tiles: {}", k_tiles);
+    log_debug("v_tiles: {}", v_tiles);
+    log_debug("qk_tiles: {}", qk_tiles);
+    log_debug("out0_t: {}", out0_t);
+    log_debug("scale_tiles: {}", scale_tiles);
+    log_debug("statistics_tiles: {}", statistics_tiles);
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4: 8;
@@ -195,19 +195,19 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // log all values
-    log_info("dst_size: {}", dst_size);
-    log_info("qk_in0_block_w: {}", qk_in0_block_w);
-    log_info("qk_out_subblock_w: {}", qk_out_subblock_w);
-    log_info("qk_out_subblock_h: {}", qk_out_subblock_h);
-    log_info("qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
-    log_info("qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
-    log_info("qk_num_blocks: {}", qk_num_blocks);
-    log_info("out_in0_block_w: {}", out_in0_block_w);
-    log_info("out_out_subblock_w: {}", out_out_subblock_w);
-    log_info("out_out_subblock_h: {}", out_out_subblock_h);
-    log_info("out_in0_num_subblocks: {}", out_in0_num_subblocks);
-    log_info("out_in1_num_subblocks: {}", out_in1_num_subblocks);
-    log_info("out_num_blocks: {}", out_num_blocks);
+    log_debug("dst_size: {}", dst_size);
+    log_debug("qk_in0_block_w: {}", qk_in0_block_w);
+    log_debug("qk_out_subblock_w: {}", qk_out_subblock_w);
+    log_debug("qk_out_subblock_h: {}", qk_out_subblock_h);
+    log_debug("qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
+    log_debug("qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
+    log_debug("qk_num_blocks: {}", qk_num_blocks);
+    log_debug("out_in0_block_w: {}", out_in0_block_w);
+    log_debug("out_out_subblock_w: {}", out_out_subblock_w);
+    log_debug("out_out_subblock_h: {}", out_out_subblock_h);
+    log_debug("out_in0_num_subblocks: {}", out_in0_num_subblocks);
+    log_debug("out_in1_num_subblocks: {}", out_in1_num_subblocks);
+    log_debug("out_num_blocks: {}", out_num_blocks);
 
     // Determine granularity for statistics computation
     const uint32_t stats_granularity = std::min(PNHt, dst_size);
@@ -228,14 +228,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const uint32_t log2_dht_granularity = std::log2(dht_granularity);
 
     // Log these
-    log_info("stats_granularity: {}", stats_granularity);
-    log_info("log2_stats_granularity: {}", log2_stats_granularity);
-    log_info("sub_exp_granularity: {}", sub_exp_granularity);
-    log_info("log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
-    log_info("mul_bcast_granularity: {}", mul_bcast_granularity);
-    log_info("log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
-    log_info("dht_granularity: {}", dht_granularity);
-    log_info("log2_dht_granularity: {}", log2_dht_granularity);
+    log_debug("stats_granularity: {}", stats_granularity);
+    log_debug("log2_stats_granularity: {}", log2_stats_granularity);
+    log_debug("sub_exp_granularity: {}", sub_exp_granularity);
+    log_debug("log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
+    log_debug("mul_bcast_granularity: {}", mul_bcast_granularity);
+    log_debug("log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
+    log_debug("dht_granularity: {}", dht_granularity);
+    log_debug("log2_dht_granularity: {}", log2_dht_granularity);
 
     // Create circular buffers
 
@@ -275,13 +275,13 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     }
 
 
-    log_info("q_data_format: {}", q_df);
-    log_info("k_data_format: {}", k_df);
-    log_info("v_data_format: {}", v_df);
-    log_info("out_data_format: {}", out_df);
-    log_info("scalar_data_format: {}", scalar_df);
-    log_info("intermediate_data_format: {}", im_df);
-    log_info("statistics_data_format: {}", stats_df);
+    log_debug("q_data_format: {}", q_df);
+    log_debug("k_data_format: {}", k_df);
+    log_debug("v_data_format: {}", v_df);
+    log_debug("out_data_format: {}", out_df);
+    log_debug("scalar_data_format: {}", scalar_df);
+    log_debug("intermediate_data_format: {}", im_df);
+    log_debug("statistics_data_format: {}", stats_df);
 
     // CBs
     // Q input
@@ -417,8 +417,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         }
     }
 
-    log_info("reduce_core_physical_xs: {}", reduce_core_physical_xs);
-    log_info("reduce_core_physical_ys: {}", reduce_core_physical_ys);
+    log_debug("reduce_core_physical_xs: {}", reduce_core_physical_xs);
+    log_debug("reduce_core_physical_ys: {}", reduce_core_physical_ys);
 
     // Common Compile time Args
     auto in0_mcast_reducer_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
@@ -518,11 +518,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         SetRuntimeArgs(program, compute_kernels_id, core, {do_reduce, core_num, cur_batch, cur_pos});
     }
     if (num_active_cores < num_cores_available) {
-        log_info("idle cores {}", core_group_idle.size());
+        log_debug("idle cores {}", core_group_idle.size());
         // Set the rest of the cores to idle
         for (uint32_t i = 0; i < core_group_idle.size(); ++i) {
             CoreCoord core = core_group_idle[i];
-            log_info("Setting core {} to idle", core);
+            log_debug("Setting core {} to idle", core);
             // reader runtime args
             std::vector<uint32_t> reader_rt_args = { 0, 0, 0, 0, 0, 0, 0, 0};
 
@@ -531,7 +531,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
             SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
             SetRuntimeArgs(program, writer_kernels_id, core, writer_rt_args);
-            SetRuntimeArgs(program, compute_kernels_id, core, { 42, 0, 0, 0});
+            SetRuntimeArgs(program, compute_kernels_id, core, { 65, 0, 0, 0});
         }
     }
 

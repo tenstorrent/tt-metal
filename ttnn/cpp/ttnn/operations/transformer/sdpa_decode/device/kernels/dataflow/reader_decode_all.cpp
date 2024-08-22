@@ -40,6 +40,7 @@ void kernel_main() {
     const uint32_t core_num = get_arg_val<uint32_t>(6);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(7);
 
+    // idle core
     if (q_addr ==0){
         return;
     }
@@ -65,10 +66,8 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
         cur_pos = index_ptr[cur_batch];
     }
-    DPRINT << "[Reader] cur_pos: " << cur_pos << ENDL();
     // Sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num, num_cores_per_batch, k_chunk_size);
-    DPRINT << "[Reader] PSt: " << PSt << " k_num_chunks: " << k_num_chunks << " k_chunk_start: " << k_chunk_start << " k_chunk_end: " << k_chunk_end << ENDL();
     tt_l1_ptr uint32_t * all_reducer_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(8));
     tt_l1_ptr uint32_t * all_reducer_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(8 + B));
 
@@ -157,7 +156,7 @@ void kernel_main() {
     const uint32_t k_batch_offset = cur_batch * St * DHt;
     const uint32_t v_batch_offset = cur_batch * St * DHt;
 
-    DPRINT << "[Reader] read Q" << ENDL();
+    // DPRINT << "[Reader] read Q" << ENDL();
 
     // Then, read K, V, Mask k_chunk_tiles at a time
     const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t * DHt;
@@ -166,7 +165,7 @@ void kernel_main() {
     uint32_t k_start_tile_id = k_batch_offset + k_chunk_offset;
     uint32_t v_start_tile_id = v_batch_offset + v_chunk_offset;
 
-    DPRINT << "[Reader] push kvm " << k_chunk_start << " to " << k_chunk_end << ENDL();
+    // DPRINT << "[Reader] push kvm " << k_chunk_start << " to " << k_chunk_end << ENDL();
 
     for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
         // Read K chunk transposed
@@ -190,7 +189,7 @@ void kernel_main() {
         cb_push_back(cb_k_in, k_chunk_tiles);
         k_start_tile_id += k_chunk_tiles;
 
-        DPRINT << "[Reader] Finished Reading K at " << k_chunk << ENDL();
+        // DPRINT << "[Reader] Finished Reading K at " << k_chunk << ENDL();
 
         // Read V chunk
         cb_reserve_back(cb_v_in, k_chunk_tiles);
@@ -210,8 +209,8 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_v_in, k_chunk_tiles);
         v_start_tile_id += k_chunk_tiles;
-        DPRINT << "[Reader] Finished Reading V at " << k_chunk << ENDL();
+        // DPRINT << "[Reader] Finished Reading V at " << k_chunk << ENDL();
     }
 
-    DPRINT << "[Reader] Done" << ENDL();
+    // DPRINT << "[Reader] Done" << ENDL();
 }
