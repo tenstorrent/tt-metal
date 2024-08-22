@@ -101,7 +101,7 @@ struct dispatch_constants {
             prefetch_q_entries_ = 128;
             max_prefetch_command_size_ = 32 * 1024;
             cmddat_q_size_ = 64 * 1024;
-            scratch_db_size_ = 20 * 1024;
+            scratch_db_size_ = 19 * 1024;
             dispatch_buffer_block_size = 128 * 1024;
             prefetch_d_buffer_size_ = 128 * 1024;
         }

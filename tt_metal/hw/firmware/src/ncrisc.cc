@@ -37,6 +37,7 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -97,11 +98,7 @@ int main(int argc, char *argv[]) {
 
         setup_cb_read_write_interfaces(0, mailboxes->launch.kernel_config.max_cb_index, true, true);
 
-        uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
-        rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_DM1].rta_offset);
-        crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_DM1].crta_offset);
+        firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM1);
 
         DEBUG_STATUS("R");
         kernel_init();

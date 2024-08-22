@@ -155,6 +155,13 @@ void WorkerConfigBufferMgr::alloc(uint32_t when_freeable_sync_count) {
     }
 }
 
+uint32_t WorkerConfigBufferMgr::get_last_slot_addr(HalProgrammableCoreType programmable_core_type) const {
+    // TODO: support all programmable core types?
+    TT_ASSERT(programmable_core_type != HalProgrammableCoreType::IDLE_ETH);
+    uint32_t index = static_cast<uint32_t>(programmable_core_type);
+    return this->reservation_[index].addr;
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

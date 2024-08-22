@@ -40,6 +40,7 @@ uint32_t atomic_ret_val __attribute__ ((section ("l1_data"))) __attribute__((use
 
 uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -130,20 +131,17 @@ int main() {
             //UC FIXME: do i need this?
             setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
 
-            // Run the ERISC kernel
-            DEBUG_STATUS("R");
             //if (mailboxes->launch.enable_brisc) {
                 //UC FIXME: do i need this?
-                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true);
-                uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
-                rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-                    mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].rta_offset);
-                crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-                    mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_ETH_DM0].crta_offset);
+            setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true);
 
-                flush_icache();
-                kernel_init();
-                RECORD_STACK_USAGE();
+            firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM0);
+
+            flush_icache();
+            // Run the ERISC kernel
+            DEBUG_STATUS("R");
+            kernel_init();
+            RECORD_STACK_USAGE();
             //} else {
                 // This was not initialized in kernel_init
             //    noc_local_state_init(noc_index);
@@ -151,7 +149,6 @@ int main() {
             DEBUG_STATUS("D");
 
             mailboxes->launch.go.run = RUN_MSG_DONE;
-
 
             // Notify dispatcher core that it has completed
             if (mailboxes->launch.kernel_config.mode == DISPATCH_MODE_DEV) {
