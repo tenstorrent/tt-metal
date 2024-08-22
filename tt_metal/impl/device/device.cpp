@@ -468,7 +468,7 @@ void Device::clear_l1_state() {
     // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
     // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
     std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-        (eth_l1_mem::address_map::SEMAPHORE_BASE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
+        (eth_l1_mem::address_map::ISSUE_CQ_CB_BASE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
         0);
 
     // Clear erisc sync info
@@ -509,6 +509,12 @@ void Device::configure_kernel_variant(
 
     const auto& grid_size = this->grid_size();
 
+    // TODO: just pass in the programmable index
+    uint32_t programmable_core_type_index = (dispatch_core_type == CoreType::WORKER) ?
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) :
+        is_active_eth_core ? hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) :
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"MY_NOC_X", std::to_string(NOC_0_X(my_noc_index, grid_size.x, kernel_physical_core.x))},
@@ -518,6 +524,7 @@ void Device::configure_kernel_variant(
         {"UPSTREAM_NOC_Y", std::to_string(NOC_0_Y(upstream_noc_index, grid_size.y, upstream_physical_core.y))},
         {"DOWNSTREAM_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, downstream_physical_core.x))},
         {"DOWNSTREAM_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, downstream_physical_core.y))},
+        {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
     defines.insert(defines_in.begin(), defines_in.end());
 
