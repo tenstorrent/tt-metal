@@ -138,7 +138,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             }
         }
     } else {
-        for (int i = 0; i < num_active_cores; ++i) {
+        for (int i = 0; i < num_cores_available; ++i) {
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
             if (i < num_active_cores) {
                 core_group.push_back(core);
@@ -518,9 +518,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         SetRuntimeArgs(program, compute_kernels_id, core, {do_reduce, core_num, cur_batch, cur_pos});
     }
     if (num_active_cores < num_cores_available) {
+        log_info("idle cores {}", core_group_idle.size());
         // Set the rest of the cores to idle
         for (uint32_t i = 0; i < core_group_idle.size(); ++i) {
             CoreCoord core = core_group_idle[i];
+            log_info("Setting core {} to idle", core);
             // reader runtime args
             std::vector<uint32_t> reader_rt_args = { 0, 0, 0, 0, 0, 0, 0, 0};
 
@@ -529,7 +531,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
             SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
             SetRuntimeArgs(program, writer_kernels_id, core, writer_rt_args);
-            SetRuntimeArgs(program, compute_kernels_id, core, { 0, 0, 0, 0});
+            SetRuntimeArgs(program, compute_kernels_id, core, { 42, 0, 0, 0});
         }
     }
 

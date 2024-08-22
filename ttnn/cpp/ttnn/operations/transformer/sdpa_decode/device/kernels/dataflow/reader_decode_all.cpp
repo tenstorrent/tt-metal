@@ -40,6 +40,9 @@ void kernel_main() {
     const uint32_t core_num = get_arg_val<uint32_t>(6);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(7);
 
+    if (q_addr ==0){
+        return;
+    }
     // Get cur_pos
     uint32_t cur_pos = 0;
     if (cur_pos_arg!=4294967295){

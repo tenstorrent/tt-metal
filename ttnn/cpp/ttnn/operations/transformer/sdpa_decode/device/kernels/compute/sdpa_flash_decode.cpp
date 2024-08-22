@@ -486,6 +486,10 @@ void MAIN {
 
     // const uin32_t idle_core = get_arg_val<uint32_t>(4);
 
+    if (get_arg_val<uint32_t>(0)==42){
+        return;
+    }
+
     // Get cur_pos
     uint32_t cur_pos = 0;
     if (cur_pos_arg!=4294967295){
