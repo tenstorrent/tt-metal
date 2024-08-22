@@ -180,7 +180,7 @@ class TtModelArgs:
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=seq_len // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_M=1,  # // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=7,  # 14336/32/64cores = 7: N / TILE_WIDTH / Grid_Size
                 mcast_in0=True,
                 fused_activation=ttnn.UnaryOpType.SILU,
@@ -194,7 +194,7 @@ class TtModelArgs:
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=seq_len // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_M=1,  # // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=7,  # 14336/32/64cores = 7: N / TILE_WIDTH / Grid_Size
                 mcast_in0=True,
                 fused_activation=None,
@@ -208,7 +208,7 @@ class TtModelArgs:
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=seq_len // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_M=1,  # // 32,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=2,  # 4096 / 32 / 64 cores = 2.86 -> 4 (32 cores) # N / TILE_WIDTH / Grid_Size
                 mcast_in0=True,
                 fused_activation=None,

@@ -4,12 +4,13 @@
 
 import torch
 import ttnn
+from ttnn import ShardTensorToMesh
 
 
 class TtLlamaMLP(torch.nn.Module):
     def __init__(
         self,
-        device,
+        mesh_device,
         args,
         state_dict,
         weight_cache_path,
@@ -20,7 +21,7 @@ class TtLlamaMLP(torch.nn.Module):
         super().__init__()
 
         self.state_dict = state_dict
-        self.device = device
+        self.mesh_device = mesh_device
         self.args = args
         self.model_config = model_config
 
@@ -30,10 +31,11 @@ class TtLlamaMLP(torch.nn.Module):
         as_tensor = lambda name, type: ttnn.as_tensor(
             torch_weight(name),
             dtype=type,
-            device=self.device,
+            device=self.mesh_device,
             layout=self.model_config["MLP_W_LAYOUT_TILE"],
             memory_config=self.model_config["MLP_WEIGHTS_MEMCFG"],
-            cache_file_name=cache_name(name),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=1),
+            # cache_file_name=cache_name(name),
         )
 
         self.w1 = as_tensor("w1", ttnn.bfloat8_b)  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
@@ -50,7 +52,7 @@ class TtLlamaMLP(torch.nn.Module):
         seq_len = x.shape[-2]
         compute_kernel_config = self.model_config["MLP_KERNEL_CONFIG"]
         if seq_len >= 1024:  # Too big to compute. Set different program configs based on seqlen
-            # Reshape input to to fit on device and parallelize computation
+            # Reshape input to to fit on mesh_device and parallelize computation
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
             pc_1 = self.model_config["PREFILL_MLP_W1_PRG_CONFIG"]
             pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"]
@@ -78,12 +80,14 @@ class TtLlamaMLP(torch.nn.Module):
             dtype=ttnn.bfloat16,
             program_config=pc_3,
         )
-
-        # x.deallocate(True)
+        x.deallocate(True)
         w2_in = ttnn.multiply(w1_out, w3_out)
 
         w3_out.deallocate(True)
         w1_out.deallocate(True)
+
+        w2_in = ttnn.to_device(w2_in, self.mesh_device)
+        w2_in = ttnn.line_all_gather(w2_in, dim=3, num_links=1, memory_config=w2_in.memory_config())
 
         w2_out = ttnn.linear(
             w2_in,

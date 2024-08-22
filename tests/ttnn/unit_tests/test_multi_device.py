@@ -252,7 +252,9 @@ def test_multi_device_multi_op(mesh_device):
         mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
         device=mesh_device,
     )
+    print("ttnn_input_tensor shape:", ttnn_input_tensor.shape)
     ttnn_gelu_output = ttnn.gelu(ttnn_input_tensor)
+    print("ttnn_gelu_output shape:", ttnn_gelu_output.shape)
     ttnn_output_tensor = ttnn.exp(ttnn_gelu_output)
 
     ttnn_torch_output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
@@ -588,3 +590,131 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
     for device in mesh_device.get_devices():
         device_tensor = ttnn.get_device_tensor(tensor, device)
         assert torch.allclose(ttnn.to_torch(device_tensor), torch_input_tensor)
+
+
+def test_llama3_mlp_unit_test(device_mesh):
+    """Llama31_8b: MLP submodules unit testing the sharding of weight tensor"""
+    torch_input_tensor = torch.rand((1, 1, 512, 4096), dtype=torch.bfloat16)
+    torch_weight_tensor = torch.rand((4096, 14336), dtype=torch.bfloat16)
+    torch_weight_tensor_w2 = torch.rand((14336, 4096), dtype=torch.bfloat16)
+
+    print("torch_input_tensor shape: ", torch_input_tensor.shape)
+    print("torch_weight_tensor shape: ", torch_weight_tensor.shape)
+
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ShardTensorToMesh(device_mesh, dim=3),
+        device=device_mesh,
+    )
+
+    ttnn_weight_tensor = ttnn.as_tensor(
+        torch_weight_tensor,
+        dtype=ttnn.bfloat8_b,
+        device=device_mesh,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+    )
+    ttnn_weight_tensor_w2 = ttnn.as_tensor(
+        torch_weight_tensor_w2,
+        dtype=ttnn.bfloat8_b,
+        device=device_mesh,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+    )
+
+    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    pc_1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=512 // 32,
+        per_core_N=7,
+        mcast_in0=True,
+        fused_activation=ttnn.UnaryOpType.SILU,
+        fuse_batch=False,
+    )
+    pc_2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=512 // 32,
+        per_core_N=2,
+        mcast_in0=True,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+    pc_3 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=512 // 32,
+        per_core_N=7,
+        mcast_in0=True,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+    w1_out = ttnn.linear(
+        ttnn_input_tensor,
+        ttnn_weight_tensor,
+        compute_kernel_config=compute_kernel_config,
+        core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
+        dtype=ttnn.bfloat16,
+        activation="silu" if not pc_1 else None,
+        program_config=pc_1,
+    )
+    w3_out = ttnn.linear(
+        ttnn_input_tensor,
+        ttnn_weight_tensor,
+        compute_kernel_config=compute_kernel_config,
+        core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
+        dtype=ttnn.bfloat16,
+        program_config=pc_3,
+    )
+    w2_in = ttnn.multiply(w1_out, w3_out)
+
+    w3_out.deallocate(True)
+    w1_out.deallocate(True)
+
+    ttnn_output_tensor = ttnn.linear(
+        w2_in,
+        ttnn_weight_tensor_w2,
+        compute_kernel_config=compute_kernel_config,
+        core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+        dtype=ttnn.bfloat8_b,
+        program_config=pc_2,
+    )
+
+    ttnn_torch_output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
+
+
+def test_ttnn_multi_device_all_gather_device_mesh(device_mesh):
+    """Multidevice API test for ttnn.all_gather using device_mesh"""
+    if device_mesh.get_num_devices() <= 1:
+        pytest.skip("Requires multiple devices to run")
+    full_tensor = torch.rand((1, 1, 32, 32 * device_mesh.get_num_devices()), dtype=torch.bfloat16)
+
+    print("full_tensor shape: ", full_tensor.shape)
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(device_mesh, dim=3))
+    print("ttnn_tensor shape: ", ttnn_tensor.shape)
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
+    print("ttnn_tensor shape after gather: ", ttnn_tensor.shape)
+
+    device_tensors: typing.List[ttnn.Tensor] = ttnn.get_device_tensors(ttnn_tensor)
+    for device_tensor in device_tensors:
+        device_tensor_torch = ttnn.to_torch(device_tensor)
+        assert torch.all(device_tensor_torch == full_tensor)

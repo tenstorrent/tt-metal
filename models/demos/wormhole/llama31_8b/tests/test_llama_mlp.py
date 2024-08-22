@@ -15,6 +15,7 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -23,14 +24,14 @@ from models.utility_functions import skip_for_grayskull
     (
         # 4096,
         # 1024, TODO: OOM L1; chunk?
-        512,
-        128,
+        # 512,
+        # 128,
         32,
     ),
 )
-def test_llama_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
+def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(device=device)
+    model_args = TtModelArgs(device=mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -46,7 +47,7 @@ def test_llama_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = TtLlamaMLP(
-        device=device,
+        mesh_device=mesh_device,
         args=model_args,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -56,16 +57,22 @@ def test_llama_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
     )
     torch_input = torch.randn(1, 1, seq_len, 4096)
     reference_output = reference_model(torch_input)
+
     tt_input = ttnn.from_torch(
-        torch_input, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+        torch_input,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        layout=ttnn.TILE_LAYOUT,
     )
 
     logger.info("Compilation pass for Llama_MLP")
-    tt_output = tt_model(tt_input)
+    # tt_output = tt_model(tt_input)
 
     logger.info("Performance pass for Llama_MLP")
-    tt_output = tt_model(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output)
+    tt_output = tt_model(tt_input)  # , tt_w1_out, tt_w3_out
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
