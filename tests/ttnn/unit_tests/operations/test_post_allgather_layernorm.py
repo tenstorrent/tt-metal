@@ -15,13 +15,19 @@ def rms_norm(x, gamma, eps):
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma
 
 
-def test_post_allgather_layernorm(device, use_program_cache):
+def test_post_allgather_layernorm(device, use_program_cache, RMSNORM=True):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((1, 1, 32, 1024), dtype=torch.bfloat16)
     torch_weight = torch.randn((1, 1, 1, 1024), dtype=torch.bfloat16)
     eps = 1e-6
-    torch_output_tensor = rms_norm(torch_input_tensor, torch_weight, eps=eps)
+    if RMSNORM:
+        torch_output_tensor = rms_norm(torch_input_tensor, torch_weight, eps=eps)
+    else:
+        torch_output_tensor = torch.nn.functional.layer_norm(
+            torch_input_tensor, (1024,), weight=torch_weight.squeeze(0).squeeze(0).squeeze(0), eps=eps
+        )
+
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         layout=ttnn.TILE_LAYOUT,
@@ -53,16 +59,25 @@ def test_post_allgather_layernorm(device, use_program_cache):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        # cache_file_name="rms_weights_cache_1024",
+        cache_file_name="rms_weights_cache_1024",
     )
 
-    tt_output_tensor = ttnn.rms_norm(
-        tt_input_tensor,
-        epsilon=eps,
-        weight=tt_weights,
-        program_config=SHARDED_NORM_PRGM_CFG,
-        memory_config=tt_sharded_config,
-    )
+    if RMSNORM:
+        tt_output_tensor = ttnn.rms_norm(
+            tt_input_tensor,
+            epsilon=eps,
+            weight=tt_weights,
+            program_config=SHARDED_NORM_PRGM_CFG,
+            memory_config=tt_sharded_config,
+        )
+    else:
+        tt_output_tensor = ttnn.layer_norm(
+            tt_input_tensor,
+            epsilon=eps,
+            weight=tt_weights,
+            program_config=SHARDED_NORM_PRGM_CFG,
+            memory_config=tt_sharded_config,
+        )
     tt_output_torch = ttnn.to_torch(tt_output_tensor)
 
     rtol = atol = 0.1
