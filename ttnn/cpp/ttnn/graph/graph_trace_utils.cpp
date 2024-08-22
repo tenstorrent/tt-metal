@@ -5,6 +5,8 @@
 #include "graph_trace_utils.hpp"
 
 #include "graph_processor.hpp"
+#include "graph_consts.hpp"
+
 
 #include "tt_metal/common/assert.hpp"
 
@@ -54,13 +56,13 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
     for (size_t i = 0; i < trace.size(); ++i) {
         const auto& v = trace[i];
 
-        if (v["name"] == "function_start") {
+        if (v[kNodeType] == kNodeFunctionStart) {
             if (current_op.empty()) {
                 while (++i < trace.size()) {
                     const auto& inner_v = trace[i];
-                    if (inner_v["name"] == "buffer" && inner_v["params"]["type"] == "L1") {
-                        total_buffer += std::stoi(inner_v["params"]["size"].get<std::string>());
-                    } else if (inner_v["name"].get<std::string>().find("tensor") != std::string::npos) {
+                    if (inner_v[kNodeType] == "buffer" && inner_v[kParams][kType] == "L1") {
+                        total_buffer += std::stoi(inner_v[kParams][kSize].get<std::string>());
+                    } else if (inner_v[kNodeType] == kNodeTensor) {
                         continue;
                     } else {
                         break;
@@ -68,20 +70,20 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
                 }
                 --i;  // adjust for loop increment
             }
-            current_op.push_back(v["params"]["name"]);
-        } else if (v["name"] == "circular_buffer_allocate") {
-            total_cb += stoi(v["params"]["size"].get<std::string>());
-        } else if (v["name"] == "circular_buffer_deallocate_all") {
+            current_op.push_back(v[kParams][kName]);
+        } else if (v[kNodeType] == kNodeCBAllocate) {
+            total_cb += stoi(v[kParams][kSize].get<std::string>());
+        } else if (v[kNodeType] == kNodeCBDeallocateAll) {
             total_cb = 0;
-        } else if (v["name"] == "buffer_allocate" && v["params"]["type"] == "L1") {
-            total_buffer += stoi(v["params"]["size"].get<std::string>());
-        } else if (v["name"] == "buffer_deallocate") {
-            auto connection = v["connections"][0].get<int>();
+        } else if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "L1") {
+            total_buffer += stoi(v[kParams][kSize].get<std::string>());
+        } else if (v[kNodeType] == kNodeBufferDeallocate) {
+            auto connection = v[kConnections][0].get<int>();
             auto buffer = trace[connection];
-            if(buffer["params"]["type"] == "L1") {
-                total_buffer -= stoi(buffer["params"]["size"].get<std::string>());
+            if(buffer[kParams][kType] == "L1") {
+                total_buffer -= stoi(buffer[kParams][kSize].get<std::string>());
             }
-        } else if (v["name"] == "function_end") {
+        } else if (v[kNodeType] == kNodeFunctionEnd) {
             current_op.pop_back();
         }
 
@@ -104,15 +106,15 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
 
     for (int i = 0; i < trace.size(); ++i) {
         const auto& v = trace[i];
-        if (v["name"] == "function_start" && !first_begin_found) {
+        if (v[kNodeType] == kNodeFunctionStart && !first_begin_found) {
             first_begin_found = true;
             first_begin_index = i;
-        } else if (v["name"] == "function_end") {
+        } else if (v[kNodeType] == kNodeFunctionEnd) {
             last_end_found = true;
             last_end_index = i;
 
-            if("create_device_tensor") {
-                auto id = v["connections"][0].get<int>();
+            if(v[kParams][kName] == "create_device_tensor") {
+                auto id = v[kConnections][0].get<int>();
                 intermediate_tensors.insert(id);
             }
         }
@@ -121,10 +123,10 @@ std::pair<uint32_t, uint32_t> count_intermediate_and_output_tensors(const nlohma
     TT_ASSERT(first_begin_found);
     TT_ASSERT(last_end_found);
 
-    auto connections = trace[last_end_index]["connections"].get<std::unordered_set<uint32_t>>();
+    auto connections = trace[last_end_index][kConnections].get<std::unordered_set<uint32_t>>();
     for(auto index : connections) {
         // It can be tensor or some other node like
-        if(trace[index]["name"].get<std::string>().find("tensor") != std::string::npos) {
+        if(trace[index][kNodeType] == kNodeTensor) {
             output_tensors.insert(index);
         }
     }
@@ -145,8 +147,8 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace){
         const auto& v = trace[i];
         i++;
 
-        if (v["name"] == "function_start") {
-            op_calls.push_back(v["params"]["name"]);
+        if (v[kNodeType] == kNodeFunctionStart) {
+            op_calls.push_back(v[kParams][kName]);
         }
     }
 
@@ -159,7 +161,7 @@ std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace)
     auto find_function_end_node = [](const auto& trace) -> const nlohmann::json& {
         for(int i = trace.size() - 1; i >= 0; --i) {
             const auto& v = trace[i];
-            if (v["name"] == "function_end") {
+            if (v[kNodeType] == kNodeFunctionEnd) {
                 return v;
             }
         }
@@ -171,10 +173,10 @@ std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace)
     // Lambda to extract output tensors from the 'function_end' node
     auto extract_output_tensors = [&trace](const nlohmann::json& function_end_node) {
         std::unordered_set<uint32_t> output;
-        auto connections = function_end_node["connections"].get<std::unordered_set<uint32_t>>();
+        auto connections = function_end_node[kConnections].get<std::unordered_set<uint32_t>>();
         for (const auto& output_id : connections) {
             const auto& output_node = trace[output_id];
-            if (output_node["name"].template get<std::string>().find("tensor") != std::string::npos) {
+            if (output_node[kNodeType] == kNodeTensor) {
                 output.insert(output_id);
             }
         }
@@ -191,19 +193,19 @@ std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace)
     auto output_tensors = extract_output_tensors(trace);
 
     for (const auto& node : trace) {
-        if (node["name"] != "buffer" )
+        if (node[kNodeType] != kNodeBuffer )
             continue;
 
-        auto connections = node["connections"].get<std::unordered_set<uint32_t>>();
+        auto connections = node[kConnections].get<std::unordered_set<uint32_t>>();
         for (const auto& tensor_id : connections) {
             if (output_tensors.find(tensor_id) == output_tensors.end())
                 continue;
 
-            const auto type = node["params"]["type"] == "L1" ? tt::tt_metal::BufferType::L1 : tt::tt_metal::BufferType::DRAM;
-            const auto size = stoi(node["params"]["size"].get<std::string>());
+            const auto type = node[kParams][kType] == "L1" ? tt::tt_metal::BufferType::L1 : tt::tt_metal::BufferType::DRAM;
+            const auto size = stoi(node[kParams][kSize].get<std::string>());
 
             const auto& tensor = trace[tensor_id];
-            const std::string shape_string = tensor["params"]["shape"].get<std::string>();
+            const std::string shape_string = tensor[kParams][kShape];
             const auto shape = parse_shape(shape_string);
 
             output.emplace_back(TensorInfo {.shape = shape, .size = size, .type = type});
