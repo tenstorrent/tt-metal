@@ -39,7 +39,7 @@ struct DatacopyParams {
 };
 
 DatacopyParams setup_datacopy(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program *program,
     const Tensor& input_tensor,
     const Tensor& all_gather_output_tensor,
     Tensor& datacopy_output_tensor,
@@ -148,7 +148,7 @@ DatacopyParams setup_datacopy(
 
     auto override_runtime_arguments_callback = [datacopy_kernel_id, all_datacopy_cores] (
         const void* operation,
-        Program& program,
+        Program *program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -182,7 +182,7 @@ DatacopyParams setup_datacopy(
 //   (in other words, disable the "bidirectional" send flag)
 operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_workers(const Tensor& input_tensor, Tensor& all_gather_output_tensor, Tensor& datacopy_output_tensor, const uint32_t dim, const uint32_t num_links, const uint32_t ring_size, const uint32_t ring_index, const std::optional<chip_id_t> receiver_device_id, const std::optional<chip_id_t> sender_device_id, all_gather_op::Topology topology, const CoreCoord core_grid_offset) {
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     DatacopyParams datacopy_params = setup_datacopy(program, input_tensor, all_gather_output_tensor, datacopy_output_tensor, dim, num_links, ring_size, ring_index, topology, {0, 0});
     const auto& datacopy_override_runtime_arguments_callback = datacopy_params.datacopy_override_runtime_arguments_callback;
@@ -196,7 +196,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     // Fuse the datacopy and all-gather overriden runtime arguments callbacks
     auto override_runtime_arguments_callback = [all_gather_override_runtime_arguments_callback, datacopy_override_runtime_arguments_callback] (
         const void* operation,
-        Program& program,
+        Program *program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

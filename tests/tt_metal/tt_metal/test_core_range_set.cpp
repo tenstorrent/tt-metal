@@ -47,15 +47,15 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program *program, 
     }
 }
 
-void check_semaphores_are_initialized(tt_metal::Device *device, tt_metal::Program& program, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &golden_sem_values) {
+void check_semaphores_are_initialized(tt_metal::Device *device, tt_metal::Program *program, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &golden_sem_values) {
     for (auto core_range : core_range_set.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 std::vector<uint32_t> res;
                 tt_metal::detail::ReadFromDeviceL1(device, logical_core,
-                    program.get_sem_base_addr(device, logical_core, CoreType::WORKER),
-                    program.get_sem_size(device, logical_core, CoreType::WORKER),
+                    tt_metal::detail::GetMetalProgram(program)->get_sem_base_addr(device, logical_core, CoreType::WORKER),
+                    tt_metal::detail::GetMetalProgram(program)->get_sem_size(device, logical_core, CoreType::WORKER),
                     res);
                 std::vector<uint32_t> filtered_res;
                 constexpr static uint32_t num_u32_to_skip = L1_ALIGNMENT / sizeof(uint32_t);

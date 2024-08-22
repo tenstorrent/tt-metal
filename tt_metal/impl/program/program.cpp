@@ -150,7 +150,7 @@ KernelHandle MetalProgram::create_kernel(
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config) {
     return std::visit(
         [&](auto &&cfg) -> KernelHandle {
-            CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+            CoreRangeSet core_ranges = CoreRangeSet::get_core_range_set(core_spec);
             std::shared_ptr<Kernel> kernel;
             using T = std::decay_t<decltype(cfg)>;
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
@@ -992,7 +992,7 @@ ProgramConfig& MetalProgram::get_program_config(uint32_t programmable_core_type_
     return this->program_configs_[programmable_core_type_index];
 }
 
-uint32_t Program::finalize_sems(uint32_t programmable_core_type_index, uint32_t base_offset) {
+uint32_t MetalProgram::finalize_sems(uint32_t programmable_core_type_index, uint32_t base_offset) {
 
     int max_id = -1;
     CoreType core_type = hal.get_core_type(programmable_core_type_index);
@@ -1010,7 +1010,7 @@ uint32_t Program::finalize_sems(uint32_t programmable_core_type_index, uint32_t 
     return base_offset + sem_size;
 }
 
-void Program::set_launch_msg_sem_offsets() {
+void MetalProgram::set_launch_msg_sem_offsets() {
 
     for (uint32_t kg_type_index = 0; kg_type_index < hal.get_programmable_core_type_count(); kg_type_index++) {
         for (auto& kg : this->get_kernel_groups(kg_type_index)) {
@@ -1215,6 +1215,13 @@ nlohmann::json MetalProgram::get_kernels_json() const {
     ret["compute_kernels"] = computeKernels;
     ret["datamovement_kernels"] = datamovementKernels;
     return ret;
+}
+
+std::vector<std::pair<CoreRangeSet, uint64_t>> MetalProgram::get_cb_info() {
+    std::vector<std::pair<CoreRangeSet, uint64_t>> info;
+    for (auto cb : circular_buffers_)
+        info.push_back({cb->core_ranges(), cb->size()});
+    return info;
 }
 
 MetalProgram::~MetalProgram() {}

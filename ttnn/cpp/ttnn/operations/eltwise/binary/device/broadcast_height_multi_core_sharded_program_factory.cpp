@@ -56,7 +56,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
 
     uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program *program = tt_metal::CreateProgram();
 
     tt_metal::Device* device = a.device();
 
@@ -199,7 +199,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
 
 
     return {
-        std::move(program),
+        program,
         {
             binary_reader_kernel_id,
             bcast_kernel_id,

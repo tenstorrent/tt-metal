@@ -29,7 +29,7 @@ static void test_sems_across_core_types(CommonFixture *fixture,
             device->get_active_ethernet_cores() :
             device->get_inactive_ethernet_cores();
         if (eth_cores.size() > 0) {
-            Program program = CreateProgram();
+            Program *program = CreateProgram();
 
             CoreCoord eth_core = *eth_cores.begin();
             CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);

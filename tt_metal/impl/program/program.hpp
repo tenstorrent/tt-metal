@@ -89,6 +89,7 @@ class MetalProgram {
     }
 
     const std::vector<std::shared_ptr<CircularBuffer>> &circular_buffers() const { return circular_buffers_; }
+    std::vector<std::pair<CoreRangeSet, uint64_t>> get_cb_info();
 
     const std::vector< Semaphore > & semaphores() const { return semaphores_; }
 

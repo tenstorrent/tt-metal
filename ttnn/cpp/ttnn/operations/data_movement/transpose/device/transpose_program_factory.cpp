@@ -16,7 +16,7 @@ using namespace tt::constants;
 
 template <bool IS_CREATING>
 void override_runtime_args_mc_cn(
-    const Program& program,
+    const Program *program,
     tt::tt_metal::KernelHandle reader_kernel_id,
     tt::tt_metal::KernelHandle writer_kernel_id,
     const Tensor &input_tensor,
@@ -219,7 +219,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor &a, Tensor 
 
 template <bool IS_CREATING>
 void override_runtime_args_mc_hc(
-    const Program& program,
+    const Program *program,
     tt::tt_metal::KernelHandle reader_kernel_id,
     tt::tt_metal::KernelHandle writer_kernel_id,
     const Tensor &input_tensor,
@@ -332,7 +332,7 @@ void override_runtime_args_mc_hc(
 
 template <bool IS_CREATING>
 void override_runtime_args_mc_hc_rm(
-    const Program& program,
+    const Program *program,
     tt::tt_metal::KernelHandle reader_kernel_id,
     tt::tt_metal::KernelHandle writer_kernel_id,
     const Tensor &input_tensor,
@@ -938,7 +938,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
 operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor &a, Tensor &output) {
 
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
@@ -1101,7 +1101,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor &a,
 
 template <bool IS_CREATING>
 void override_runtime_args_wh(
-    const Program& program,
+    const Program *program,
     tt::tt_metal::KernelHandle reader_kernel_id,
     tt::tt_metal::KernelHandle compute_kernel_id,
     tt::tt_metal::KernelHandle writer_kernel_id,
@@ -1240,7 +1240,7 @@ void override_runtime_args_wh(
 
 template<bool IS_CREATING>
 void override_runtime_args_wh_rm(
-    const Program& program,
+    const Program *program,
     tt::tt_metal::KernelHandle reader_kernel_id,
     tt::tt_metal::KernelHandle compute_kernel_id,
     tt::tt_metal::KernelHandle writer_kernel_id,

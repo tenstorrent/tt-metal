@@ -2540,7 +2540,7 @@ void Device::launch_program(MetalProgram *program, bool wait_until_cores_done, b
         this->write_runtime_args(program, force_slow_dispatch);
         this->configure_with_program(program, force_slow_dispatch);
 
-        auto device_id = device->id();
+        auto device_id = this->id();
 
         tt::Cluster::instance().dram_barrier(device_id);
 

@@ -599,6 +599,13 @@ nlohmann::json GetKernelsJSON(Program *program) {
     return program->metal_program->get_kernels_json();
 }
 
+void SetRuntimeID(Program *program, uint64_t id) {
+    program->metal_program->set_runtime_id(id);
+}
+
+std::vector<std::pair<CoreRangeSet, uint64_t>> GetCBInfo(Program *program) {
+    return program->metal_program->get_cb_info();
+}
 }  // namespace detail
 
 size_t GetNumAvailableDevices() {

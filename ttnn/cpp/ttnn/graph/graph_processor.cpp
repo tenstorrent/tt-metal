@@ -178,8 +178,8 @@ void GraphProcessor::track_program(tt::tt_metal::Program* program) {
         return;
     }
 
-    for (auto& cb : program->circular_buffers()) {
-        track_allocate_cb(cb->core_ranges(), 0, cb->size());
+    for (auto& core_range_and_size : tt::tt_metal::detail::GetCBInfo(program)) {
+        track_allocate_cb(core_range_and_size.first, 0, core_range_and_size.second);
     }
 }
 

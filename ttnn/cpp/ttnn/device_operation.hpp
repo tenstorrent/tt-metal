@@ -299,10 +299,10 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
         auto& program = create_or_get_program_from_cache<device_operation_t>(
             program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
 
-        program.set_runtime_id(operation_id);
+        tt::tt_metal::detail::SetRuntimeID(program, operation_id);
 
-        GraphTracker::instance().track_program(&program);
-        if(GraphTracker::instance().hook_program(&program)) {
+        GraphTracker::instance().track_program(program);
+        if(GraphTracker::instance().hook_program(program)) {
             return;
         }
 
@@ -342,10 +342,10 @@ void launch_on_worker_thread(auto cq_id, auto operation_id, const auto& operatio
             program_factory
         );
 
-        program->set_runtime_id(operation_id);
+        tt::tt_metal::detail::SetRuntimeID(program, operation_id);
 
-        GraphTracker::instance().track_program(program.get());
-        if(GraphTracker::instance().hook_program(program.get())) {
+        GraphTracker::instance().track_program(program);
+        if(GraphTracker::instance().hook_program(program)) {
             return;
         }
 

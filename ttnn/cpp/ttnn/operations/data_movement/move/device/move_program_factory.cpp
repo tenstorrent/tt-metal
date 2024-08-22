@@ -188,7 +188,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
 
 // Sharded buffers are mapped to CBs. Move from top of src CB to dst CB
 operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Tensor& output) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
     auto shard_spec = input.shard_spec().value();
@@ -262,7 +262,7 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
                                            total_size_bytes = total_size_bytes,
                                            cores = cores](
                                               const void* operation,
-                                              Program& program,
+                                              Program *program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {

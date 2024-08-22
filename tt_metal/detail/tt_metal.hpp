@@ -265,5 +265,11 @@ namespace tt::tt_metal {
 
         // Get a json rep of kernels in a program, used by profiler.
         nlohmann::json GetKernelsJSON(Program *program);
+
+        // Set the runtime id for a given program, used by profiler.
+        void SetRuntimeID(Program *program, uint64_t id);
+
+        // Get str reps of cb core ranges in a program, used by graph processor
+        std::vector<std::pair<CoreRangeSet, uint64_t>> GetCBInfo(Program *program);
     }
 }
