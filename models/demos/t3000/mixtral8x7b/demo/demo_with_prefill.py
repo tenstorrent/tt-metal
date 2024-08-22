@@ -24,7 +24,6 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_embedding import TtMixtralEmbedding
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
-from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
@@ -41,6 +40,14 @@ class Emb(torch.nn.Module):
 
 @torch.no_grad()
 def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_prefill_len, is_ci_env):
+    # Set Mixtral flags for CI
+    if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
+        os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/"
+        os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/"
+        os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/"
+    # This module requires the env paths above for CI runs
+    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+
     if batch_size == 32:
         max_seq_len = 16384
     elif batch_size in [4, 8, 16]:
