@@ -8,7 +8,6 @@ import torch
 from torch import nn
 
 import ttnn
-import tt_lib
 from typing import Optional, Tuple
 from loguru import logger
 
@@ -21,7 +20,7 @@ from models.utility_functions import (
 
 
 def shape_tt(
-    states: tt_lib.tensor.Tensor,
+    states: ttnn.Tensor,
     batch_size: int,
     seq_len: int,
     n_heads: int,
@@ -39,7 +38,7 @@ def shape_pt(tensor: torch.Tensor, seq_len: int, bsz: int):
     return tensor.view(bsz, seq_len, num_heads, head_dim).transpose(1, 2).contiguous()
 
 
-def test_lamma_shape(device: tt_lib.device.Device):
+def test_lamma_shape(device: ttnn.Device):
     batch_size = 1
     n_heads = 32
     seq_len = 128
@@ -188,7 +187,7 @@ class TtLlamaAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
@@ -270,7 +269,7 @@ class TtLlamaAttention(nn.Module):
             attn_weights = tt_to_torch_tensor(attn_weights)
             attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
 
-        if not isinstance(attn_weights, tt_lib.tensor.Tensor):
+        if not isinstance(attn_weights, ttnn.Tensor):
             attn_weights = pad_by_zero(attn_weights, self.device)[0]
         value_states = torch_to_tt_tensor_rm(value_states, self.device)
 

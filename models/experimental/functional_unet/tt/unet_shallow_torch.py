@@ -6,10 +6,6 @@ import torch
 import torch.nn as nn
 import ttnn
 
-import tt_lib as ttl
-import tt_lib.fallback_ops
-from tt_lib import profiler
-
 from loguru import logger
 
 

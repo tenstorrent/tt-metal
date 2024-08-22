@@ -2113,7 +2113,7 @@ class ResNet(nn.Module):
         )
 
         # fold for unity stride on device
-        x = ttnn.experimental.tensor.fold(x, stride_h=stride_h, stride_w=1)
+        x = ttnn.fold(x, stride_h=stride_h, stride_w=1)
 
         shard_shape = [
             NHW_even // self.first_conv_num_cores_nhw,

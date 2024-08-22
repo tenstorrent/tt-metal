@@ -6,7 +6,6 @@ import transformers
 import torch
 
 import ttnn
-import tt_lib as ttl
 from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_linear_bias,
@@ -26,7 +25,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     stride_w = 1
 
     pixel_values = ttnn.reshape(pixel_values, (batch_size, img_h, img_w // patch_size, 4 * patch_size))
-    pixel_values = ttl.tensor.fold(pixel_values, stride_h, stride_w)
+    pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)
     pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT)
 
     if unittest_check:
