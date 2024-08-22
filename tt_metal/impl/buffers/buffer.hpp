@@ -94,6 +94,7 @@ struct ShardSpecBuffer {
     std::array<uint32_t, 2> shape() const { return tensor_shard_spec.shape; }
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
     bool halo() const { return tensor_shard_spec.halo; }
+    void set_shard_spec(const ShardSpec& shard_spec) { tensor_shard_spec = shard_spec; };
 
     /* Shape in pages of the full tensor, not per core */
     std::array<uint32_t, 2> shape_in_pages() const {
@@ -184,6 +185,11 @@ class Buffer {
 
     uint32_t num_pages() const { return this->size() / this->page_size(); }
 
+    void set_page_size(uint64_t page_size) {
+        TT_FATAL(size_ % page_size == 0, "buffer size must be divisible by new page size");
+        page_size_ = page_size;
+    }
+
     uint32_t num_dev_pages() const {
         if (!is_sharded(this->buffer_layout_)) {
             return this->num_pages();
@@ -237,6 +243,10 @@ class Buffer {
         TT_ASSERT(is_sharded(this->buffer_layout_), "Buffer not sharded");
         TT_ASSERT(shard_parameters_.has_value());
         return this->shard_parameters_.value();
+    }
+
+    void set_shard_spec(const ShardSpecBuffer& shard_spec) {
+        this->shard_parameters_ = shard_spec;
     }
 
     uint32_t num_cores() const {

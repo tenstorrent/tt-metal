@@ -775,6 +775,41 @@ Tensor Tensor::reshape(const Shape& new_shape) const {
                 }
                 updated_storage.shapes = new_shapes;
                 return Tensor(updated_storage, new_shape, tensor.get_dtype(), tensor.get_layout());
+            }
+            if constexpr (std::is_same_v<T, DeviceStorage>) {
+                if (this->get_layout() == Layout::ROW_MAJOR) {
+                    if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+                        DeviceStorage device_storage = std::get<T>(tensor.get_storage());
+                        DeviceBuffer device_buffer = device_storage.get_buffer();
+                        device_buffer->set_page_size(new_shape[-1] * tensor.element_size());
+                        device_storage.insert_buffer(device_buffer);
+                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout());
+                    } else {
+                        DeviceStorage device_storage = std::get<T>(tensor.get_storage());
+                        DeviceBuffer device_buffer = device_storage.get_buffer();
+                        ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
+
+                        auto shard_spec = shard_spec_buffer.tensor_shard_spec;
+                        auto shard_shape = shard_spec.shape;
+
+                        uint32_t mul_div = new_shape[-1] > shard_shape[1] ?
+                                        (new_shape[-1] / shard_shape[1]) :
+                                        (shard_shape[1] / new_shape[-1]);
+                        shard_spec.shape[0] = new_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div : shard_shape[0] * mul_div;
+                        shard_spec.shape[1] = new_shape[-1];
+
+                        shard_spec_buffer.page_shape = {1, new_shape[-1]};
+                        shard_spec_buffer.tensor2d_shape = {shard_spec.shape[0], 1};
+                        shard_spec_buffer.set_shard_spec(shard_spec);
+
+                        device_buffer->set_shard_spec(shard_spec_buffer);
+                        device_storage.insert_buffer(device_buffer);
+
+                        return Tensor(device_storage, new_shape, tensor.get_dtype(), tensor.get_layout());
+                    }
+                } else {
+                    return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout());
+                }
             } else {
                 return Tensor(tensor.get_storage(), new_shape, tensor.get_dtype(), tensor.get_layout());
             }
