@@ -19,7 +19,7 @@ void MAIN {
     reduce_init<true>(tt::CB::c_in0, tt::CB::c_in2);
 #else
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in2, tt::CB::c_out0);
-    reduce_init_delta<true>(tt::CB::c_out0, tt::CB::c_in0, tt::CB::c_in2);
+    reduce_init_delta<false>(tt::CB::c_out0, tt::CB::c_in0, tt::CB::c_in2);
 #endif
 
     cb_wait_front(tt::CB::c_in2, 1); // scaler tile from the reader
