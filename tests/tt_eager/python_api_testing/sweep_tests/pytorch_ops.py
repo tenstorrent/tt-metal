@@ -2457,3 +2457,8 @@ def complex_conj_bw(x, y, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
+
+
+def topk(x, largest, k, *args, **kwargs):
+    values, indices = torch.topk(x, k, dim=-1, largest=largest, sorted=True)
+    return [values, indices]
