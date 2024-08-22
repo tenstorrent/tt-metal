@@ -90,6 +90,7 @@ class UNetConv2D:
         self.groups = conv.groups
         self.use_1d_systolic_array = conv.use_1d_systolic_array
         self.deallocate_activation = True
+        self.cache = cache
 
         self.conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat8_b,
@@ -146,16 +147,47 @@ class UNetMaxPool2D:
             padding=pool.padding,
             dilation=pool.dilation,
             dtype=ttnn.bfloat8_b,
-            device=device,
             batch_size=pool.batch_size,
             input_height=pool.input_height,
             input_width=pool.input_width,
             reader_patterns_cache=reader_patterns_cache,
-            deallocate_activation=False,
+            parallel_config_override=pool.parallel_config_override,
+            deallocate_activation=True,
+            device=device,
         )
 
     def __call__(self, x):
         return self.max_pool(x)
+
+
+class UNetMaxPool2DNew:
+    def __init__(self, pool, channels, device=None, reader_patterns_cache={}):
+        self.channels = channels
+        self.kernel_size = pool.kernel_size
+        self.stride = pool.stride
+        self.padding = pool.padding
+        self.dilation = pool.dilation
+        self.dtype = ttnn.bfloat8_b
+        self.batch_size = pool.batch_size
+        self.input_height = pool.input_height
+        self.input_width = pool.input_width
+        self.reader_patterns_cache = reader_patterns_cache
+        self.deallocate_activation = True
+        self.device = device
+
+    def __call__(self, x):
+        return ttnn.max_pool2d_new(
+            input_tensor=x,
+            batch_size=self.batch_size,
+            input_h=self.input_height,
+            input_w=self.input_width,
+            channels=self.channels,
+            kernel_size=[self.kernel_size, self.kernel_size],
+            stride=[self.stride, self.stride],
+            padding=[self.padding, self.padding],
+            dilation=[self.dilation, self.dilation],
+            device=self.device,
+        )
 
 
 class UNetDownblock:
@@ -191,8 +223,6 @@ class UNetUpblock:
         x = unet_concat([x, residual], dim=-1, perf_mode=perf_mode)
         ttnn.deallocate(residual)
 
-        breakpoint()
-
         logger.info(f"conv1")
         x = self.conv1(x)
         logger.info(f"conv2")
@@ -207,7 +237,6 @@ class UNet:
     def __init__(self, parameters: ParameterDict, device) -> None:
         self.conv_cache = {}
         self.max_pool_cache = {}
-
         self.downblock1 = UNetDownblock(
             parameters.c1,
             parameters.b1,
@@ -304,7 +333,6 @@ class UNet:
 
         input_tensor = input_tensor.to(device, ttnn.L1_MEMORY_CONFIG)
 
-        breakpoint()
         logger.info(f"C1 {input_tensor.shape}")
         x, c1_residual = self.downblock1(input_tensor, perf_mode=perf_mode)
 

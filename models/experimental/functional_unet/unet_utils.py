@@ -48,20 +48,6 @@ def create_unet_input_tensors(device, batch, groups):
     torch_input_tensor = torch.randn(batch, 4 * groups, 1056, 160)
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
 
-    # Pad to 16 if grayskull run and 32 for wormhole
-    ttnn_input_tensor = ttnn_input_tensor.reshape(
-        ttnn_input_tensor.shape[0],
-        1,
-        ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
-        ttnn_input_tensor.shape[3],
-    )
-    pad = 32 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 16
-    hpad = 0  # 96*32*64
-    if ttnn_input_tensor.shape[-1] < pad or ttnn_input_tensor.shape[-2] < hpad:
-        ttnn_input_tensor = torch.nn.functional.pad(
-            ttnn_input_tensor,
-            (0, max(0, pad - ttnn_input_tensor.shape[-1]), 0, max(0, hpad - ttnn_input_tensor.shape[-2])),
-        )
     ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16)
 
     return torch_input_tensor, ttnn_input_tensor
