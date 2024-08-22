@@ -392,13 +392,13 @@ class TtLlamaAttention_optimized:
         keys = self.layer_past[0]
         # Fill cache expects batch in dim0
         keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.fill_cache(keys_reshaped, ttnn.experimental.tensor.typecast(key_layer, ttnn.bfloat8_b), user_id)
+        ttnn.fill_cache(keys_reshaped, ttnn.experimental.typecast(key_layer, ttnn.bfloat8_b), user_id)
 
         # FILL V CACHE
         values = self.layer_past[1]
         # Fill cache expects batch in dim0
         values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.fill_cache(values_reshaped, ttnn.experimental.tensor.typecast(value_layer, ttnn.bfloat8_b), user_id)
+        ttnn.fill_cache(values_reshaped, ttnn.experimental.typecast(value_layer, ttnn.bfloat8_b), user_id)
 
         # SDPA
         attn_output = ttnn.transformer.scaled_dot_product_attention(

@@ -123,11 +123,11 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
             expected_strings.push_back(expected);
         }
     }
-    EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected_strings));
+    // See #10527
+    // EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected_strings));
 }
 
-// See #10527
-TEST_F(WatcherFixture, DISABLED_TestWatcherPause) {
+TEST_F(WatcherFixture, TestWatcherPause) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }

@@ -27,10 +27,10 @@ void bind_fold_operation(py::module& module) {
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::fold)& op, const ttnn::Tensor& input, uint8_t stride_h, uint8_t stride_w,
-                bool use_transpose_as_fold, std::optional<std::vector<uint32_t>> output_shape, int64_t pad_c, int64_t pad_h, int64_t pad_w,
+                bool use_transpose_as_fold, std::optional<std::vector<uint32_t>> output_shape, int64_t pad_c, int64_t pad_h, int64_t pad_w, std::optional<CoreCoord> grid_size,
                 const uint8_t& queue_id)
                 -> ttnn::Tensor {
-                return op(queue_id, input, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w);
+                return op(queue_id, input, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w, grid_size);
             },
             py::arg("input"),
             py::arg("stride_h"),
@@ -40,6 +40,7 @@ void bind_fold_operation(py::module& module) {
             py::arg("pad_c") = 0,
             py::arg("pad_h") = 0,
             py::arg("pad_w") = 0,
+            py::arg("grid_size") = std::nullopt,
             py::kw_only(),
             py::arg("queue_id") = 0 });
 }

@@ -25,7 +25,7 @@ jobs:
       LOGURU_LEVEL: INFO
       TT_METAL_SLOW_DISPATCH_MODE: 1
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: model-runner-${{ matrix.arch }}
+    runs-on: ["model-runner-${{ matrix.arch }}", "in-service"]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active

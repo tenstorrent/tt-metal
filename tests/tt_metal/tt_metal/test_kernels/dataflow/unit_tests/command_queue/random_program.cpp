@@ -47,14 +47,16 @@ void MAIN  {
         }
     }
 
+#ifdef DATA_MOVEMENT
     for (uint32_t i = 0; i < num_sems; i++) {
-        uint32_t sem_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SEMAPHORE_BASE + i * 16)[0];
+        uint32_t sem_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i))[0];
         uint32_t expected = i + 1;
         if (sem_val != expected) {
             DPRINT << "Problem with Sem idx: " << i << " Expected: " << expected << " Got: " << sem_val << ENDL();
             while(true); // Purposefully hang the kernel if semaphores did not arrive correctly
         }
     }
+#endif
 
     for (uint32_t i = 0; i < num_unique_rt_args; i++) {
         uint32_t rt_arg = get_arg_val<uint32_t>(i);
