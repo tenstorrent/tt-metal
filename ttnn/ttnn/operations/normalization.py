@@ -24,7 +24,7 @@ ttnn.attach_golden_function(
 )
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.normalization.softmax_in_place,
+    ttnn.softmax_in_place,
     golden_function=_golden_function,
 )
 
@@ -40,17 +40,17 @@ def _golden_function(input_tensor: ttnn.Tensor, scalar: float, attention_mask=No
 
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.normalization.scale_mask_softmax_in_place,
+    ttnn.scale_mask_softmax_in_place,
     golden_function=_golden_function,
 )
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.normalization.scale_mask_softmax,
+    ttnn.scale_mask_softmax,
     golden_function=_golden_function,
 )
 
 ttnn.attach_golden_function(
-    ttnn._ttnn.operations.normalization.scale_causal_mask_hw_dims_softmax_in_place,
+    ttnn.scale_causal_mask_hw_dims_softmax_in_place,
     golden_function=_golden_function,
 )
 
@@ -61,7 +61,13 @@ SoftmaxShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.Softm
 
 
 def _golden_function(
-    input_tensor: ttnn.Tensor, *, epsilon=1e-12, residual_input_tensor=None, weight=None, bias=None, **_
+    input_tensor: ttnn.Tensor,
+    *,
+    epsilon=1e-12,
+    residual_input_tensor=None,
+    weight=None,
+    bias=None,
+    **_,
 ):
     import torch
 
