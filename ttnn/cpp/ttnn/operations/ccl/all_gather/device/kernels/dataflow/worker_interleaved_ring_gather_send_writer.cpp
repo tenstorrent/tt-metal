@@ -53,12 +53,7 @@ void kernel_main() {
     OpSignaler op_signaler;
 
     if constexpr(fuse_op) {
-        op_signaler = OpSignaler(
-            get_compile_time_arg_val(23),
-            get_compile_time_arg_val(24),
-            get_compile_time_arg_val(25),
-            arg_idx
-        );
+        op_signaler = OpSignaler(arg_idx);
     }
 
     static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");

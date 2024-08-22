@@ -99,16 +99,12 @@ struct OpSignaler {
 
     OpSignaler() {}
 
-    OpSignaler(
-        uint32_t num_workers_to_sync,
-        uint32_t curr_worker_index,
-        uint32_t worker_sync_sem_id,
-        uint32_t& rt_args_idx) :
-        num_workers_to_sync(num_workers_to_sync) {
-
-        this-> worker_sync_sem_addr = get_semaphore(worker_sync_sem_id);
+    OpSignaler(uint32_t& rt_args_idx) {
 
         // Runtime args
+        this->num_workers_to_sync = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t curr_worker_index = get_arg_val<uint32_t>(rt_args_idx++);
+        this-> worker_sync_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
         this->workers_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2)); // Skip over the number of workers
 
         this->num_fused_op_cores_to_signal = get_arg_val<uint32_t>(rt_args_idx++);
@@ -238,6 +234,7 @@ struct MatmulOpReceiver {
         num_blocks(num_blocks)
     {
 
+        // Runtime args
         this->num_transfers = get_arg_val<uint32_t>(rt_args_idx++);
         this->ring_size = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t start_ring_index = get_arg_val<uint32_t>(rt_args_idx++);
@@ -255,7 +252,7 @@ struct MatmulOpReceiver {
 
         this->num_tensor_slices = this->num_transfers * this->num_directions;
 
-        // Start idxs for the different directions
+        // Setup internal states for bi-direction
         this->ring_idxs[0] = start_ring_index;
         this->ring_idxs[1] = start_ring_index;
 
@@ -280,6 +277,8 @@ struct MatmulOpReceiver {
         uint32_t& curr_block_start_tile_id,
         const uint32_t& tensor_start_tile_id
     ) {
+        ASSERT(this->initialized);
+
         if (block_idx % this->num_blocks_per_slice == 0) { // Aligned to the start of a tensor slice
 
             if (this->curr_transfer_idx != 0) { // Skip update for local slice
@@ -301,14 +300,14 @@ struct MatmulOpReceiver {
             // Index of the current tensor slice in a certain direction
             uint32_t tensor_slice_cnt = (this->curr_transfer_idx) / this->num_directions;
 
-            // Wait for the first sempaphore signal to start processing
+            // Wait for a sempaphore signal to start processing the tensor slice
             if (this->wait_for_op_signal) {
                 noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], tensor_slice_cnt + 1);
             }
 
             // Update the relevant internal states
             this->curr_transfer_idx++;
-            this->curr_dir = !this->curr_dir;
+            this->curr_dir = !this->curr_dir; // Change direction
         }
     }
 

@@ -46,22 +46,14 @@ struct AllGatherFusedOpSignaler {
         std::vector<CoreCoord>& all_gather_worker_cores
     );
 
-    void emit_all_gather_fused_op_ct_args(
-        std::vector<uint32_t>& ct_args,
-
-        uint32_t num_workers_to_sync,
-        uint32_t curr_worker_index
-    );
-
-
     void emit_all_gather_fused_op_rt_args(
         std::vector<uint32_t>& rt_args,
 
+        uint32_t num_workers_to_sync,
+        uint32_t curr_worker_index,
         uint32_t all_gather_direction,
         std::optional<CoreSemPair> start_signal_core_sem_pair = {}
     );
-
-    static uint32_t get_num_ct_args() { return 3; }
 
 };
 

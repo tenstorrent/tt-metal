@@ -130,12 +130,7 @@ void kernel_main() {
     OpSignaler op_signaler;
 
     if constexpr(fuse_op) {
-        op_signaler = OpSignaler(
-            get_compile_time_arg_val(25),
-            get_compile_time_arg_val(26),
-            get_compile_time_arg_val(27),
-            arg_idx
-        );
+        op_signaler = OpSignaler(arg_idx);
     }
 
 

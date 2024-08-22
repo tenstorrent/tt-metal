@@ -39,28 +39,19 @@ void AllGatherFusedOpSignaler::init_all_gather(
     initialized_all_gather = true;
 }
 
-void AllGatherFusedOpSignaler::emit_all_gather_fused_op_ct_args(
-    std::vector<uint32_t>& ct_args,
-
-    uint32_t num_workers_to_sync,
-    uint32_t curr_worker_index
-) {
-    TT_ASSERT(initialized_fused_op && initialized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
-
-    ct_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
-    ct_args.push_back(static_cast<uint32_t>(curr_worker_index));
-    ct_args.push_back(static_cast<uint32_t>(this->all_gather_worker_sync_semaphore));
-
-}
-
-
 void AllGatherFusedOpSignaler::emit_all_gather_fused_op_rt_args(
     std::vector<uint32_t>& rt_args,
 
+    uint32_t num_workers_to_sync,
+    uint32_t curr_worker_index,
     uint32_t all_gather_direction,
     std::optional<CoreSemPair> start_signal_core_sem_pair
 ) {
     TT_ASSERT(initialized_fused_op && initialized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
+
+    rt_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
+    rt_args.push_back(static_cast<uint32_t>(curr_worker_index));
+    rt_args.push_back(static_cast<uint32_t>(this->all_gather_worker_sync_semaphore));
 
     // Push the worker core noc coords
     for (const auto& core : this->all_gather_worker_cores_noc) {
