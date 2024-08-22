@@ -19,20 +19,6 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-namespace {
-bool is_output_wh_dim(uint32_t input_dim, uint32_t input_rank) {
-    if (input_rank == 2 || input_rank == 3) {
-        return true;
-    }
-    if (input_rank >= 4) {
-        if (input_dim >= input_rank - 2) {
-            return true;
-        }
-    }
-    return false;
-}
-}  // namespace
-
 void MorehNllLossStep1::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
@@ -159,7 +145,7 @@ std::vector<Shape> MorehNllLossStep2::compute_output_shapes(const std::vector<Te
         }
 
         // padding if output is w, h dim
-        if (is_output_wh_dim(dim, input_rank)) {
+        if (is_hw_dim(dim, input_rank)) {
             uint32_t up32_shape = round_up(input_shape[dim], 32);
             uint32_t padding_back = up32_shape - input_shape_without_padding[dim];
             output_shape_vec.push_back(up32_shape);
