@@ -28,7 +28,7 @@ def attempt_get_env_var(env_var_name):
 
 
 def get_is_srcdir_build():
-    build_dir = Path(__file__).parent
+    build_dir = CMakeBuild.get_working_dir()
     assert build_dir.is_dir()
     git_dir = build_dir / ".git"
     return git_dir.exists()
@@ -83,7 +83,6 @@ def get_is_from_precompiled():
 
 @dataclass(frozen=True)
 class MetalliumBuildConfig:
-    is_srcdir_build = get_is_srcdir_build()
     arch_name = get_arch_name()
     is_from_precompiled=get_is_from_precompiled()
 
@@ -116,9 +115,7 @@ class CMakeBuild(build_ext):
         assert len(self.extensions) == 1, f"Detected {len(self.extensions)} extensions, but should be only 1: ttnn"
 
         if self.is_editable_install_():
-            assert (
-                metal_build_config.is_srcdir_build
-            ), f"Editable install detected in a non-srcdir environment, aborting"
+            assert get_is_srcdir_build(), f"Editable install detected in a non-srcdir environment, aborting"
             return
 
         build_env = CMakeBuild.get_build_env()
