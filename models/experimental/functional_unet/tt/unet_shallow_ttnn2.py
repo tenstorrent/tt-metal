@@ -167,12 +167,9 @@ class UNetMaxPool2DNew:
         self.stride = pool.stride
         self.padding = pool.padding
         self.dilation = pool.dilation
-        self.dtype = ttnn.bfloat8_b
         self.batch_size = pool.batch_size
         self.input_height = pool.input_height
         self.input_width = pool.input_width
-        self.reader_patterns_cache = reader_patterns_cache
-        self.deallocate_activation = True
         self.device = device
 
     def __call__(self, x):
@@ -192,17 +189,21 @@ class UNetMaxPool2DNew:
 
 class UNetDownblock:
     def __init__(self, conv1, bn1, conv2, bn2, pool, device, conv_cache={}, max_pool_cache={}):
-        self.conv1 = UNetConv2D(conv1, bn1, device, conv_cache)
-        self.conv2 = UNetConv2D(conv2, bn2, device, conv_cache)
-        self.pool1 = UNetMaxPool2D(pool, device, max_pool_cache)
+        self.conv1 = UNetConv2D(conv1, bn=bn1, device=device, cache=conv_cache)
+        self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, cache=conv_cache)
+        # self.pool1 = UNetMaxPool2D(pool, conv2.out_channels, device=device, reader_patterns_cache=max_pool_cache)
+        self.pool1 = UNetMaxPool2D(pool, device=device, reader_patterns_cache=max_pool_cache)
 
     def __call__(self, x, perf_mode=False):
         x = self.conv1(x)
         x = self.conv2(x)
+
         residual = ttnn.experimental.tensor.sharded_to_interleaved(
             x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16
         )
+
         x = self.pool1(x)
+
         return x, residual
 
 
