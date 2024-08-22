@@ -189,10 +189,30 @@ struct LegacyCclTensorSlicer {
     bool is_sharded;
 };
 
+
+struct TensorSlice {
+    using ords_t = tt_xy_pair;
+    ords_t tensor_shape;
+    ords_t tensor_slice_shape;
+    ords_t tensor_slice_offset;
+    ords_t worker_slice_shape;
+    ords_t worker_slice_offset;
+    std::size_t dim;
+};
+
+std::vector<TensorSlice> generate_slice_sequence_on_dim(
+    TensorSlice::ords_t tensor_shape,
+    TensorSlice::ords_t worker_slice_shape,
+    std::size_t fracture_dim,
+    std::size_t num_slices,
+    std::size_t start_slice_index,
+    std::size_t end_slice_index
+);
+
 // Uniform Tensor Worker Slice
 struct InterleavedTensorWorkerSlice {
     InterleavedTensorWorkerSlice(
-        tt_xy_pair const& tensor_shape,  // Don't _really_ need this
+        tt_xy_pair const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape,
         tt_xy_pair const& worker_slice_shape,
         tt_xy_pair const& worker_slice_offset,
@@ -204,6 +224,7 @@ struct InterleavedTensorWorkerSlice {
         worker_slice_is_wrapped(worker_slice_is_wrapped) {}
 
     // Could probably be solved in some closed form
+
     std::size_t compute_num_worker_slice_iterations(std::size_t num_workers) const {
         auto slice_offset = coord_t(worker_slice_offset.x, worker_slice_offset.y);
         auto const& slice_shape = coord_t(worker_slice_shape.x, worker_slice_shape.y);
@@ -426,14 +447,6 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
         this->input_start_page_idx += num_pages /*pages_per_worker*/;
     }
 };
-
-struct ShardedAddrGenArgBuilder {
-    static bool shard_grid_is_transposed(Tensor const& t);
-    static std::vector<uint32_t> emit_ct_args(Tensor const& t);
-    static std::vector<uint32_t> emit_rt_args(Device const* d, Tensor const& t);
-    static void log_sharded_tensor_kernel_args(Tensor const& t, std::string const& prefix);
-};
-
 
 
 KernelHandle generate_edm_kernel(

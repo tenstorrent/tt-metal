@@ -7,6 +7,7 @@
 #include "eth_l1_address_map.h"
 #include "impl/buffers/buffer.hpp"
 #include "impl/kernels/data_types.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -18,9 +19,15 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 
+#include "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_common.hpp"
+
 // Includes that need to be moved to CCL datastructures header
+#include <cstdint>
+#include <limits>
 #include <vector>
 #include <algorithm>
+#include <ranges>
 
 using namespace tt::constants;
 
@@ -40,296 +47,18 @@ namespace ttnn {
 
 namespace ccl {
 namespace reduce_scatter_detail {
-struct WorkerTransferInfo {
-    WorkerTransferInfo(
-        std::vector<uint32_t> pages_per_full_chunk_per_worker, uint32_t num_links, uint32_t num_workers) :
-        pages_per_full_chunk_per_worker(pages_per_full_chunk_per_worker),
-        num_links(num_links),
-        num_workers(num_workers) {}
-
-    uint32_t get_num_pages_per_full_chunk(uint32_t link, uint32_t worker_idx) const {
-        return pages_per_full_chunk_per_worker.at(link * num_workers + worker_idx);
-    }
-
-    std::vector<uint32_t> pages_per_full_chunk_per_worker;
-    uint32_t num_links;
-    uint32_t num_workers;
-};
 
 static std::size_t decide_number_of_edm_channels(
    ttnn::ccl::CCLOpConfig const& ccl_op_config, std::size_t max_num_workers, bool enable_bidirectional) {
-    return std::min<std::size_t>(max_num_workers, enable_bidirectional ? 8 : 4);
+    bool is_linear_topology = ccl_op_config.get_topology() == ttnn::ccl::Topology::Linear;
+    TT_ASSERT(!is_linear_topology || max_num_workers > 1);
+    if (is_linear_topology) {
+        // Workers must be evenly divided for line reduce scatter
+        max_num_workers = tt::round_down(max_num_workers, 2);
+    }
+    return std::min<std::size_t>(max_num_workers, enable_bidirectional || is_linear_topology ? 8 : 4);
 }
 
-struct ReduceScatterWorkerArgBuilder {
-    ReduceScatterWorkerArgBuilder(
-        Device const* device,
-        ttnn::ccl::CCLOpConfig const& op_config,
-        ttnn::ccl::RingTopology const& topology_config,
-        ttnn::ccl::InterleavedTensorWorkerSlice const& worker_input_slice,
-        WorkerTransferInfo const& worker_transfer_info,
-        uint32_t worker_idx,
-        uint32_t link,
-        uint32_t cb_num_pages_per_packet,
-        uint32_t worker_sender_semaphore_id,
-        uint32_t worker_receiver_semaphore_id) :
-        device(device),
-        op_config(op_config),
-        topology_config(topology_config),
-        worker_input_slice(worker_input_slice),
-        worker_transfer_info(worker_transfer_info),
-        cb_num_pages_per_packet(cb_num_pages_per_packet),
-        worker_sender_semaphore_id(worker_sender_semaphore_id),
-        worker_receiver_semaphore_id(worker_receiver_semaphore_id) {
-#ifndef SEND_MATH_TERMINATE_SIGNAL
-        // This algorithm assumes that the worker slices are sized such that they start at the same x offsets for each
-        // new row they slice into (as they stride through the tensor)
-        std::size_t num_slice_iterations =
-            worker_input_slice.compute_num_worker_slice_iterations(worker_transfer_info.num_workers);
-        std::size_t worker_slice_num_pages =
-            worker_input_slice.worker_slice_shape.x * worker_input_slice.worker_slice_shape.y;
-        std::size_t pages_per_full_chunk = worker_transfer_info.get_num_pages_per_full_chunk(link, worker_idx);
-        std::size_t num_filler_pages_per_slice = pages_per_full_chunk - (worker_slice_num_pages % pages_per_full_chunk);
-        this->total_num_math_pages = (worker_input_slice.get_worker_slice_num_pages() + num_filler_pages_per_slice) *
-                                     num_slice_iterations * (topology_config.ring_size - 1);
-
-        log_trace(tt::LogOp, "ReduceScatterWorkerArgBuilder: total_num_math_pages: {}", this->total_num_math_pages);
-#endif
-    }
-
-    std::vector<uint32_t> generate_reduce_op_kernel_ct_args() const {
-        log_trace(tt::LogOp, "Reduce Scatter Worker CT Args: None");
-        return {};
-    }
-
-    std::vector<uint32_t> generate_reduce_op_kernel_rt_args(
-        uint32_t link, uint32_t worker_index, uint32_t ring_size) const {
-        log_trace(tt::LogOp, "generate_reduce_op_kernel_rt_args");
-
-        auto const& args = std::vector<uint32_t>{total_num_math_pages, 1, 0};
-
-        std::size_t i = 0;
-        log_trace(tt::LogOp, "Reduce Scatter Worker RT Args:");
-        log_trace(tt::LogOp, "\tblock_size: {}", args.at(i++));
-        log_trace(tt::LogOp, "\ttotal_num_math_pages: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tacc_to_dst: {}", args.at(i++));
-
-        return args;
-    }
-
-    std::vector<uint32_t> generate_receiver_kernel_ct_args() const {
-        auto const& local_input_tensor = this->op_config.get_input_tensor(0);
-        auto args = std::vector<uint32_t>{
-            static_cast<uint32_t>(this->op_config.is_input_sharded() ? 1 : 0),
-            static_cast<uint32_t>(
-                this->op_config.get_input_tensor(0).memory_config().buffer_type == BufferType::DRAM ? 1 : 0)};
-
-        std::size_t i = 0;
-        log_trace(tt::LogOp, "Reduce Scatter Receiver Worker CT Args:");
-        log_trace(tt::LogOp, "\tis_sharded: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tsrc_is_dram: {}", args.at(i++));
-        TT_ASSERT(args.size() == i, "Missed some args");
-
-        if (local_input_tensor.is_sharded()) {
-            auto const& shard_ct_args = ShardedAddrGenArgBuilder::emit_ct_args(local_input_tensor);
-            std::copy(shard_ct_args.begin(), shard_ct_args.end(), std::back_inserter(args));
-        } else {
-            args.push_back(static_cast<uint32_t>(local_input_tensor.memory_config().memory_layout));
-        }
-        return args;
-    }
-
-    std::vector<uint32_t> generate_receiver_kernel_rt_args(
-       ttnn::ccl::WorkerXY edm_core,
-        uint32_t edm_core_semaphore_address,
-        uint32_t edm_core_buffer_address,
-        uint32_t link,
-        uint32_t worker_index,
-        bool is_in_clockwise_direction) const {
-        TT_ASSERT(edm_core_semaphore_address > 0);
-        TT_ASSERT(edm_core_buffer_address > 0);
-        auto const& local_input_tensor = this->op_config.get_input_tensor(0);
-        uint32_t starting_ring_index =
-            is_in_clockwise_direction ? (this->topology_config.ring_index == 0 ? this->topology_config.ring_size - 1
-                                                                               : this->topology_config.ring_index - 1)
-                                      : (this->topology_config.ring_index == this->topology_config.ring_size - 1
-                                             ? 0
-                                             : this->topology_config.ring_index + 1);
-        auto args = std::vector<uint32_t>{
-            static_cast<uint32_t>(local_input_tensor.buffer()->address()),
-            static_cast<uint32_t>(this->topology_config.ring_size),  // num_transfers
-            static_cast<uint32_t>(this->worker_transfer_info.get_num_pages_per_full_chunk(link, worker_index)),
-            static_cast<uint32_t>(this->op_config.get_page_size()),
-            static_cast<uint32_t>(starting_ring_index),
-            static_cast<uint32_t>(this->topology_config.ring_size),
-            static_cast<uint32_t>(this->worker_receiver_semaphore_id),
-            static_cast<uint32_t>(is_in_clockwise_direction ? 1 : 0),
-            static_cast<uint32_t>(this->cb_num_pages_per_packet),
-            static_cast<uint32_t>(edm_core.x),
-            static_cast<uint32_t>(edm_core.y),
-            static_cast<uint32_t>(edm_core_semaphore_address),
-            static_cast<uint32_t>(edm_core_buffer_address),
-
-            static_cast<uint32_t>(worker_transfer_info.num_workers),
-
-            static_cast<uint32_t>(this->worker_input_slice.tensor_shape.x),
-            static_cast<uint32_t>(this->worker_input_slice.tensor_shape.y),
-
-            static_cast<uint32_t>(this->worker_input_slice.tensor_slice_shape.x),
-            static_cast<uint32_t>(this->worker_input_slice.tensor_slice_shape.y),
-
-            static_cast<uint32_t>(this->worker_input_slice.worker_slice_shape.x),
-            static_cast<uint32_t>(this->worker_input_slice.worker_slice_shape.y),
-
-            static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.x),
-            static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.y),
-
-            this->total_num_math_pages};
-
-        std::size_t i = 0;
-        log_trace(tt::LogOp, "Reduce Scatter Receiver Worker RT Args:");
-        log_trace(tt::LogOp, "\tsrc_addr: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tnum_transfers: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tfull_chunk_num_pages: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tpage_size: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tmy_ring_idx: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tring_size: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tsem_addr: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tis_clockwise_direction: {}", args.at(i++));
-        log_trace(tt::LogOp, "\thalf_cb_n_pages: {}", args.at(i++));
-
-        log_trace(tt::LogOp, "\tedm_core_noc0_core_x: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tedm_core_noc0_core_y: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tedm_core_semaphore_address: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tedm_core_buffer_address: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tnum_concurrent_workers: {}", args.at(i++));
-
-        log_trace(tt::LogOp, "\tinput_tensor_shape.x={}", args.at(i++));
-        log_trace(tt::LogOp, "\tinput_tensor_shape.y={}", args.at(i++));
-        log_trace(tt::LogOp, "\ttensor_slice_shape.x={}", args.at(i++));
-        log_trace(tt::LogOp, "\ttensor_slice_shape.y={}", args.at(i++));
-        log_trace(tt::LogOp, "\tworker_slice_shape.x={}", args.at(i++));
-        log_trace(tt::LogOp, "\tworker_slice_shape.y={}", args.at(i++));
-        log_trace(tt::LogOp, "\tworker_slice_offset.x={}", args.at(i++));
-        log_trace(tt::LogOp, "\tworker_slice_offset.y={}", args.at(i++));
-        log_trace(tt::LogOp, "\ttotal_num_math_pages={}", args.at(i++));
-
-        TT_ASSERT(args.size() == i, "Missed some args");
-
-
-        if (local_input_tensor.is_sharded()) {
-            auto const& shard_rt_args = ShardedAddrGenArgBuilder::emit_rt_args(device, local_input_tensor);
-            std::copy(shard_rt_args.begin(), shard_rt_args.end(), std::back_inserter(args));
-        }
-        return args;
-    }
-
-    std::vector<uint32_t> generate_sender_kernel_ct_args() const {
-        auto const& local_output_tensor = this->op_config.get_output_tensor(0);
-        auto args = std::vector<uint32_t>{
-            static_cast<uint32_t>(this->op_config.is_input_sharded() ? 1 : 0),
-            static_cast<uint32_t>(
-                this->op_config.get_output_tensor(0).memory_config().buffer_type == BufferType::DRAM ? 1 : 0)};
-
-        std::size_t i = 0;
-        log_trace(tt::LogOp, "Reduce Scatter Sender Worker CT Args:");
-        log_trace(tt::LogOp, "\tis_sharded: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tdst_is_dram: {}", args.at(i++));
-        TT_ASSERT(args.size() == i, "Missed some args");
-
-        if (local_output_tensor.is_sharded()) {
-            auto const& shard_ct_args = ShardedAddrGenArgBuilder::emit_ct_args(local_output_tensor);
-            std::copy(shard_ct_args.begin(), shard_ct_args.end(), std::back_inserter(args));
-        } else {
-            args.push_back(static_cast<uint32_t>(local_output_tensor.memory_config().memory_layout));
-        }
-        return args;
-    }
-
-    std::vector<uint32_t> generate_sender_kernel_rt_args(
-        ttnn::ccl::WorkerXY edm_core,
-        uint32_t edm_core_semaphore_address,
-        uint32_t edm_core_buffer_address,
-        uint32_t link,
-        uint32_t worker_index,
-        bool is_clockwise) const {
-        TT_ASSERT(edm_core_semaphore_address > 0);
-        TT_ASSERT(edm_core_buffer_address > 0);
-        auto const& local_output_tensor = this->op_config.get_output_tensor(0);
-        auto args = std::vector<uint32_t>{
-            static_cast<uint32_t>(local_output_tensor.buffer()->address()),
-            static_cast<uint32_t>(edm_core_buffer_address),
-            static_cast<uint32_t>(edm_core_semaphore_address),
-            static_cast<uint32_t>(edm_core.x),
-            static_cast<uint32_t>(edm_core.y),
-            static_cast<uint32_t>(this->topology_config.ring_size - 1),  // num_transfers),
-
-            static_cast<uint32_t>(this->op_config.get_page_size()),
-            static_cast<uint32_t>(this->worker_transfer_info.get_num_pages_per_full_chunk(link, worker_index)),
-
-            static_cast<uint32_t>(this->worker_sender_semaphore_id),
-            static_cast<uint32_t>(this->cb_num_pages_per_packet),
-
-            static_cast<uint32_t>(worker_transfer_info.num_workers),
-
-            // For sender side, all worker slice info is the same except for the tensor shape
-            // and for sender side specifically, there is only one tensor_slice_shape for the output
-            // tensor (as opposed to `ring_size` tensor_slice_shapes for the input tensor), so we can
-            // directly use it as the output tensor shape
-            static_cast<uint32_t>(this->worker_input_slice.tensor_slice_shape.x),
-            static_cast<uint32_t>(this->worker_input_slice.tensor_slice_shape.y),
-            static_cast<uint32_t>(this->worker_input_slice.worker_slice_shape.x),
-            static_cast<uint32_t>(this->worker_input_slice.worker_slice_shape.y),
-            static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.x),
-            static_cast<uint32_t>(this->worker_input_slice.worker_slice_offset.y),
-
-            total_num_math_pages};
-
-        std::size_t i = 0;
-        log_trace(tt::LogOp, "Reduce Scatter Sender Worker RT Args:");
-        log_trace(tt::LogOp, "\tdst_addr: {}", args.at(i++));
-        log_trace(tt::LogOp, "\teth_sender_l1_base_addr: {}", args.at(i++));
-        log_trace(tt::LogOp, "\teth_sender_l1_sem_addr: {}", args.at(i++));
-        log_trace(tt::LogOp, "\teth_sender_noc_x: {}", args.at(i++));
-        log_trace(tt::LogOp, "\teth_sender_noc_y: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tnum_transfers: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tpage_size: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tfull_chunk_num_pages: {}", args.at(i++));
-        log_trace(tt::LogOp, "\twriter_send_sem_addr: {}", args.at(i++));
-        log_trace(tt::LogOp, "\thalf_cb_n_pages: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tnum_concurrent_workers: {}", args.at(i++));
-
-        log_trace(tt::LogOp, "\toutput_tensor_shape.x: {}", args.at(i++));
-        log_trace(tt::LogOp, "\toutput_tensor_shape.y: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tworker_slice_shape.x: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tworker_slice_shape.y: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tworker_slice_offset.x: {}", args.at(i++));
-        log_trace(tt::LogOp, "\tworker_slice_offset.y: {}", args.at(i++));
-
-        log_trace(tt::LogOp, "\ttotal_num_math_pages={}", args.at(i++));
-
-        TT_ASSERT(args.size() == i, "Missed some args");
-
-        if (local_output_tensor.is_sharded()) {
-            auto const& shard_rt_args = ShardedAddrGenArgBuilder::emit_rt_args(device, local_output_tensor);
-            std::copy(shard_rt_args.begin(), shard_rt_args.end(), std::back_inserter(args));
-        }
-        return args;
-    }
-
-    Device const*device;
-    ttnn::ccl::RingTopology const topology_config;
-    ttnn::ccl::CCLOpConfig const op_config;
-    ttnn::ccl::InterleavedTensorWorkerSlice const worker_input_slice;
-    WorkerTransferInfo const worker_transfer_info;
-    uint32_t cb_num_pages_per_packet;
-    uint32_t worker_sender_semaphore_id;
-    uint32_t worker_receiver_semaphore_id;
-
-    uint32_t total_num_math_pages;
-    bool src_is_dram;
-    bool dst_is_dram;
-};
 
 struct EdmInterfaceAddresses {
     std::unordered_map<int, uint32_t> worker_sender_edm_semaphore_addresses;
@@ -422,15 +151,17 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     ttnn::ccl::RingTopology const& topology_config,
     ttnn::ccl::CCLOpConfig const& op_config,
     ReduceScatterWorkerArgBuilder const& worker_arg_builder,
-    std::vector<ttnn::ccl::EriscDatamoverBuilder>& cw_edm_builders,
-    std::vector<ttnn::ccl::EriscDatamoverBuilder>& ccw_edm_builders,
     EdmInterfaceAddresses const& edm_interface_addresses,
     CoreCoord const& worker_core,
     uint32_t num_edm_channels,
     uint32_t link,
+    uint32_t ring_index,
     uint32_t ring_size,
     uint32_t worker_index,
     ttnn::operations::binary::BinaryOpType binary_math_op,
+    std::size_t scatter_split_dim,
+    std::size_t edm_num_buffers_per_channel,
+    std::unordered_map<std::size_t, CoreCoord> const& worker_association_map,
     std::function<bool(uint32_t)> is_buffer_in_clockwise_direction_fn) {
 
     auto const& worker_defines = op_config.emit_worker_defines();
@@ -438,17 +169,21 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     for (auto const& [key, value] : worker_defines) {
         log_trace(tt::LogOp, "Worker Define: {} = {}", key, value);
     }
-    static std::string const& receiver_kernel_path =
+    static std::string const& receiver_kernel_path = //topology_config.is_linear ?
+        // "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_line_reduce_scatter_reader.cpp" :
         "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_reader.cpp";
-    static std::string const& sender_kernel_path =
-        "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp";
 
     // This will be configurable by sharded/non-sharded but present the same arg builder
     KernelHandle worker_receiver_kernel_id, worker_sender_kernel_id;
 
     bool is_in_clockwise_direction = is_buffer_in_clockwise_direction_fn(worker_index);
     uint32_t global_worker_index = link * num_edm_channels + worker_index;
-    {
+
+    bool is_first_device_in_line =
+        topology_config.is_linear &&
+        ((is_in_clockwise_direction && ring_index == 0) || (!is_in_clockwise_direction && ring_index == ring_size - 1));
+
+    if (!is_first_device_in_line) {
         CoreCoord const& receiver_edm = is_in_clockwise_direction ? topology_config.eth_receiver_cores.at(link)
                                                                   : topology_config.eth_sender_cores.at(link);
        ttnn::ccl::WorkerXY receiver_edm_noc_coord =ttnn::ccl::WorkerXY(
@@ -478,11 +213,13 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
                 edm_core_semaphore_address,
                 edm_core_buffer_address,
                 link,
+                ring_index,
+                ring_size,
                 worker_index,
                 is_in_clockwise_direction));
     }
 
-    {
+    if (!is_first_device_in_line) {
         vector<uint32_t> compute_kernel_args = {};
         constexpr bool fp32_dest_acc_en = false;
         constexpr bool math_approx_mode = false;
@@ -506,9 +243,15 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     }
 
     {
+        // static std::string const& sender_kernel_path =
+        //     !topology_config.is_linear ? "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_interleaved_ring_reduce_scatter_sender.cpp" :
+        static std::string const& sender_kernel_path =
+                is_first_device_in_line  ? "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send.cpp"
+                                       : "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/device/kernels/worker_line_reduce_scatter_sender.cpp";
+
         CoreCoord sender_edm = is_in_clockwise_direction ? topology_config.eth_sender_cores.at(link)
                                                          : topology_config.eth_receiver_cores.at(link);
-       ttnn::ccl::WorkerXY const sender_edm_noc_coord =ttnn::ccl::WorkerXY(
+        ttnn::ccl::WorkerXY const sender_edm_noc_coord = ttnn::ccl::WorkerXY(
             device->ethernet_core_from_logical_core(sender_edm).x,
             device->ethernet_core_from_logical_core(sender_edm).y);
         TT_ASSERT(sender_edm_noc_coord.y == 0 || sender_edm_noc_coord.y == 6);
@@ -520,30 +263,41 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
             is_in_clockwise_direction
                 ? edm_interface_addresses.worker_sender_edm_buffer_addresses.at(global_worker_index)
                 : edm_interface_addresses.worker_receiver_edm_buffer_addresses.at(global_worker_index);
+
+
+        WorkerEdmInterfaceArgs edm_interface = {
+            sender_edm.x,
+            sender_edm.y,
+            edm_core_buffer_address,
+            edm_core_semaphore_address,
+            edm_num_buffers_per_channel};
+
+        auto const ct_args = is_first_device_in_line ? worker_arg_builder.generate_line_start_sender_kernel_ct_args()
+                                                     : worker_arg_builder.generate_sender_kernel_ct_args();
+        auto const rt_args = is_first_device_in_line
+                                 ? worker_arg_builder.generate_line_start_sender_kernel_rt_args(
+                                       edm_interface, scatter_split_dim, link, worker_index)
+                                 : worker_arg_builder.generate_sender_kernel_rt_args(
+                                       edm_interface, link, ring_index, ring_size, worker_index, worker_association_map, is_in_clockwise_direction);
         worker_sender_kernel_id = tt::tt_metal::CreateKernel(
             program,
             sender_kernel_path,
             worker_core,
-            tt::tt_metal::WriterDataMovementConfig(worker_arg_builder.generate_sender_kernel_ct_args(), worker_defines));
+            tt::tt_metal::WriterDataMovementConfig(ct_args, worker_defines));
 
         tt::tt_metal::SetRuntimeArgs(
             program,
             worker_sender_kernel_id,
             worker_core,
-            worker_arg_builder.generate_sender_kernel_rt_args(
-                sender_edm_noc_coord,
-                edm_core_semaphore_address,
-                edm_core_buffer_address,
-                link,
-                worker_index,
-                is_in_clockwise_direction));
+            rt_args);
     }
 
     return {worker_receiver_kernel_id, worker_sender_kernel_id};
 }
 
 static CoreRangeSet select_worker_cores(
-   ttnn::ccl::CCLOpConfig const& op_config, std::size_t num_links, std::size_t num_edm_channels) {
+    ttnn::ccl::CCLOpConfig const& op_config, std::size_t num_links, std::size_t num_edm_channels) {
+
     switch (op_config.get_topology()) {
         case ttnn::ccl::Topology::Linear:
             return CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(num_edm_channels - 1, num_links - 1))});
@@ -615,17 +369,28 @@ static WorkerTransferInfo compute_num_edm_messages_per_channel(
 }
 
 static uint32_t compute_maximum_worker_slice_in_bytes(
+    ttnn::ccl::Topology topology,
     uint32_t cb_src0_size_pages,
     uint32_t cb_dst0_size_pages,
     uint32_t cb_short_circuit_size_pages,
     std::size_t edm_channel_buffer_size,
     uint32_t page_size) {
-    return std::min(cb_short_circuit_size_pages, cb_src0_size_pages + cb_dst0_size_pages) * page_size +
-           edm_channel_buffer_size;
+    switch (topology) {
+        case ttnn::ccl::Topology::Linear:
+            // For linear topology, we only want one slice per worker so we don't
+            return std::numeric_limits<uint32_t>::max();
+
+        case ttnn::ccl::Topology::Ring:
+            return std::min(cb_short_circuit_size_pages, cb_src0_size_pages + cb_dst0_size_pages) * page_size +
+                   edm_channel_buffer_size;
+
+        default: TT_ASSERT(false, "Unsupported topology"); return 0;
+    };
 }
 
 static bool is_cb_buffering_sufficient_to_avoid_deadlock(
-   ttnn::ccl::InterleavedTensorWorkerSlice const& worker_slice,
+    ttnn::ccl::Topology topology,
+    ttnn::ccl::InterleavedTensorWorkerSlice const& worker_slice,
     uint32_t cb_src0_size_pages,
     uint32_t cb_dst0_size_pages,
     uint32_t cb_short_circuit_size_pages,
@@ -635,7 +400,7 @@ static bool is_cb_buffering_sufficient_to_avoid_deadlock(
         tt::round_up(worker_slice.worker_slice_shape.x * worker_slice.worker_slice_shape.y, cb_src0_size_pages / 2);
     uint32_t worker_slice_size_bytes = worker_size_pages_rounded_up * page_size;
     uint32_t available_buffering_capacity = compute_maximum_worker_slice_in_bytes(
-        cb_src0_size_pages, cb_dst0_size_pages, cb_short_circuit_size_pages, edm_channel_buffer_size, page_size);
+        topology, cb_src0_size_pages, cb_dst0_size_pages, cb_short_circuit_size_pages, edm_channel_buffer_size, page_size);
     log_trace(tt::LogOp, "worker_slice.worker_slice_shape.x: {}", worker_slice.worker_slice_shape.x);
     log_trace(tt::LogOp, "worker_slice.worker_slice_shape.y: {}", worker_slice.worker_slice_shape.y);
     log_trace(tt::LogOp, "worker_slice_size_bytes: {}", worker_slice_size_bytes);
@@ -693,6 +458,34 @@ static std::tuple<CBHandle, CBHandle, CBHandle, CBHandle> create_worker_circular
     return {cb_src0_workers, cb_src1_workers, cb_dst0_sender_workers, cb_short_circuit_sender_workers};
 }
 
+/*
+ * The worker association map tells which other worker (if any) it is logically cooperating with on the local
+ * chip. This is really only relevant for line reduce scatter where there will be two "directions" of workers
+ * cooperatively producing the result for a part of the tensor. Each of these workers will produce a partial
+ * for the given chunk of the tensor but only for inputs from their "direction". The workers must merge (reduce)
+ * their partials into a final result in the output tensor. This association map tells the workers which other
+ * worker they should be communicating with during the final reduction
+ *
+ * The current scheme is that one of the worker cores is the designated "master" or "leader" core and the other
+ * worker is the follower. The
+ */
+static std::unordered_map<std::size_t, CoreCoord> build_worker_association_map(std::vector<CoreCoord> const& worker_cores, std::size_t num_edm_channels_per_link, std::size_t num_links, ttnn::ccl::Topology topology) {
+    std::unordered_map<std::size_t, CoreCoord> worker_association_map;
+    if (topology == ttnn::ccl::Topology::Linear) {
+        TT_ASSERT(num_edm_channels_per_link % 2 == 0);
+        TT_ASSERT(worker_cores.size() >= num_links * num_edm_channels_per_link);
+        std::size_t workers_per_direction_per_link = num_edm_channels_per_link / 2;
+        for (std::size_t l = 0; l < num_links; l++) {
+            std::size_t link_workers_offset = l * num_edm_channels_per_link;
+            for (std::size_t i = 0; i < workers_per_direction_per_link; i++) {
+                worker_association_map[link_workers_offset + i] = worker_cores[link_workers_offset + i + workers_per_direction_per_link];
+                worker_association_map[link_workers_offset + i + workers_per_direction_per_link] = worker_cores[link_workers_offset + i];
+            }
+        }
+    }
+    return worker_association_map;
+}
+
 operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
@@ -703,7 +496,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const uint32_t ring_index,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-   ttnn::ccl::Topology topology) {
+    ttnn::ccl::Topology topology) {
     log_trace(tt::LogOp, "reduce_scatter_with_workers entry");
     TT_ASSERT(
         input_tensor.get_legacy_shape()[scatter_split_dim] ==
@@ -715,6 +508,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
     /////////////// Constants/Configuration
     /// Constants/Configuration
+    const bool is_linear = topology == ttnn::ccl::Topology::Linear;
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
     ttnn::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode =ttnn::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN;
@@ -731,14 +525,14 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     TT_ASSERT(input_tensor_num_units_per_tensor_slice > 0);
     uint32_t max_num_workers = std::min<std::size_t>(8, input_tensor_num_units_per_tensor_slice);
     bool enable_bidirectional = true;
-    auto num_edm_channels = decide_number_of_edm_channels(op_config, max_num_workers, enable_bidirectional);
-    log_trace(tt::LogOp, "num_edm_channels: {}", num_edm_channels);
+    auto num_edm_channels_per_link = decide_number_of_edm_channels(op_config, max_num_workers, enable_bidirectional);
+    log_trace(tt::LogOp, "num_edm_channels_per_link: {}", num_edm_channels_per_link);
     auto edm_termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
 
     constexpr std::size_t num_buffers_per_channel = 1; // enable double buffering later
     auto const& edm_builder = create_erisc_datamover_builder(
-        num_edm_channels, op_config.get_page_size(), num_buffers_per_channel, buffer_sharing_mode, edm_termination_mode);
-    TT_ASSERT(num_edm_channels > 0);
+        num_edm_channels_per_link, op_config.get_page_size(), num_buffers_per_channel, buffer_sharing_mode, edm_termination_mode);
+    TT_ASSERT(num_edm_channels_per_link > 0);
 
     Tensor const& local_chip_tensor = input_tensor;
     Tensor const& local_chip_output_tensor = output_tensor;
@@ -758,12 +552,17 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     auto const& topology_config =
        ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
-    CoreRangeSet const& worker_core_range = select_worker_cores(op_config, num_links, num_edm_channels);
+    CoreRangeSet const& worker_core_range = select_worker_cores(op_config, num_links, num_edm_channels_per_link);
     auto const& worker_cores = corerange_to_cores(worker_core_range, std::nullopt, true);
 
     // Semaphores && CBs
     auto worker_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range, 0);
     auto worker_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range, 0);
+    std::optional<uint32_t> receiver_worker_partial_ready_semaphore_id = std::nullopt;
+
+    if (is_linear) {
+        receiver_worker_partial_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range, 0);
+    }
 
     uint32_t cb_num_pages = std::min(input_tensor_num_units_per_tensor_slice,
         (cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes() / op_config.get_page_size())) * 2;
@@ -773,13 +572,19 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         create_worker_circular_buffers(local_chip_tensor, op_config, worker_core_range, cb_num_pages, program);
 
     uint32_t max_worker_slice_in_bytes = compute_maximum_worker_slice_in_bytes(
+        topology,
         cb_num_pages,
         cb_num_pages,
         cb_num_pages,
         cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes(),
         op_config.get_page_size());
     std::size_t num_workers = worker_cores.size();
-    TT_ASSERT(num_workers == num_edm_channels * num_links);
+    if (is_linear) {
+        num_workers /= 2;
+        TT_ASSERT(2 * num_workers == num_edm_channels_per_link * num_links);
+    } else {
+        TT_ASSERT(num_workers == num_edm_channels_per_link * num_links);
+    }
     auto tensor_slicer = ttnn::ccl::RingReduceScatterWrappedTensorSlicer(
         local_chip_tensor,
         local_chip_output_tensor,
@@ -796,22 +601,34 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         tensor_slicer,
         cw_per_link_edm_builders,
         ccw_per_link_edm_builders,
-        num_edm_channels,
+        num_edm_channels_per_link,
         num_links,
         ring_size);
 
     // Configure the EDM builders
-    std::function<bool(uint32_t)> is_worker_in_clockwise_direction_fn = [enable_bidirectional, num_edm_channels](uint32_t x) {
-                return enable_bidirectional ? (x % num_edm_channels == 0) : true;
-            };
+    std::function<bool(uint32_t)> is_worker_in_clockwise_direction_fn =
+        [enable_bidirectional, num_edm_channels_per_link, is_linear](uint32_t x) {
+            if (is_linear) {
+                return x < num_edm_channels_per_link / 2;
+            } else {
+                return enable_bidirectional ? (x % num_edm_channels_per_link == 0) : true;
+            }
+        };
+
+    auto const& worker_association_map = build_worker_association_map(worker_cores, num_edm_channels_per_link, num_links, topology);
+
     EdmInterfaceAddresses edm_interface_addresses;
+
+    // For both linear and ring topologies, we should be able to treat this consistently
+    // because the is_worker_in_clockwise_direction_fn is implemented according to the
+    // topoology chosen.
     for (std::size_t link = 0; link < num_links; link++) {
         add_worker_config_to_edm_builders(
             device,
             tensor_slicer,
             op_config,
             worker_cores,
-            num_edm_channels,
+            num_edm_channels_per_link,
 
             cw_per_link_edm_builders,
             ccw_per_link_edm_builders,
@@ -826,55 +643,62 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     }
 
     // build the worker kernels
-    tt::tt_metal::ComputeConfig compute_config;
-    for (std::size_t link = 0; link < num_links; link++) {
-        uint32_t global_worker_index = link * num_edm_channels;
-        log_trace(tt::LogOp, "==============================================");
-        log_trace(tt::LogOp, "------------------ Link: {} ------------------", link);
-        for (std::size_t worker = 0; worker < num_edm_channels; worker++) {
-            std::size_t global_worker_index = worker + link * num_edm_channels;
-            log_trace(tt::LogOp, "------ Worker: {} (global ID={})", worker, global_worker_index);
+    std::size_t num_duplicate_directions = is_linear ? 2 : 1;
+    for (std::size_t direction = 0; direction < num_duplicate_directions; direction++) {
+        for (std::size_t link = 0; link < num_links; link++) {
+            uint32_t global_worker_index = link * num_edm_channels_per_link;
+            log_trace(tt::LogOp, "==============================================");
+            log_trace(tt::LogOp, "------------------ Link: {} ------------------", link);
+            for (std::size_t worker = 0; worker < num_edm_channels_per_link; worker++) {
+                std::size_t global_worker_index = worker + link * num_edm_channels_per_link;
+                log_trace(tt::LogOp, "------ Worker: {} (global ID={})", worker, global_worker_index);
 
-            auto const& worker_slice = tensor_slicer.get_worker_slice(global_worker_index);
-            auto worker_arg_builder = ReduceScatterWorkerArgBuilder(
-                device,
-                op_config,
-                topology_config,
-                worker_slice,
-                worker_transfer_info,
-                worker,
-                link,
-                cb_num_pages_per_packet,
-                worker_sender_semaphore_id,
-                worker_receiver_semaphore_id);
+                auto const& worker_slice = tensor_slicer.get_worker_slice(global_worker_index);
+                auto worker_arg_builder = ReduceScatterWorkerArgBuilder(
+                    device,
+                    op_config,
+                    topology_config,
+                    worker_slice,
+                    worker_transfer_info,
+                    edm_termination_mode,
+                    worker,
+                    link,
+                    cb_num_pages_per_packet,
+                    worker_sender_semaphore_id,
+                    worker_receiver_semaphore_id,
+                    receiver_worker_partial_ready_semaphore_id);
 
-            log_trace(tt::LogOp, "worker_cores.at(global_worker_index): {}", worker_cores.at(global_worker_index));
-            auto [receiver_kernel_id, sender_kernel_id] = build_reduce_scatter_worker(
-                program,
-                device,
-                topology_config,
-                op_config,
-                worker_arg_builder,
-                cw_per_link_edm_builders,
-                ccw_per_link_edm_builders,
-                edm_interface_addresses,
-                worker_cores.at(global_worker_index),
-                num_edm_channels,
-                link,
-                ring_size,
-                worker,
-                reduce_op,
-                is_worker_in_clockwise_direction_fn);
-            worker_receiver_kernels.push_back(receiver_kernel_id);
-            worker_sender_kernels.push_back(sender_kernel_id);
+                log_trace(tt::LogOp, "worker_cores.at(global_worker_index): {}", worker_cores.at(global_worker_index));
+                auto [receiver_kernel_id, sender_kernel_id] = build_reduce_scatter_worker(
+                    program,
+                    device,
+                    topology_config,
+                    op_config,
+                    worker_arg_builder,
+                    edm_interface_addresses,
+                    worker_cores.at(global_worker_index),
+                    num_edm_channels_per_link,
+                    link,
+                    ring_index,
+                    ring_size,
+                    worker,
+                    reduce_op,
+                    scatter_split_dim,
+                    num_buffers_per_channel,
+                    worker_association_map,
+                    is_worker_in_clockwise_direction_fn);
+                worker_receiver_kernels.push_back(receiver_kernel_id);
+                worker_sender_kernels.push_back(sender_kernel_id);
 
-            TT_FATAL(is_cb_buffering_sufficient_to_avoid_deadlock(
-                worker_slice,
-                cb_num_pages,
-                cb_num_pages,
-                cb_num_pages,
-                cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes(),
-                op_config.get_page_size()));
+                TT_FATAL(is_cb_buffering_sufficient_to_avoid_deadlock(
+                    topology,
+                    worker_slice,
+                    cb_num_pages,
+                    cb_num_pages,
+                    cb_num_pages,
+                    cw_per_link_edm_builders.at(0).get_eth_buffer_size_bytes(),
+                    op_config.get_page_size()));
+            }
         }
     }
 

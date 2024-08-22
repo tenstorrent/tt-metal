@@ -11,23 +11,59 @@
 
 using ttnn::ccl::coord_t;
 
+template <bool is_line>
+struct reader_signaler {
+    uint64_t noc_semaphore_address;
+
+    FORCE_INLINE static reader_signaler build(std::size_t arg_idx) {
+        if constexpr (is_line) {
+            return {get_noc_addr(get_arg_val<uint32_t>(arg_idx++), get_arg_val<uint32_t>(arg_idx++), get_arg_val<uint32_t>(arg_idx++))};
+        } else {
+            return {0};
+        }
+    }
+
+    FORCE_INLINE std::size_t get_args_consumed() const {
+        if constexpr (is_line) {
+            return 3;
+        } else {
+            return 0;
+        }
+    }
+
+    FORCE_INLINE void notify() const {
+        if constexpr (is_line) {
+            noc_semaphore_inc(noc_semaphore_address, 1);
+        }
+    }
+
+};
+
 void kernel_main() {
     constexpr bool is_sharded = get_compile_time_arg_val(0) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
 
     constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout =
         static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(2));
+
+    /*
+     * Indicates to another reader core that we have written out a unit of data to the output tensor and
+     * that unit of data can be readback for accumulation with the outputs from the opposite line directoin
+     */
+    constexpr bool signal_reader_on_output_tensor_write = get_compile_time_arg_val(3) != 0;
+
     #ifdef SHARDED_MEM_LAYOUT
-    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(3);
-    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(4);
-    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(5);
-    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(6);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(7);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(8);
-    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(9) != 0;
+    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(4);
+    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(5);
+    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(6);
+    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(7);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(8);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(9);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(10) != 0;
     #endif
 
-    uint32_t arg_idx = 0;
+
+    std::size_t arg_idx = 0;
     uint32_t const dst_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t const eth_sender_l1_base_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t const eth_sender_l1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -46,6 +82,8 @@ void kernel_main() {
 
     uint32_t total_eltwise_kernel_num_pages = get_arg_val<uint32_t>(arg_idx++);
 
+    auto readback_accumulation_signaler = reader_signaler<signal_reader_on_output_tensor_write>::build(arg_idx);
+    arg_idx += readback_accumulation_signaler.get_args_consumed();
 
     #ifdef SHARDED_MEM_LAYOUT
     uint32_t output_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
@@ -187,6 +225,10 @@ void kernel_main() {
                 page_size,
                 last_page_of_worker);
             total_lifetime_cb_pages_popped_from_math += n_pages;
+
+            // Nop when doesn't need to notify - only used for lines
+            readback_accumulation_signaler.notify();
+
             if (n_pages < half_cb_n_pages) {
                 uint32_t num_filler_pages = half_cb_n_pages - n_pages;
                 ASSERT(p + n_pages == num_pages_to_write);

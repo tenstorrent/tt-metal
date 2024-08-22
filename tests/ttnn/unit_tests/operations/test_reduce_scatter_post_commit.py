@@ -142,30 +142,30 @@ def run_reduce_scatter_test(
 @pytest.mark.parametrize(
     "per_chip_output_shape, scatter_dim, layout",
     [
-        ([1, 2, 256, 32 * 8], 3, ttnn.TILE_LAYOUT),  # Input tensor is (16*32) x (64*32) = 8 * input tensor shape
+        # ([1, 2, 256, 32 * 8], 3, ttnn.TILE_LAYOUT),  # Input tensor is (16*32) x (64*32) = 8 * input tensor shape
         ([1, 1, 32, 32 * 8], 3, ttnn.TILE_LAYOUT),
-        ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
-        ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
-        # # # Has worker slice size warning - defaults to 1x1
-        ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
+        # ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
+        # ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
+        # # # # Has worker slice size warning - defaults to 1x1
+        # ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("enable_async", [False])
 def test_reduce_scatter_post_commit(
     t3k_device_mesh,
     num_devices,

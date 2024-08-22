@@ -14,7 +14,7 @@ using ttnn::ccl::WorkerXY;
 
 namespace ttnn {
 namespace ccl {
-static FORCE_INLINE coord_t coord_from_args(uint32_t& arg_idx) {
+static FORCE_INLINE coord_t coord_from_args(std::size_t& arg_idx) {
     uint32_t x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t y = get_arg_val<uint32_t>(arg_idx++);
     return coord_t(x, y);
