@@ -101,8 +101,31 @@ class CMakeBuild(build_ext):
         """
         return {
             **os.environ.copy(),
-            "TT_METAL_HOME": Path(__file__).parent,
             "CXX": "clang++-17",
+        }
+
+    @staticmethod
+    def get_working_dir():
+        working_dir = Path(__file__).parent
+        assert working_dir.is_dir()
+        return working_dir
+
+    # This should only run when building the wheel. Should not be running for any dev flow
+    # Taking advantage of the fact devs run editable pip install -> "pip install -e ."
+    def run(self) -> None:
+        assert len(self.extensions) == 1, f"Detected {len(self.extensions)} extensions, but should be only 1: ttnn"
+
+        if self.is_editable_install_():
+            assert (
+                metal_build_config.is_srcdir_build
+            ), f"Editable install detected in a non-srcdir environment, aborting"
+            return
+
+        build_env = CMakeBuild.get_build_env()
+        source_dir = CMakeBuild.get_working_dir()
+        build_dir = source_dir / "build"
+
+        if not metal_build_config.is_from_precompiled:
             # Currently, the ttnn (ttnn/_ttnn.so)
             # both link to the tt_metal runtime. The specific thing in
             # ttnn linking to tt_metal is likely the implementation of
@@ -115,29 +138,11 @@ class CMakeBuild(build_ext):
             # Ultimately, we will not statically build tt_metal, and
             # opt to dynamically set rpath of the bindings to the
             # packaged libs for now.
-            "TT_METAL_CREATE_STATIC_LIB": "0",
-        }
-
-    # This should only run when building the wheel. Should not be running for any dev flow
-    # Taking advantage of the fact devs run editable pip install -> "pip install -e ."
-    def run(self) -> None:
-        assert len(self.extensions) == 1, f"Detected {len(self.extensions)} extensions, but should be only 2: ttnn"
-
-        if self.is_editable_install_():
-            assert (
-                metal_build_config.is_srcdir_build
-            ), f"Editable install detected in a non-srcdir environment, aborting"
-            return
-
-        build_env = CMakeBuild.get_build_env()
-        source_dir = Path(os.environ.get("TT_METAL_HOME"))
-        build_dir = Path(os.environ.get("TT_METAL_HOME") + "/build")
-        if not build_dir.exists():
-            build_dir.mkdir(parents=True)
+            cmake_args = ["-DBUILD_SHARED_LIBS=OFF"]
 
         cmake_args = []
         
-        if not metal_build_config.is_from_precompiled:      
+        if not metal_build_config.is_from_precompiled:
             nproc = subprocess.check_output(["nproc"]).decode().strip()
             build_args = [f"-j{nproc}"]
 

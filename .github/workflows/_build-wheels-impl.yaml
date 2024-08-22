@@ -18,7 +18,6 @@ jobs:
   build-wheel:
     runs-on: ${{ inputs.os }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
       TT_METAL_CREATE_STATIC_LIB: 1
     steps:
@@ -43,9 +42,6 @@ jobs:
         run: |
           pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
           pip install -r tt_metal/python_env/requirements-dev.txt
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Use g++ as umd compiler for ubuntu 22.04
         if: ${{ inputs.os == 'ubuntu-22.04' }}
         run: |
