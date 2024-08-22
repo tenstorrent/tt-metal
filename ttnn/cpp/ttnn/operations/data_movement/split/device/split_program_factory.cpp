@@ -2,27 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/cpp/ttnn/operation.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace   ttnn::operations::data_movement::detail {
 
-void setup_runtime(
-    const Program &program,
-    const uint32_t &core_offset,
-    const uint32_t &num_cores_r,
-    const uint32_t &num_cores_c,
-    const uint32_t &z,
-    const uint32_t &num_cores_x,
-    const uint32_t &per_core_tiles_y,
-    const uint32_t &per_core_tiles_x,
-    const uint32_t &num_tiles_per_z,
-    tt::tt_metal::Buffer *in0_buffer,
-    tt::tt_metal::Buffer *out0_buffer,
-    tt::tt_metal::Buffer *out1_buffer,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id) {
+void setup_runtime(const Program &program,
+                   const uint32_t &core_offset,
+                   const uint32_t &num_cores_r,
+                   const uint32_t &num_cores_c,
+                   const uint32_t &z,
+                   const uint32_t &num_cores_x,
+                   const uint32_t &per_core_tiles_y,
+                   const uint32_t &per_core_tiles_x,
+                   const uint32_t &num_tiles_per_z,
+                   tt::tt_metal::Buffer *in0_buffer,
+                   const std::vector<tt::tt_metal::Buffer*> &output_buffers,
+                   tt::tt_metal::KernelHandle reader_kernel_id,
+                   tt::tt_metal::KernelHandle writer_kernel_id) {
+
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
 
@@ -54,7 +56,6 @@ void setup_runtime(
                     std::vector<uint32_t> reader_runtime_args = {
                         (std::uint32_t)reader_core_id,
                         (std::uint32_t)(in0_buffer->address()),  // in0_tensor_addr
-                        (std::uint32_t)0                         // split on last dim
                     };
                     bool out0_only = false;
                     bool out1_only = false;
@@ -66,11 +67,20 @@ void setup_runtime(
                     uint32_t writer_core_id = id_c_inner * per_core_tiles_y + (id_r_writer);
 
                     std::vector<uint32_t> writer_runtime_args = {
-                        writer_core_id,
-                        (std::uint32_t)out0_buffer->address(),  // first base addr
-                        (std::uint32_t)out1_buffer->address(),  // second base addr
-                        (std::uint32_t)out0_only,
-                        (std::uint32_t)out1_only};
+                        writer_core_id
+                    };
+
+                    std::vector<uint32_t> output_addrs(output_buffers.size());
+                    std::transform(output_buffers.begin(),
+                                   output_buffers.end(),
+                                   output_addrs.begin(),
+                                   [](Buffer* b) { return b->address(); });
+
+                    writer_runtime_args.reserve(1+output_buffers.size());
+                    writer_runtime_args.insert(writer_runtime_args.end(),
+                                               output_addrs.begin(),
+                                               output_addrs.end());
+
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
                     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
                 }
@@ -79,41 +89,37 @@ void setup_runtime(
     }
 }
 
-operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
+operation::ProgramWithCallbacks split_last_dim_n_chunks_tiled(
     const Tensor &input_tensor, std::vector<Tensor> &output_tensors, const MemoryConfig &mem_config) {
-    uint32_t dim = 3;
-    uint32_t num_chunks = 2;
+    uint32_t dim = 3; // this op always splits on dim 3 for now.
+    uint32_t num_chunks = output_tensors.size();
 
     auto input_shape = input_tensor.get_legacy_shape();
 
     Program program{};
     tt::tt_metal::Device *device = input_tensor.device();
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(input_data_format);
     tt::tt_metal::Buffer *in0_buffer = input_tensor.buffer();
 
     // Output buffers
-    TT_FATAL(output_tensors.size() == num_chunks);
-    tt::tt_metal::Tensor &out0 = output_tensors[0];
-    tt::tt_metal::Tensor &out1 = output_tensors[1];
-
-    tt::tt_metal::Buffer *out0_buffer = out0.buffer();
-    TT_FATAL(out0_buffer != nullptr, "Output 0 buffer should be allocated on device!");
-    tt::tt_metal::Buffer *out1_buffer = out1.buffer();
-    TT_FATAL(out1_buffer != nullptr, "Output 1 buffer should be allocated on device!");
+    TT_FATAL(std::all_of(output_tensors.begin(),
+                        output_tensors.end(),
+                        [](tt::tt_metal::Tensor &t) {return t.buffer() != nullptr;}),
+            "Output tensor buffers should be allocated on device!"); // FIXME?: could make this more specific
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    uint32_t z = input_shape[1];
-    uint32_t num_tiles_dim_2 = input_shape[2] / tt::constants::TILE_HEIGHT;
-    uint32_t num_tiles_dim_3 = input_shape[3] / tt::constants::TILE_WIDTH;
+    uint32_t z = input_shape[1]; // channels
+    uint32_t num_tiles_dim_2 = input_shape[2] / tt::constants::TILE_HEIGHT; // how many tiles intersect a column of cores
+    uint32_t num_tiles_dim_3 = input_shape[3] / tt::constants::TILE_WIDTH; // how many tiles intersect a row of cores
     uint32_t num_cores_x_limit = device->compute_with_storage_grid_size().x;
     uint32_t num_cores_y_limit = device->compute_with_storage_grid_size().y;
 
@@ -128,7 +134,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     auto [num_cores_x, per_core_tiles_x] =
         get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_2, num_cores_x_limit / num_cores_z);
 
-    uint32_t per_core_tiles = per_core_tiles_x * per_core_tiles_y * (z / num_cores_z);
+    uint32_t per_core_tiles = per_core_tiles_x * per_core_tiles_y * (z / num_cores_z); // FIXME: how is z / num_cores_z not always just 1?
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -143,8 +149,20 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     bool tile_dtype_is_bfloat16 = input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = out0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    TT_FATAL(out0_buffer->buffer_type() == out1_buffer->buffer_type(), "Output buffers should be the same type");
+
+    std::vector<tt::tt_metal::Buffer*> output_buffers(output_tensors.size());
+    std::transform(output_tensors.begin(),
+                   output_tensors.end(),
+                   output_buffers.begin(),
+                   [](Tensor &t) { return t.buffer(); });
+
+    TT_FATAL(std::all_of(output_tensors.begin(),
+                         output_tensors.end(),
+                         [&](tt::tt_metal::Tensor &t)
+                           {return t.buffer()->buffer_type() == output_tensors[0].buffer()->buffer_type();}),
+             "Output buffers should be the same type");
+
+    bool out_is_dram = output_buffers[0]->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     uint32_t num_tiles_per_z = (per_core_tiles_x * num_cores_x) * (per_core_tiles_y * num_cores_y);
     uint32_t z_stride_read = num_tiles_per_z;
@@ -160,7 +178,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
                                                       (std::uint32_t)per_core_tiles_x,  // out_num_tiles_per_tensor
                                                       (std::uint32_t)per_core_tiles_y,  // out_num_tiles_per_tensor
                                                       (std::uint32_t)z_stride_read,
-                                                      (std::uint32_t)y_stride_read};
+                                                      (std::uint32_t)y_stride_read,
+                                                      (std::uint32_t)num_chunks};
 
     uint32_t z_stride_write = num_tiles_per_z / num_chunks;
     uint32_t y_stride_write = per_core_tiles_y * (num_cores_c / num_chunks);
@@ -173,9 +192,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
                                                       (std::uint32_t)(z / num_cores_z),
                                                       (std::uint32_t)z_stride_write,
-                                                      (std::uint32_t)y_stride_write
-
-    };
+                                                      (std::uint32_t)y_stride_write,
+                                                      (std::uint32_t)num_chunks};
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -191,8 +209,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
+    auto cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, input_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
@@ -207,8 +225,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         per_core_tiles_x,
         num_tiles_per_z,
         in0_buffer,
-        out0_buffer,
-        out1_buffer,
+        output_buffers,
         reader_kernel_id,
         writer_kernel_id);
 

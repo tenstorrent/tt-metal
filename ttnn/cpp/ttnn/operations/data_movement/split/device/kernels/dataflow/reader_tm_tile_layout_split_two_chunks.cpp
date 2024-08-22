@@ -15,7 +15,6 @@ void kernel_main() {
     // READER RUNTIME ARGS
     uint32_t in0_tensor_tile_id = get_arg_val<uint32_t>(0);
     uint32_t in0_tensor_addr = get_arg_val<uint32_t>(1);
-    bool split_last_dim = (bool)get_arg_val<uint32_t>(2);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
@@ -25,8 +24,9 @@ void kernel_main() {
     constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(4);
     constexpr uint32_t z_stride = get_compile_time_arg_val(5);
     constexpr uint32_t y_stride = get_compile_time_arg_val(6);
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(7);
 
-    constexpr uint32_t out_num_tensors = 1;
+
     constexpr uint32_t cb_id_in0 = 0;
     uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
 
@@ -49,7 +49,7 @@ void kernel_main() {
     // DPRINT << "Reader Z Stride: " << z_stride << ENDL();
     // DPRINT << "Reader Y Stride: " << y_stride << ENDL();
 #endif
-    for (uint32_t out_tensor_id = 0; out_tensor_id < out_num_tensors; out_tensor_id++) {
+    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         uint32_t z_stride_cum = 0;
         for (uint32_t k = 0; k < z; k++) {
             uint32_t y_stride_cum = 0;

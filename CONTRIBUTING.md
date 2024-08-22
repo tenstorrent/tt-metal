@@ -297,7 +297,8 @@ running such tests.
 ### Debugging host-side code
 
 - GDB can be used to debug Metalium C++ host APIs and C++ Python binding files.
-  - Build with debug symbols: `CONFIG=Debug ./build_metal.sh`
+  - Build with debug symbols: `./build_metal.sh -b Debug`
+  - Need a version of GDB compatible with clang-17: version 14?
   - To debug Metalium C++ host APIs, run `gdb --args <generated binary>`
   - To debug the C++ binding file itself:
     - Ensure the python file you wish to debug is standalone and has a main function.
