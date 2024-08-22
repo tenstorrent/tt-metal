@@ -15,7 +15,7 @@ namespace operations {
 namespace primary {
 
 operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor &output_grad, const Tensor &bias_grad, const DeviceComputeKernelConfig &compute_kernel_config) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 
@@ -126,7 +126,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor 
 
     auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id](
                                                    const void *operation,
-                                                   const Program *program,
+                                                   const std::shared_ptr<Program> program,
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {

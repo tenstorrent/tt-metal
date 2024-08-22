@@ -16,7 +16,7 @@ namespace primary {
     operation::ProgramWithCallbacks prod_single_core(const Tensor &a, const Tensor& output)
     {
 
-        Program *program = CreateProgram();
+        std::shared_ptr<Program> program = CreateProgram();
 
         CoreRange core({0, 0}, {0, 0});
 
@@ -107,7 +107,7 @@ namespace primary {
     );
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program *program,
+        const std::shared_ptr<Program> program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {

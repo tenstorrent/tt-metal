@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 
 namespace basic_tests::circular_buffer {
 
-bool test_cb_config_written_to_core(Program *program, Device *device, const CoreRangeSet &cr_set, const std::map<uint8_t, std::vector<uint32_t>> &cb_config_per_buffer_index) {
+bool test_cb_config_written_to_core(std::shared_ptr<Program> program, Device *device, const CoreRangeSet &cr_set, const std::map<uint8_t, std::vector<uint32_t>> &cb_config_per_buffer_index) {
     bool pass = true;
 
     detail::CompileProgram(device, program);
@@ -51,7 +51,7 @@ TEST_F(DeviceFixture, TestCreateCircularBufferAtValidIndices) {
     CoreRange cr({0, 0}, {0, 1});
     CoreRangeSet cr_set({cr});
 
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     initialize_program(program, cr_set);
 
     std::map<uint8_t, std::vector<uint32_t>> golden_cb_config = {
@@ -85,14 +85,14 @@ TEST_F(DeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
 }
 
 TEST_F(DeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     CBConfig cb_config;
 
     EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}}).set_page_size(1, cb_config.page_size));
 }
 
 TEST_F(DeviceFixture, TestCreateCircularBufferAtOverlappingIndex) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     CBConfig cb_config;
 
     CoreRange cr({0, 0}, {1, 1});

@@ -374,7 +374,7 @@ int main(int argc, char **argv) {
 
         CommandQueue& cq = device->command_queue();
 
-        tt_metal::Program *program = tt_metal::CreateProgram();
+        std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
         CoreCoord spoof_prefetch_core = {0, 0};
         CoreCoord dispatch_core = {4, 0};

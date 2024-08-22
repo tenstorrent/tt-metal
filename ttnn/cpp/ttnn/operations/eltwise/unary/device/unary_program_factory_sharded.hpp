@@ -18,7 +18,7 @@ using namespace tt::constants;
 
 operation::ProgramWithCallbacks unary_sharded(const Tensor &input, Tensor &output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en, bool preserve_fp32_precision){
 
-    tt::tt_metal::Program *program = CreateProgram();
+    std::shared_ptr<tt::tt_metal::Program> program = CreateProgram();
     tt::tt_metal::Device *device = input.device();
 
     auto shard_spec = input.shard_spec().value();
@@ -132,7 +132,7 @@ operation::ProgramWithCallbacks unary_sharded(const Tensor &input, Tensor &outpu
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, cb_src0, out_cb](
                                               const void *operation,
-                                              Program *program,
+                                              std::shared_ptr<Program> program,
                                               const std::vector<Tensor> &input_tensors,
                                               const std::vector<std::optional<const Tensor>> &,
                                               const std::vector<Tensor> &output_tensors) {

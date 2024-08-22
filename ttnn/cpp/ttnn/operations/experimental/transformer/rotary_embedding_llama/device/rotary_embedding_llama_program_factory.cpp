@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     Tensor &output,
     DeviceComputeKernelConfig compute_kernel_config
 ) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     const uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
@@ -275,7 +275,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
                                                 Wt
                                                 ](
                                                    const void *operation,
-                                                   const Program *program,
+                                                   const std::shared_ptr<Program> program,
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {

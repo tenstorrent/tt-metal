@@ -169,7 +169,7 @@ void GraphProcessor::track_deallocate_cb() {
     }
 }
 
-void GraphProcessor::track_program(tt::tt_metal::Program* program) {
+void GraphProcessor::track_program(std::shared_ptr<tt::tt_metal::Program>  program) {
     // All previous CBs are deallocated before a new program run
     track_deallocate_cb();
 
@@ -490,7 +490,7 @@ bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* buffer) {
     return do_block;
 }
 
-bool ProcessorHooks::hook_program(tt::tt_metal::Program*) {
+bool ProcessorHooks::hook_program(std::shared_ptr<tt::tt_metal::Program> ) {
     return do_block;
 }
 

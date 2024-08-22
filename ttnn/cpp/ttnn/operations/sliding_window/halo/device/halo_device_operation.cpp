@@ -95,7 +95,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(const std::v
     auto local_config_device_tensor = sliding_window::move_config_tensor_to_device(local_config_tensor, parallel_config_, is_block_sharded, device);
     auto remote_config_device_tensor = sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, is_block_sharded, device);
 
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     tt::tt_metal::RegisterBuffer(program, pad_config_device_tensor.device_buffer());
     tt::tt_metal::RegisterBuffer(program, local_config_device_tensor.device_buffer());

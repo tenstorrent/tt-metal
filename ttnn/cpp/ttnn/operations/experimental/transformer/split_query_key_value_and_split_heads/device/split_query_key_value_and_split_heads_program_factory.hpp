@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -183,7 +183,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
             start_core_y
         ]
     (
-        const Program *program,
+        const std::shared_ptr<Program> program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -271,7 +271,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     // reader compile arg
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) num_heads_per_tensor,
@@ -343,7 +343,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
         ]
     (
         const void* operation,
-        Program* program,
+        std::shared_ptr<Program>  program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

@@ -204,7 +204,7 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(Device const* d, Te
 }
 
 void generate_edm_kernels_for_ring_or_linear_topology(
-   tt::tt_metal::Program* program,
+   std::shared_ptr<tt::tt_metal::Program>  program,
     Device const* device,
     RingTopology const& topology_config,
     std::vector<ccl::EriscDatamoverBuilder> const& clockwise_edm_builders,
@@ -258,7 +258,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
 
 
 KernelHandle generate_edm_kernel(
-   tt::tt_metal::Program* program,
+   std::shared_ptr<tt::tt_metal::Program>  program,
     Device const* device,
     ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,

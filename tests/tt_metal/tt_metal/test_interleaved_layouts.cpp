@@ -93,7 +93,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program *program = tt_metal::CreateProgram();
+        std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
 
@@ -272,7 +272,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program *program = tt_metal::CreateProgram();
+        std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
 
@@ -427,7 +427,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
 
 
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
 
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(2 * num_bytes_per_page, {{0, tt::DataFormat::Float16_b}})

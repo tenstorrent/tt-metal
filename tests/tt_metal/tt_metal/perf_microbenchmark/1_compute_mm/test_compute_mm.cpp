@@ -126,7 +126,7 @@ void prepare_inputs(
     std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
     std::vector<std::vector<float>>& in1_bfp8_unpack_slice);
 
-tt_metal::Program *create_program_single_core (
+std::shared_ptr<tt_metal::Program> create_program_single_core (
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -147,7 +147,7 @@ tt_metal::Program *create_program_single_core (
     uint32_t interm_cb_dtype
 );
 
-tt_metal::Program *create_program(
+std::shared_ptr<tt_metal::Program> create_program(
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -440,7 +440,7 @@ int main(int argc, char** argv) {
         log_debug(LogTest, "out_subblock_h {}", out_subblock_h);
         log_debug(LogTest, "out_subblock_w {}", out_subblock_w);
 
-        tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
+        std::shared_ptr<tt::tt_metal::Program> program = tt::tt_metal::CreateProgram();
         if (single_core) {
             program = create_program_single_core(
                 device,
@@ -832,7 +832,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
     return {in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr};
 }
 
-tt_metal::Program *create_program_single_core (
+std::shared_ptr<tt_metal::Program> create_program_single_core (
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -852,7 +852,7 @@ tt_metal::Program *create_program_single_core (
     uint32_t num_blocks,
     uint32_t interm_cb_dtype
 ) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     log_debug("cb_data_format: {} ", cb_data_format);
     log_debug("math_fidelity: {} ", math_fidelity);
@@ -1041,7 +1041,7 @@ tt_metal::Program *create_program_single_core (
 }
 
 
-tt_metal::Program *create_program(
+std::shared_ptr<tt_metal::Program> create_program(
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -1065,7 +1065,7 @@ tt_metal::Program *create_program(
     uint32_t out_addr,
     bool matmul_block,
     bool packer_l1) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     uint32_t num_buffer = 2;  // double buffer
     uint32_t in0_block_tiles = per_core_Mt * in0_block_w;

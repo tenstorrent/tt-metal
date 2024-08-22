@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
     uint32_t mask_Ht = mask_H/TILE_HEIGHT;
 
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     // This should allocate input_tensor DRAM buffer on the device
     Device *device = input_tensor.device();
@@ -289,7 +289,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         ]
     (
         const void* operation,
-        Program* program,
+        std::shared_ptr<Program>  program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -536,7 +536,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     // define core ranges
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -766,7 +766,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         ]
     (
         const void* operation,
-        Program* program,
+        std::shared_ptr<Program>  program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

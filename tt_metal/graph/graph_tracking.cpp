@@ -59,8 +59,8 @@ void GraphTracker::track_deallocate_cb() {
     }
 }
 
-void GraphTracker::track_program(Program* program) {
-    TT_ASSERT(program);
+void GraphTracker::track_program(std::shared_ptr<Program>  program) {
+    TT_ASSERT(program.get());
     if (processors.empty()) {
         return;
     }
@@ -82,7 +82,7 @@ bool GraphTracker::hook_deallocate(Buffer* buffer) {
     return hook->hook_deallocate(buffer);
 }
 
-bool GraphTracker::hook_program(tt::tt_metal::Program* program) {
+bool GraphTracker::hook_program(std::shared_ptr<tt::tt_metal::Program>  program) {
     if (hook == nullptr) {
         return false;
     }

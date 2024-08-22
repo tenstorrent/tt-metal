@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks moreh_arange_(
 
     auto element_size = output.element_size();
 
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     // create circular buffers
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -102,7 +102,7 @@ operation::ProgramWithCallbacks moreh_arange_(
     }
 
     auto override_runtime_args_callback = [kernel_id = kernel_id, num_cores, core_h](
-                                              const Program *program,
+                                              const std::shared_ptr<Program> program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         TT_FATAL(output_buffers.size() == 1);

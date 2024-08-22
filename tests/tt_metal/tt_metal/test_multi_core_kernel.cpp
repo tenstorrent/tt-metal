@@ -18,12 +18,12 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-std::tuple<tt_metal::Program *, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
+std::tuple<std::shared_ptr<tt_metal::Program> , tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
     tt_metal::Device *device,
     uint32_t single_tile_size,
     const CoreRange &all_cores,
     const std::vector<uint32_t> &eltwise_unary_args) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     CoreCoord start_core = all_cores.start_coord;
     CoreCoord end_core = all_cores.end_coord;
@@ -70,7 +70,7 @@ std::tuple<tt_metal::Program *, tt_metal::KernelHandle, tt_metal::KernelHandle> 
 
 void compile_and_configure_program(
     tt_metal::Device *device,
-    tt_metal::Program *program,
+    std::shared_ptr<tt_metal::Program> program,
     std::vector<uint32_t> &src_vec,
     tt_metal::Buffer &src_dram_buffer) {
     ////////////////////////////////////////////////////////////////////////////
@@ -87,7 +87,7 @@ void compile_and_configure_program(
 
 }
 
-void set_rt_args(tt_metal::Program *program, tt_metal::KernelHandle kernel, const CoreRange &core_range, const std::vector<uint32_t> &rt_args) {
+void set_rt_args(std::shared_ptr<tt_metal::Program> program, tt_metal::KernelHandle kernel, const CoreRange &core_range, const std::vector<uint32_t> &rt_args) {
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             CoreCoord core = CoreCoord(x, y);
@@ -98,7 +98,7 @@ void set_rt_args(tt_metal::Program *program, tt_metal::KernelHandle kernel, cons
 
 void write_same_runtime_args_to_device(
     tt_metal::Device *device,
-    tt_metal::Program *program,
+    std::shared_ptr<tt_metal::Program> program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
     const CoreRange &core_range,
@@ -128,7 +128,7 @@ void write_same_runtime_args_to_device(
 
 void write_unique_writer_runtime_args_to_device(
     tt_metal::Device *device,
-    tt_metal::Program *program,
+    std::shared_ptr<tt_metal::Program> program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
     const CoreRange &core_range,

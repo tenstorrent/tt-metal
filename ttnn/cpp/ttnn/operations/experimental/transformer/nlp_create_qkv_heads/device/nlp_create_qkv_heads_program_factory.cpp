@@ -97,7 +97,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     bool tile_dtype_is_bfloat16 = input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -244,7 +244,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
         ]
     (
         const void* operation,
-        Program *program,
+        std::shared_ptr<Program> program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -334,7 +334,7 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
     auto num_q_heads = operation_attributes.num_q_heads;
     auto num_kv_heads = operation_attributes.num_kv_heads;
 
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     const auto& input_shape = input_tensor.get_legacy_shape();
 
@@ -534,7 +534,7 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
     //     ]
     // (
     //     const void* operation,
-    //     Program *program,
+    //     std::shared_ptr<Program> program,
     //     const std::vector<Tensor>& input_tensors,
     //     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     //     const std::vector<Tensor>& output_tensors

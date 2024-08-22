@@ -32,7 +32,7 @@ void ClearKernelCache (uint32_t build_key){
 }
 
 // This assumes binaries are written to specific location: kernel_compile_outpath / kernel_name / hash
-std::unordered_map<std::string, std::string> get_last_program_binary_path(const Program *program, int build_key) {
+std::unordered_map<std::string, std::string> get_last_program_binary_path(const std::shared_ptr<Program> program, int build_key) {
     std::unordered_map<std::string, std::string> kernel_name_to_last_compiled_dir;
     auto root_dir = jit_build_get_kernel_compile_outpath(build_key);
     for (size_t kernel_id = 0; kernel_id < detail::GetMetalProgram(program)->num_kernels(); kernel_id++) {
@@ -58,7 +58,7 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(const 
 }
 
 // TODO: Replace this when we have debug/test hooks (GH: #964) to inspect inside CompileProgram
-KernelCacheStatus CompileProgramTestWrapper(Device *device, Program *program, bool profile_kernel=false) {
+KernelCacheStatus CompileProgramTestWrapper(Device *device, std::shared_ptr<Program> program, bool profile_kernel=false) {
     // Check
     auto root_dir = jit_build_get_kernel_compile_outpath(device->build_key());
     std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->build_key());
@@ -95,10 +95,10 @@ struct ProgramAttributes {
     uint32_t output_cb_index = 16;
 };
 
-Program *create_program(Device *device, const ProgramAttributes &program_attributes) {
+std::shared_ptr<Program> create_program(Device *device, const ProgramAttributes &program_attributes) {
 
     CoreCoord core = {0, 0};
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     uint32_t single_tile_size = 2 * 1024;
 
@@ -146,7 +146,7 @@ Program *create_program(Device *device, const ProgramAttributes &program_attribu
     return program;
 }
 
-void assert_kernel_binary_path_exists(const Program *program, int build_key, const KernelCacheStatus &kernel_cache_status) {
+void assert_kernel_binary_path_exists(const std::shared_ptr<Program> program, int build_key, const KernelCacheStatus &kernel_cache_status) {
     auto kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
     for (size_t kernel_id = 0; kernel_id < detail::GetMetalProgram(program)->num_kernels(); kernel_id++) {
         auto kernel = detail::GetMetalProgram(program)->get_kernel(kernel_id);
@@ -156,7 +156,7 @@ void assert_kernel_binary_path_exists(const Program *program, int build_key, con
     }
 }
 
-void assert_program_cache_hit_status(const Program *program, bool hit_expected, const KernelCacheStatus &kernel_cache_status) {
+void assert_program_cache_hit_status(const std::shared_ptr<Program> program, bool hit_expected, const KernelCacheStatus &kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
     for (size_t kernel_id = 0; kernel_id < detail::GetMetalProgram(program)->num_kernels(); kernel_id++) {
         auto kernel = detail::GetMetalProgram(program)->get_kernel(kernel_id);
@@ -220,7 +220,7 @@ bool test_compile_program_after_clean_kernel_binary_directory(Device *device) {
 }
 
 void assert_hash_comparison_for_kernel_type(
-    const Program *program,
+    const std::shared_ptr<Program> program,
     const std::unordered_map<std::string, std::string> &prev_kernel_name_to_hash,
     const std::unordered_map<tt::RISCV, bool> &type_to_same_hash_expected,
     const KernelCacheStatus &kernel_cache_status
@@ -239,7 +239,7 @@ void assert_hash_comparison_for_kernel_type(
     }
 }
 
-void assert_cache_hit_status_for_kernel_type(const Program *program, const std::unordered_map<tt::RISCV, bool> &type_to_cache_hit_status, const KernelCacheStatus &kernel_cache_status) {
+void assert_cache_hit_status_for_kernel_type(const std::shared_ptr<Program> program, const std::unordered_map<tt::RISCV, bool> &type_to_cache_hit_status, const KernelCacheStatus &kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
     for (size_t kernel_id = 0; kernel_id < detail::GetMetalProgram(program)->num_kernels(); kernel_id++) {
         auto kernel = detail::GetMetalProgram(program)->get_kernel(kernel_id);

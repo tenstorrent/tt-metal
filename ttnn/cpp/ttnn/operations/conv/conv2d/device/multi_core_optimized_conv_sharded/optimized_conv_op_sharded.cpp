@@ -38,7 +38,7 @@ const uint32_t out0_cb                                = CB::c_out0;
 
 
 std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input(
-    tt_metal::Program *program,
+    std::shared_ptr<tt_metal::Program> program,
     const Tensor& input,
     CoreRange core,
     uint32_t num_cb0_tiles,
@@ -287,7 +287,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
 
     uint32_t out_block_h_datums = out_block_h_ntiles * TILE_HEIGHT;
 
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
     //CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     //CoreRange core = {{0, 0}, {0, 0}};
 
@@ -1131,7 +1131,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         ]
     (
         const void* operation,
-        Program* program,
+        std::shared_ptr<Program>  program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

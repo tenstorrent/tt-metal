@@ -21,7 +21,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-void check_program_is_mapped_to_correct_cores(const tt_metal::Program *program, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compute_kernel_args) {
+void check_program_is_mapped_to_correct_cores(const std::shared_ptr<tt_metal::Program> program, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compute_kernel_args) {
     // every kernel, semaphore and CB should be mapped to each core in the core ranges of core_range_set
     for (auto core_range : core_range_set.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -47,7 +47,7 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program *program, 
     }
 }
 
-void check_semaphores_are_initialized(tt_metal::Device *device, tt_metal::Program *program, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &golden_sem_values) {
+void check_semaphores_are_initialized(tt_metal::Device *device, std::shared_ptr<tt_metal::Program> program, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &golden_sem_values) {
     for (auto core_range : core_range_set.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -69,7 +69,7 @@ void check_semaphores_are_initialized(tt_metal::Device *device, tt_metal::Progra
     }
 }
 
-bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_metal::Program *program, const CoreRangeSet &core_range_set) {
+bool test_program_specified_with_core_range_set(tt_metal::Device *device, std::shared_ptr<tt_metal::Program> program, const CoreRangeSet &core_range_set) {
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
@@ -221,7 +221,7 @@ int main(int argc, char **argv) {
 
 
 
-        tt_metal::Program *program = tt_metal::CreateProgram();
+        std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
         CoreRange core_range_one({0, 0}, {1, 1});
         CoreRange core_range_two({2, 2}, {3, 3});
         CoreRangeSet core_ranges = CoreRangeSet({core_range_one, core_range_two});

@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
         }
         tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
         std::vector<Device*> devices = tt::DevicePool::instance().get_all_active_devices();
-        std::vector<Program*> programs;
+        std::vector<std::shared_ptr<Program>> programs;
         std::set<uint32_t> build_keys;
         // kernel->binaries() returns 32B aligned binaries
         std::map<uint32_t, std::vector<ll_api::memory>> compute_binaries;
@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
             //                      Application Setup
             ////////////////////////////////////////////////////////////////////////////
             programs.push_back(CreateProgram());
-            Program* program = programs.back();
+            std::shared_ptr<Program> program = programs.back();
 
             uint32_t single_tile_size = 2 * 1024;
             uint32_t num_tiles = 2048;

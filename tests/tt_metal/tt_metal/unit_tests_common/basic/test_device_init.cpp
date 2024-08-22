@@ -28,7 +28,7 @@ class DeviceParamFixture : public ::testing::TestWithParam<int> {
 
 namespace unit_tests_common::basic::test_device_init {
 
-void launch_program(tt_metal::Device *device, tt_metal::Program *program) {
+void launch_program(tt_metal::Device *device, std::shared_ptr<tt_metal::Program> program) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         tt_metal::detail::LaunchProgram(device, program);
     } else {
@@ -43,7 +43,7 @@ void launch_program(tt_metal::Device *device, tt_metal::Program *program) {
 /// @return
 bool load_all_blank_kernels(tt_metal::Device *device) {
     bool pass = true;
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
     CoreRange all_cores = CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1));
     CreateKernel(

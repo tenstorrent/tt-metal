@@ -1466,9 +1466,9 @@ void initialize_dram_banks(Device *device)
 
 std::chrono::duration<double> run_test(uint32_t iterations,
                                        Device *device,
-                                       Program* program,
+                                       std::shared_ptr<Program> program,
                                        Device *device_r,
-                                       Program* program_r,
+                                       std::shared_ptr<Program> program_r,
                                        vector<uint32_t>& cmd_sizes,
                                        vector<uint32_t>& terminate_sizes,
                                        vector<uint32_t>& cmds,
@@ -1502,7 +1502,7 @@ std::chrono::duration<double> run_test(uint32_t iterations,
 }
 
 void configure_for_single_chip(Device *device,
-                               Program* program,
+                               std::shared_ptr<Program> program,
                                void*& host_hugepage_base,
                                uint32_t prefetch_q_base,
                                uint32_t prefetch_q_rd_ptr_addr,
@@ -2108,9 +2108,9 @@ void configure_for_single_chip(Device *device,
 // This is, sadly, copied and modified from above
 // TODO: clean up, maybe leverage runtime structures
 void configure_for_multi_chip(Device *device,
-                              Program* program,
+                              std::shared_ptr<Program> program,
                               Device *device_r,
-                              Program* program_r,
+                              std::shared_ptr<Program> program_r,
                               int device_id_l,
                               int device_id_r,
                               void*& host_hugepage_base,
@@ -2878,8 +2878,8 @@ int main(int argc, char **argv) {
             device_r = tt_metal::CreateDevice(device_id_r);
         }
 
-        tt_metal::Program *program = tt_metal::CreateProgram();
-        tt_metal::Program *program_r = tt_metal::CreateProgram();
+        std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
+        std::shared_ptr<tt_metal::Program> program_r = tt_metal::CreateProgram();
 
         void* host_hugepage_base;
         uint32_t packetized_path_test_results_size = 1024;

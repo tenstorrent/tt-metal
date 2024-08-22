@@ -15,7 +15,7 @@ int main(int argc, char **argv) {
 
     /* Setup program to execute along with its buffers and kernels to use */
     CommandQueue& cq = device->command_queue();
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     constexpr CoreCoord core = {0, 0};
 
     constexpr uint32_t single_tile_size = 2 * 1024;

@@ -49,8 +49,8 @@ uint32_t get_runtime_arg_addr(tt::RISCV processor, bool is_common) {
     return result_base + offset;
 };
 
-Program *initialize_program_data_movement(Device *device, const CoreRangeSet &core_range_set) {
-    Program *program = tt_metal::CreateProgram();
+std::shared_ptr<Program> initialize_program_data_movement(Device *device, const CoreRangeSet &core_range_set) {
+    std::shared_ptr<Program> program = tt_metal::CreateProgram();
 
     auto add_two_ints_kernel = tt_metal::CreateKernel(
         program,
@@ -63,9 +63,9 @@ Program *initialize_program_data_movement(Device *device, const CoreRangeSet &co
     return program;
 }
 
-Program *initialize_program_data_movement_rta(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args,
+std::shared_ptr<Program> initialize_program_data_movement_rta(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args,
                                              bool common_rtas = false) {
-    Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<Program> program = tt_metal::CreateProgram();
 
     uint32_t rta_base_dm = get_runtime_arg_addr(tt::RISCV::BRISC, common_rtas);
     std::map<string, string> dm_defines = {{"DATA_MOVEMENT", "1"},
@@ -86,8 +86,8 @@ Program *initialize_program_data_movement_rta(Device *device, const CoreRangeSet
     return program;
 }
 
-Program *initialize_program_compute(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args, uint32_t num_common_rt_args) {
-    Program *program = tt_metal::CreateProgram();
+std::shared_ptr<Program> initialize_program_compute(Device *device, const CoreRangeSet &core_range_set, uint32_t num_unique_rt_args, uint32_t num_common_rt_args) {
+    std::shared_ptr<Program> program = tt_metal::CreateProgram();
 
     // Tell kernel how many unique and common RT args to expect. Will increment each.
     uint32_t rta_base_compute = get_runtime_arg_addr(tt::RISCV::COMPUTE, false);
@@ -125,7 +125,7 @@ bool verify_core_rt_args(Device *device, bool is_common, CoreCoord core, uint32_
 
 // Iterate over all cores unique and common runtime args, and verify they match expected values.
 bool verify_results(
-    bool are_args_incremented, Device *device, const Program *program, const std::map<CoreCoord, std::vector<uint32_t>> &core_to_rt_args, const std::vector<uint32_t> &common_rt_args = {}) {
+    bool are_args_incremented, Device *device, const std::shared_ptr<Program> program, const std::map<CoreCoord, std::vector<uint32_t>> &core_to_rt_args, const std::vector<uint32_t> &common_rt_args = {}) {
 
     bool pass = true;
     EXPECT_TRUE(detail::GetMetalProgram(program)->num_kernels() == 1);

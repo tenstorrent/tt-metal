@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks moreh_adamw_(
     const DeviceComputeKernelConfig compute_kernel_config) {
     uint32_t num_units = param_in.volume() / TILE_HW;
 
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup

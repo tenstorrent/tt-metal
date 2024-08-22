@@ -40,7 +40,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     string reader_kernel_name = "";
     string writer_kernel_name = "";
@@ -164,7 +164,7 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     tt::tt_metal::InterleavedBufferConfig in_config{
                     .device=device,

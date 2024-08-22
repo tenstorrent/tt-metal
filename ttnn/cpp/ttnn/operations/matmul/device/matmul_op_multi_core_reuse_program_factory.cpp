@@ -32,7 +32,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     tt_metal::Buffer *in0_buffer,
     tt_metal::Buffer *in1_buffer,
     tt_metal::Buffer *out_buffer) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles * 2;  // double buffer
@@ -198,7 +198,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                                            num_cores_x,
                                            num_blocks_y,
                                            num_blocks_x](
-                                              const tt_metal::Program *program,
+                                              const std::shared_ptr<tt_metal::Program> program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         auto src_dram_buffer_a = input_buffers.at(0);

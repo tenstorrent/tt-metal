@@ -32,7 +32,7 @@ namespace tt::tt_metal {
 
         virtual void track_deallocate_cb() {};
 
-        virtual void track_program(tt::tt_metal::Program* program) {};
+        virtual void track_program(std::shared_ptr<tt::tt_metal::Program>  program) {};
 
         virtual void track_function_start(std::string_view function_name, std::span<std::any> input_parameters) {};
 
@@ -54,7 +54,7 @@ namespace tt::tt_metal {
 
         virtual bool hook_deallocate(tt::tt_metal::Buffer* buffer) = 0;
 
-        virtual bool hook_program(Program* program) = 0;
+        virtual bool hook_program(std::shared_ptr<Program>  program) = 0;
 
         virtual ~IGraphHooks() = default;
     };
@@ -79,7 +79,7 @@ namespace tt::tt_metal {
 
         void track_deallocate_cb();
 
-        void track_program(Program* program);
+        void track_program(std::shared_ptr<Program>  program);
 
         template<class... Args>
         void track_function_start(std::string_view function_name, Args&&... args) {
@@ -116,7 +116,7 @@ namespace tt::tt_metal {
 
         bool hook_deallocate(Buffer* buffer);
 
-        bool hook_program(tt::tt_metal::Program* program);
+        bool hook_program(std::shared_ptr<tt::tt_metal::Program>  program);
 
         const std::vector<std::shared_ptr<IGraphProcessor>>& get_processors() const;
 

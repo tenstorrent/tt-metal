@@ -16,7 +16,7 @@
 namespace ttnn::operations::pool {
 
 MaxPoolNew::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_v2_impl_new(
-    Program* program,
+    std::shared_ptr<Program>  program,
     const Tensor& input,
     const Tensor& reader_indices,
     Tensor& output,
@@ -323,7 +323,7 @@ MaxPoolNew::MultiCore::cached_program_t MaxPoolNew::MultiCore::create(const oper
     auto& sliding_window_config = op_attr.sliding_window_config_;
     auto& out_mem_config = op_attr.memory_config_;
 
-    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
+    std::shared_ptr<tt::tt_metal::Program> program = tt::tt_metal::CreateProgram();
 
     auto parallel_config = sliding_window::ParallelConfig{
         .grid = input.shard_spec().value().grid,

@@ -195,7 +195,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
@@ -367,7 +367,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         ]
     (
         const void* operation,
-        const Program *program,
+        const std::shared_ptr<Program> program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -577,7 +577,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     // define core ranges
     bool use_mcast = num_blocks > 1;
 
@@ -1351,7 +1351,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         ]
     (
         const void* operation,
-        Program *program,
+        std::shared_ptr<Program> program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

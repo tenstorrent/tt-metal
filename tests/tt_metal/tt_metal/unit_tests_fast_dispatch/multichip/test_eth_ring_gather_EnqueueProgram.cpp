@@ -177,7 +177,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     std::vector<std::vector<uint32_t>> inputs;
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
-    std::map<chip_id_t, tt_metal::Program *> programs;
+    std::map<chip_id_t, std::shared_ptr<tt_metal::Program> > programs;
     std::vector<uint32_t> full_input;
     full_input.reserve(numel * sender_receivers.size());
 
@@ -331,7 +331,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     std::vector<std::vector<uint32_t>> inputs;
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
-    std::map<chip_id_t, tt_metal::Program *> programs;
+    std::map<chip_id_t, std::shared_ptr<tt_metal::Program> > programs;
     std::vector<uint32_t> full_input;
     full_input.reserve(numel * sender_receivers.size());
 

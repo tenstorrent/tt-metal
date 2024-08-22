@@ -79,7 +79,7 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
         split_work_to_cores(core_range, num_units);
 
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     // create circular buffers
     auto src_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -216,7 +216,7 @@ operation::ProgramWithCallbacks moreh_getitem_rm(
 
     auto override_runtime_args_callback =
         [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h, index_dims, dim_offset](
-            const Program *program,
+            const std::shared_ptr<Program> program,
             const std::vector<Buffer *> &input_buffers,
             const std::vector<Buffer *> &output_buffers) {
             TT_ASSERT(output_buffers.size() == 1);

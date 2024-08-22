@@ -64,14 +64,14 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     CoreRange core_range, uint32_t units_to_divide);
 
 [[maybe_unused]] KernelHandle CreateReadKernel(
-    Program *program,
+    std::shared_ptr<Program> program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args = {},
     std::map<string, string> defines = {});
 
 [[maybe_unused]] KernelHandle CreateWriteKernel(
-    Program *program,
+    std::shared_ptr<Program> program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args = {},
@@ -84,7 +84,7 @@ struct ComputeKernelArg {
 };
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
-    Program *program,
+    std::shared_ptr<Program> program,
     const std::string &file_name,
     std::vector<ComputeKernelArg> args,
     std::map<std::string, std::string> defines = {},
@@ -94,7 +94,7 @@ struct ComputeKernelArg {
     bool preserve_fp32_precision = false);
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
-    Program *program,
+    std::shared_ptr<Program> program,
     const std::string &file_name,
     ComputeKernelArg arg,
     std::map<std::string, std::string> defines = {},
@@ -117,13 +117,13 @@ struct CircularBufferArg {
 };
 
 [[maybe_unused]] std::vector<CBHandle> CreateCircularBuffer(
-    Program *program,
+    std::shared_ptr<Program> program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
     tt::DataFormat data_format,
     std::vector<CircularBufferArg> args);
 
 [[maybe_unused]] CBHandle CreateCircularBuffer(
-    Program *program,
+    std::shared_ptr<Program> program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
     tt::DataFormat data_format,
     CircularBufferArg arg);
@@ -161,7 +161,7 @@ auto create_override_runtime_arguments_callback(
     KernelHandle reader_kernel_id, KernelHandle writer_kernel_id, uint32_t num_cores, uint32_t core_h) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
                const void *operation,
-               Program *program,
+               std::shared_ptr<Program> program,
                const Tensors &input_tensors,
                const OptionalConstTensors &optional_input_tensors,
                const OutputTensors &output_tensors) -> void {
@@ -204,7 +204,7 @@ auto create_override_runtime_arguments_callback(
     CallbackArgMap arg_map) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, arg_map, num_cores, core_h](
                const void *operation,
-               Program *program,
+               std::shared_ptr<Program> program,
                const Tensors &input_tensors,
                const OptionalConstTensors &optional_input_tensors,
                const OutputTensors &output_tensors) -> void {
@@ -241,7 +241,7 @@ template <typename OutputTensors = Tensors>
 auto create_override_addresses_callback(
     KernelHandle reader_kernel_id, KernelHandle writer_kernel_id, uint32_t num_cores, uint32_t core_h) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
-               const Program* program,
+               const std::shared_ptr<Program>  program,
                const std::vector<Buffer*>& input_buffers,
                const std::vector<Buffer*>& output_buffers) -> void {
         for (uint32_t icore = 0; icore < num_cores; icore++) {

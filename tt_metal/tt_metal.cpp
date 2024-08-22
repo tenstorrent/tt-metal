@@ -126,7 +126,7 @@ inline void SetRuntimeArgs(
 
 namespace detail {
 
-MetalProgram *GetMetalProgram(const Program *program) {
+MetalProgram *GetMetalProgram(std::shared_ptr<Program> program) {
     return program->metal_program;
 }
 
@@ -529,17 +529,11 @@ void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const u
     }
 }
 
-// TODO: This is a problem
 void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done, bool force_slow_dispatch) {
-    LaunchProgram(device, program, wait_until_cores_done, force_slow_dispatch);
-}
-
-
-void LaunchProgram(Device *device, Program *program, bool wait_until_cores_done, bool force_slow_dispatch) {
     device->launch_program(program->metal_program, wait_until_cores_done, force_slow_dispatch);
 }
 
-void WaitProgramDone(Device *device, Program *program) {
+void WaitProgramDone(Device *device, std::shared_ptr<Program> program) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program->metal_program->logical_cores();
     std::unordered_set<CoreCoord> not_done_cores;
@@ -556,19 +550,19 @@ void WaitProgramDone(Device *device, Program *program) {
     DumpDeviceProfileResults(device);
 }
 
-bool ConfigureDeviceWithProgram(Device *device, Program *program, bool fd_bootloader_mode) {
+bool ConfigureDeviceWithProgram(Device *device, std::shared_ptr<Program> program, bool fd_bootloader_mode) {
     return device->configure_with_program(program->metal_program, fd_bootloader_mode);
 }
 
-void CaptureMultiDeviceDependencies(Program *program) {
+void CaptureMultiDeviceDependencies(std::shared_ptr<Program> program) {
     program->metal_program->capture_multi_device_dependencies();
 }
 
-void WriteRuntimeArgsToDevice(Device *device, Program *program, bool force_slow_dispatch) {
+void WriteRuntimeArgsToDevice(Device *device, std::shared_ptr<Program> program, bool force_slow_dispatch) {
     return device->write_runtime_args(program->metal_program, force_slow_dispatch);
 }
 
-void CompileProgram(Device *device, Program *program, bool fd_bootloader_mode) {
+void CompileProgram(Device *device, std::shared_ptr<Program> program, bool fd_bootloader_mode) {
     ZoneScoped;
     program->metal_program->compile(device, fd_bootloader_mode);
 }
@@ -595,15 +589,15 @@ void DeallocateBuffer(Buffer *buffer) {
         false);
 }
 
-nlohmann::json GetKernelsJSON(Program *program) {
+nlohmann::json GetKernelsJSON(std::shared_ptr<Program> program) {
     return program->metal_program->get_kernels_json();
 }
 
-void SetRuntimeID(Program *program, uint64_t id) {
+void SetRuntimeID(std::shared_ptr<Program> program, uint64_t id) {
     program->metal_program->set_runtime_id(id);
 }
 
-std::vector<std::pair<CoreRangeSet, uint64_t>> GetCBInfo(Program *program) {
+std::vector<std::pair<CoreRangeSet, uint64_t>> GetCBInfo(std::shared_ptr<Program> program) {
     return program->metal_program->get_cb_info();
 }
 }  // namespace detail
@@ -648,8 +642,8 @@ bool CloseDevice(Device *device) {
     return tt::DevicePool::instance().close_device(device_id);
 }
 
-Program *CreateProgram() {
-    struct Program *program = (struct Program *) malloc(sizeof(struct Program));
+Program *MakeProgram() {
+    Program *program = (Program *) malloc(sizeof(Program));
     program->metal_program = new MetalProgram;
     return program;
 }
@@ -659,8 +653,12 @@ void DestroyProgram(Program *program) {
     free(program);
 }
 
+std::shared_ptr<Program> CreateProgram() {
+    return std::shared_ptr<Program>(MakeProgram(), &DestroyProgram);
+}
+
 KernelHandle CreateKernel(
-    Program *program,
+    std::shared_ptr<Program> program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config) {
@@ -668,18 +666,18 @@ KernelHandle CreateKernel(
 }
 
 CBHandle CreateCircularBuffer(
-    Program *program,
+    std::shared_ptr<Program> program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const CircularBufferConfig &config) {
     CoreRangeSet core_ranges = CoreRangeSet::get_core_range_set(core_spec);
     return program->metal_program->add_circular_buffer(core_ranges, config);
 }
 
-const CircularBufferConfig &GetCircularBufferConfig(Program *program, CBHandle cb_handle) {
+const CircularBufferConfig &GetCircularBufferConfig(std::shared_ptr<Program> program, CBHandle cb_handle) {
     return program->metal_program->get_circular_buffer(cb_handle)->config();
 }
 
-void UpdateCircularBufferTotalSize(Program *program, CBHandle cb_handle, uint32_t total_size) {
+void UpdateCircularBufferTotalSize(std::shared_ptr<Program> program, CBHandle cb_handle, uint32_t total_size) {
     std::shared_ptr<CircularBuffer> circular_buffer = program->metal_program->get_circular_buffer(cb_handle);
     if (not circular_buffer->globally_allocated()) {
         program->metal_program->invalidate_circular_buffer_allocation();
@@ -687,18 +685,18 @@ void UpdateCircularBufferTotalSize(Program *program, CBHandle cb_handle, uint32_
     circular_buffer->config().set_total_size(total_size);
 }
 
-void UpdateCircularBufferPageSize(Program *program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size) {
+void UpdateCircularBufferPageSize(std::shared_ptr<Program> program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size) {
     program->metal_program->get_circular_buffer(cb_handle)->config().set_page_size(buffer_index, page_size);
 }
 
-void UpdateDynamicCircularBufferAddress(Program *program, CBHandle cb_handle, const Buffer &buffer) {
+void UpdateDynamicCircularBufferAddress(std::shared_ptr<Program> program, CBHandle cb_handle, const Buffer &buffer) {
     auto circular_buffer = program->metal_program->get_circular_buffer(cb_handle);
     circular_buffer->config().set_globally_allocated_address(buffer);
     circular_buffer->assign_global_address();
 }
 
 uint32_t CreateSemaphore(
-    Program *program,
+    std::shared_ptr<Program> program,
     const std::variant<CoreRange, CoreRangeSet> &core_spec,
     uint32_t initial_value,
     CoreType core_type) {
@@ -723,13 +721,13 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(
-    std::shared_ptr<Buffer> buffer, Program *program) {
+    std::shared_ptr<Buffer> buffer, std::shared_ptr<Program> program) {
     detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
     EnqueueAddBufferToProgram(buffer->device()->command_queue(), buffer, program->metal_program, false);
 }
 
 void SetRuntimeArgs(
-    const Program *program,
+    const std::shared_ptr<Program> program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &runtime_args) {
@@ -742,7 +740,7 @@ void SetRuntimeArgs(
 }
 
 void SetRuntimeArgs(
-    const Program *program,
+    const std::shared_ptr<Program> program,
     KernelHandle kernel,
     const std::vector<CoreCoord> &core_spec,
     const std::vector<std::vector<uint32_t>> &runtime_args) {
@@ -783,7 +781,7 @@ void SetRuntimeArgs(
     SetRuntimeArgs(device->command_queue(), kernel, core_spec, runtime_args, false);
 }
 
-void SetCommonRuntimeArgs(const Program *program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
+void SetCommonRuntimeArgs(const std::shared_ptr<Program> program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
     ZoneScoped;
     TT_FATAL(
         not CommandQueue::async_mode_set(),
@@ -794,21 +792,21 @@ void SetCommonRuntimeArgs(const Program *program, KernelHandle kernel_id, const 
     }
 }
 
-RuntimeArgsData &GetRuntimeArgs(const Program *program, KernelHandle kernel_id, const CoreCoord &logical_core) {
+RuntimeArgsData &GetRuntimeArgs(const std::shared_ptr<Program> program, KernelHandle kernel_id, const CoreCoord &logical_core) {
     TT_FATAL(
         not CommandQueue::async_mode_set(),
         "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
     return program->metal_program->get_kernel(kernel_id)->runtime_args_data(logical_core);
 }
 
-std::vector<std::vector<RuntimeArgsData>> &GetRuntimeArgs(const Program *program, KernelHandle kernel_id) {
+std::vector<std::vector<RuntimeArgsData>> &GetRuntimeArgs(const std::shared_ptr<Program> program, KernelHandle kernel_id) {
     TT_FATAL(
         not CommandQueue::async_mode_set(),
         "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
     return program->metal_program->get_kernel(kernel_id)->runtime_args_data();
 }
 
-RuntimeArgsData &GetCommonRuntimeArgs(const Program *program, KernelHandle kernel_id) {
+RuntimeArgsData &GetCommonRuntimeArgs(const std::shared_ptr<Program> program, KernelHandle kernel_id) {
     TT_FATAL(
         not CommandQueue::async_mode_set(),
         "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
@@ -841,11 +839,11 @@ void Synchronize(Device *device, const std::optional<uint8_t> cq_id) {
     }
 }
 
-void EnqueueProgram(CommandQueue& cq, Program *program, bool blocking) {
+void EnqueueProgram(CommandQueue& cq, std::shared_ptr<Program> program, bool blocking) {
     EnqueueProgram(cq, program->metal_program, blocking);
 }
 
-void RegisterBuffer(Program *program, std::shared_ptr<Buffer> buffer) {
+void RegisterBuffer(std::shared_ptr<Program> program, std::shared_ptr<Buffer> buffer) {
     program->metal_program->add_config_buffer(buffer);
 }
 

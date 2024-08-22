@@ -417,7 +417,7 @@ static void add_worker_config_to_edm_builders(
 }
 
 static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
-    tt::tt_metal::Program* program,
+    std::shared_ptr<tt::tt_metal::Program>  program,
     Device const* device,
     ttnn::ccl::RingTopology const& topology_config,
     ttnn::ccl::CCLOpConfig const& op_config,
@@ -654,7 +654,7 @@ static std::tuple<CBHandle, CBHandle, CBHandle, CBHandle> create_worker_circular
    ttnn::ccl::CCLOpConfig const& op_config,
     CoreRangeSet const& worker_core_range,
     uint32_t worker_pages_per_transfer,
-    tt::tt_metal::Program* program) {
+    std::shared_ptr<tt::tt_metal::Program>  program) {
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t page_size_bytes = op_config.get_page_size();
 
@@ -750,7 +750,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     std::vector<ttnn::ccl::EriscDatamoverBuilder> ccw_per_link_edm_builders(num_links, edm_builder);
 
     //////////////////
-    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
+    std::shared_ptr<tt::tt_metal::Program> program = tt::tt_metal::CreateProgram();
     // Issue #10978: CCLs need to be tagged as having multi-device dependencies, when running on Galaxy.
     tt::tt_metal::detail::CaptureMultiDeviceDependencies(program);
     const auto& device = local_chip_tensor.device();
@@ -892,7 +892,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     auto override_runtime_arguments_callback =
         [topology_config, worker_receiver_kernels, worker_sender_kernels, worker_cores, total_num_workers, ring_index](
             const void* operation,
-            Program* program,
+            std::shared_ptr<Program>  program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {

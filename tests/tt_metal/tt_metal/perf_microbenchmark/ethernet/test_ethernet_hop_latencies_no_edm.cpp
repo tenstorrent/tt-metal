@@ -167,7 +167,7 @@ void build_and_run_roundtrip_latency_test(
     std::size_t max_concurrent_samples,
     std::size_t n_hops,
 
-    std::vector<Program *> &programs,
+    std::vector<std::shared_ptr<Program> > &programs,
     std::vector<KernelHandle> &receiver_kernel_ids,
     std::vector<KernelHandle> &sender_kernel_ids
 ) {
@@ -180,7 +180,7 @@ void build_and_run_roundtrip_latency_test(
     receiver_kernel_ids.reserve(n_hops);
     sender_kernel_ids.reserve(n_hops);
 
-    std::unordered_map<Device*,Program*> device_program_map;
+    std::unordered_map<Device*, std::shared_ptr<Program>> device_program_map;
     for (std::size_t i = 0; i < n_hops; i++) {
         if (device_program_map.find(devices.at(i)) == device_program_map.end()) {
             programs.push_back(tt::tt_metal::CreateProgram());
@@ -456,7 +456,7 @@ int main (int argc, char** argv) {
                     for (auto sample_page_size : page_sizes) {
                         log_trace(tt::LogTest, "Running test with num_devices={}, num_samples={}, sample_page_size={}, max_concurrent_samples={}, n_hops={}",
                             n_hops, num_samples, sample_page_size, max_concurrent_samples, n_hops);
-                        std::vector<Program *> programs = {};
+                        std::vector<std::shared_ptr<Program> > programs = {};
                         std::vector<KernelHandle> receiver_kernel_ids;
                         std::vector<KernelHandle> sender_kernel_ids;
                         tt::tt_metal::build_and_run_roundtrip_latency_test(

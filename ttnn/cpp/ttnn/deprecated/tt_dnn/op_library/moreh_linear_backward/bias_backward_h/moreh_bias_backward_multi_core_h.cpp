@@ -16,7 +16,7 @@ namespace operations {
 namespace primary {
 
 operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &output_grad, const Tensor &bias_grad, const DeviceComputeKernelConfig &compute_kernel_config) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     uint32_t single_tile_size = detail::TileSize(cb_data_format);
@@ -194,7 +194,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &o
 
     auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y](
                                                    const void *operation,
-                                                   const Program *program,
+                                                   const std::shared_ptr<Program> program,
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {

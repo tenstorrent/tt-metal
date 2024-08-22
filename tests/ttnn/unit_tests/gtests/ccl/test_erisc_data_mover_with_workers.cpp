@@ -36,7 +36,7 @@ using namespace tt::test_utils::df;
 namespace ttnn {
 namespace ccl {
 void set_edm_runtime_args(
-    tt_metal::Program *program,
+    std::shared_ptr<tt_metal::Program> program,
     KernelHandle edm_kernel_handle,
     ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core
@@ -111,7 +111,7 @@ struct KernelXY {
 };
 
 void generate_receiver_worker_kernels(
-    Program *program,
+    std::shared_ptr<Program> program,
     Device *device,
     CoreCoord const& worker_core,
     CoreCoord const& edm_core,
@@ -203,7 +203,7 @@ void generate_receiver_worker_kernels(
 }
 
 void generate_sender_worker_kernels(
-    Program *program,
+    std::shared_ptr<Program> program,
     Device *device,
     CoreCoord const& worker_core,
     CoreCoord const& edm_core,
@@ -320,8 +320,8 @@ bool RunWriteBWTest(
 
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
-    tt_metal::Program *sender_program = tt_metal::CreateProgram();
-    tt_metal::Program *receiver_program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> sender_program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> receiver_program = tt_metal::CreateProgram();
 
     std::vector<CoreCoord> worker_cores;
     {

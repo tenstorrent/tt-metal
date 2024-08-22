@@ -81,7 +81,7 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
     CoreCoord phys_spoof_prefetch_core = device->worker_core_from_logical_core(spoof_prefetch_core);
     CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
 
-    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
+    std::shared_ptr<tt::tt_metal::Program> program = tt::tt_metal::CreateProgram();
 
     uint32_t dispatch_buffer_size_blocks_g = 4;
 

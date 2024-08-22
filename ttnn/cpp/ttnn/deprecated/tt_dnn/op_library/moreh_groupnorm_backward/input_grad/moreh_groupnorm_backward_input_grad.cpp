@@ -276,7 +276,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_backward_input_grad_impl(
                                            writer_kernels_id = writer_kernels_id,
                                            num_cores_to_be_used = num_cores_to_be_used,
                                            num_cores_y = num_cores_y](
-                                              const Program *program,
+                                              const std::shared_ptr<Program> program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         auto output_grad_buffer = input_buffers.at(0);

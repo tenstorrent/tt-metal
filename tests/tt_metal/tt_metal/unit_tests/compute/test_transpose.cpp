@@ -69,7 +69,7 @@ void validate_transpose_wh(const std::vector<uint32_t> &src_vec, const std::vect
 void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& test_config) {
     TT_FATAL(test_config.shape.size() == 4);
 
-    Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<Program> program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
 

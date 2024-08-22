@@ -73,7 +73,7 @@ void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t tile_size, uin
     num_pages = total_size / page_size;
 }
 
-std::tuple<tt_metal::Program *, tt_metal::KernelHandle, uint32_t> create_program(
+std::tuple<std::shared_ptr<tt_metal::Program> , tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_cores,
     const uint32_t &single_tile_size,
@@ -87,7 +87,7 @@ std::tuple<tt_metal::Program *, tt_metal::KernelHandle, uint32_t> create_program
     std::vector<CoreCoord>all_cores_list,
     uint32_t bank_start_id,
     const uint32_t &input_buffer_addr) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     uint32_t start_tile_id = 0;
     uint32_t kt = k / 32;

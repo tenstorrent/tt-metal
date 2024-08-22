@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-        tt_metal::Program *program = tt_metal::CreateProgram();
+        std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
         CoreCoord mux_core = {mux_x, mux_y};
         CoreCoord mux_phys_core = device->worker_core_from_logical_core(mux_core);

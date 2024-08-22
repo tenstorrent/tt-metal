@@ -11,7 +11,7 @@ struct Program;
 typedef struct Program Program;
 namespace detail {
 
-MetalProgram *GetMetalProgram(const Program *program);
+MetalProgram *GetMetalProgram(std::shared_ptr<Program> program);
 
 }  // namespace detail
 

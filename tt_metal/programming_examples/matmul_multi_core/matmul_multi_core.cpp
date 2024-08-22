@@ -54,7 +54,7 @@ void matmul_multi_core(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16
     * Setup program to execute along with its buffers and kernels to use
     */
     CommandQueue& cq = device->command_queue();
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     /*
     * Multi-Core prep

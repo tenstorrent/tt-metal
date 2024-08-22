@@ -52,7 +52,7 @@ int main(int argc, char **argv) {
         * Setup program and command queue to execute along with its buffers and kernels to use
         */
         CommandQueue& cq = device->command_queue();
-        Program *program = CreateProgram();
+        std::shared_ptr<Program> program = CreateProgram();
 
         constexpr CoreCoord core = {0, 0};
 

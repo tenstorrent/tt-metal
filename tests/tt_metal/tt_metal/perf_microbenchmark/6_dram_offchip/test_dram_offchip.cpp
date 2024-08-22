@@ -51,7 +51,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
 template <typename T>
 std::vector<T> slice_vec(std::vector<T> const &v, int m, int n);
 
-std::tuple<tt_metal::Program *, tt_metal::KernelHandle, uint32_t> create_program(
+std::tuple<std::shared_ptr<tt_metal::Program> , tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_cores,
     const uint32_t &num_reqs_at_a_time,
@@ -61,7 +61,7 @@ std::tuple<tt_metal::Program *, tt_metal::KernelHandle, uint32_t> create_program
 
 bool assign_runtime_args_to_program(
     tt_metal::Device *device,
-    tt_metal::Program *program,
+    std::shared_ptr<tt_metal::Program> program,
     const uint32_t &num_cores,
     const uint32_t &num_cores_y,
     const uint32_t &num_cores_x,
@@ -361,14 +361,14 @@ std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     return vec;
 }
 
-std::tuple<tt_metal::Program *, tt_metal::KernelHandle, uint32_t> create_program(
+std::tuple<std::shared_ptr<tt_metal::Program> , tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_cores,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
     const tt::DataFormat &tile_format,
     const uint32_t &access_type) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     uint32_t cb_index = 0;
     uint32_t cb_tiles = num_reqs_at_a_time;
@@ -394,7 +394,7 @@ std::tuple<tt_metal::Program *, tt_metal::KernelHandle, uint32_t> create_program
 
 bool assign_runtime_args_to_program(
     tt_metal::Device *device,
-    tt_metal::Program *program,
+    std::shared_ptr<tt_metal::Program> program,
     const uint32_t &num_cores,
     const uint32_t &num_cores_y,
     const uint32_t &num_cores_x,

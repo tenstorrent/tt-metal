@@ -76,9 +76,8 @@ namespace tt::tt_metal {
 
         // Launches all kernels on cores specified with kernels in the program.
         // All kernels on a given Tensix core must be launched.
-        void LaunchProgram(Device *device, Program *program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
         void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
-        void WaitProgramDone(Device *device, Program *program);
+        void WaitProgramDone(Device *device, std::shared_ptr<Program> program);
 
         /**
          *  Compiles all kernels within the program, and generates binaries that are written to `$TT_METAL_HOME/built/<device>/kernels/<kernel name>/<kernel hash>`
@@ -95,10 +94,10 @@ namespace tt::tt_metal {
          * | Argument                  | Description                                                      | Type      | Valid Range                                        | Required |
          * |---------------------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
          * | device                    | Which device the program is compiled for                         | Device *  | Must be initialized via tt_metal::InitializeDevice | Yes      |
-         * | program                   | The program to compile                                           | Program * |                                                    | Yes      |
+         * | program                   | The program to compile                                           | std::shared_ptr<Program>  |                                                    | Yes      |
          * | fd_bootloader_mode        | Set when compiling program to initialize fast dispatch           | bool      |                                                    | No       |
          */
-        void CompileProgram(Device *device, Program *program, bool fd_bootloader_mode = false);
+        void CompileProgram(Device *device, std::shared_ptr<Program> program, bool fd_bootloader_mode = false);
 
 
         /**
@@ -109,16 +108,16 @@ namespace tt::tt_metal {
          * | Argument            | Description                                                            | Type                          | Valid Range                        | Required |
          * |---------------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
          * | device              | The device to whcih runtime args will be written                       | Device *                      |                                    | Yes      |
-         * | program             | The program holding the runtime args                                   | const Program *               |                                    | Yes      |
+         * | program             | The program holding the runtime args                                   | const std::shared_ptr<Program>                |                                    | Yes      |
          * | force_slow_dispatch | Force allowing slow dispatch                                           | bool                          |                                    | No       |
          */
-        void WriteRuntimeArgsToDevice(Device *device, Program *program, bool force_slow_dispatch = false);
+        void WriteRuntimeArgsToDevice(Device *device, std::shared_ptr<Program> program, bool force_slow_dispatch = false);
 
         // Configures a given device with a given program.
         // - Loads all kernel binaries into L1s of assigned Tensix cores
         // - Configures circular buffers (inits regs with buffer data)
         // - Takes the device out of reset
-        bool ConfigureDeviceWithProgram(Device *device, Program *program, bool fd_bootloader_mode = false);
+        bool ConfigureDeviceWithProgram(Device *device, std::shared_ptr<Program> program, bool fd_bootloader_mode = false);
 
         /**
          * Flags a program as having multi-device dependencies.
@@ -127,9 +126,9 @@ namespace tt::tt_metal {
          *
          * | Argument            | Description                                                            | Type                          | Valid Range                        | Required |
          * |---------------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
-         * | program             | The program to flag with multi-device dependencies.                    |       Program *               |                                    | Yes      |
+         * | program             | The program to flag with multi-device dependencies.                    |       std::shared_ptr<Program>                |                                    | Yes      |
          */
-        void CaptureMultiDeviceDependencies(Program *program);
+        void CaptureMultiDeviceDependencies(std::shared_ptr<Program> program);
 
         /**
          * Clear profiler control buffer
@@ -264,12 +263,12 @@ namespace tt::tt_metal {
         void DeallocateBuffer(Buffer *buffer);
 
         // Get a json rep of kernels in a program, used by profiler.
-        nlohmann::json GetKernelsJSON(Program *program);
+        nlohmann::json GetKernelsJSON(std::shared_ptr<Program> program);
 
         // Set the runtime id for a given program, used by profiler.
-        void SetRuntimeID(Program *program, uint64_t id);
+        void SetRuntimeID(std::shared_ptr<Program> program, uint64_t id);
 
         // Get str reps of cb core ranges in a program, used by graph processor
-        std::vector<std::pair<CoreRangeSet, uint64_t>> GetCBInfo(Program *program);
+        std::vector<std::pair<CoreRangeSet, uint64_t>> GetCBInfo(std::shared_ptr<Program> program);
     }
 }

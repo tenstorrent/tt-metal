@@ -169,8 +169,8 @@ int main(int argc, char **argv) {
         std::cout<<"Left Tunneler = "<<tunneler_logical_core.str()<<std::endl;
         std::cout<<"Right Tunneler = "<<r_tunneler_logical_core.str()<<std::endl;
 
-        tt_metal::Program *program = tt_metal::CreateProgram();
-        tt_metal::Program *program_r = tt_metal::CreateProgram();
+        std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
+        std::shared_ptr<tt_metal::Program> program_r = tt_metal::CreateProgram();
 
         CoreCoord mux_core = {mux_x, mux_y};
         CoreCoord mux_phys_core = device->worker_core_from_logical_core(mux_core);

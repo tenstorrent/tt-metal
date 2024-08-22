@@ -127,7 +127,7 @@ void init(int argc, char **argv) {
     }
 }
 
-void set_runtime_args(tt_metal::Program *program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args, CoreRange kg) {
+void set_runtime_args(std::shared_ptr<tt_metal::Program> program, tt_metal::KernelHandle kernel_id, vector<uint32_t>& args, CoreRange kg) {
     for (int core_idx_y = kg.start_coord.y; core_idx_y <= kg.end_coord.y; core_idx_y++) {
         for (int core_idx_x = kg.start_coord.x; core_idx_x <= kg.end_coord.x; core_idx_x++) {
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
@@ -136,9 +136,9 @@ void set_runtime_args(tt_metal::Program *program, tt_metal::KernelHandle kernel_
     }
 }
 
-tt_metal::Program *initialize_program(uint32_t run_cycles) {
+std::shared_ptr<tt_metal::Program> initialize_program(uint32_t run_cycles) {
 
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     std::map<string, string> defines = {
         {"KERNEL_BYTES", std::to_string(kernel_size_g)}
@@ -218,7 +218,7 @@ int main(int argc, char **argv) {
 
         CommandQueue& cq = device->command_queue();
 
-        tt_metal::Program *program[2];
+        std::shared_ptr<tt_metal::Program> program[2];
         program[0] = initialize_program(slow_kernel_cycles_g);
         program[1] = initialize_program(fast_kernel_cycles_g);
 

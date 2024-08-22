@@ -51,7 +51,7 @@ Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& opt
 template <class OutputTensors>
 void override_addresses(
     const OverrideAddressesCallback& override_addresses_callback,
-    const Program* program,
+    const std::shared_ptr<Program>  program,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OutputTensors& output_tensors) {
@@ -79,14 +79,14 @@ void override_addresses(
 
 template void override_addresses<Tensors>(
     const OverrideAddressesCallback& override_addresses_callback,
-    const Program* program,
+    const std::shared_ptr<Program>  program,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const Tensors& output_tensors);
 
 template void override_addresses<OptionalTensors>(
     const OverrideAddressesCallback& override_addresses_callback,
-    const Program* program,
+    const std::shared_ptr<Program>  program,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& output_tensors);

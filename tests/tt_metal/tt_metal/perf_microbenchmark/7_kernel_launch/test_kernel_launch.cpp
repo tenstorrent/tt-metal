@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program *program = tt_metal::CreateProgram();
+        std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
         uint32_t single_tile_size = 2 * 1024;
 
         for (int core_group_idx = 0; core_group_idx < num_core_groups; ++core_group_idx) {

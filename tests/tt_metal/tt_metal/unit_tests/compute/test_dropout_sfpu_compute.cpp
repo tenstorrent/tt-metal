@@ -66,7 +66,7 @@ bool test_dropout_standalone(tt_metal::Device* device, float probability, uint32
         /*
         * Setup program to execute along with its buffers and kernels to use
         */
-        Program *program = CreateProgram();
+        std::shared_ptr<Program> program = CreateProgram();
         constexpr CoreCoord core = {0, 0};
         constexpr uint32_t single_tile_size = 2 * 1024;
         constexpr uint32_t num_tiles = 128;

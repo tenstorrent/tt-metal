@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     bool in0_is_sharded,
     bool output_is_sharded,
     bool untilize_out) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -738,7 +738,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
          cores,
          num_cores_with_work](
             const void* operation,
-            Program* program,
+            std::shared_ptr<Program>  program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
@@ -821,7 +821,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     bool in0_is_sharded,
     bool output_is_sharded,
     bool untilize_out) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
@@ -1397,7 +1397,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
          start_core,
          cores](
             const void* operation,
-            Program* program,
+            std::shared_ptr<Program>  program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {

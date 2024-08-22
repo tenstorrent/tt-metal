@@ -20,7 +20,7 @@ namespace tt {
 namespace tt_metal {
 
 operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     Device *device = input.device();
 
     DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
@@ -164,7 +164,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
 
     auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb](
         const void* operation,
-        Program *program,
+        std::shared_ptr<Program> program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors

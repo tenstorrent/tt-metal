@@ -91,7 +91,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
     int tensor_num_tiles,
     int block_num_tiles) {
 
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     int num_cores = num_cores_r * num_cores_c;
 
@@ -168,7 +168,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
 
 bool write_runtime_args_to_device(
     tt_metal::Device *device,
-    tt_metal::Program *program,
+    std::shared_ptr<tt_metal::Program> program,
     int num_cores_r,
     int num_cores_c,
     tt_metal::KernelHandle reader_kernel,

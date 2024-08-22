@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks moreh_mean_h(const Tensor &a, const Tensor &outp
 
     float scaler = 1.0f / origin_H;
 
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
@@ -199,7 +199,7 @@ operation::ProgramWithCallbacks moreh_mean_h(const Tensor &a, const Tensor &outp
                                                 num_cores = num_cores,
                                                 num_cores_y = num_cores_y](
                                                    const void *operation,
-                                                   Program *program,
+                                                   std::shared_ptr<Program> program,
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {

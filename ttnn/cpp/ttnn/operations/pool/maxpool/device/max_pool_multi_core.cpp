@@ -191,7 +191,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
     uint32_t dilation_w,
     const MemoryConfig& out_mem_config,
     uint32_t nblocks) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     // This should allocate a DRAM buffer on the device
     Device* device = input.device();
@@ -649,7 +649,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
     auto override_runtime_arguments_callback =
         [reader_kernel, writer_kernel, raw_in_cb, cb_sharded_out, cores](
             const void* operation,
-            Program* program,
+            std::shared_ptr<Program>  program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
@@ -685,7 +685,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(
 
 // this version uses distribution along height = N * H * W
 operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl(
-    Program* program,
+    std::shared_ptr<Program>  program,
     const Tensor& input,
     const Tensor& reader_indices,
     Tensor& output,
@@ -985,7 +985,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2_impl
             ncores,
             ncores_w](
             const void* operation,
-            Program* program,
+            std::shared_ptr<Program>  program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
@@ -1026,7 +1026,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(
     uint32_t dilation_w,
     const MemoryConfig& out_mem_config,
     uint32_t nblocks) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     return max_pool_2d_multi_core_sharded_with_halo_v2_impl(
         program,
         input,

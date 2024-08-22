@@ -40,7 +40,7 @@ struct DummyProgramMultiCBConfig {
 
 namespace local_test_functions {
 
-void initialize_dummy_kernels(Program* program, const CoreRangeSet& cr_set) {
+void initialize_dummy_kernels(std::shared_ptr<Program> program, const CoreRangeSet& cr_set) {
     auto dummy_reader_kernel = CreateKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
@@ -52,7 +52,7 @@ void initialize_dummy_kernels(Program* program, const CoreRangeSet& cr_set) {
     auto dummy_compute_kernel = CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
-void initialize_dummy_semaphores(Program* program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values)
+void initialize_dummy_semaphores(std::shared_ptr<Program> program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values)
 {
     for (uint32_t i = 0; i < init_values.size(); i++)
     {
@@ -60,7 +60,7 @@ void initialize_dummy_semaphores(Program* program, const std::variant<CoreRange,
     }
 }
 
-std::vector<CBHandle> initialize_dummy_circular_buffers(Program* program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs)
+std::vector<CBHandle> initialize_dummy_circular_buffers(std::shared_ptr<Program> program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs)
 {
     std::vector<CBHandle> cb_handles;
     for (uint32_t i = 0; i < cb_configs.size(); i++) {
@@ -108,7 +108,7 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
 }
 
 bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
@@ -120,7 +120,7 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyP
 }
 
 bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     const std::vector<CBHandle>& cb_handles = initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
@@ -144,7 +144,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
     return is_cb_config_before_update_successful && is_cb_config_after_update_successful;
 }
 
-bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Program* program, const DummyProgramConfig& program_config, const vector<vector<uint32_t>>& expected_semaphore_vals) {
+bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, std::shared_ptr<Program> program, const DummyProgramConfig& program_config, const vector<vector<uint32_t>>& expected_semaphore_vals) {
     TT_ASSERT(program_config.cr_set.size() == expected_semaphore_vals.size());
 
     bool are_all_semaphore_values_correct = true;
@@ -182,7 +182,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Progr
 }
 
 bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     vector<uint32_t> expected_semaphore_values;
 
     for (uint32_t initial_sem_value = 0; initial_sem_value < program_config.num_sems; initial_sem_value++) {
@@ -194,7 +194,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config, uint32_t num_runtime_args_dm0, uint32_t num_runtime_args_dm1, uint32_t num_runtime_args_compute, uint32_t num_iterations) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     bool pass = true;
 
     CoreRangeSet cr_set = program_config.cr_set;
@@ -290,7 +290,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     uint32_t num_runtime_args_for_cr0,
     uint32_t num_runtime_args_for_cr1,
     uint32_t num_iterations) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     bool pass = true;
 
     // TODO: this test would be better if it varied args across core ranges and kernel type
@@ -529,7 +529,7 @@ bool verify_rt_args(bool unique, Device* device, CoreCoord logical_core, const t
 // Write unique and common RT args, increment in kernel, and verify correctness via readback.
 bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig& program_config, uint32_t num_unique_rt_args, uint32_t num_common_rt_args, const tt::RISCV &riscv, bool idle_eth = false) {
 
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     bool pass = true;
     CoreRangeSet cr_set = program_config.cr_set;
 
@@ -680,7 +680,7 @@ namespace compiler_workaround_hardware_bug_tests {
 
 TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
     for (Device *device : devices_) {
-        Program *program = CreateProgram();
+        std::shared_ptr<Program> program = CreateProgram();
 
         CoreRange cr({0, 0}, {0, 0});
         CoreRangeSet cr_set({cr});
@@ -762,7 +762,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCor
     CoreCoord core_coord(0,0);
 
     for (Device *device : devices_) {
-        Program *program = CreateProgram();
+        std::shared_ptr<Program> program = CreateProgram();
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
             .set_page_size(intermediate_cb, single_tile_size)
             .set_page_size(out_cb, single_tile_size);
@@ -822,7 +822,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSing
 
 TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
     for (Device *device : devices_) {
-        Program *program = CreateProgram();
+        std::shared_ptr<Program> program = CreateProgram();
 
         CoreRange cr({0, 0}, {0, 0});
         CoreRangeSet cr_set({cr});
@@ -1051,7 +1051,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllSemaphoreConfigsCorrectlySentMultip
 
         CoreRangeSet cr_set({first_cr, second_cr});
 
-        Program *program = CreateProgram();
+        std::shared_ptr<Program> program = CreateProgram();
         DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
         vector<vector<uint32_t>> expected_semaphore_vals;
@@ -1241,10 +1241,10 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
-    vector<Program *> programs;
+    vector<std::shared_ptr<Program> > programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         programs.push_back(CreateProgram());
-        Program* program = programs.back();
+        std::shared_ptr<Program> program = programs.back();
 
         std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
         std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
@@ -1390,7 +1390,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
     log_info(tt::LogTest, "Running {} programs for cache warmup.", programs.size());
     // This loop caches program and runs
-    for (Program* program: programs) {
+    for (std::shared_ptr<Program> program: programs) {
         EnqueueProgram(this->device_->command_queue(), program, false);
     }
 
@@ -1404,7 +1404,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
         if (i % 50 == 0) {
             log_info(tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i+1, NUM_ITERATIONS);
         }
-        for (Program* program: programs) {
+        for (std::shared_ptr<Program> program: programs) {
             EnqueueProgram(this->device_->command_queue(), program, false);
         }
     }

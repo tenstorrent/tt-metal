@@ -51,7 +51,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::DataFormat output_data_format,
     bool untilize_out) {
     TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     uint32_t num_blocks = K / in0_block_w;
 
@@ -1123,7 +1123,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
          transpose_mcast,
          cores](
             const void* operation,
-            Program* program,
+            std::shared_ptr<Program>  program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {

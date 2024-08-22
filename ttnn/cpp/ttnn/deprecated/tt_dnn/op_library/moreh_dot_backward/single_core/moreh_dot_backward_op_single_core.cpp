@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
     const Tensor &other,
     const std::optional<const Tensor> &input_grad,
     const std::optional<const Tensor> &other_grad) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 
@@ -145,7 +145,7 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
     auto override_runtime_arguments_callback =
         [reader_kernel_id, writer_kernel_id, compute_kernel_id](
             const void *operation,
-            const Program *program,
+            const std::shared_ptr<Program> program,
             const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>> &optional_input_tensors,
             const std::vector<Tensor> &output_tensors) {

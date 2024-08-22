@@ -38,7 +38,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -240,7 +240,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
     }
 
     auto override_runtime_args_callback = [num_cores_x, num_cores_y, reader_kernel_id, writer_kernel_id, cores, device](
-                                              const Program *program,
+                                              const std::shared_ptr<Program> program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         auto output_dram_buffer = output_buffers.at(0);
@@ -288,7 +288,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
 
     bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -465,7 +465,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     }
 
     auto override_runtime_args_callback = [num_cores_x, num_cores_y, reader_kernel_id, writer_kernel_id, cores, device](
-                                              const Program *program,
+                                              const std::shared_ptr<Program> program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         auto output_dram_buffer = output_buffers.at(0);

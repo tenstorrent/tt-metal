@@ -27,8 +27,8 @@ struct TestBufferConfig {
     BufferType buftype;
 };
 
-Program *create_simple_unary_program(Buffer& input, Buffer& output) {
-    Program *program = CreateProgram();
+std::shared_ptr<Program> create_simple_unary_program(Buffer& input, Buffer& output) {
+    std::shared_ptr<Program> program = CreateProgram();
     Device* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
@@ -133,7 +133,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
 
     CommandQueue& command_queue = this->device_->command_queue();
 
-    Program *simple_program = create_simple_unary_program(input, output);
+    std::shared_ptr<Program> simple_program = create_simple_unary_program(input, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
@@ -181,7 +181,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramDeviceCapture) {
     trace_output_data.resize(input_data.size());
 
     bool has_eager = true;
-    Program *simple_program;
+    std::shared_ptr<Program> simple_program;
     // EAGER MODE EXECUTION
     if (has_eager) {
         simple_program = create_simple_unary_program(input, output);
@@ -223,8 +223,8 @@ TEST_F(SingleDeviceTraceFixture, EnqueueTwoProgramTrace) {
     Buffer interm(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
-    Program *op0 = create_simple_unary_program(input, interm);
-    Program *op1 = create_simple_unary_program(interm, output);
+    std::shared_ptr<Program> op0 = create_simple_unary_program(input, interm);
+    std::shared_ptr<Program> op1 = create_simple_unary_program(interm, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
@@ -300,7 +300,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueMultiProgramTraceBenchmark) {
     uint32_t num_loops = parse_env<int>("TT_METAL_TRACE_LOOPS", 4);
     uint32_t num_programs = parse_env<int>("TT_METAL_TRACE_PROGRAMS", 4);
     vector<std::shared_ptr<Buffer>> interm_buffers;
-    vector<Program *> programs;
+    vector<std::shared_ptr<Program> > programs;
 
     vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {

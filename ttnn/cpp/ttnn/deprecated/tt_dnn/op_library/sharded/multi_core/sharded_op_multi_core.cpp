@@ -35,7 +35,7 @@ uint32_t calculate_starting_idx_h(const Tensor& tensor, uint32_t num_slices, uin
 
 operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
@@ -295,7 +295,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     auto override_runtime_arguments_callback =
         [unary_reader_kernel_id, unary_writer_kernel_id, cb_output, cores, num_slices](
             const void* operation,
-            Program* program,
+            std::shared_ptr<Program>  program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
@@ -325,7 +325,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
 operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
@@ -548,7 +548,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     auto override_runtime_arguments_callback =
         [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cores, num_slices](
             const void* operation,
-            Program* program,
+            std::shared_ptr<Program>  program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {
@@ -870,7 +870,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges(
 operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& input, Tensor& output) {
     auto device = input.device();
 
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     const auto input_shard_spec = input.shard_spec().value();
     const auto output_shard_spec = output.shard_spec().value();
@@ -968,7 +968,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
     auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, cb_dst0, grid, output_cores](
                                                    const void* operation,
-                                                   Program* program,
+                                                   std::shared_ptr<Program>  program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
@@ -993,7 +993,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     auto device = input.device();
     auto output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer());
 
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
 
     auto input_shard_spec = input.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
@@ -1075,7 +1075,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
 
     auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, cb_dst0, grid, cores](
                                                    const void* operation,
-                                                   Program* program,
+                                                   std::shared_ptr<Program>  program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {

@@ -17,7 +17,7 @@ using namespace tt::constants;
 
 operation::ProgramWithCallbacks argmax_multi_core(
     const Tensor &input, const Tensor &output, const std::optional<uint32_t> dim) {
-    tt::tt_metal::Program *program = tt::tt_metal::CreateProgram();
+    std::shared_ptr<tt::tt_metal::Program> program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_unit_size = input.get_legacy_shape()[-1] * input.element_size();
@@ -104,7 +104,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, cores](
-                                              const Program *program,
+                                              const std::shared_ptr<Program> program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         auto src_buffer = input_buffers.at(0);

@@ -207,7 +207,7 @@ std::vector<uint32_t> get_receiver_writer_rt_args(
 
 // TODO: randomize each noc for testing purposes
 void build_and_run_autonomous_stream_test(
-    std::vector<Program *>& programs,
+    std::vector<std::shared_ptr<Program> >& programs,
     std::vector<Device*> const& devices,
     std::size_t num_messages,
     std::size_t page_size,
@@ -235,7 +235,7 @@ void build_and_run_autonomous_stream_test(
 
     programs.push_back(CreateProgram());
     Device* device = devices.at(0);
-    Program* program = programs.at(0);
+    std::shared_ptr<Program> program = programs.at(0);
     log_trace(tt::LogTest, "Device ID: {}", device->id());
 
     CoreCoord sender_core = CoreCoord(0, 0);
@@ -675,7 +675,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreams) {
 
     std::array<uint32_t, num_sizes> sub_sizes = std::array<uint32_t, num_sizes>{0, 3, 4, 7, 0, 2, 10, 1};
 
-    std::vector<Program *> programs;
+    std::vector<std::shared_ptr<Program> > programs;
     tt::tt_metal::build_and_run_autonomous_stream_test(
         programs,
         {device_},
@@ -718,7 +718,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsSmallPackets) {
 
     std::array<uint32_t, num_sizes> sub_sizes = std::array<uint32_t, num_sizes>{0, 3, 4, 7, 0, 2, 5, 1};
 
-    std::vector<Program *> programs;
+    std::vector<std::shared_ptr<Program> > programs;
     tt::tt_metal::build_and_run_autonomous_stream_test(
         programs,
         {device_},
@@ -761,7 +761,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingShort) {
 
     std::array<uint32_t, num_sizes> sub_sizes = std::array<uint32_t, num_sizes>{0, 3, 4, 7, 0, 2, 10, 1};
 
-    std::vector<Program *> programs;
+    std::vector<std::shared_ptr<Program> > programs;
     tt::tt_metal::build_and_run_autonomous_stream_test(
         programs,
         {device_},
@@ -815,7 +815,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingRandomShor
             sub_sizes.at(i) = std::rand() % (page_size / noc_word_size);
             EXPECT_TRUE(sub_sizes.at(i) < (page_size / noc_word_size));
         }
-        std::vector<Program *> programs;
+        std::vector<std::shared_ptr<Program> > programs;
         log_info(tt::LogTest, "Iteration: {}", i);
         tt::tt_metal::build_and_run_autonomous_stream_test(
             programs,
@@ -866,7 +866,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingLong) {
 
     std::array<uint32_t, num_sizes> sub_sizes = std::array<uint32_t, num_sizes>{0, 3, 4, 7, 0, 2, 10, 1};
 
-    std::vector<Program *> programs;
+    std::vector<std::shared_ptr<Program> > programs;
     tt::tt_metal::build_and_run_autonomous_stream_test(
         programs,
         {device_},
@@ -952,7 +952,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsSweep) {
                             EXPECT_TRUE(sub_sizes.at(i) < (page_size / noc_word_size));
                         }
 
-                        std::vector<Program *> programs;
+                        std::vector<std::shared_ptr<Program> > programs;
                         tt::tt_metal::build_and_run_autonomous_stream_test(
                             programs,
                             {device_},

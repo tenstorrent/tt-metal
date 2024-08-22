@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement {
 
 Fold::MultiCore::cached_program_t fold_multi_core(
     const Tensor& input, const Tensor& output, uint8_t stride_h, uint8_t stride_w) {
-    Program *program = CreateProgram();
+    std::shared_ptr<Program> program = CreateProgram();
     Device* device = output.device();
 
     auto all_cores = input.shard_spec()->grid;

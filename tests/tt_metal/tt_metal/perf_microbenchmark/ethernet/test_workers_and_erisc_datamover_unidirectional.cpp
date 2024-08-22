@@ -201,7 +201,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                               Device 0
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program *sender_program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> sender_program = tt_metal::CreateProgram();
     uint32_t chip0_worker_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, chip0_sender_worker_core, 0);
 
     chip0_edm_args.push_back(chip0_sender_channels_offset);
@@ -345,7 +345,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                              Device 1
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program *receiver_program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> receiver_program = tt_metal::CreateProgram();
     auto chip1_receiver_worker_core = CoreCoord(0, 0);
     uint32_t chip1_worker_semaphore_id = tt::tt_metal::CreateSemaphore(receiver_program, chip1_receiver_worker_core, 0);
 

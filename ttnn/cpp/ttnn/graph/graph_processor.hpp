@@ -24,7 +24,7 @@ namespace ttnn {
 
         bool hook_deallocate(tt::tt_metal::Buffer* buffer) override;
 
-        bool hook_program(tt::tt_metal::Program* program) override;
+        bool hook_program(std::shared_ptr<tt::tt_metal::Program>  program) override;
 
         virtual ~ProcessorHooks() = default;
 
@@ -46,7 +46,7 @@ namespace ttnn {
 
         void track_deallocate_cb() override;
 
-        void track_program(tt::tt_metal::Program* program) override;
+        void track_program(std::shared_ptr<tt::tt_metal::Program>  program) override;
 
         void track_function_start(std::string_view function_name, std::span<std::any> args) override;
 

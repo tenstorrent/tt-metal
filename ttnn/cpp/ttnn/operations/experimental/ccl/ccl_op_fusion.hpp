@@ -45,7 +45,7 @@ struct AllGatherFusedOpSignaler {
     }
 
     void init_all_gather(
-        Program *program,
+        std::shared_ptr<Program> program,
         Device const* device,
 
         CoreRangeSet const& all_gather_workers,

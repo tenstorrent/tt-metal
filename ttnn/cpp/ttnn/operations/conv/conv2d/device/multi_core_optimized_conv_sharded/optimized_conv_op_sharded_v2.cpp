@@ -39,7 +39,7 @@ const uint32_t temp_sum_cb = CB::c_intermed3;
 
 // TODO: Add namespace for utilities?
 std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
-    tt_metal::Program* program,
+    std::shared_ptr<tt_metal::Program>  program,
     const Tensor& input,
     CoreRange core,
     uint32_t num_cb0_tiles,
@@ -215,7 +215,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
 
 // TODO: Add namespace for utilities?
 std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
-    tt_metal::Program* program,
+    std::shared_ptr<tt_metal::Program>  program,
     const Tensor& input,
     CoreRange core,
     uint32_t num_cb0_tiles,
@@ -310,7 +310,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
 }
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
-    tt_metal::Program* program,
+    std::shared_ptr<tt_metal::Program>  program,
     const Tensor& a,
     const Tensor& b,
     const Shape& ashape,
@@ -1584,7 +1584,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
          num_cores_y = num_cores_y,
          has_bias = has_bias](
             const void* operation,
-            Program* program,
+            std::shared_ptr<Program>  program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
@@ -1668,7 +1668,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
     bool enable_act_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
     return multi_core_optimized_conv_sharded_v2_impl(
         program,
         a,
@@ -1713,7 +1713,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     bool enable_act_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding) {
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
     // TODO: conv params need to be cleaned up and replaced with sliding window config
     ttnn::operations::sliding_window::ParallelConfig parallel_config;
     parallel_config.grid = a.shard_spec().value().grid;

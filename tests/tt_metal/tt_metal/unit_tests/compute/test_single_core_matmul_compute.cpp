@@ -26,7 +26,7 @@ using namespace tt::test_utils::df;
 namespace unit_tests::compute::matmul {
 
 void create_CBs_for_fused_matmul(
-    tt_metal::Program* program,
+    std::shared_ptr<tt_metal::Program> program,
     tt_metal::Device* device,
     CoreCoord core,
     bool activations_rm,
@@ -155,7 +155,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
                     .buffer_type = tt::tt_metal::BufferType::DRAM
         };
 
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(dram_config);
     const uint32_t in0_dram_addr = input0_dram_buffer->address();
     auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
@@ -303,7 +303,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
         };
 
 
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(dram_config_0);
     const uint32_t in0_dram_addr = input0_dram_buffer->address();
     auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
@@ -465,7 +465,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
                     .buffer_type = tt::tt_metal::BufferType::DRAM
         };
 
-    tt_metal::Program *program = tt_metal::CreateProgram();
+    std::shared_ptr<tt_metal::Program> program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(dram_config_0);
     const uint32_t in0_dram_addr = input0_dram_buffer->address();
     auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
