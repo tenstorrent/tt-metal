@@ -54,7 +54,7 @@ void kernel_main() {
     MatmulOpReceiver fused_op_receiver;
     if constexpr (fuse_op) {
         fused_op_receiver = MatmulOpReceiver(
-            true,
+            true, /* wait_for_op_signal */
             get_compile_time_arg_val(18), /* num_transfers */
             get_compile_time_arg_val(19), /* ring_size */
             get_compile_time_arg_val(20), /* start_ring_index */

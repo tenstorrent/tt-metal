@@ -82,9 +82,9 @@ void AllGatherFusedOpSignaler::emit_all_gather_fused_op_rt_args(
         static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[all_gather_direction])
     );
 
-    // Push the params for the start signal
-    bool wait_for_start_signal = !start_signal_core_sem_pair.has_value() && all_gather_direction == 0;
-    bool send_start_signal = start_signal_core_sem_pair.has_value() && all_gather_direction == 0;
+    // Push the params for the start signal. Only wait for/send start signal if all_gather direction is counter clockwise
+    bool wait_for_start_signal = !start_signal_core_sem_pair.has_value() && all_gather_direction == 1;
+    bool send_start_signal = start_signal_core_sem_pair.has_value() && all_gather_direction == 1;
 
     rt_args.push_back(static_cast<uint32_t>(wait_for_start_signal));
     rt_args.push_back(static_cast<uint32_t>(send_start_signal));

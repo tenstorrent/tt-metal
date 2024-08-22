@@ -108,6 +108,10 @@ def run_all_gather_matmul_on_t3000_impl(
 
         logger.info(f"Done iteration {i}")
 
+        # Synchronize the devices
+        for d in devices:
+            ttnn.synchronize_device(d)
+
     print("Checking outputs for All Gather Matmul (All Gather)")
     for i, t in enumerate(ttnn.get_device_tensors(tt_all_gather_out_tensor)):
         tt_output_tensor = t.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
