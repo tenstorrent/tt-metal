@@ -420,6 +420,7 @@ void JitBuildState::compile_one(
     const JitBuildSettings* settings,
     const string& src,
     const string& obj) const {
+    ZoneScoped;
     fs::create_directories(out_dir);
 
     // Add kernel specific defines
@@ -456,6 +457,7 @@ void JitBuildState::compile_one(
 }
 
 void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
+    ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         launch_build_step(
@@ -472,6 +474,7 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
 }
 
 void JitBuildState::link(const string& log_file, const string& out_dir) const {
+    ZoneScoped;
     string lflags = this->lflags_;
     if (tt::llrt::OptionsG.get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + "linker.map ";
@@ -497,6 +500,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
 }
 
 void JitBuildState::elf_to_hex8(const string& log_file, const string& out_dir) const {
+    ZoneScoped;
     string cmd;
     cmd = "cd " + out_dir + " && ";
     cmd += env_.objcopy_;
@@ -564,6 +568,7 @@ void JitBuildState::hex8_to_hex32(const string& log_file, const string& out_dir)
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propogate link addresses
 void JitBuildState::weaken(const string& log_file, const string& out_dir) const {
+    ZoneScoped;
     string cmd;
     cmd = "cd " + out_dir + " && ";
     cmd += env_.objcopy_;
@@ -577,6 +582,7 @@ void JitBuildState::weaken(const string& log_file, const string& out_dir) const 
 }
 
 void JitBuildState::extract_zone_src_locations(const string& log_file) const {
+    ZoneScoped;
     static std::atomic<bool> new_log = true;
     if (tt::tt_metal::getDeviceProfilerState()) {
         if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
@@ -595,6 +601,7 @@ void JitBuildState::extract_zone_src_locations(const string& log_file) const {
 }
 
 void JitBuildState::build(const JitBuildSettings* settings) const {
+    ZoneScoped;
     string out_dir = (settings == nullptr)
                          ? this->out_path_ + this->target_name_ + "/"
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
@@ -626,6 +633,7 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings, con
 }
 
 void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings, const string& kernel_in_path) {
+    ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < build_set.size(); ++i) {
         // Capture the necessary objects by reference
