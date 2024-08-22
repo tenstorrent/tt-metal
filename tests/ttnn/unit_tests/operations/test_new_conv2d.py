@@ -360,6 +360,9 @@ def test_conv_ws(
     weights_dtype,
     activations_dtype,
 ):
+    if is_grayskull() and input_channels >= 2048:
+        pytest.skip("Skipping on grayskull due to insufficient L1")
+
     stride_h = stride
     stride_w = stride
     batch_size = 2
