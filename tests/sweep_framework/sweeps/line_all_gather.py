@@ -40,28 +40,50 @@ parameters = {
         "input_dtype": [ttl.tensor.DataType.BFLOAT16],
         "mem_config": [ttl.tensor.MemoryConfig(buffer_type=ttl.tensor.BufferType.DRAM)],
         "enable_async": [True, False],
+        "num_iters": [1],
     },
 }
 
 
-def skip(
-    *, t3k_device_mesh, input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, **_
-) -> Tuple[bool, Optional[str]]:
-    if t3k_device_mesh.get_num_devices() != 8:
-        return True, "Not T3000!"
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     (is_known_failure, message) = is_unsupported_case(
-        input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout
+        test_vector["input_shape"],
+        test_vector["dim"],
+        test_vector["mem_config"],
+        test_vector["num_devices"],
+        test_vector["num_links"],
+        test_vector["input_dtype"],
+        test_vector["layout"],
     )
     if is_known_failure:
         return True, f"Skipping unsupported case {message}."
+    if test_vector["num_links"] == 2:
+        return True, f"test cases with num_links = 2 is currently not supported by new mesh fixture"
     return False, None
+
+
+def device_mesh_fixture():
+    import tt_lib as ttl
+
+    assert ttnn.get_num_devices() >= 8, "Not T3000!"
+    device_ids = [0, 4, 5, 1, 2, 6, 7, 3]
+    num_devices_requested = len(device_ids)
+    device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested])
+    print("ALL GATHER: Opened device mesh")
+
+    yield (device_mesh, "T3000 Mesh")
+
+    print("ALL GATHER: Closing device mesh")
+    for device in device_mesh.get_devices():
+        ttl.device.DumpDeviceProfiler(device)
+    ttnn.close_device_mesh(device_mesh)
+    del device_mesh
 
 
 # This is the run instructions for the test, defined by the developer.
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 def run(
-    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -69,16 +91,14 @@ def run(
     input_dtype,
     layout,
     mem_config,
-    use_program_cache,
-    function_level_defaults,
     enable_async,
-    num_iters=1,
+    num_iters,
+    *,
+    device,
 ) -> list:
+    t3k_device_mesh = device
     for device in t3k_device_mesh.get_devices():
         device.enable_async(enable_async)
-
-    logger.info(f"Input shape: {input_shape}")
-    logger.info(f"dim: {dim}")
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
@@ -103,4 +123,4 @@ def run(
             eq, output = comp_pcc(tt_output_tensor, input_tensor)
         if not eq:
             logger.error(f"output mismatch for tensor {i}")
-        return [eq, output, e2e_perf]
+        return [(eq, output), e2e_perf]
