@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "device/unary_op.hpp"
+#include "common/unary_op_types.hpp"
 
 namespace ttnn {
     using UnaryWithParam = ttnn::operations::unary::UnaryWithParam;

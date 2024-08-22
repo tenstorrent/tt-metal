@@ -6,6 +6,7 @@
 #pragma once
 
 #include "device/complex_unary_op.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn {
