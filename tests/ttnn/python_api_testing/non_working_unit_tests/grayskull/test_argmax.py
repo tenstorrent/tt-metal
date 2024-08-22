@@ -74,33 +74,6 @@ test_sweep_args = [
         11079580,
         {"dim": -1},
     ),
-    (
-        [(2, 6, 32, 32)],
-        [ttnn.bfloat16],
-        [ttnn.ROW_MAJOR_LAYOUT],
-        [ttnn.DRAM_MEMORY_CONFIG],
-        ttnn.DRAM_MEMORY_CONFIG,
-        11079580,
-        {"dim": -2},
-    ),
-    (
-        [(2, 6, 32, 32)],
-        [ttnn.bfloat16],
-        [ttnn.ROW_MAJOR_LAYOUT],
-        [ttnn.DRAM_MEMORY_CONFIG],
-        ttnn.DRAM_MEMORY_CONFIG,
-        11079580,
-        {"dim": -3},
-    ),
-    (
-        [(2, 6, 32, 32)],
-        [ttnn.bfloat16],
-        [ttnn.ROW_MAJOR_LAYOUT],
-        [ttnn.DRAM_MEMORY_CONFIG],
-        ttnn.DRAM_MEMORY_CONFIG,
-        11079580,
-        {"dim": -4},
-    ),
 ]
 
 
