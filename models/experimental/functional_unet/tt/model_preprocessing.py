@@ -17,13 +17,26 @@ def create_unet_model_parameters(model: unet_shallow_torch.UNet, input_tensor: t
     for key in parameters.keys():
         parameters[key].module = getattr(model, key)
 
-    parameters.p1["parallel_config_override"] = None  # {}
-    parameters.p2["parallel_config_override"] = None  # {}
-    parameters.p3["parallel_config_override"] = None  # {}
-    parameters.p4["parallel_config_override"] = None  # {}
+    parameters.p1["parallel_config_override"] = {
+        "grid_size": (8, 8),
+        "num_cores_nhw": 64,
+    }
+    parameters.p2["parallel_config_override"] = {
+        "grid_size": (8, 8),
+        "num_cores_nhw": 60,
+    }
+    parameters.p3["parallel_config_override"] = {
+        "grid_size": (8, 8),
+        "num_cores_nhw": 60,
+    }
+    parameters.p4["parallel_config_override"] = {
+        "grid_size": (8, 7),
+        "num_cores_nhw": 5,
+    }
 
     parameters.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 5 * 32}
     parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 5 * 32}
+
     parameters.c2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c2_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c3["conv_blocking_and_parallelization_config_override"] = None

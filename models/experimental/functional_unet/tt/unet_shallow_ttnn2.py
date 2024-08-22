@@ -9,8 +9,9 @@ from loguru import logger
 from typing import Optional, Tuple
 from tt_lib import profiler
 
+from ttnn.operations.conv2d import determine_parallel_config, create_sharded_memory_config_from_parallel_config
+
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, ParameterDict
-from models.experimental.functional_unet.tt.unet_shallow_torch import UNet as TorchUNet
 
 
 # Unet reshard wrapper
@@ -120,7 +121,11 @@ class UNetConv2D:
         self.bias = ttnn.from_torch(bias, dtype=ttnn.float32)
 
     def __call__(self, x):
-        x, _, _, self.weight, self.bias = ttnn.conv2d(
+        logger.info(
+            f"running conv - input={x.shape} in_h={self.input_height}, in_w={self.input_width}, in_c={self.in_channels}, out=c{self.out_channels}, pad={self.padding}"
+        )
+        logger.info(f"config:{self.conv_config}")
+        x, output_height, output_width, self.weight, self.bias = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -136,17 +141,19 @@ class UNetConv2D:
             conv_config=self.conv_config,
             conv_op_cache=self.cache,
         )
+        logger.info(f"done conv out shape: {output_height} {output_width}")
         return x
 
 
 class UNetMaxPool2D:
     def __init__(self, pool, device=None, reader_patterns_cache={}):
+        self.pool = pool
         self.max_pool = ttnn.MaxPool2d(
             kernel_size=pool.kernel_size,
             stride=pool.stride,
             padding=pool.padding,
             dilation=pool.dilation,
-            dtype=ttnn.bfloat8_b,
+            dtype=pool.dtype,
             batch_size=pool.batch_size,
             input_height=pool.input_height,
             input_width=pool.input_width,
@@ -157,6 +164,7 @@ class UNetMaxPool2D:
         )
 
     def __call__(self, x):
+        logger.info(f"running max_pool - input={x.shape}, in_h={self.pool.input_height}, in_w={self.pool.input_width}")
         return self.max_pool(x)
 
 
@@ -188,22 +196,44 @@ class UNetMaxPool2DNew:
 
 
 class UNetDownblock:
-    def __init__(self, conv1, bn1, conv2, bn2, pool, device, conv_cache={}, max_pool_cache={}):
+    def __init__(self, conv1, bn1, conv2, bn2, pool, device, conv_cache={}, max_pool_cache={}, should_reshard=False):
         self.conv1 = UNetConv2D(conv1, bn=bn1, device=device, cache=conv_cache)
         self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, cache=conv_cache)
-        # self.pool1 = UNetMaxPool2D(pool, conv2.out_channels, device=device, reader_patterns_cache=max_pool_cache)
         self.pool1 = UNetMaxPool2D(pool, device=device, reader_patterns_cache=max_pool_cache)
 
+        self.should_reshard = should_reshard
+        if self.should_reshard:
+            parallel_config = determine_parallel_config(
+                is_1d_systolic=True,
+                batch_size=self.conv1.batch_size,
+                input_channels=self.conv1.in_channels,
+                output_height=self.conv2.input_height,
+                output_width=self.conv2.input_width,
+                output_channels=self.conv1.out_channels,
+                device=device,
+                is_out_tiled=True,
+            )
+            self.sharded_memory_config = create_sharded_memory_config_from_parallel_config(
+                tensor_shape=[
+                    1,
+                    1,
+                    self.conv1.input_width * self.conv1.input_height * self.conv1.batch_size,
+                    self.conv1.in_channels,
+                ],
+                parallel_config=parallel_config,
+                tile_size=32 if conv1.dtype == ttnn.bfloat8_b else 1,
+            )
+            logger.info(f"Created shardspec: {parallel_config}, {self.sharded_memory_config}")
+
     def __call__(self, x, perf_mode=False):
+        if self.should_reshard:
+            x = unet_reshard(x, self.sharded_memory_config, use_reshard=False)
         x = self.conv1(x)
         x = self.conv2(x)
-
         residual = ttnn.experimental.tensor.sharded_to_interleaved(
-            x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16
+            x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat8_b
         )
-
         x = self.pool1(x)
-
         return x, residual
 
 
@@ -247,6 +277,7 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             max_pool_cache=self.max_pool_cache,
+            should_reshard=False,
         )
         self.downblock2 = UNetDownblock(
             parameters.c2,
@@ -257,6 +288,7 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             max_pool_cache=self.max_pool_cache,
+            should_reshard=True,
         )
         self.downblock3 = UNetDownblock(
             parameters.c3,
@@ -267,6 +299,7 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             max_pool_cache=self.max_pool_cache,
+            should_reshard=True,
         )
         self.downblock4 = UNetDownblock(
             parameters.c4,
@@ -277,6 +310,7 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             max_pool_cache=self.max_pool_cache,
+            should_reshard=True,
         )
 
         self.bnc = UNetConv2D(parameters.bnc, parameters.bnb, device, cache=self.conv_cache)

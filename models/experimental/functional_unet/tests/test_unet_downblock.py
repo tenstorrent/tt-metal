@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import pytest
 import ttnn
 from loguru import logger
