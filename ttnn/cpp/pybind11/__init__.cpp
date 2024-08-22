@@ -26,7 +26,7 @@ PYBIND11_MODULE(_ttnn, module) {
     module.doc() = "Python bindings for TTNN";
 
     auto m_graph = module.def_submodule("graph", "Contains graph capture functions");
-    ttnn::py_graph_module(m_graph);
+    ttnn::graph::py_graph_module(m_graph);
 
     auto m_deprecated = module.def_submodule("deprecated", "Contains deprecated tt_lib bindings for tensor, device, profiler");
     tt::bind_deprecated(m_deprecated);
