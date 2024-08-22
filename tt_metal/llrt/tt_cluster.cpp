@@ -14,6 +14,7 @@
 #include "hostdevcommon/dprint_common.h"
 #include "rtoptions.hpp"
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
+#include "third_party/umd/device/simulation/tt_simulation_device.h"
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/impl/debug/sanitize_noc_host.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
