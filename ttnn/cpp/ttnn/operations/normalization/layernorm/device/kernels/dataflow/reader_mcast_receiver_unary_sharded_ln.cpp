@@ -44,6 +44,7 @@ void kernel_main() {
     constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5;
     constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3;
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
+    constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x2] global reduce
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2); // tile size
     const DataFormat data_format = get_dataformat(cb_ex_partial2); // data format
@@ -205,6 +206,6 @@ void kernel_main() {
     #ifndef RMSNORM
     global_reduce_receiver(cb_ex_partial, cb_ex_external, cb_ex, cb_ex_global, cb_ex);
     #endif
-    global_reduce_receiver(cb_ex_partial2, cb_ex_external2, cb_ex2pe, cb_ex_global, cb_ex2);
+    global_reduce_receiver(cb_ex_partial2, cb_ex_external2, cb_ex2pe, cb_ex2_global, cb_ex2);
 
 }
