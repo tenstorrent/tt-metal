@@ -4,11 +4,11 @@
 
 import torch
 import pytest
-import tt_lib
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
 from loguru import logger
+import ttnn
 
 
 @pytest.mark.parametrize(
@@ -40,7 +40,7 @@ def test_embedding_bw(input_shapes, device):
 
     weights_tensor = ttnn.Tensor(weights, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device)
 
-    tt_output_tensor_on_device = tt_lib.tensor.embedding_bw(grad_tensor, input_tensor, weights_tensor)
+    tt_output_tensor_on_device = ttnn.embedding_bw(grad_tensor, input_tensor, weights_tensor)
     tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     weights.retain_grad()

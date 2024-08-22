@@ -8,7 +8,6 @@ from loguru import logger
 import random
 import pytest
 import torch
-import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc

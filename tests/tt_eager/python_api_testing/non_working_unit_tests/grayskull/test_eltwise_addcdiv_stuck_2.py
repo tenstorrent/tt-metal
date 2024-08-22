@@ -47,7 +47,7 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type[2]),
             dtype[2],
         )
-        t3 = ttnn.addcdiv(t0, t1, t2, scalar, output_mem_config)
+        t3 = ttnn.addcdiv(t0, t1, t2, value=scalar, memory_config=output_mem_config)
 
         y = tt2torch_tensor(t3)
     except Exception as exc:

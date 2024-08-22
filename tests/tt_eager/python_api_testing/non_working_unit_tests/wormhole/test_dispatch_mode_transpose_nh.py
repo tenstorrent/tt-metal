@@ -9,7 +9,6 @@ from loguru import logger
 import random
 import pytest
 import torch
-import tt_lib as ttl
 import random
 import ttnn
 
