@@ -7,12 +7,12 @@
 #include <vector>
 
 #include "debug/dprint.h"
+#include "../../rt_args_common.hpp"
 
 template<uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
      return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
  }
-
 void kernel_main() {
     /*
     In DRAM, Q is (B, PNHt, DHt), K is (B, St, DHt), V is (B, St, DHt), mask is (B, PNHt, PSt)
@@ -26,19 +26,48 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);  // number of tiles in seqlen of a k/v/mask chunk
     constexpr uint32_t num_cores = get_compile_time_arg_val(5);
     constexpr bool is_q_sharded = get_compile_time_arg_val(6);
+    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(7);
+    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(8);
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(9);
+    constexpr uint32_t index_stick_size_B = get_compile_time_arg_val(10);
 
     const uint32_t q_addr  = get_arg_val<uint32_t>(0);
     const uint32_t k_addr  = get_arg_val<uint32_t>(1);
     const uint32_t v_addr  = get_arg_val<uint32_t>(2);
-    const uint32_t PSt = get_arg_val<uint32_t>(3);  // padded layer length in tiles
-    const uint32_t k_num_chunks = get_arg_val<uint32_t>(4);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
-    const uint32_t k_chunk_start = get_arg_val<uint32_t>(5);
-    const uint32_t k_chunk_end = get_arg_val<uint32_t>(6);
-    const uint32_t cur_batch =  get_arg_val<uint32_t>(7);
-    const bool is_worker = get_arg_val<uint32_t>(8) == 1;
+    const uint32_t pos_addr  = get_arg_val<uint32_t>(3);
+    const uint32_t cur_batch =  get_arg_val<uint32_t>(4);
+    const bool is_worker = get_arg_val<uint32_t>(5) == 1;
+    const uint32_t core_num = get_arg_val<uint32_t>(6);
+    const uint32_t cur_pos_arg = get_arg_val<uint32_t>(7);
 
-    tt_l1_ptr uint32_t * all_reducer_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
-    tt_l1_ptr uint32_t * all_reducer_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(9 + B));
+    // Get cur_pos
+    uint32_t cur_pos = 0;
+    if (cur_pos_arg!=4294967295){
+        cur_pos = cur_pos_arg;
+    }
+    else {
+        constexpr uint32_t cb_index_id = tt::CB::dataflow0;
+        const InterleavedPow2AddrGen<true> addrg = {
+                .bank_base_address = pos_addr,
+                .log_base_2_of_page_size = log_base_2_of_page_size
+            };
+
+        cb_reserve_back(cb_index_id, 1);
+        uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
+        // index_tensor has one page to read
+        uint64_t tensor_index_noc_addr = get_noc_addr(0, addrg);
+        noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
+        noc_async_read_barrier();
+        cb_push_back(cb_index_id, 1);
+        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
+        cur_pos = index_ptr[cur_batch];
+    }
+    DPRINT << "[Reader] cur_pos: " << cur_pos << ENDL();
+    // Sequence length assignment
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num, num_cores_per_batch, k_chunk_size);
+    DPRINT << "[Reader] PSt: " << PSt << " k_num_chunks: " << k_num_chunks << " k_chunk_start: " << k_chunk_start << " k_chunk_end: " << k_chunk_end << ENDL();
+    tt_l1_ptr uint32_t * all_reducer_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(8));
+    tt_l1_ptr uint32_t * all_reducer_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(8 + B));
 
     uint32_t reduce_core_noc_x = all_reducer_noc_x[cur_batch];
     uint32_t reduce_core_noc_y = all_reducer_noc_y[cur_batch];
@@ -125,7 +154,7 @@ void kernel_main() {
     const uint32_t k_batch_offset = cur_batch * St * DHt;
     const uint32_t v_batch_offset = cur_batch * St * DHt;
 
-    // DPRINT << "[Reader] read Q" << ENDL();
+    DPRINT << "[Reader] read Q" << ENDL();
 
     // Then, read K, V, Mask k_chunk_tiles at a time
     const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t * DHt;
@@ -134,7 +163,7 @@ void kernel_main() {
     uint32_t k_start_tile_id = k_batch_offset + k_chunk_offset;
     uint32_t v_start_tile_id = v_batch_offset + v_chunk_offset;
 
-    // DPRINT << "[Reader] push kvm " << k_chunk_start << " to " << k_chunk_end << ENDL();
+    DPRINT << "[Reader] push kvm " << k_chunk_start << " to " << k_chunk_end << ENDL();
 
     for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
         // Read K chunk transposed
@@ -158,7 +187,7 @@ void kernel_main() {
         cb_push_back(cb_k_in, k_chunk_tiles);
         k_start_tile_id += k_chunk_tiles;
 
-        // DPRINT << "[Reader] Finished Reading K at " << k_chunk << ENDL();
+        DPRINT << "[Reader] Finished Reading K at " << k_chunk << ENDL();
 
         // Read V chunk
         cb_reserve_back(cb_v_in, k_chunk_tiles);
@@ -178,8 +207,8 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_v_in, k_chunk_tiles);
         v_start_tile_id += k_chunk_tiles;
-        // DPRINT << "[Reader] Finished Reading V at " << k_chunk << ENDL();
+        DPRINT << "[Reader] Finished Reading V at " << k_chunk << ENDL();
     }
 
-    // DPRINT << "[Reader] Done" << ENDL();
+    DPRINT << "[Reader] Done" << ENDL();
 }

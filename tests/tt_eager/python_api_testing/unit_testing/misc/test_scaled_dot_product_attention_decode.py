@@ -250,11 +250,13 @@ def run_test_sdpa_decode_multi_pos(
             memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
         )
 
+        start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.uint32).to(device)
+
         tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
             tt_Q,
             tt_K,
             tt_V,
-            start_indices,
+            cur_pos_tensor=start_indices_tt,
             scale=scale,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
@@ -370,12 +372,13 @@ def run_test_sdpa_decode_single_iter(
         layout=ttnn.TILE_LAYOUT,
         memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
     )
+    start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.uint32).to(device)
 
     tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
         tt_Q,
         tt_K,
         tt_V,
-        start_indices,
+        cur_pos_tensor=start_indices_tt,
         scale=scale,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
@@ -401,29 +404,30 @@ def run_test_sdpa_decode_single_iter(
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
+# @pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
-        [ttnn.bfloat8_b, ttnn.bfloat8_b],
-        [ttnn.bfloat16, ttnn.bfloat16],
+        # [ttnn.bfloat8_b, ttnn.bfloat8_b],
+        # [ttnn.bfloat16, ttnn.bfloat16],
         [ttnn.bfloat8_b, ttnn.bfloat16],
-        [ttnn.bfloat4_b, ttnn.bfloat16],
+        # [ttnn.bfloat4_b, ttnn.bfloat16],
     ],
     ids=[
-        "all_bfp8",
-        "all_bfp16",
+        # "all_bfp8",
+        # "all_bfp16",
         "kv_bfp8",
-        "kv_bfp4",
+        # "kv_bfp4",
     ],
 )
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size, single_iter",
     (
-        [32, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
-        [16, 8, 1, 32768, 128, (8, 6), False],  # Llama2-70B
-        [8, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
-        [4, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
+        # [32, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
+        # [16, 8, 1, 32768, 128, (8, 6), False],  # Llama2-70B
+        # [8, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
+        # [4, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
+        [32, 8, 1, 32768, 128, (8, 8), True],  # Llama2-70B
     ),
 )
 def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, use_program_cache):
