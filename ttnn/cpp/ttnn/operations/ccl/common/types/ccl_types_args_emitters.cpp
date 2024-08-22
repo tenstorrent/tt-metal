@@ -126,7 +126,6 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
         t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
         t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED
     );
-    args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout));
     // shard_grid_height (cores)
     args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
     // shard_grid_width (cores)

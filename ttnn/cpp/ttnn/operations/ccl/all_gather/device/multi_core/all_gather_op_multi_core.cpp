@@ -22,6 +22,7 @@
 
 #include <sstream>
 #include <type_traits>
+#include <ranges>
 
 #include "ttnn/operations/experimental/ccl/ccl_op_fusion.hpp"
 
@@ -163,8 +164,8 @@ static bool shard_grid_is_transposed(Tensor const& t) {
 }
 
 static void emit_sharded_tensor_kernel_ct_args(Device *d, Tensor const& tensor, std::vector<uint32_t> &args, std::size_t pages_per_shard_y, std::size_t pages_per_shard_x) {
-    auto const& new_args = ShardedAddrGenArgBuilder::emit_ct_args(tensor);
-    std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
+    std::ranges::copy(std::vector<uint32_t>{static_cast<uint32_t>(tensor.memory_config().memory_layout)}, std::back_inserter(args));
+    std::ranges::copy(ShardedAddrGenArgBuilder::emit_ct_args(tensor), std::back_inserter(args));
 };
 
 

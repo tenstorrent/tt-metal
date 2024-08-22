@@ -43,8 +43,7 @@ struct ReduceScatterWorkerArgBuilder {
 
     std::vector<uint32_t> generate_reduce_op_kernel_ct_args() const;
 
-    std::vector<uint32_t> generate_reduce_op_kernel_rt_args(
-        uint32_t link, uint32_t worker_index, uint32_t ring_size) const;
+    std::vector<uint32_t> generate_reduce_op_kernel_rt_args() const;
 
     std::vector<uint32_t> generate_receiver_kernel_ct_args() const;
 
@@ -53,8 +52,6 @@ struct ReduceScatterWorkerArgBuilder {
         uint32_t edm_core_semaphore_address,
         uint32_t edm_core_buffer_address,
         uint32_t link,
-        uint32_t ring_index,
-        uint32_t ring_size,
         uint32_t worker_index,
         bool is_in_clockwise_direction) const;
 
@@ -63,8 +60,6 @@ struct ReduceScatterWorkerArgBuilder {
     std::vector<uint32_t> generate_sender_kernel_rt_args(
         WorkerEdmInterfaceArgs const& edm_interface,
         uint32_t link,
-        uint32_t ring_index,
-        uint32_t ring_size,
         uint32_t worker_index,
         std::unordered_map<std::size_t, CoreCoord> const& worker_association_map,
         bool is_clockwise) const;

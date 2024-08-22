@@ -155,8 +155,6 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
     CoreCoord const& worker_core,
     uint32_t num_edm_channels,
     uint32_t link,
-    uint32_t ring_index,
-    uint32_t ring_size,
     uint32_t worker_index,
     ttnn::operations::binary::BinaryOpType binary_math_op,
     std::size_t scatter_split_dim,
@@ -181,7 +179,7 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
 
     bool is_first_device_in_line =
         topology_config.is_linear &&
-        ((is_in_clockwise_direction && ring_index == 0) || (!is_in_clockwise_direction && ring_index == ring_size - 1));
+        ((is_in_clockwise_direction && topology_config.ring_index == 0) || (!is_in_clockwise_direction && topology_config.ring_index == topology_config.ring_size - 1));
 
     if (!is_first_device_in_line) {
         CoreCoord const& receiver_edm = is_in_clockwise_direction ? topology_config.eth_receiver_cores.at(link)
@@ -213,8 +211,6 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
                 edm_core_semaphore_address,
                 edm_core_buffer_address,
                 link,
-                ring_index,
-                ring_size,
                 worker_index,
                 is_in_clockwise_direction));
     }
@@ -239,7 +235,7 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
             program,
             worker_reduce_kernel_id,
             worker_core,
-            worker_arg_builder.generate_reduce_op_kernel_rt_args(link, worker_index, ring_size));
+            worker_arg_builder.generate_reduce_op_kernel_rt_args());
     }
 
     {
@@ -278,7 +274,7 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
                                  ? worker_arg_builder.generate_line_start_sender_kernel_rt_args(
                                        edm_interface, scatter_split_dim, link, worker_index)
                                  : worker_arg_builder.generate_sender_kernel_rt_args(
-                                       edm_interface, link, ring_index, ring_size, worker_index, worker_association_map, is_in_clockwise_direction);
+                                       edm_interface, link, worker_index, worker_association_map, is_in_clockwise_direction);
         worker_sender_kernel_id = tt::tt_metal::CreateKernel(
             program,
             sender_kernel_path,
@@ -297,7 +293,6 @@ static std::tuple<KernelHandle, KernelHandle> build_reduce_scatter_worker(
 
 static CoreRangeSet select_worker_cores(
     ttnn::ccl::CCLOpConfig const& op_config, std::size_t num_links, std::size_t num_edm_channels) {
-
     switch (op_config.get_topology()) {
         case ttnn::ccl::Topology::Linear:
             return CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(num_edm_channels - 1, num_links - 1))});
@@ -679,8 +674,6 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                     worker_cores.at(global_worker_index),
                     num_edm_channels_per_link,
                     link,
-                    ring_index,
-                    ring_size,
                     worker,
                     reduce_op,
                     scatter_split_dim,

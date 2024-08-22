@@ -54,8 +54,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_reduce_op_kernel_c
     return {};
 }
 
-std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_reduce_op_kernel_rt_args(
-    uint32_t link, uint32_t worker_index, uint32_t ring_size) const {
+std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_reduce_op_kernel_rt_args() const {
     log_trace(tt::LogOp, "generate_reduce_op_kernel_rt_args");
 
     auto const& args = std::vector<uint32_t>{total_num_math_pages, 1, 0};
@@ -73,14 +72,18 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_receiver_kernel_ct
     auto const& local_input_tensor = this->op_config.get_input_tensor(0);
     auto const& local_output_tensor = this->op_config.get_output_tensor(0);
     auto args = std::vector<uint32_t>{
+
         static_cast<uint32_t>(this->op_config.is_input_sharded() ? 1 : 0),
-        static_cast<uint32_t>(
-            this->op_config.get_input_tensor(0).memory_config().buffer_type == BufferType::DRAM ? 1 : 0),
+
+        static_cast<uint32_t>(local_input_tensor.memory_config().buffer_type == BufferType::DRAM ? 1 : 0),
+
         static_cast<uint32_t>(local_input_tensor.memory_config().memory_layout),
-        static_cast<uint32_t>(
-            this->op_config.get_output_tensor(0).memory_config().buffer_type == BufferType::DRAM ? 1 : 0),
+
+        static_cast<uint32_t>(local_output_tensor.memory_config().buffer_type == BufferType::DRAM ? 1 : 0),
+
         static_cast<uint32_t>(local_output_tensor.memory_config().memory_layout),
-        static_cast<uint32_t>(this->topology_config.is_linear),
+
+        static_cast<uint32_t>(this->topology_config.is_linear ? 1 : 0),
             };
 
     std::size_t i = 0;
@@ -109,8 +112,6 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_receiver_kernel_rt
     uint32_t edm_core_semaphore_address,
     uint32_t edm_core_buffer_address,
     uint32_t link,
-    uint32_t ring_index,
-    uint32_t ring_size,
     uint32_t worker_index,
     bool is_in_clockwise_direction) const {
     TT_ASSERT(edm_core_semaphore_address > 0);
@@ -124,7 +125,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_receiver_kernel_rt
                                             ? 0
                                             : this->topology_config.ring_index + 1);
     uint32_t num_transfers = this->topology_config.is_linear
-                                 ? (ring_size - (is_in_clockwise_direction ? ring_index : (ring_size - 1 - ring_index)))
+                                 ? (this->topology_config.ring_size - (is_in_clockwise_direction ? this->topology_config.ring_index : (this->topology_config.ring_size - 1 - this->topology_config.ring_index)))
                                  : this->topology_config.ring_size;
     auto args = std::vector<uint32_t>{
         static_cast<uint32_t>(local_input_tensor.buffer()->address()),
@@ -210,6 +211,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_sender_kernel_ct_a
         static_cast<uint32_t>(this->op_config.is_input_sharded() ? 1 : 0),
         static_cast<uint32_t>(
             this->op_config.get_output_tensor(0).memory_config().buffer_type == BufferType::DRAM ? 1 : 0),
+        static_cast<uint32_t>(local_output_tensor.memory_config().memory_layout),
         static_cast<uint32_t>(this->topology_config.is_linear)
     };
 
@@ -217,14 +219,13 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_sender_kernel_ct_a
     log_trace(tt::LogOp, "Reduce Scatter Sender Worker CT Args:");
     log_trace(tt::LogOp, "\tis_sharded: {}", args.at(i++));
     log_trace(tt::LogOp, "\tdst_is_dram: {}", args.at(i++));
+    log_trace(tt::LogOp, "\ttensor_memory_layout: {}", args.at(i++));
     log_trace(tt::LogOp, "\tis_linear: {}", args.at(i++));
     TT_ASSERT(args.size() == i, "Missed some args");
 
     if (local_output_tensor.is_sharded()) {
         auto const& shard_ct_args = ShardedAddrGenArgBuilder::emit_ct_args(local_output_tensor);
         std::copy(shard_ct_args.begin(), shard_ct_args.end(), std::back_inserter(args));
-    } else {
-        args.push_back(static_cast<uint32_t>(local_output_tensor.memory_config().memory_layout));
     }
     return args;
 }
@@ -232,8 +233,6 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_sender_kernel_ct_a
 std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_sender_kernel_rt_args(
     WorkerEdmInterfaceArgs const& edm_interface,
     uint32_t link,
-    uint32_t ring_index,
-    uint32_t ring_size,
     uint32_t worker_index,
     std::unordered_map<std::size_t, CoreCoord> const& worker_association_map,
     bool is_clockwise) const {
@@ -241,7 +240,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_sender_kernel_rt_a
     TT_ASSERT(edm_interface.edm_buffer_base_address > 0);
     auto const& local_output_tensor = this->op_config.get_output_tensor(0);
     uint32_t num_transfers = this->topology_config.is_linear
-        ? (ring_size - (is_clockwise ? ring_index : (ring_size - 1 - ring_index)))
+        ? (this->topology_config.ring_size - (is_clockwise ? this->topology_config.ring_index : (this->topology_config.ring_size - 1 - this->topology_config.ring_index)))
         : this->topology_config.ring_size - 1;
 
 
