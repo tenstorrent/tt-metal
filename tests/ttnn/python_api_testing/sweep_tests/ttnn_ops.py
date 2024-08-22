@@ -4853,7 +4853,6 @@ def argmax(
         return ttnn_tensor_to_torch(t1).squeeze()
 
 
-
 def unary_remainder_bw(
     x,  # grad_tensor
     y,  # input_tensor
