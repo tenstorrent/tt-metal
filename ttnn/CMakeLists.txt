@@ -439,6 +439,8 @@ target_precompile_headers(ttnn PRIVATE ${TTNN_PRECOMPILED_HEADERS})
 if(${BUILD_SHARED_LIBS})
     set(TTNN_INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib")
 else()
+    # We move the library binaries to a different path rather than PROJECT_BINARY_DIR
+    # in the Python wheel
     set(TTNN_INSTALL_RPATH "$ORIGIN/build/lib")
 endif()
 
