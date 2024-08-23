@@ -161,6 +161,8 @@ class CMakeBuild(build_ext):
         os.makedirs(tt_build_dir, exist_ok=True)
         self.copy_tree(source_dir / "build/lib", tt_build_dir + "/lib")
         self.copy_tree(source_dir / "runtime", self.build_lib + "/runtime")
+
+        # Encode ARCH_NAME into package for later use
         arch_name_file = self.build_lib + "/ttnn/.ARCH_NAME"
         subprocess.check_call(f"echo {metal_build_config.arch_name} > {arch_name_file}", shell=True)
 
@@ -176,8 +178,9 @@ class CMakeBuild(build_ext):
             if not os.path.exists(dir_path):
                 os.makedirs(dir_path)
 
-            src = os.path.join(build_dir, build_constants_lookup[ext].so_src_location)
+            src = os.path.join(tt_build_dir, build_constants_lookup[ext].so_src_location)
             self.copy_file(src, full_lib_path)
+            os.remove(src)
 
     def is_editable_install_(self):
         return self.inplace

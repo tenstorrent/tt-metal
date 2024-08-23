@@ -436,6 +436,11 @@ target_link_libraries(ttnn PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
 target_link_directories(ttnn PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
 target_precompile_headers(ttnn PRIVATE ${TTNN_PRECOMPILED_HEADERS})
 
+if(${BUILD_SHARED_LIBS})
+    set(TTNN_INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib")
+else()
+    set(TTNN_INSTALL_RPATH "$ORIGIN/build/lib")
+endif()
 
 # Make sure library built is _ttnn.so and that it can find all it's linked libraries
 # ttnn breaks if -fvisibility=hidden, so CXX_VISIBILITY_PRESET set to default
@@ -444,7 +449,7 @@ set_target_properties(ttnn PROPERTIES
     PREFIX ""
     SUFFIX ".so"
     BUILD_RPATH "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
+    INSTALL_RPATH ${TTNN_INSTALL_RPATH}
     CXX_VISIBILITY_PRESET "default"
     ADDITIONAL_CLEAN_FILES "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_ttnn.so;${PROJECT_SOURCE_DIR}/ttnn/ttnn.egg-info"
 )
