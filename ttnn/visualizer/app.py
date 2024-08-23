@@ -181,10 +181,9 @@ def operations(report_hash):
 
     def load_captured_graph(operation_id):
         captured_graph = ttnn.database.query_captured_graph(get_report_path(), operation_id=operation_id)
-        output = ""
-        for node in captured_graph:
-            if node["name"] == "function_start":
-                output += f"{node['params']['name']}<br>"
+        output = ttnn.graph.pretty_format(captured_graph)
+        output = output.replace(" ", "&nbsp;")
+        output = output.replace("\n", "<br>")
         return output
 
     return render_template(
