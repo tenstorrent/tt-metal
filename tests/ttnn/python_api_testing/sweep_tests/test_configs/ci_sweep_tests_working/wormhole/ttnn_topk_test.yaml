@@ -1,0 +1,28 @@
+---
+test-list:
+  - topk:
+      shape:
+        start-shape: [1, 1, 32, 64]
+        end-shape: [6, 12, 256, 1024]
+        interval: [1, 1, 32, 64]
+        num-shapes: 1
+        num-samples: 128
+        args-sampling-strategy: "all"
+        method: "topk"
+      datagen:
+        function: gen_rand
+        args:
+          low: -100
+          high: 100
+      comparison:
+        function: comp_topk_simmilarity
+      args-gen: gen_topk_args
+      sanitize-args: False
+      args:
+        data-layout: ["TILE"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        buffer-type: ["DRAM", "L1"]
+        out-buffer-type: ["DRAM", "L1"]
+      output-file: topk_sweep.csv
+      env:
+        # TT_PCI_DMA_BUF_SIZE: "1048576"

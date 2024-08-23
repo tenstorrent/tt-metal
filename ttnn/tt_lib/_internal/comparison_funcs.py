@@ -229,3 +229,22 @@ def comp_using_plot(tname, input, golden, calculated):
     plt.legend(loc="upper center")
     plt.savefig(plot_name)
     plt.close()
+
+
+def comp_topk_simmilarity(golden, calculated):
+    golden_values, golden_indices = golden[0], golden[1]
+    calculated_values, calculated_gather_values = calculated[0], calculated[1]
+
+    values_passing, output_str = comp_pcc(golden_values, calculated_values)
+
+    cosine = torch.nn.CosineSimilarity(dim=-1)
+    ttnn_torch_cosine = torch.mean(cosine(golden_values, calculated_gather_values))
+
+    indices_passing = ttnn_torch_cosine > 0.99
+
+    output_str += f", Cosine simmilarity: {ttnn_torch_cosine.item()}"
+
+    if not indices_passing:
+        output_str += ", Cosine simmilarity check failed"
+
+    return values_passing and indices_passing, output_str

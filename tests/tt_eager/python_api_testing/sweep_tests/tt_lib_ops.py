@@ -2044,9 +2044,6 @@ eltwise_nez = make_unary_op_optional_output(ttnn.nez)
 eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
 zeros_like = make_ttnn_unary_op(ttnn.zeros_like)
 ones_like = make_ttnn_unary_op(ttnn.ones_like)
-eltwise_ceil = make_unary_op_optional_output(ttnn.ceil)
-eltwise_trunc = make_ttnn_unary_op(ttnn.trunc)
-eltwise_frac = make_ttnn_unary_op(ttnn.frac)
 
 
 def make_binary_op(ttl_tensor_binop):
