@@ -88,7 +88,7 @@ std::vector<tt::tt_metal::Shape> LayerNormPostAllGather::compute_output_shapes(c
 
 std::vector<Tensor> LayerNormPostAllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->memory_config);
 }
 
 operation::ProgramWithCallbacks LayerNormPostAllGather::create_program(

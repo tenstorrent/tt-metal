@@ -15,7 +15,7 @@ namespace operations::normalization {
 struct ExecuteLayerNormPreAllGather {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const DataType output_dtype = DataType::BFLOAT16,
+        const DataType dtype = DataType::BFLOAT16,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 

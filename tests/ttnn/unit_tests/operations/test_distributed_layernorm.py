@@ -29,15 +29,11 @@ def tt_distributed_layernorm(inp, gamma, beta, epsilon, is_rmsnorm, compute_kern
     for d in range(n_devices):
         if is_rmsnorm:
             tt_stats.append(
-                ttnn.rms_norm_pre_all_gather(
-                    inp[d], compute_kernel_config=compute_kernel_config, output_dtype=stats_dtype
-                )
+                ttnn.rms_norm_pre_all_gather(inp[d], compute_kernel_config=compute_kernel_config, dtype=stats_dtype)
             )
         else:
             tt_stats.append(
-                ttnn.layer_norm_pre_all_gather(
-                    inp[d], compute_kernel_config=compute_kernel_config, output_dtype=stats_dtype
-                )
+                ttnn.layer_norm_pre_all_gather(inp[d], compute_kernel_config=compute_kernel_config, dtype=stats_dtype)
             )
 
     tt_stats = ttnn.aggregate_as_tensor(tt_stats)

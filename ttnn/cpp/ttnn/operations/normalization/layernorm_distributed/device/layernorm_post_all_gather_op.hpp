@@ -7,7 +7,6 @@
 #include <optional>
 
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -30,7 +29,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
 struct LayerNormPostAllGather {
     LayerNormDistributedType norm_type;
     float eps;
-    MemoryConfig output_mem_config;
+    MemoryConfig memory_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
     void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;

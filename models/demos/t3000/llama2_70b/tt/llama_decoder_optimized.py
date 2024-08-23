@@ -227,7 +227,7 @@ class TtLlamaDecoder_optimized:
     def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(
-            inp, compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"], output_dtype=ttnn.bfloat16
+            inp, compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"], dtype=ttnn.bfloat16
         )
 
         # AllGather stats

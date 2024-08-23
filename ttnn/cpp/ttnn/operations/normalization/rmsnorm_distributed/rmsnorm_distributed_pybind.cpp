@@ -21,13 +21,13 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(py::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::rms_norm_pre_all_gather,
-        R"doc(rms_norm_pre_all_gather(input_tensor: ttnn.Tensor, output_dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+        R"doc(rms_norm_pre_all_gather(input_tensor: ttnn.Tensor, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
             Compute sum(:attr:`input_tensor`ˆ2) and sum(:attr:`input_tensor`) over the last dimension.
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::kw_only(),
-            py::arg("output_dtype") = DataType::BFLOAT16,
+            py::arg("dtype") = DataType::BFLOAT16,
             py::arg("compute_kernel_config") = std::nullopt});
 }
 

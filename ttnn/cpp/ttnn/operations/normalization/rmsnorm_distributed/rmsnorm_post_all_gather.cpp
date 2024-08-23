@@ -22,7 +22,7 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
                 LayerNormPostAllGather{
                     .norm_type = LayerNormDistributedType::RMSNORM,
                     .eps = epsilon,
-                    .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+                    .memory_config = memory_config.value_or(input_tensor.memory_config()),
                     .compute_kernel_config = kernel_config_val},
                 {input_tensor, stats},
                 {weight, bias}).at(0);

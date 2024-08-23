@@ -49,7 +49,7 @@ std::vector<tt::tt_metal::Shape> LayerNormPreAllGather::compute_output_shapes(co
 
 std::vector<Tensor> LayerNormPreAllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, input_tensor.memory_config());
+    return operation::generic_create_output_tensors(*this, input_tensors, this->dtype, Layout::TILE, input_tensor.memory_config());
 }
 
 operation::ProgramWithCallbacks LayerNormPreAllGather::create_program(
