@@ -65,12 +65,12 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     // Record the completion of the write event
     ttnn::record_event(device->command_queue(io_cq), write_event);
     // Host stalls until write is completed, before sending workload
-    ttnn::event_synchronize(device, write_event);
+    ttnn::event_synchronize(write_event);
     // Dispatch workload. Preallocated output_tensor is populated by op/
     ttnn::moreh_sum(workload_dispatch_cq, input_tensor, /*dim*/3, false, output_tensor);
     // Record completion of workload
     ttnn::record_event(device->command_queue(workload_dispatch_cq), workload_event);
-    ttnn::event_synchronize(device, workload_event);
+    ttnn::event_synchronize(workload_event);
     // Read output back, once workload is complete
     ttnn::read_buffer(io_cq, output_tensor, {readback_data});
     // Ensure that reference count book keeping is done correctly
