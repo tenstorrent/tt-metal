@@ -31,6 +31,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         base=10000,
         model_config=None,
         tt_cache_path=None,
+        weights_dict=None,
     ):
         super().__init__()
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
@@ -57,6 +58,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
             cos_str,
             weight_config_str="COS_CACHED_WEIGHTS",
             weights_to_cache=emb.cos()[None, None, :, :],
+            weights_dict=weights_dict,
         )
         self.tt_sin_cached = get_weights_cached(
             device_mesh,
@@ -65,6 +67,7 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
             sin_str,
             weight_config_str="SIN_CACHED_WEIGHTS",
             weights_to_cache=emb.sin()[None, None, :, :],
+            weights_dict=weights_dict,
         )
 
     def forward(self, layer: ttnn.Tensor, token_idx: Optional[int] = None) -> ttnn.Tensor:
@@ -144,6 +147,7 @@ class TtFalconAttentionPrefill(nn.Module):
             max_position_embeddings=self.max_position_embeddings,
             model_config=model_config,
             tt_cache_path=tt_cache_path,
+            weights_dict=weights_dict,
         )
 
         self.scalar = tt_from_torch(
@@ -535,6 +539,7 @@ class TtFalconAttentionDecode(nn.Module):
             max_position_embeddings=self.max_position_embeddings,
             model_config=model_config,
             tt_cache_path=tt_cache_path,
+            weights_dict=weights_dict,
         )
 
         self.scalar = 1 / math.sqrt(self.head_dim)
