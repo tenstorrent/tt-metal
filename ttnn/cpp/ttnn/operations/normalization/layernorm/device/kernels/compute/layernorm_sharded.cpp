@@ -192,12 +192,7 @@ void MAIN {
         cb_push_back(cb_ex, num_tiles_per_allgather_worker);
         cb_wait_front(cb_ex, num_tiles_per_allgather_worker);
     }
-
-    #ifndef FUSE_PRE_ADD
-    unpack_reconfig_data_format_srca(cb_in, cb_in);
-    #endif
-    cb_wait_front(cb_in, num_tiles_per_block);
-    #endif
+    #endif // not RMSNORM
 
     // (x)^2, cb_x2 <-- cb_in
     mul_tiles_init();
@@ -289,6 +284,7 @@ void MAIN {
                 tile_regs_acquire();
                 mul_tiles_init();
                 mul_tiles(cb_ex_global, cb_ex_global, i, i, dst0);
+                tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex_sqr);
                 cb_push_back(cb_ex_sqr, 1);
@@ -302,6 +298,7 @@ void MAIN {
                 tile_regs_acquire();
                 sub_tiles_init();
                 sub_tiles(cb_ex2, cb_ex_sqr, i, i, dst0);
+                tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_var);
                 cb_push_back(cb_var, 1);
