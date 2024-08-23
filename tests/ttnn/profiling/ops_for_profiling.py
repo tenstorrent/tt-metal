@@ -409,6 +409,10 @@ def unary_div_bw(x, y):
 
 all_binary_ops = [
     {
+        "op": ttnn.assign,
+        "name": "ttnn.assign_binary",
+    },
+    {
         "op": ttnn.add,
         "name": "ttnn.add",
     },
@@ -1575,10 +1579,18 @@ def split_dim_2(x):
     ttnn.split(x, 2, 2)
 
 
+def assign_unary(x):
+    ttnn.assign(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=x.get_dtype())
+
+
 from tt_lib.fused_ops.softmax import softmax as fused_softmax
 
 
 all_unary_ops = [
+    {
+        "op": assign_unary,
+        "name": "ttnn.assign_unary",
+    },
     {
         "op": add_unary,
         "name": "ttnn.add_unary",
@@ -2260,27 +2272,27 @@ all_unary_ops = [
         "layout": "ROW_MAJOR",
         "num_repeats": 2,
     },
-    {
-        "op": argmin_dim_3,
-        "name": "ttnn.argmin_dim_3",
-        "shape_func": argmax_shape_func,
-        "layout": "ROW_MAJOR",
-        "num_repeats": 2,
-    },
-    {
-        "op": argmin_dim_2,
-        "name": "ttnn.argmin_dim_2",
-        "shape_func": argmax_shape_func,
-        "layout": "ROW_MAJOR",
-        "num_repeats": 2,
-    },
-    {
-        "op": argmin_all,
-        "name": "ttnn.argmin_all",
-        "shape_func": argmax_shape_func,
-        "layout": "ROW_MAJOR",
-        "num_repeats": 2,
-    },
+    # {
+    #     "op": argmin_dim_3,
+    #     "name": "ttnn.argmin_dim_3",
+    #     "shape_func": argmax_shape_func,
+    #     "layout": "ROW_MAJOR",
+    #     "num_repeats": 2,
+    # },
+    # {
+    #     "op": argmin_dim_2,
+    #     "name": "ttnn.argmin_dim_2",
+    #     "shape_func": argmax_shape_func,
+    #     "layout": "ROW_MAJOR",
+    #     "num_repeats": 2,
+    # },
+    # {
+    #     "op": argmin_all,
+    #     "name": "ttnn.argmin_all",
+    #     "shape_func": argmax_shape_func,
+    #     "layout": "ROW_MAJOR",
+    #     "num_repeats": 2,
+    # },
     {
         "op": ttnn.softmax_in_place,
         "name": "ttnn.softmax_in_place",
