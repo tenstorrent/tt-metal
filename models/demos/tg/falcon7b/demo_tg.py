@@ -10,9 +10,9 @@ from models.utility_functions import is_wormhole_b0
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 5940, "decode_t/s": 1240, "decode_t/s/u": 1.21}, False, None),
-        (True, 1024, {"prefill_t/s": 12300, "decode_t/s": 1130, "decode_t/s/u": 1.10}, False, None),
-        (True, 2048, {"prefill_t/s": 9340, "decode_t/s": 1130, "decode_t/s/u": 1.10}, False, None),
+        (True, 128, {"prefill_t/s": 12760, "decode_t/s": 3510, "decode_t/s/u": 3.4}, False, None),
+        (True, 1024, {"prefill_t/s": 17200, "decode_t/s": 3560, "decode_t/s/u": 3.5}, False, None),
+        (True, 2048, {"prefill_t/s": 12380, "decode_t/s": 3600, "decode_t/s/u": 3.5}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),
@@ -64,8 +64,6 @@ def test_demo_multichip(
             pytest.skip("Skipping test in CI since it provides redundant testing")
         if expected_greedy_output_path:
             pytest.skip("Skipping test in CI due to Issue #11254")
-        elif expected_perf_metrics:
-            pytest.skip("Skipping test in CI due to Issue #11258")
     elif expected_greedy_output_path or expected_perf_metrics:
         assert num_devices == 32, "32 devices are expected for perf and greedy output verification"
 

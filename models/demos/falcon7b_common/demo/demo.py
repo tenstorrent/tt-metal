@@ -109,6 +109,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     top_k_values, top_k_indices = torch.topk(logits, k=k)
     top_p_values = top_k_top_p_filtering(top_k_values, top_p=p)
     probs = F.softmax(top_p_values / temperature, dim=-1)
+    probs = torch.nan_to_num(probs)  # convert nan to num to prevent error in multinomial
     top_k_id = torch.multinomial(probs, num_samples=1).squeeze(-1)
     token = top_k_indices.gather(-1, top_k_id.unsqueeze(-1)).squeeze(-1)
     if return_probs:
