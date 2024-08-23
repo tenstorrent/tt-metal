@@ -46,11 +46,11 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
         os.environ["MIXTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/"
         os.environ["MIXTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/"
     # This module requires the env paths above for CI runs
-    from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
+    from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 
     if batch_size == 32:
         max_seq_len = 16384
-    elif batch_size in [4, 8, 16]:
+    elif batch_size < 32:
         max_seq_len = 32768
     else:
         raise ValueError(f"Batch size {batch_size} not supported")
@@ -466,9 +466,21 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
     [
         # General weights
         ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", 128, False),
-        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 4 * 1024, False),
-        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 8 * 1024, False),
-        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 16 * 1024, False),
+        (
+            "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/input_tale_of_two_cities_32k.txt",
+            4 * 1024,
+            False,
+        ),
+        (
+            "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/input_tale_of_two_cities_32k.txt",
+            8 * 1024,
+            False,
+        ),
+        (
+            "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/input_tale_of_two_cities_32k.txt",
+            16 * 1024,
+            False,
+        ),
         # Instruct weights
         ("models/demos/t3000/mixtral8x7b/demo/input_data_questions_prefill_128.json", 128, True),
         (
