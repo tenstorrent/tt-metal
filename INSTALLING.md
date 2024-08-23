@@ -30,7 +30,7 @@ Note the current compatability matrix:
 
 ```sh
 sudo apt update
-sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv libhwloc-dev graphviz patchelf cmake=3.16.3-1ubuntu1.20.04.1 ninja-build
+sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv libhwloc-dev graphviz cmake=3.16.3-1ubuntu1.20.04.1 ninja-build
 
 wget https://apt.llvm.org/llvm.sh
 chmod u+x llvm.sh
