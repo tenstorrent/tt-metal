@@ -32,7 +32,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     # Check that stack dumping is working
     ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter=*TestWatcherRingBufferBrisc
     ./build/tools/watcher_dump -d=0 -w
-    grep "brisc stack usage:" generated/watcher/watcher.log > /dev/null || { echo "Error: couldn't find stack usage in watcher log after dump." ; exit 1; }
+    grep "brisc highest stack usage:" generated/watcher/watcher.log > /dev/null || { echo "Error: couldn't find stack usage in watcher log after dump." ; exit 1; }
     echo "Watcher stack usage test - Pass"
 
     # Remove created files.
