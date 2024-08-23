@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::normalization {
 
-ttnn::Tensor ExecuteSoftmax::invoke(
+ttnn::Tensor SoftmaxOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const int dim_arg,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -35,7 +35,7 @@ ttnn::Tensor ExecuteSoftmax::invoke(
     }
 }
 
-ttnn::Tensor ExecuteScaleMaskSoftmax::invoke(
+ttnn::Tensor ScaleMaskSoftmaxOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<float> scale,
     const std::optional<const Tensor> mask,
@@ -51,7 +51,7 @@ ttnn::Tensor ExecuteScaleMaskSoftmax::invoke(
     return ttnn::reshape(output_tensor, input_shape);
 }
 
-ttnn::Tensor ExecuteSoftmaxInPlace::invoke(
+ttnn::Tensor SoftmaxInPlaceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const SoftmaxProgramConfig& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
@@ -64,7 +64,7 @@ ttnn::Tensor ExecuteSoftmaxInPlace::invoke(
     return ttnn::reshape(output_tensor, input_shape);
 }
 
-ttnn::Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
+ttnn::Tensor ScaleMaskSoftmaxInPlaceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<float> scale,
     const std::optional<const Tensor> mask,
@@ -80,7 +80,7 @@ ttnn::Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
     return ttnn::reshape(output_tensor, input_shape);
 }
 
-ttnn::Tensor ExecuteScaleCausalMaskHWSoftmaxInPlace::invoke(
+ttnn::Tensor ScaleCausalMaskHWSoftmaxInPlaceOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<float> scale,
     const std::optional<const Tensor> mask,
