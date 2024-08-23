@@ -28,7 +28,7 @@ struct FoldOperation {
         uint32_t pad_h = 0,
         uint32_t pad_w = 0,
         const std::optional<CoreCoord> grid_size = std::nullopt,
-        const std::optional<uint32_t> override_shard_height = std::nullopt);
+        const std::optional<MemoryConfig> override_memory_config = std::nullopt);
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor,
@@ -40,7 +40,7 @@ struct FoldOperation {
         uint32_t pad_h = 0,
         uint32_t pad_w = 0,
         const std::optional<CoreCoord> grid_size = std::nullopt,
-        const std::optional<uint32_t> override_shard_height = std::nullopt);
+        const std::optional<MemoryConfig> override_memory_config = std::nullopt);
 
 };
 

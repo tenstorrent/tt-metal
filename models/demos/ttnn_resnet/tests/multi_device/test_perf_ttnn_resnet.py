@@ -257,7 +257,7 @@ def run_trace_2cq_model(
     ttnn.record_event(1, write_event)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    first_out_addr = ttnn.buffer_address(reshard_out)
+    first_out_addr = ttnn.buffer_address(test_infra.input_tensor)
     ttnn.record_event(0, op_event)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("cache")
@@ -364,7 +364,7 @@ def run_perf_resnet(
 
     test_infra = create_test_infra(
         device,
-        batch_size,
+        device_batch_size,
         model_config["ACTIVATIONS_DTYPE"],
         model_config["WEIGHTS_DTYPE"],
         model_config["MATH_FIDELITY"],

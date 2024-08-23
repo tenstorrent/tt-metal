@@ -1356,16 +1356,21 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
     tt::log_debug("all_cores_unpadded: {}", all_cores_unpadded);
     tt::log_debug("num_cores_unpadded: {}", num_cores_unpadded);
 
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
 
     uint32_t src0_cb_index = 0;
     tt::tt_metal::CircularBufferConfig cb_src0_config = tt::tt_metal::CircularBufferConfig(shard_height_unpadded * stick_size_unpadded, {{src0_cb_index, cb_data_format}})
         .set_page_size(src0_cb_index, stick_size_unpadded).set_globally_allocated_address(*a.buffer());
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores_unpadded, cb_src0_config);
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
     tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(shard_height_padded * stick_size_padded, {{output_cb_index, dst_cb_data_format}})
         .set_page_size(output_cb_index, stick_size_padded).set_globally_allocated_address(*output.buffer());
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores_padded, cb_output_config);
+    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
@@ -1373,7 +1378,7 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
         uint32_t src1_cb_index = 1;
         tt::tt_metal::CircularBufferConfig cb_src1_config = tt::tt_metal::CircularBufferConfig(row_major_min_bytes, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, row_major_min_bytes);
-        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores_padded, cb_src1_config);
+        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
     }
 
 

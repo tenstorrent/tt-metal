@@ -464,6 +464,9 @@ class resnet50:
         parameters,
         batch_size,
         model_config,
+        input_shape,
+        kernel_size,
+        stride,
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         mesh_mapper=None,
@@ -633,6 +636,48 @@ class resnet50:
             (self.conv1_input_width - self.conv1_kernel_size[1] + 2 * self.conv1_padding[1]) // self.conv1_stride[1]
         ) + 1
 
+        # fold params
+        self.fold_stride_h = stride
+        self.fold_stride_w = stride
+        _, c, h, w = input_shape
+        n = batch_size
+        h += kernel_size * 2
+        w += kernel_size * 2
+        C = _nearest_y(c, 4)
+        self.fold_pad_c = C - c
+        self.fold_pad_h = 0
+        self.fold_pad_w = 0
+        self.fold_output_shape = (
+            n,
+            h // self.fold_stride_h,
+            w // self.fold_stride_w,
+            C * (self.fold_stride_h * self.fold_stride_w),
+        )
+        if self.batch_size == 16:
+            num_cores_x = 8
+            num_cores_y = 8
+        elif self.batch_size == 20:
+            if is_grayskull():
+                num_cores_x = 10
+                num_cores_y = 8
+            elif is_wormhole_b0():  # untested due to unsupported batch20 on WH
+                num_cores_x = 8
+                num_cores_y = 5
+        self.fold_compute_grid_size = (num_cores_x, num_cores_y)
+
+        conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
+        conv_dummy_tensor = ttnn.from_torch(conv_dummy_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        _, self.override_fold_mem_config, _ = ttnn.get_conv_padded_input_shape_and_mem_config(
+            device=device,
+            input_tensor=conv_dummy_tensor,
+            conv_config=self.conv1_config,
+            batch_size=self.batch_size,
+            height=self.conv1_output_height,
+            width=self.conv1_output_width,
+            in_channels=self.conv1_input_channels,
+            out_channels=self.conv1_output_channels,
+        )
+
     def __del__(self):
         # Need to clear global configs for each Resnet run
         self.conv_op_cache.clear()
@@ -667,21 +712,16 @@ class resnet50:
             )
         return layers
 
-    def __call__(self, input_tensor, input_shape_unpadded, stride, pad, device, ops_parallel_config) -> ttnn.Tensor:
+    def __call__(self, input_tensor, device, ops_parallel_config) -> ttnn.Tensor:
         return self.run(
             input_tensor,
-            input_shape_unpadded,
-            stride,
-            pad,
             device,
             ops_parallel_config,
             {} if not ops_parallel_config else self.conv_op_cache,
         )
 
     ## merged runs (first and optimized)
-    def run(
-        self, input_tensor, input_shape_unpadded, stride, pad, device, ops_parallel_config, conv_op_cache={}
-    ) -> ttnn.Tensor:
+    def run(self, input_tensor, device, ops_parallel_config, conv_op_cache={}) -> ttnn.Tensor:
         is_first_run = False
         if not ops_parallel_config:
             is_first_run = True
@@ -689,42 +729,23 @@ class resnet50:
         else:
             logger.debug(f"==== Optimized run")
 
-        # fold on device
-        TILE_HEIGHT = 32
-        stride_h = stride
-        stride_w = stride
-        n, c, h, w = input_shape_unpadded
-        h += pad * 2
-        w += pad * 2
-        C = _nearest_y(c, 4)
-        num_cores_x = 8
-        num_cores_y = 8
-        num_cores = num_cores_x * num_cores_y
-        # override the shard height to make it consistent with first conv
-        output_tensor_height = n * (h // stride_h) * (w // stride_w)
-        output_tensor_width = C * (stride_h * stride_w)
-        num_cores_mul_tile_h = num_cores * TILE_HEIGHT
-        output_tensor_height_padded = num_cores_mul_tile_h * (
-            (output_tensor_height + num_cores_mul_tile_h - 1) // num_cores_mul_tile_h
-        )
-        override_shard_height = output_tensor_height_padded // num_cores
-
         logger.debug(f"==== fold on device")
 
         # run fold
         fold_output_tensor = ttnn.fold(
             input_tensor,
-            stride_h,
-            stride_w,
+            self.fold_stride_h,
+            self.fold_stride_w,
             use_transpose_as_fold=True,
-            output_shape=(n, h // stride_h, w // stride_w, C * (stride_h * stride_w)),
-            pad_c=C - c,
-            pad_h=0,
-            pad_w=0,
-            grid_size=(num_cores_x, num_cores_y),
-            override_shard_height=override_shard_height,
+            output_shape=self.fold_output_shape,
+            pad_c=self.fold_pad_c,
+            pad_h=self.fold_pad_h,
+            pad_w=self.fold_pad_w,
+            grid_size=self.fold_compute_grid_size,
+            override_memory_config=self.override_fold_mem_config,
         )
-        fold_output_tensor = ttnn.reshape(fold_output_tensor, (1, 1, output_tensor_height, output_tensor_width))
+        n, c, h, w = fold_output_tensor.shape
+        fold_output_tensor = ttnn.reshape(fold_output_tensor, (1, 1, n * c * h, w))
 
         ttnn.deallocate(input_tensor)
 

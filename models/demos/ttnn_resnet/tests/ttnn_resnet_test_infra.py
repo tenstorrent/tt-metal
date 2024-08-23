@@ -12,6 +12,8 @@ from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
 from models.utility_functions import (
+    is_wormhole_b0,
+    is_grayskull,
     divup,
     _nearest_y,
 )
@@ -224,6 +226,9 @@ class ResNet50TestInfra:
             parameters=parameters,
             batch_size=batch_size,
             model_config=model_config,
+            input_shape=input_shape,
+            kernel_size=self.resnet50_first_conv_kernel_size,
+            stride=self.resnet50_first_conv_stride,
             dealloc_input=dealloc_input,
             final_output_mem_config=final_output_mem_config,
             mesh_mapper=weights_mesh_mapper,
@@ -231,23 +236,37 @@ class ResNet50TestInfra:
         self.ops_parallel_config = {}
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
+        if self.batch_size == 16:
+            core_grid = ttnn.CoreGrid(y=8, x=6)
+        elif self.batch_size == 20:
+            if is_grayskull():
+                core_grid = ttnn.CoreGrid(y=8, x=10)
+            elif is_wormhole_b0():
+                core_grid = ttnn.CoreGrid(y=5, x=6)  # untested due to unsupported batch20 on WH
         num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
+        # torch tensor
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
+        print(torch_input_tensor.shape)
         pad_h = self.resnet50_first_conv_kernel_size
         pad_w = self.resnet50_first_conv_kernel_size
         w = torch_input_tensor.shape[-1]
         pad_w_right = (w + 2 * pad_w + 31) // 32 * 32 - (w + pad_w)
+        # pad h w
         torch_input_tensor_padded = torch.nn.functional.pad(torch_input_tensor, (pad_w, pad_w_right, pad_h, pad_h))
         if num_devices > 1:
             n, c, h, w = torch_input_tensor_padded.shape
-            n_per_device = n // num_devices
-            torch_input_tensor_padded = torch_input_tensor_padded.reshape(num_devices, n_per_device, c, h, w)
+            n = n // num_devices
+        else:
+            n, c, h, w = torch_input_tensor_padded.shape
         # sharded mem config for fold input
-        input_mem_config = ttnn.create_sharded_memory_config(
-            torch_input_tensor_padded.shape,
-            core_grid=ttnn.CoreGrid(y=8, x=6),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        num_cores = core_grid.x * core_grid.y
+        shard_h = (n * c * h + num_cores - 1) // num_cores
+        grid_size = core_grid
+        grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR, False)
+        input_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
         tt_inputs_host = ttnn.from_torch(
             torch_input_tensor_padded, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mesh_mapper
@@ -280,9 +299,6 @@ class ResNet50TestInfra:
     def run(self, tt_input_tensor=None):
         self.output_tensor = self.ttnn_resnet50_model(
             self.input_tensor,
-            self.torch_input_tensor.shape,
-            self.resnet50_first_conv_stride,
-            self.resnet50_first_conv_kernel_size,
             self.device,
             self.ops_parallel_config,
         )

@@ -47,7 +47,7 @@ model_config = {
 
 def run_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
     ops_parallel_config = {}
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input()
+    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
     profiler.start("compile")
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
