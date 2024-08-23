@@ -301,6 +301,7 @@ class EnqueueProgramCommand : public Command {
         std::vector<uint32_t*> cb_configs_payloads;
         std::vector<std::vector<std::shared_ptr<CircularBuffer>>> circular_buffers_on_core_ranges;
         std::vector<launch_msg_t*> go_signals;
+        uint32_t program_config_buffer_data_size_bytes;
     };
     thread_local static std::unordered_map<uint64_t, CachedProgramCommandSequence> cached_program_command_sequences;
 
