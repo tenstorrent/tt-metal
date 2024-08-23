@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
@@ -11,15 +11,15 @@
 #include "tt_metal/detail/util.hpp"
 
 
+using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::constants;
+using namespace	tt::constants;
 
 
-namespace tt {
 
-namespace tt_metal {
-
+namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math/*, BcastOpDim bcast_dim*/){
+
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();
     uint32_t N  = ashape.rank() >= 4 ? ashape[-4] : 1, C  = ashape.rank() >= 3 ? ashape[-3] : 1, H  = ashape[-2], W  = ashape[-1];
@@ -27,7 +27,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
     uint32_t NC = N*C;
 
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     Device *device = a.device();
 
     auto shard_spec = a.shard_spec().value();
@@ -40,9 +40,9 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
     auto out_shard_spec = output.shard_spec().value();
     TT_FATAL(out_shard_spec.num_cores() == ncores, "Output tensor should have same number of cores {} as input tensor {}", out_shard_spec.num_cores(), ncores);
 
-    DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    auto act_df = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    auto b_df = tt::tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    auto out_df = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
@@ -72,49 +72,49 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t aligned_input_tile_nbytes = round_up_to_mul32(input_tile_size); //will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
-    tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(aligned_input_tile_nbytes * num_tile_per_core,  {{src0_cb_index, act_df}})
+    tt::tt_metal::CircularBufferConfig src0_cb_config = tt::tt_metal::CircularBufferConfig(aligned_input_tile_nbytes * num_tile_per_core,  {{src0_cb_index, act_df}})
                                           .set_page_size(src0_cb_index, in_cb_pagesize)
                                           .set_globally_allocated_address(*a.buffer());
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
     uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
-    tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(aligned_input_tile_nbytes * num_tile_per_core,
+    tt::tt_metal::CircularBufferConfig output_cb_config = tt::tt_metal::CircularBufferConfig(aligned_input_tile_nbytes * num_tile_per_core,
                                           {{output_cb_index, out_df}})
                                           .set_page_size(output_cb_index, in_cb_pagesize)
                                           .set_globally_allocated_address(*output.buffer());
-    auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    auto out_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     uint32_t h_blk = std::min(Ht, 8u);
     uint32_t w_blk = std::min(Wt, 8u);
 
     uint32_t num_input_tiles = w_blk;
     uint32_t src1_cb_index = CB::c_in1;
-    tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
+    tt::tt_metal::CircularBufferConfig src1_cb_config = tt::tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
         .set_page_size(src1_cb_index, input1_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
     auto src0_buffer = a.buffer();
     auto src1_buffer = b.buffer();
     auto dst_buffer = output.buffer();
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index, (uint32_t)src1_is_dram};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
-    KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
+    KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_sharded_optimised.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_h_sharded_optimised.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(BcastOpDim::H, bcast_math);
     //const char* compute_name = bcast_op_utils::get_compute_name(BcastOpDim::H));
-    auto bcast_kernel_id = tt_metal::CreateKernel(
+    auto bcast_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/compute/bcast_h_sharded_optimised.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h_sharded_optimised.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
+        tt::tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
     );
 
     uint32_t ncores_y = ncores / ncores_x;
@@ -146,7 +146,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
             }
         }
         uint32_t tile_offset = Wt * ncores; //used in multi batch weight for block sharded
-        tt_metal::SetRuntimeArgs(
+        tt::tt_metal::SetRuntimeArgs(
             program,
             binary_reader_kernel_id,
             core,
@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
             }
         );
 
-        tt_metal::SetRuntimeArgs(
+        tt::tt_metal::SetRuntimeArgs(
             program,
             bcast_kernel_id,
             core,
@@ -236,7 +236,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
             uint32_t h_blk = std::min(Ht, 8u);
             uint32_t w_blk = std::min(Wt, 8u);
 
-            tt_metal::SetRuntimeArgs(
+            tt::tt_metal::SetRuntimeArgs(
                 program,
                 binary_reader_kernel_id,
                 core,
@@ -251,7 +251,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
                 }
             );
 
-            tt_metal::SetRuntimeArgs(
+            tt::tt_metal::SetRuntimeArgs(
                 program,
                 bcast_kernel_id,
                 core,
@@ -271,6 +271,4 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
 }
 
 
-}  // namespace tt_metal
-
-}  // namespace tt
+} // ttnn::operations::data_movement
