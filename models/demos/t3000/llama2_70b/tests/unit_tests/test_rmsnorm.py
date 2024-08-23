@@ -52,9 +52,7 @@ class TtLlamaRMSNorm(torch.nn.Module):
         self.attn_norm = attn_norm.to(device, self.model_config["LN_ATTN_WEIGHTS_MEMCFG"])
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.experimental.tensor.interleaved_to_sharded(
-            x, sharded_mem_config=self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"]
-        )
+        x = ttnn.interleaved_to_sharded(x, self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"])
         x_attn_norm = ttnn.rms_norm(
             x,
             epsilon=self.norm_eps,
