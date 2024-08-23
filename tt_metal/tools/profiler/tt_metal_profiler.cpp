@@ -132,6 +132,7 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
     std::vector<int64_t> writeTimes(sampleCount);
 
     profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(core, HalMemAddrType::PROFILER);
+    uint64_t control_addr = reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::FW_RESET_L]);
     for (int i = 0; i < sampleCount; i++)
     {
         ZoneScopedC(tracy::Color::Tomato2);
@@ -139,8 +140,7 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
         int64_t writeStart = TracyGetCpuTime();
         uint32_t sinceStart = writeStart - hostStartTime;
 
-        uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::FW_RESET_L]);
-        tt::Cluster::instance().write_reg(&sinceStart, tt_cxy_pair(device_id, core), addr);
+        tt::Cluster::instance().write_reg(&sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
 
@@ -158,7 +158,9 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
         writeSum += writeTime;
     }
     double writeOverhead = (double)writeSum / sampleCount;
-    uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->buffer[0][kernel_profiler::CUSTOM_MARKERS]);
+
+    constexpr uint32_t briscIndex = 0;
+    uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
 
     vector<std::uint32_t> sync_times = tt::llrt::read_hex_vec_from_core(
             device_id,
