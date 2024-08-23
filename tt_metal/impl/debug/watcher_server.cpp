@@ -55,6 +55,13 @@ static std::vector<string> kernel_names;
 static FILE *kernel_file = nullptr;
 static string kernel_file_name = "kernel_names.txt";
 
+// Struct containing relevant info for stack usage
+typedef struct {
+    CoreCoord core;
+    uint16_t stack_usage;
+    uint16_t kernel_id;
+} stack_usage_info_t;
+
 // Flag to signal whether the watcher server has been killed due to a thrown exception.
 static std::atomic<bool> watcher_killed_due_to_error = false;
 
@@ -573,36 +580,14 @@ static void dump_sync_regs(FILE *f, Device *device, CoreCoord core) {
     }
 }
 
-static void dump_stack_usage(FILE *f, Device *device, CoreCoord core, const mailboxes_t *mbox) {
+static void dump_stack_usage(
+    CoreCoord core, const debug_stack_usage_t *stack_usage_mbox, std::map<riscv_id_t, stack_usage_info_t> &highest_stack_usage) {
     for (int risc_id = 0; risc_id < DebugNumUniqueRiscs; risc_id++) {
-        uint16_t stack_usage = mbox->watcher.stack_usage.max_usage[risc_id];
-        uint16_t stack_size = get_riscv_stack_size(core, risc_id);
+        uint16_t stack_usage = stack_usage_mbox->max_usage[risc_id];
         if (stack_usage != watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
-            const string &kernel_name = kernel_names[mbox->watcher.stack_usage.watcher_kernel_id[risc_id]];
-            const char *riscv_name = get_riscv_name(core, risc_id);
-            fprintf(f, "\n\t%s stack usage: %d/%d", riscv_name, stack_usage, stack_size);
-            fprintf(f, " kernel using most stack: %s", kernel_name.c_str());
-            if (stack_usage >= stack_size) {
-                fprintf(f, " (OVERFLOW)");
-                log_fatal(
-                    "Watcher detected stack overflow on Device {} Core {}: {}! Kernel {} uses {}/{} of the stack.",
-                    device->id(),
-                    core.str(),
-                    riscv_name,
-                    kernel_name,
-                    stack_usage,
-                    stack_size);
-            } else if (stack_usage >= stack_size * 9 / 10) {
-                fprintf(f, " (Close to overflow)");
-                log_warning(
-                    "Watcher detected stack usage within 10\% of max on Device {} Core {}: {}! Kernel {} uses {}/{} of "
-                    "the stack.",
-                    device->id(),
-                    core.str(),
-                    riscv_name,
-                    kernel_name,
-                    stack_usage,
-                    stack_size);
+            if (stack_usage > highest_stack_usage[static_cast<riscv_id_t>(risc_id)].stack_usage) {
+                highest_stack_usage[static_cast<riscv_id_t>(risc_id)] = {
+                    core, stack_usage, stack_usage_mbox->watcher_kernel_id[risc_id]};
             }
         }
     }
@@ -650,7 +635,8 @@ static void dump_core(
     Device *device,
     CoreDescriptor logical_core,
     bool is_active_eth_core,
-    std::set<std::pair<CoreCoord, riscv_id_t>> &paused_cores) {
+    std::set<std::pair<CoreCoord, riscv_id_t>> &paused_cores,
+    std::map<riscv_id_t, stack_usage_info_t> &highest_stack_usage) {
     // Watcher only treats ethernet + worker cores.
     bool is_eth_core = (logical_core.type == CoreType::ETH);
     CoreCoord core = device->physical_core_from_logical_core(logical_core.coord, logical_core.type);
@@ -744,7 +730,7 @@ static void dump_core(
     // Ring buffer at the end because it can print a bunch of data, same for stack usage
     if (enabled) {
         if (!tt::llrt::OptionsG.watcher_stack_usage_disabled())
-            dump_stack_usage(f, device, core, mbox_data);
+            dump_stack_usage(core, &mbox_data->watcher.stack_usage, highest_stack_usage);
         if (!tt::llrt::OptionsG.watcher_ring_buffer_disabled())
             dump_ring_buffer(f, device, core);
     }
@@ -762,13 +748,14 @@ static void __attribute__((noinline)) dump(FILE *f) {
         }
 
         std::set<std::pair<CoreCoord, riscv_id_t>> paused_cores;
+        std::map<riscv_id_t, stack_usage_info_t> highest_stack_usage;
         std::map<int, bool> used_kernel_names;
         CoreCoord grid_size = device->logical_grid_size();
         for (uint32_t y = 0; y < grid_size.y; y++) {
             for (uint32_t x = 0; x < grid_size.x; x++) {
                 CoreDescriptor logical_core = {{x, y}, CoreType::WORKER};
                 if (device->storage_only_cores().find(logical_core.coord) == device->storage_only_cores().end()) {
-                    dump_core(f, used_kernel_names, device, logical_core, false, paused_cores);
+                    dump_core(f, used_kernel_names, device, logical_core, false, paused_cores, highest_stack_usage);
                 }
             }
         }
@@ -777,9 +764,9 @@ static void __attribute__((noinline)) dump(FILE *f) {
             CoreDescriptor logical_core = {eth_core, CoreType::ETH};
             CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
             if (device->is_active_ethernet_core(eth_core)) {
-                dump_core(f, used_kernel_names, device, logical_core, true, paused_cores);
+                dump_core(f, used_kernel_names, device, logical_core, true, paused_cores, highest_stack_usage);
             } else if (device->is_inactive_ethernet_core(eth_core)) {
-                dump_core(f, used_kernel_names, device, logical_core, false, paused_cores);
+                dump_core(f, used_kernel_names, device, logical_core, false, paused_cores, highest_stack_usage);
             } else {
                 continue;
             }
@@ -789,6 +776,47 @@ static void __attribute__((noinline)) dump(FILE *f) {
             fprintf(f, "k_id[%d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
         }
         fflush(f);
+
+        // Print stack usage report for this device/dump
+        if (!highest_stack_usage.empty()) {
+            fprintf(f, "Stack usage summary:");
+            for (auto &risc_id_and_stack_info : highest_stack_usage) {
+                stack_usage_info_t &info = risc_id_and_stack_info.second;
+                const char *riscv_name = get_riscv_name(info.core, risc_id_and_stack_info.first);
+                uint16_t stack_size = get_riscv_stack_size(info.core, risc_id_and_stack_info.first);
+                fprintf(
+                    f,
+                    "\n\t%s highest stack usage: %d/%d, on core %s, running kernel %s",
+                    riscv_name,
+                    info.stack_usage,
+                    stack_size,
+                    info.core.str().c_str(),
+                    kernel_names[info.kernel_id].c_str());
+                if (info.stack_usage >= stack_size) {
+                    fprintf(f, " (OVERFLOW)");
+                    log_fatal(
+                        "Watcher detected stack overflow on Device {} Core {}: {}! Kernel {} uses {}/{} of the stack.",
+                        device->id(),
+                        info.core.str(),
+                        riscv_name,
+                        kernel_names[info.kernel_id].c_str(),
+                        info.stack_usage,
+                        stack_size);
+                } else if (info.stack_usage >= stack_size * 9 / 10) {
+                    fprintf(f, " (Close to overflow)");
+                    log_warning(
+                        "Watcher detected stack usage within 10\% of max on Device {} Core {}: {}! Kernel {} uses "
+                        "{}/{} of the stack.",
+                        device->id(),
+                        info.core.str(),
+                        riscv_name,
+                        kernel_names[info.kernel_id].c_str(),
+                        info.stack_usage,
+                        stack_size);
+                }
+            }
+            fprintf(f, "\n");
+        }
 
         // Handle any paused cores, wait for user input.
         if (!paused_cores.empty()) {
