@@ -42,6 +42,8 @@ def is_sharded(tensor) -> bool:
 
 
 get_memory_config = ttnn._ttnn.core.get_memory_config
+num_cores_to_corerange_set = ttnn._ttnn.operations.core.num_cores_to_corerange_set
+num_cores_to_core_range_set = ttnn._ttnn.operations.core.num_cores_to_core_range_set
 
 
 def has_tile_padding(tensor, *, dim=None):
