@@ -409,7 +409,7 @@ def test_conv_ws(
     #     .broadcast_to(conv_weight_shape)
     #     .float()
     # )
-    # torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
+
     tt_bias_tensor = None
     torch_bias_tensor = None
     if has_bias:
@@ -437,41 +437,11 @@ def test_conv_ws(
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
     )
-    ncores = 3
-    shard_grid = get_shard_grid_from_num_cores(ncores, device)
-    shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
-        shard_grid, (input_height * input_width * batch_size, input_channels // ncores), shard_orientation, False
-    )
-    tensor_memory_layout = ttnn.types.TensorMemoryLayout.WIDTH_SHARDED
-    in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
 
-    # compute_grid_size = device.compute_with_storage_grid_size()
-
-    # block_shard_mem_config = ttnn.MemoryConfig(
-    #     ttnn.types.TensorMemoryLayout.BLOCK_SHARDED,
-    #     ttnn.types.BufferType.L1,
-    #     ttnn.experimental.tensor.ShardSpec(
-    #         ttnn.CoreRangeSet(set([ttnn.CoreRange((0, 0), (3, 3))])),
-    #         (64, input_channels // ncores),
-    #         shard_orientation,
-    #         False,
-    #     ),
-    # )
-    # height_shard_mem_config = ttnn.MemoryConfig(
-    #     ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
-    #     ttnn.types.BufferType.L1,
-    #     ttnn.experimental.tensor.ShardSpec(
-    #         ttnn.CoreRangeSet(set([ttnn.CoreRange((0, 0), (3, 0))])), (64, input_channels), shard_orientation, False
-    #     ),
-    # )
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
-    # tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=block_shard_mem_config)
-    # tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=in_sharded_mem_config)
-    # tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=height_shard_mem_config)
 
     tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
-    # breakpoint()
+
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
