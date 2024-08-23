@@ -78,9 +78,11 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     // Also run on ethernet cores if they're present
     bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
     bool has_idle_eth_cores = !device->get_inactive_ethernet_cores().empty();
-    // TODO: revert this when #7771 is fixed.
+
+    // TODO: Enable this when FD-on-idle-eth is supported.
     if (!fixture->IsSlowDispatch())
         has_idle_eth_cores = false;
+
     if (has_eth_cores) {
         KernelHandle erisc_kid;
         std::set<CoreRange> eth_core_ranges;
