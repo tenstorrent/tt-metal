@@ -57,5 +57,5 @@ class TestFrac:
             comparison_func,
             device,
             test_args,
-            ttnn_ops=True,
+            ttnn_op=True,
         )
