@@ -7,8 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
@@ -47,54 +45,6 @@ namespace operations {
 namespace primary {
 
 void py_module(py::module& m_primary) {
-    m_primary.def(
-        "layernorm_pre_allgather",
-        tt::operations::primary::layernorm_pre_allgather,
-        py::arg("input").noconvert(),
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        py::arg("output_dtype").noconvert() = DataType::BFLOAT16,
-        R"doc(
-            Performs the first part of a distributed layernorm operation collecting local statistics E(x) and E(xˆ2).
-        )doc");
-
-    m_primary.def(
-        "rmsnorm_pre_allgather",
-        tt::operations::primary::rmsnorm_pre_allgather,
-        py::arg("input").noconvert(),
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        py::arg("output_dtype").noconvert() = DataType::BFLOAT16,
-        R"doc(
-            Performs the first part of a distributed rms norm operation collecting local statistics E(x) and E(xˆ2).
-        )doc");
-
-    m_primary.def(
-        "layernorm_post_allgather",
-        tt::operations::primary::layernorm_post_allgather,
-        py::arg("input").noconvert(),
-        py::arg("stats").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs the second part of a distributed layernorm operation normalizing the input based on the gathered statistics input.
-        )doc");
-
-    m_primary.def(
-        "rmsnorm_post_allgather",
-        tt::operations::primary::rmsnorm_post_allgather,
-        py::arg("input").noconvert(),
-        py::arg("stats").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs the second part of a distributed rms norm operation normalizing the input based on the gathered statistics input.
-        )doc");
-
 
     // moreh_adam
     m_primary.def(
