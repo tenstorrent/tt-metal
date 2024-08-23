@@ -5,12 +5,18 @@
 #include <cstdint>
 
 #include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
 namespace NAMESPACE {
 void MAIN {
 
     uint32_t NHtWt = get_compile_time_arg_val(0);
+#ifndef SHORT_INIT
     transpose_wh_init(tt::CB::c_in0);
+#else
+    unary_op_init_common(tt::CB::c_in0);
+    transpose_wh_init_short(tt::CB::c_in0);
+#endif
 
     // transpose a row-major block:
     // - assumes the tiles come in in column major order from reader

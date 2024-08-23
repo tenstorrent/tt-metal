@@ -63,11 +63,11 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
         {
             EXPECT_EQ(graph::extract_calltrace(json_trace), params.expected_calltrace);
             EXPECT_EQ(graph::extract_peak_L1_memory_usage(json_trace), params.expected_peak_L1_memory_usage);
-            EXPECT_EQ(graph::extract_output_tensors(json_trace).size(), params.expected_output_info.size());
+            EXPECT_EQ(graph::extract_output_tensors(json_trace).size(), 1);
 
             auto [intermediate_tensors_count, output_tensors_count] = graph::count_intermediate_and_output_tensors(json_trace);
             EXPECT_EQ(intermediate_tensors_count, params.expected_intermediate_tensors_count);
-            EXPECT_EQ(output_tensors_count, params.expected_output_info.size());
+            EXPECT_EQ(output_tensors_count, 1);
         }
 
         // Query calls
@@ -112,27 +112,30 @@ INSTANTIATE_TEST_SUITE_P(
                 .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
-                .expected_calltrace = { "ttnn::add", "ttnn::prim::binary", "Device Operation", "create_device_tensor" },
+                .expected_calltrace = { "ttnn::add", "ttnn::prim::binary", "BinaryDeviceOperation", "tt::tt_metal::create_device_tensor" },
                 .expected_peak_L1_memory_usage = 30720,
                 .expected_intermediate_tensors_count = 0,
                 .expected_output_info = {
                     graph::TensorInfo{
                         .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                         .size = 6144,
-                        .type = tt::tt_metal::BufferType::L1}},
+                        .type = tt::tt_metal::BufferType::L1}
+                }
             },
             AddOpGraphTestParam{
                 .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
                 .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
-                .expected_calltrace = { "ttnn::add", "ttnn::repeat", "ttnn::prim::old_infra_device_operation", "Device Operation", "create_device_tensor", "ttnn::prim::binary", "Device Operation", "create_device_tensor"},
+                .expected_calltrace = { "ttnn::add", "ttnn::repeat", "ttnn::prim::old_infra_device_operation", "RepeatDeviceOperation", "tt::tt_metal::create_device_tensor", "ttnn::prim::binary", "BinaryDeviceOperation", "tt::tt_metal::create_device_tensor"},
                 .expected_peak_L1_memory_usage = 92160,
-                .expected_intermediate_tensors_count = 1,
+                .expected_intermediate_tensors_count = 0,
                 .expected_output_info = {
                     graph::TensorInfo{
                         .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
                         .size = 24576,
-                        .type = tt::tt_metal::BufferType::L1}},
+                        .type = tt::tt_metal::BufferType::L1
+                    }
+                },
             }
         ),
         ::testing::Values(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH, tt::tt_metal::IGraphProcessor::RunMode::NORMAL)

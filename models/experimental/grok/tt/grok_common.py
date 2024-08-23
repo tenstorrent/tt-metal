@@ -105,7 +105,7 @@ def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, device_mesh):
         use_height_and_width_as_shard_shape=True,
     )
 
-    attn_mask = ttnn.experimental.tensor.interleaved_to_sharded(attn_mask, sharded_mem_config=ATTN_MASK_MEMCFG)
+    attn_mask = ttnn.interleaved_to_sharded(attn_mask, ATTN_MASK_MEMCFG)
 
     return xs_1SBH, attn_mask
 
@@ -196,7 +196,7 @@ def cache_attention(device_mesh, state_dict, model_args, rot_emb_matrix_list, se
             use_height_and_width_as_shard_shape=True,
         )
 
-        attn_mask = ttnn.experimental.tensor.interleaved_to_sharded(attn_mask, sharded_mem_config=ATTN_MASK_MEMCFG)
+        attn_mask = ttnn.interleaved_to_sharded(attn_mask, ATTN_MASK_MEMCFG)
 
         _ = tt_attn(
             attention_inputs,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -229,13 +229,14 @@ inline void llk_unpack_tilizeA_B(
     DEBUG_STATUS("UPTD");
 }
 
-template <bool reuse_srcB = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool reuse_srcB = false>
 inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
     std::uint32_t tile_idx_b,
-    std::uint32_t num_faces = 4) {
+    std::uint32_t num_faces = 4,
+    std::uint32_t unpA_face_r_dim = FACE_R_DIM /*unused*/) {
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
         llk_unpack_tilizeA_B<reuse_srcB>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
     }

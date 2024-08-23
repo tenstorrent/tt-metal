@@ -15,32 +15,6 @@
 
 using namespace ckernel;
 
-// "llk_setup_outputs" is the old function name that HLKC emits
-inline void llk_setup_outputs() {
-    volatile tt_l1_ptr std::uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
-
-    for (std::uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
-
-        uint32_t fifo_addr = circular_buffer_config_addr[0];
-        uint32_t fifo_size = circular_buffer_config_addr[1];
-        uint32_t fifo_num_pages = circular_buffer_config_addr[2];
-        uint32_t fifo_page_size = circular_buffer_config_addr[3];
-
-        cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
-        cb_interface[cb_id].fifo_limit = fifo_addr + fifo_size;  // Check if there is overflow
-        cb_interface[cb_id].fifo_size = fifo_size;
-        cb_interface[cb_id].fifo_num_pages = fifo_num_pages;
-        cb_interface[cb_id].fifo_page_size = fifo_page_size;
-
-        // local copy used by the packer
-        cb_interface[cb_id].tiles_received = 0;
-        // this is currently used for in-order packing (the default mode)
-        cb_interface[cb_id].fifo_wr_tile_ptr = 0;
-
-        circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG; // move by 3 uint32's
-    }
-}
-
 // Blocking call to wait for free space needed to pack N tiles
 template <bool skip_sync = false, bool wait_for_blocks = false, bool brisc_pack = false>
 inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32_t num_tiles) {

@@ -128,7 +128,7 @@ class TestBertOpsTrace:
 
         def run_ops(in0_t_res):
             if in0_sharded:
-                in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+                in0_t = ttnn.interleaved_to_sharded(
                     in0_t_res,
                     grid_size,
                     [M // grid_size[0], K // grid_size[1]],
@@ -156,7 +156,7 @@ class TestBertOpsTrace:
                     compute_kernel_config=compute_kernel_config,
                 )
             if out_sharded:
-                output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+                output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
             return output_t
 
         # Compile
@@ -173,7 +173,7 @@ class TestBertOpsTrace:
             in0_t_updated = torch2tt_tensor(
                 in0, None, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttnn.bfloat8_b
             )
-            ttnn.experimental.tensor.write_tensor(in0_t_updated, in0_t_res)
+            ttnn.copy_host_to_device_tensor(in0_t_updated, in0_t_res)
             logger.info(f"Running iteration {iter}")
             ttnn.experimental.device.ReplayTrace(device, cq_id, tid, True)
 
