@@ -22,6 +22,7 @@ def run_all_gather_matmul_on_t3000_impl(
     input_dtype,
     layout,
     matmul_output_dim,
+    max_in0_block_w,
     mem_config,
     num_iters=1,
 ):
@@ -64,7 +65,7 @@ def run_all_gather_matmul_on_t3000_impl(
     core_grid = (8, 4)
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=core_grid,
-        in0_block_w=min(16, hidden_dim // 32 // core_grid[0]),  # how much inner dim you take each time
+        in0_block_w=min(max_in0_block_w, hidden_dim // 32 // core_grid[0]),  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
         per_core_M=max(1, input_shape[2] // 32 // core_grid[1]),  # M / TILE_HEIGHT / Grid_Size
@@ -150,7 +151,7 @@ def run_all_gather_matmul_on_t3000_impl(
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "num_devices, num_links, input_shape, dim, layout, matmul_output_dim",
+    "num_devices, num_links, input_shape, dim, layout, matmul_output_dim, max_in0_block_w",
     [
         (
             8,
@@ -159,6 +160,7 @@ def run_all_gather_matmul_on_t3000_impl(
             3,
             ttl.tensor.Layout.TILE,
             1024,
+            2,
         ),
         (
             8,
@@ -167,6 +169,7 @@ def run_all_gather_matmul_on_t3000_impl(
             3,
             ttl.tensor.Layout.TILE,
             1024,
+            16,
         ),
         (
             8,
@@ -175,6 +178,7 @@ def run_all_gather_matmul_on_t3000_impl(
             3,
             ttl.tensor.Layout.TILE,
             1024,
+            16,  # NOTE: 64 for some reason gives lower perf
         ),
         (
             8,
@@ -183,6 +187,25 @@ def run_all_gather_matmul_on_t3000_impl(
             3,
             ttl.tensor.Layout.TILE,
             1024,
+            16,
+        ),
+        (  # AllGather + Fused QKV Matmul llama 2k prefill
+            8,
+            1,
+            [1, 1, 2048, 8192],
+            3,
+            ttl.tensor.Layout.TILE,
+            1280,
+            8,
+        ),
+        (  # AllGather + FF1 Matmul llama 1k prefill
+            8,
+            1,
+            [1, 1, 1024, 8192],
+            3,
+            ttl.tensor.Layout.TILE,
+            4096,
+            4,
         ),
         ### Test cases that are not supported
         # (
@@ -231,6 +254,7 @@ def test_all_gather_matmul_on_t3000_post_commit(
     input_dtype,
     layout,
     matmul_output_dim,
+    max_in0_block_w,
     mem_config,
     use_program_cache,
     function_level_defaults,
@@ -245,5 +269,6 @@ def test_all_gather_matmul_on_t3000_post_commit(
         input_dtype,
         layout,
         matmul_output_dim,
+        max_in0_block_w,
         mem_config,
     )
