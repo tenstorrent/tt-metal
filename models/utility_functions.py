@@ -199,7 +199,7 @@ def tt_tensors_to_torch_tensors(
 ):
     # Convert tensors to interleaved
     if tt_tensors_device.is_sharded():
-        tt_tensors_device = ttnn.experimental.tensor.sharded_to_interleaved(tt_tensors_device)
+        tt_tensors_device = ttnn.sharded_to_interleaved(tt_tensors_device)
 
     # Convert tensors to RM layout
     if tt_tensors_device.layout == ttnn.TILE_LAYOUT:

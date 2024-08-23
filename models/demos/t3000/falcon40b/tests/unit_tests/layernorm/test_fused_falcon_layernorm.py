@@ -296,7 +296,7 @@ def run_test_FalconLayernorm_inference(pcc, devices, model_location_generator, g
     #         False,
     #     ),
     # )
-    input = ttnn.experimental.tensor.interleaved_to_sharded(input, sharded_mem_config=block_sharded_memconfig)
+    input = ttnn.interleaved_to_sharded(input, block_sharded_memconfig)
 
     # PyTorch output --------------------------------------------------------------------
     pytorch_FalconLayernorm_model = PytorchFusedLayernorm(hugging_face_reference_model)

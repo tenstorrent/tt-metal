@@ -1668,7 +1668,7 @@ def test_matmul(
 
     if input_mem_config == "DEV_0_L1_BLOCK_SHARDED":
         logical_grid = [grid_size[0], grid_size[1]] if transpose_mcast else [grid_size[1], grid_size[0]]
-        in_0 = ttnn.experimental.tensor.interleaved_to_sharded(
+        in_0 = ttnn.interleaved_to_sharded(
             in_0,
             grid_size,
             [M * Z0 * W0 // logical_grid[0], K // logical_grid[1]],
@@ -1680,7 +1680,7 @@ def test_matmul(
             ),
         )
     elif input_mem_config == "DEV_0_L1_HEIGHT_SHARDED":
-        in_0 = ttnn.experimental.tensor.interleaved_to_sharded(
+        in_0 = ttnn.interleaved_to_sharded(
             in_0,
             grid_size,
             [round_up_to_tile_dim(M * Z0 * W0 // (grid_size[0] * grid_size[1])), round_up_to_tile_dim(K)],

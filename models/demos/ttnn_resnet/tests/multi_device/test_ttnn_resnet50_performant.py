@@ -422,9 +422,7 @@ def test_run_resnet50_trace_2cqs_inference(
         ttnn.record_event(1, write_event)
         ttnn.wait_for_event(0, write_event)
         # TODO: Add in place support to ttnn to_memory_config
-        test_infra.input_tensor = ttnn.experimental.tensor.reshard(
-            tt_image_res, input_mem_config, test_infra.input_tensor
-        )
+        test_infra.input_tensor = ttnn.reshard(tt_image_res, input_mem_config, test_infra.input_tensor)
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device_mesh, tid, cq_id=0, blocking=False)
         outputs.append(ttnn.from_device(test_infra.output_tensor, blocking=False))

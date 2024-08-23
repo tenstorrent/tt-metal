@@ -220,7 +220,7 @@ class transformer_2d_model:
                 hidden_states, (self.batch_size, 1, self.input_height * self.input_width, in_channels)
             )
             if ttnn.get_memory_config(hidden_states) != self.gn_expected_input_sharded_memory_config:
-                # hidden_states = ttnn.experimental.tensor.reshard(hidden_states, self.gn_expected_input_sharded_memory_config)
+                # hidden_states = ttnn.reshard(hidden_states, self.gn_expected_input_sharded_memory_config)
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
                 hidden_states = ttnn.to_memory_config(hidden_states, self.gn_expected_input_sharded_memory_config)
             hidden_states = ttnn.group_norm(
