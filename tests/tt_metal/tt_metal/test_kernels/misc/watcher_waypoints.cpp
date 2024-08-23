@@ -34,9 +34,6 @@ void MAIN {
     uint32_t sync_wait_cycles = get_arg_val<uint32_t>(0);
     uint32_t sync_address     = get_arg_val<uint32_t>(1);
     WATCHER_RING_BUFFER_PUSH(sync_wait_cycles);
-#if defined(COMPILE_FOR_IDLE_ERISC)
-    sync_wait_cycles = 0x5f5e1000U;
-#endif
 
     // Post a new waypoint with a delay after (to let the watcher poll it)
     hacky_sync(1, sync_wait_cycles, sync_address);
