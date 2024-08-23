@@ -18,3 +18,5 @@ python3-dev
 python3-venv
 cargo
 ninja-build
+libxml2-dev
+libxslt-dev
