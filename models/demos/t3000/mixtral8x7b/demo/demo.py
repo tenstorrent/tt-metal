@@ -270,7 +270,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         ("models/demos/t3000/mixtral8x7b/demo/input_data.json", False),
         ("models/demos/t3000/mixtral8x7b/demo/input_data_questions.json", True),
     ],
-    ids=["general_weights", "instruct_weights"],
+    ids=["general", "instruct"],
 )
 def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights, is_ci_env):
     if is_ci_env and instruct_weights == True:
