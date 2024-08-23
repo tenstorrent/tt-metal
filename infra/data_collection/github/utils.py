@@ -366,8 +366,8 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
 
     device_info = json.dumps(
         {
-            "device_type": device_type,
-            "device_memory_size": device_memory_size,
+            "card_type": device_type,
+            "dram_size": device_memory_size,
         }
     )
 
