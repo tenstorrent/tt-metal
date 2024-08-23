@@ -54,14 +54,23 @@ enum RunTimeDebugFeatures {
     RunTimeDebugFeatureCount
 };
 
+// Enumerates a class of cores to enable features on at runtime.
+enum RunTimeDebugClass {
+    RunTimeDebugClassNoneSpecified,
+    RunTimeDebugClassWorker,
+    RunTimeDebugClassDispatch,
+    RunTimeDebugClassAll,
+    RunTimeDebugClassCount
+};
+
 extern const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount];
+extern const char *RunTimeDebugClassNames[RunTimeDebugClassCount];
 
 // TargetSelection stores the targets for a given debug feature. I.e. for which chips, cores, harts
 // to enable the feature.
 struct TargetSelection {
     std::map<CoreType, std::vector<CoreCoord>> cores;
-    std::map<CoreType, bool> all_cores;
-    std::map<CoreType, std::unordered_set<CoreCoord>> disabled_cores;
+    std::map<CoreType, int> all_cores;
     bool enabled;
     std::vector<int> chip_ids;
     bool all_chips = false;
@@ -148,18 +157,11 @@ class RunTimeOptions {
     inline void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
         feature_targets[feature].cores = cores;
     }
-    inline std::map<CoreType, std::unordered_set<CoreCoord>> &get_feature_disabled_cores(RunTimeDebugFeatures feature) {
-        return feature_targets[feature].disabled_cores;
-    }
-    inline void set_feature_disabled_cores(
-        RunTimeDebugFeatures feature, std::map<CoreType, std::unordered_set<CoreCoord>> disabled_cores) {
-        feature_targets[feature].disabled_cores = disabled_cores;
-    }
     // An alternative to setting cores by range, a flag to enable all.
-    inline void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, bool all_cores) {
+    inline void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, int all_cores) {
         feature_targets[feature].all_cores[core_type] = all_cores;
     }
-    inline bool get_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type) {
+    inline int get_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type) {
         return feature_targets[feature].all_cores[core_type];
     }
     // Note: core range is inclusive
