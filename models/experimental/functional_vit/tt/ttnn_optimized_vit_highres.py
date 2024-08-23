@@ -10,8 +10,6 @@ from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
-import tt_lib as ttl
-import tt_lib.fallback_ops
 
 core_grid = ttnn.CoreGrid(y=8, x=12)
 
@@ -34,7 +32,7 @@ def vit_patch_embeddings(
     stride_w = 1
 
     pixel_values = ttnn.reshape(pixel_values, (batch_size, img_h, img_w // patch_size, 4 * patch_size))
-    pixel_values = ttl.tensor.fold(pixel_values, stride_h, stride_w)
+    pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)
     pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT)
 
     ## Needed only when running the standalone module pytest test_vit_patch_embeddings

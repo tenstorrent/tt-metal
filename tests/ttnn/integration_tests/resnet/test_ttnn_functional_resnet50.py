@@ -20,6 +20,7 @@ from models.utility_functions import (
     pad_and_fold_conv_filters_for_unity_stride,
     enable_memory_reports,
     skip_for_grayskull,
+    skip_for_wormhole_b0,
 )
 
 from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import load_resnet50_model
@@ -261,6 +262,7 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
 
 
 @skip_for_grayskull("#9168: Resnet50 performance test failing after removing 1x1s2 matmul fallback into conv")
+@skip_for_wormhole_b0(reason_str="#10923: Various L1 / CB clashes or no-log crashes for all batch sizes")
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576}], ids=["device_params=l1_small_size_24576"], indirect=True
 )
@@ -275,8 +277,6 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     ),
 )
 def test_resnet_50(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
-    if batch_size == 8:
-        pytest.skip("Failing, issue #8555")
     ttnn.CONFIG.enable_logging = True
     ttnn.CONFIG.enable_detailed_buffer_report = True
     test_infra = create_test_infra(

@@ -6,6 +6,10 @@
 
 namespace tt::tt_metal {
 
+bool GraphTracker::is_enabled() const {
+    return (not processors.empty());
+}
+
 void GraphTracker::push_processor(const std::shared_ptr<IGraphProcessor>& new_processor) {
     processors.push_back(new_processor);
 }
@@ -93,7 +97,7 @@ const std::vector<std::shared_ptr<IGraphProcessor>>& GraphTracker::get_processor
     return processors;
 }
 
-const std::shared_ptr<IGraphHooks>& GraphTracker::get_hooks() const {
+const std::shared_ptr<IGraphHooks>& GraphTracker::get_hook() const {
     return hook;
 }
 
@@ -101,4 +105,9 @@ void GraphTracker::clear() {
     processors.clear();
     hook = nullptr;
 }
+
+void GraphTracker::clear_hook() {
+    hook = nullptr;
+}
+
 }

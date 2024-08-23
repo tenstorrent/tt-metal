@@ -2113,14 +2113,14 @@ class ResNet(nn.Module):
         )
 
         # fold for unity stride on device
-        x = ttnn.experimental.tensor.fold(x, stride_h=stride_h, stride_w=1)
+        x = ttnn.fold(x, stride_h=stride_h, stride_w=1)
 
         shard_shape = [
             NHW_even // self.first_conv_num_cores_nhw,
             x.get_legacy_shape()[3],
         ]
 
-        x = ttnn.experimental.tensor.reshard(
+        x = ttnn.reshard(
             x,
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -2177,11 +2177,11 @@ class ResNet(nn.Module):
                 x = x.to(self.device, mem_config)
             elif x.memory_config().is_sharded():
                 if x.memory_config() != mem_config:
-                    x = ttnn.experimental.tensor.reshard(x, mem_config)
+                    x = ttnn.reshard(x, mem_config)
                 else:
                     x_in = x
             else:
-                x = ttnn.experimental.tensor.interleaved_to_sharded(x, mem_config)
+                x = ttnn.interleaved_to_sharded(x, mem_config)
             if op_event is not None:
                 ttnn.record_event(0, op_event)
 
@@ -2248,7 +2248,7 @@ class ResNet(nn.Module):
                     False,
                 ),
             )
-            x = ttnn.experimental.tensor.reshard(
+            x = ttnn.reshard(
                 x,
                 reshard_mem_config,
             )
@@ -2280,7 +2280,7 @@ class ResNet(nn.Module):
                     False,
                 ),
             )
-            x = ttnn.experimental.tensor.reshard(
+            x = ttnn.reshard(
                 x,
                 reshard_mem_config,
             )
@@ -2310,7 +2310,7 @@ class ResNet(nn.Module):
                     False,
                 ),
             )
-            x = ttnn.experimental.tensor.reshard(
+            x = ttnn.reshard(
                 x,
                 reshard_mem_config,
             )

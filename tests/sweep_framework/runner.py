@@ -13,7 +13,8 @@ from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
 from statuses import TestStatus, VectorValidity, VectorStatus
-import architecture
+import tt_smi_util
+from device_fixtures import default_device
 from elasticsearch import Elasticsearch, NotFoundError
 from elastic_config import *
 
@@ -35,8 +36,17 @@ def get_username():
     return os.environ["USER"]
 
 
+def get_devices(test_module):
+    try:
+        return test_module.device_mesh_fixture()
+    except:
+        return default_device()
+
+
 def run(test_module, input_queue, output_queue):
-    device = ttnn.open_device(0)
+    device_generator = get_devices(test_module)
+    device, device_name = next(device_generator)
+    print(f"SWEEPS: Opened device configuration, {device_name}.")
     try:
         while True:
             test_vector = input_queue.get(block=True, timeout=1)
@@ -54,7 +64,11 @@ def run(test_module, input_queue, output_queue):
                 e2e_perf = None
             output_queue.put([status, message, e2e_perf])
     except Empty as e:
-        ttnn.close_device(device)
+        try:
+            # Run teardown in device_mesh_fixture
+            next(device_generator)
+        except StopIteration:
+            print(f"SWEEPS: Closed device configuration, {device_name}.")
 
 
 def get_timeout(test_module):
@@ -125,10 +139,9 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                 print(f"SWEEPS: TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
                 p.terminate()
                 p = None
-                smi_process = subprocess.run(architecture.tt_smi_command(ARCH))
-                if smi_process.returncode == 0:
-                    print("SWEEPS: TT-SMI Reset Complete Successfully")
+                tt_smi_util.run_tt_smi(ARCH)
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
+                result["e2e_perf"] = None
         result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         result["host"] = get_hostname()
         result["user"] = get_username()

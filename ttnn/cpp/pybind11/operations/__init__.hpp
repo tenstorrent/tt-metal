@@ -13,7 +13,6 @@
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
-#include "pybind11/operations/kv_cache.hpp"
 
 #include "ttnn/operations/pool/avgpool/avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/downsample/downsample_pybind.hpp"
@@ -33,12 +32,14 @@
 #include "ttnn/operations/eltwise/complex_unary/complex_unary_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/embedding/embedding_pybind.hpp"
+#include "ttnn/operations/embedding_backward/embedding_backward_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
 #include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
 #include "ttnn/operations/loss/loss_pybind.hpp"
+#include "ttnn/operations/kv_cache/kv_cache_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -91,6 +92,9 @@ void py_module(py::module& module) {
     auto m_embedding = module.def_submodule("embedding", "embedding operations");
     embedding::py_module(m_embedding);
 
+    auto m_embedding_backward = module.def_submodule("embedding_backward", "embedding backward operations");
+    embedding_backward::py_bind_embedding_backward(m_embedding_backward);
+
     auto m_loss = module.def_submodule("loss", "loss operations");
     loss::py_bind_loss_functions(m_loss);
 
@@ -119,7 +123,7 @@ void py_module(py::module& module) {
     reduction::py_module(m_reduction);
 
     auto m_kv_cache = module.def_submodule("kv_cache", "KV cache operations");
-    kv_cache::py_module(m_kv_cache);
+    kv_cache::py_bind_kv_cache(m_kv_cache);
 
     auto m_copy = module.def_submodule("copy", "copy operations");
     copy::py_module(m_copy);

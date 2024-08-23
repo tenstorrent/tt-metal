@@ -11,7 +11,6 @@ from ttnn.model_preprocessing import (
 
 import ttnn
 
-# import tt_lib as ttl
 from ttnn.dot_access import DotAccessDict
 
 
@@ -170,7 +169,7 @@ def vit_patch_embeddings(
     fold_w_padded = (4 * patch_size * patch_size) + 128
 
     # pixel_values = ttnn.reshape(pixel_values, (batch_size, img_h, img_w // patch_size, 4 * patch_size))
-    folded_pixel_values = ttnn.experimental.tensor.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
+    folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
     ttnn.deallocate(pixel_values)
     x = ttnn.reallocate(folded_pixel_values)
     folded_pixel_values = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
@@ -199,7 +198,7 @@ def vit_patch_embeddings(
     #         False,
     #     ),
     # )
-    # resharded_pixel_values = ttnn.experimental.tensor.reshard(pixel_values, post_fold_config)
+    # resharded_pixel_values = ttnn.reshard(pixel_values, post_fold_config)
 
     # return resharded_pixel_values
 

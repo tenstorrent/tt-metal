@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttm
 import ttnn
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 

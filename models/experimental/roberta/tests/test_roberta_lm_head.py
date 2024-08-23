@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 from transformers import RobertaForMaskedLM
 
-import tt_lib
 
 from models.experimental.roberta.tt.roberta_lm_head import TtRobertaLMHead
 from models.utility_functions import (

@@ -21,10 +21,6 @@ from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 
 
 class TtFalconRotaryEmbedding(torch.nn.Module):
-    """
-    See FalconRotaryEmbedding from hf_modeling_falcon.py
-    """
-
     def __init__(
         self,
         device_mesh,
@@ -237,7 +233,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ######################
         ### K CACHE UPDATE ###
         ######################
-        ttnn.experimental.tensor.fill_cache(layer_past[0], key_layer, user_id)
+        ttnn.fill_cache(layer_past[0], key_layer, user_id)
 
         ######################
         ### PRE-SOFTMAX MM ###
@@ -284,7 +280,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ######################
         ### V CACHE UPDATE ###
         ######################
-        ttnn.experimental.tensor.fill_cache(layer_past[1], value_layer, user_id)
+        ttnn.fill_cache(layer_past[1], value_layer, user_id)
 
         layer_present = layer_past if use_cache else None
 
@@ -367,7 +363,7 @@ class TtFalconAttentionPrefill(nn.Module):
         ######################
         ### K CACHE UPDATE ###
         ######################
-        ttnn.experimental.tensor.fill_cache(layer_past[0], key_layer, user_id)
+        ttnn.fill_cache(layer_past[0], key_layer, user_id)
 
         ######################
         ### PRE-SOFTMAX MM ###
@@ -456,7 +452,7 @@ class TtFalconAttentionPrefill(nn.Module):
             slices.deallocate(True)
 
         # V cache update
-        ttnn.experimental.tensor.fill_cache(layer_past[1], value_layer, user_id)
+        ttnn.fill_cache(layer_past[1], value_layer, user_id)
 
         layer_present = layer_past if use_cache else None
 
@@ -610,7 +606,7 @@ class TtFalconAttentionDecode(nn.Module):
         ######################
 
         # Update kv_cache in place
-        ttnn.experimental.tensor.update_cache(layer_past[0], key_layer, layer_past_len)
+        ttnn.update_cache(layer_past[0], key_layer, layer_past_len)
         key_layer.deallocate(True)
 
         # key and value layers will have kv_seq_len padded to nearest 32
@@ -622,9 +618,9 @@ class TtFalconAttentionDecode(nn.Module):
         )
 
         if self.model_config["l1_sharded"]:
-            key_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+            key_layer = ttnn.interleaved_to_sharded(
                 key_layer,
-                sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](padded_layer_past_len, self.head_dim),
+                self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](padded_layer_past_len, self.head_dim),
             )
 
             # Pad and transpose Q for batched matmul
@@ -646,11 +642,9 @@ class TtFalconAttentionDecode(nn.Module):
                 self.padded_local_heads,
                 self.head_dim,  # Batch must be in dim 0 to match K cache
             )
-            query_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+            query_layer = ttnn.interleaved_to_sharded(
                 query_layer,
-                sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](
-                    self.padded_local_heads, self.head_dim
-                ),
+                self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](self.padded_local_heads, self.head_dim),
             )
 
         ######################
@@ -743,7 +737,7 @@ class TtFalconAttentionDecode(nn.Module):
         ######################
 
         # Update kv_cache in place
-        ttnn.experimental.tensor.update_cache(layer_past[1], value_layer, layer_past_len)
+        ttnn.update_cache(layer_past[1], value_layer, layer_past_len)
 
         value_layer = ttnn.slice(
             layer_past[1],
@@ -752,9 +746,9 @@ class TtFalconAttentionDecode(nn.Module):
             memory_config=self.model_config["V_CACHE_SLICE_OUTPUT_MEMCFG"],
         )
         if self.model_config["l1_sharded"]:
-            value_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+            value_layer = ttnn.interleaved_to_sharded(
                 value_layer,
-                sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](padded_layer_past_len, self.head_dim),
+                self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](padded_layer_past_len, self.head_dim),
             )
 
         layer_present = layer_past if use_cache else None
@@ -781,8 +775,8 @@ class TtFalconAttentionDecode(nn.Module):
             attn_weights.deallocate(True)
             value_layer.deallocate()
 
-            attn_output = ttnn.experimental.tensor.sharded_to_interleaved(
-                attn_output, output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"]
+            attn_output = ttnn.sharded_to_interleaved(
+                attn_output, memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"]
             )
 
             # Get batch in dim 1

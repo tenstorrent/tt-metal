@@ -14,7 +14,6 @@ namespace ttnn::operations::binary_backward {
 
 enum class BinaryBackwardOpType {
     ATAN2_BW,
-    EMBEDDING_BW,
     ADDALPHA_BW,
     SUBALPHA_BW,
     SUB_BW,
@@ -37,7 +36,6 @@ enum class BinaryBackwardOpType {
 
 std::vector<Tensor> _atan2_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _rsub_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _embedding_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _xlogy_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _hypot_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _ldexp_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
@@ -154,13 +152,6 @@ template <>
 struct OpHandler<BinaryBackwardOpType::ADDALPHA_BW> {
     static std::vector<std::optional<ttnn::Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad, std::optional<Tensor> other_grad ) {
         return _addalpha_bw( queue_id, grad, input, other, alpha, output_mem_config, are_required_outputs, input_grad, other_grad);
-    }
-};
-
-template <>
-struct OpHandler<BinaryBackwardOpType::EMBEDDING_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _embedding_bw(grad, input, other, output_mem_config);
     }
 };
 

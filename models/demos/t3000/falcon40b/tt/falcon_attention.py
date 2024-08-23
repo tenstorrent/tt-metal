@@ -336,14 +336,14 @@ class TtFalconAttention:
         key_layer = self.rotary_embedding(key_layer)
 
         # K Cache update
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             layer_past[0],
             ttnn.experimental.typecast(
                 key_layer, self.model_config["KV_CACHE_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
             ),
             user_id,
         )
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             layer_past[1],
             ttnn.experimental.typecast(
                 value_layer, self.model_config["KV_CACHE_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -422,13 +422,13 @@ class TtFalconAttention:
 
         # Reshard
         if self.model_config["LN_ATTN_OUTPUT_MEMCFG"] != self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"]:
-            hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+            hidden_states = ttnn.sharded_to_interleaved(
                 hidden_states,
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
             )
-            hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+            hidden_states = ttnn.interleaved_to_sharded(
                 hidden_states,
-                sharded_mem_config=self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"],
+                self.model_config["FUSED_QKV_MM_INPUT_MEMCFG"],
             )
 
         #################
@@ -447,13 +447,13 @@ class TtFalconAttention:
         ### TMs ###
         ###########
         if self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] != self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"]:
-            fused_query_key_value = ttnn.experimental.tensor.sharded_to_interleaved(
+            fused_query_key_value = ttnn.sharded_to_interleaved(
                 fused_query_key_value,
-                output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+                memory_config=self.model_config["DEFAULT_MEMCFG"],
             )
-            fused_query_key_value = ttnn.experimental.tensor.interleaved_to_sharded(
+            fused_query_key_value = ttnn.interleaved_to_sharded(
                 fused_query_key_value,
-                sharded_mem_config=self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"],
+                self.model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"],
             )
         query_layer, key_layer, value_layer = ttnn.experimental.nlp_create_qkv_heads(
             fused_query_key_value,
@@ -480,7 +480,7 @@ class TtFalconAttention:
             kv_cache_shard_shape[0] = layer_past[0].get_legacy_shape()[1] * padded_layer_past_len
             kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
         # Update kv_cache in place
-        ttnn.experimental.tensor.update_cache(
+        ttnn.update_cache(
             layer_past[0],
             key_layer,
             layer_past_len,
@@ -499,9 +499,9 @@ class TtFalconAttention:
             ],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        key_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+        key_layer = ttnn.interleaved_to_sharded(
             key_layer,
-            sharded_mem_config=kv_cache_memcfg,
+            kv_cache_memcfg,
         )
         ######################
         ### PRE-SOFTMAX MM ###
@@ -545,7 +545,7 @@ class TtFalconAttention:
         ######################
 
         # Update kv_cache in place
-        ttnn.experimental.tensor.update_cache(
+        ttnn.update_cache(
             layer_past[1],
             value_layer,
             layer_past_len,
@@ -563,9 +563,9 @@ class TtFalconAttention:
             ],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        value_layer = ttnn.experimental.tensor.interleaved_to_sharded(
+        value_layer = ttnn.interleaved_to_sharded(
             value_layer,
-            sharded_mem_config=kv_cache_memcfg,
+            kv_cache_memcfg,
         )
 
         layer_present = layer_past if use_cache else None
@@ -588,9 +588,9 @@ class TtFalconAttention:
             attn_output,
             memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )
-        attn_output = ttnn.experimental.tensor.sharded_to_interleaved(
+        attn_output = ttnn.sharded_to_interleaved(
             attn_output,
-            output_mem_config=self.model_config["DEFAULT_MEMCFG"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
         attn_output = ttnn.all_gather(
             attn_output,
@@ -598,9 +598,9 @@ class TtFalconAttention:
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        attn_output = ttnn.experimental.tensor.interleaved_to_sharded(
+        attn_output = ttnn.interleaved_to_sharded(
             attn_output,
-            sharded_mem_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
+            self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
         )
         attn_output = ttnn.matmul(
             attn_output,

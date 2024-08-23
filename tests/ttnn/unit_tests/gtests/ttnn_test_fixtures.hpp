@@ -46,6 +46,8 @@ class TTNNFixtureWithDevice : public TTNNFixture {
         TTNNFixture::TearDown();
         tt::tt_metal::CloseDevice(device_);
     }
+
+    tt::tt_metal::Device& getDevice() { return *device_; }
 };
 
 }  // namespace ttnn

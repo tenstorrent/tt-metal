@@ -52,7 +52,6 @@ using NUM_REPETITIONS = std::uint32_t;
 
 using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
-using CircularBufferConfigVec = std::vector<uint32_t>;
 
 ll_api::memory get_risc_binary(string path);
 uint16_t get_binary_code_size16(const ll_api::memory &mem, int riscv_id);
@@ -90,18 +89,6 @@ inline bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) {
     return std::find(soc_desc.physical_ethernet_cores.begin(), soc_desc.physical_ethernet_cores.end(), core) !=
            soc_desc.physical_ethernet_cores.end();
 }
-
-CircularBufferConfigVec create_circular_buffer_config_vector();
-
-void set_config_for_circular_buffer(
-    CircularBufferConfigVec &circular_buffer_config_vec,
-    uint32_t circular_buffer_index,
-    uint32_t addr_in_bytes,
-    uint32_t size_in_bytes,
-    uint32_t num_pages);
-
-void write_circular_buffer_config_vector_to_core(
-    chip_id_t chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec);
 
 uint32_t generate_risc_startup_addr(bool is_eth_core);
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core);

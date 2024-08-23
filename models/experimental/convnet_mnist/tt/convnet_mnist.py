@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 import ttnn
 
 from models.experimental.convnet_mnist.reference.convnet import ConvNet
@@ -16,32 +15,24 @@ class TtConvNet(torch.nn.Module):
         super().__init__()
         self.device = device
 
-        self.tt_conv1_weight = torch2tt_tensor(
-            state_dict[f"conv1.weight"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        self.tt_conv1_bias = torch2tt_tensor(state_dict[f"conv1.bias"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        self.tt_conv1_weight = torch2tt_tensor(state_dict[f"conv1.weight"], None, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.tt_conv1_bias = torch2tt_tensor(state_dict[f"conv1.bias"], None, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        self.tt_conv2_weight = torch2tt_tensor(
-            state_dict[f"conv2.weight"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        self.tt_conv2_bias = torch2tt_tensor(state_dict[f"conv2.bias"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        self.tt_conv2_weight = torch2tt_tensor(state_dict[f"conv2.weight"], None, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.tt_conv2_bias = torch2tt_tensor(state_dict[f"conv2.bias"], None, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        self.linear1_weights = torch2tt_tensor(
-            state_dict[f"fc1.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        self.linear1_bias = torch2tt_tensor(state_dict[f"fc1.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        self.linear1_weights = torch2tt_tensor(state_dict[f"fc1.weight"], device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.linear1_bias = torch2tt_tensor(state_dict[f"fc1.bias"], device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        self.linear2_weights = torch2tt_tensor(
-            state_dict[f"fc2.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        self.linear2_bias = torch2tt_tensor(state_dict[f"fc2.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        self.linear2_weights = torch2tt_tensor(state_dict[f"fc2.weight"], device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.linear2_bias = torch2tt_tensor(state_dict[f"fc2.bias"], device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
         self.linear1_weights = ttnn.transpose(self.linear1_weights, -2, -1)
         self.linear2_weights = ttnn.transpose(self.linear2_weights, -2, -1)
 
         self.max_pool2d = fallback_ops.MaxPool2d(2)
 
-    def forward(self, tt_x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, tt_x: ttnn.Tensor) -> ttnn.Tensor:
         out = fallback_ops.conv2d(tt_x, self.tt_conv1_weight, self.tt_conv1_bias)
         out = ttnn.relu(out)
         out = self.max_pool2d(out)

@@ -4,8 +4,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharding_utilities.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute_kernel_config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sharded/sharded_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sharded/multi_core/sharded_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/bcast_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_multi_core_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h.cpp
@@ -49,6 +47,7 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_nc_impl/moreh_sum_nc_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_nc_impl/moreh_int_sum_nc_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_impl/moreh_sum_backward_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_mean/moreh_mean_h/moreh_mean_h.cpp
@@ -93,8 +92,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_cumsum/moreh_cumsum_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/multi_core/update_cache_op_multi_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/update_cache/update_cache_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_rm/moreh_getitem_rm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_getitem/moreh_getitem_tilized/moreh_getitem_tilized.cpp

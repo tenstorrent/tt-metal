@@ -72,12 +72,10 @@ class upblock_2d:
                 )
 
             if hidden_states.is_sharded():
-                hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-                    hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
-                )
+                hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
 
             if on_dev_res_hidden_states.is_sharded():
-                on_dev_res_hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+                on_dev_res_hidden_states = ttnn.sharded_to_interleaved(
                     on_dev_res_hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
                 )
 

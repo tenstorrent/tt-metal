@@ -4,7 +4,6 @@
 
 import torch
 from tt_lib.fallback_ops import fallback_ops
-import tt_lib
 import ttnn
 from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv
 

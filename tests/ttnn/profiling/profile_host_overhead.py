@@ -151,8 +151,6 @@ def measure_host_overhead_unary(
     if shape_func is not None:
         input_shape_0 = shape_func(input_shape)
 
-    print(f"input_shape_0 {input_shape_0} **************************")
-
     x = torch.Tensor(size=input_shape_0).uniform_(-100, 100).bfloat16()
     x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
 

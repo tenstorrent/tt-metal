@@ -144,7 +144,7 @@ def run_2cq_model(device, tt_image, tt_resnet50):
     ttnn.record_event(0, op_event)
 
     ttnn.wait_for_event(1, op_event)
-    ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res, 1)
+    ttnn.copy_host_to_device_tensor(tt_image, tt_image_res, 1)
     ttnn.record_event(1, write_event)
 
     _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
@@ -153,7 +153,7 @@ def run_2cq_model(device, tt_image, tt_resnet50):
     outputs = []
     for iter in range(0, 2):
         ttnn.wait_for_event(1, op_event)
-        ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(tt_image, tt_image_res, 1)
         ttnn.record_event(1, write_event)
 
         outputs.append(tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=False))
@@ -178,7 +178,7 @@ def run_trace_model(device, tt_image, tt_resnet50):
     tt_image_res = ttnn.allocate_tensor_on_device(
         tt_image.shape, tt_image.dtype, tt_image.layout, device, sharded_mem_config_DRAM
     )
-    ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res)
+    ttnn.copy_host_to_device_tensor(tt_image, tt_image_res)
 
     # Compile
     tt_resnet50(tt_image_res)
@@ -187,7 +187,7 @@ def run_trace_model(device, tt_image, tt_resnet50):
     tt_output_res = tt_resnet50(tt_image_res)
     ttnn.experimental.device.EndTraceCapture(device, 0, tid)
 
-    ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res)
+    ttnn.copy_host_to_device_tensor(tt_image, tt_image_res)
     ttnn.experimental.device.ReplayTrace(device, 0, tid, True)
 
     # Done with the trace, can deallocate the buffers now.
@@ -237,11 +237,11 @@ def run_trace_2cq_model(device, tt_image, tt_resnet50):
 
     # Compile
     ttnn.wait_for_event(1, op_event)
-    ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res, 1)
+    ttnn.copy_host_to_device_tensor(tt_image, tt_image_res, 1)
     ttnn.record_event(1, write_event)
 
     ttnn.wait_for_event(0, write_event)
-    reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config)
+    reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config)
     ttnn.record_event(0, op_event)
     first_out_addr = reshard_out.buffer_address()
 
@@ -249,11 +249,11 @@ def run_trace_2cq_model(device, tt_image, tt_resnet50):
     ttnn.synchronize_device(device)
     # Trace
     ttnn.wait_for_event(1, op_event)
-    ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res, 1)
+    ttnn.copy_host_to_device_tensor(tt_image, tt_image_res, 1)
     ttnn.record_event(1, write_event)
 
     ttnn.wait_for_event(0, write_event)
-    reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config)
+    reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config)
     ttnn.record_event(0, op_event)
 
     tid = ttnn.experimental.device.BeginTraceCapture(device, 0)
@@ -269,11 +269,11 @@ def run_trace_2cq_model(device, tt_image, tt_resnet50):
     outputs = []
     for iter in range(0, 2):
         ttnn.wait_for_event(1, op_event)
-        ttnn.experimental.tensor.write_tensor(tt_image, tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(tt_image, tt_image_res, 1)
         ttnn.record_event(1, write_event)
 
         ttnn.wait_for_event(0, write_event)
-        reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
+        reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config, reshard_out)
         ttnn.record_event(0, op_event)
 
         ttnn.experimental.device.ReplayTrace(device, 0, tid, False)

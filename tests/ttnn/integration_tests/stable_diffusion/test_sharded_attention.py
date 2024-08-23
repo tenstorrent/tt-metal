@@ -174,7 +174,7 @@ def test_time_sharded_attnention_hwb(
         output_mem_config = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, output_shard_spec
         )
-        mm_slice = ttl.tensor.reshard(
+        mm_slice = ttnn.reshard(
             mm_slice,
             output_mem_config,
         )
@@ -505,7 +505,7 @@ def test_cross_attnention(
     passing = True
     output = None
 
-    q_sharded = ttl.tensor.interleaved_to_sharded(
+    q_sharded = ttnn.interleaved_to_sharded(
         reference_query_layer,
         grid_size,
         [num_heads * seq_len // num_cores, 64],
@@ -544,8 +544,8 @@ def test_cross_attnention(
         height_per_core = num_heads * seq_len // 64
         orig_mem_config = mm_slice.memory_config()
         if seq_len == 1024:
-            mm_slice = ttl.tensor.sharded_to_interleaved(mm_slice, dram_interleaved_memory_config)
-            mm_slice = ttl.tensor.interleaved_to_sharded(
+            mm_slice = ttnn.sharded_to_interleaved(mm_slice, dram_interleaved_memory_config)
+            mm_slice = ttnn.interleaved_to_sharded(
                 mm_slice,
                 (8, 8),
                 [height_per_core, kv_len],
@@ -562,7 +562,7 @@ def test_cross_attnention(
             output_mem_config = ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, output_shard_spec
             )
-            mm_slice = ttl.tensor.reshard(
+            mm_slice = ttnn.reshard(
                 mm_slice,
                 output_mem_config,
             )
@@ -573,7 +573,7 @@ def test_cross_attnention(
             block_w=3,
         )
         mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
-        mm_slice = ttl.tensor.reshard(mm_slice, orig_mem_config)
+        mm_slice = ttnn.reshard(mm_slice, orig_mem_config)
 
     else:
         softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
@@ -584,7 +584,7 @@ def test_cross_attnention(
         )
         mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
 
-    v_sharded = ttl.tensor.interleaved_to_sharded(
+    v_sharded = ttnn.interleaved_to_sharded(
         reference_value_layer,
         grid_size,
         [num_heads * kv_len // num_cores, 64],
@@ -702,7 +702,7 @@ def test_attention(
     passing = True
     output = None
 
-    q_sharded = ttl.tensor.interleaved_to_sharded(
+    q_sharded = ttnn.interleaved_to_sharded(
         reference_query_layer,
         grid_size,
         [num_heads * seq_len // num_cores, 64],
@@ -743,8 +743,8 @@ def test_attention(
         height_per_core = num_heads * seq_len // 64
         orig_mem_config = mm_slice.memory_config()
         if seq_len == 1024:
-            mm_slice = ttl.tensor.sharded_to_interleaved(mm_slice, l1_interleaved_memory_config)
-            mm_slice = ttl.tensor.interleaved_to_sharded(
+            mm_slice = ttnn.sharded_to_interleaved(mm_slice, l1_interleaved_memory_config)
+            mm_slice = ttnn.interleaved_to_sharded(
                 mm_slice,
                 (8, 8),
                 [height_per_core, seq_len],
@@ -758,8 +758,8 @@ def test_attention(
                 block_w=seq_len // 32,
             )
             mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
-            mm_slice = ttl.tensor.sharded_to_interleaved(mm_slice, l1_interleaved_memory_config)
-            mm_slice = ttl.tensor.interleaved_to_sharded(
+            mm_slice = ttnn.sharded_to_interleaved(mm_slice, l1_interleaved_memory_config)
+            mm_slice = ttnn.interleaved_to_sharded(
                 mm_slice,
                 (8, 2),
                 [num_heads * seq_len // 16, seq_len],
@@ -777,7 +777,7 @@ def test_attention(
             output_mem_config = ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, output_shard_spec
             )
-            mm_slice = ttl.tensor.reshard(
+            mm_slice = ttnn.reshard(
                 mm_slice,
                 output_mem_config,
             )
@@ -788,7 +788,7 @@ def test_attention(
                 block_w=seq_len // 32,
             )
             mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
-            mm_slice = ttl.tensor.reshard(mm_slice, orig_mem_config)
+            mm_slice = ttnn.reshard(mm_slice, orig_mem_config)
     else:
         softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -799,7 +799,7 @@ def test_attention(
         print(softmax_program_config)
         mm_slice = ttnn.softmax_in_place(mm_slice, program_config=softmax_program_config)
 
-    v_sharded = ttl.tensor.interleaved_to_sharded(
+    v_sharded = ttnn.interleaved_to_sharded(
         reference_value_layer,
         grid_size,
         [num_heads * seq_len // num_cores, 64],
@@ -928,7 +928,7 @@ def test_q_and_kv(
     passing = True
     output = None
 
-    in_0_sharded = ttl.tensor.interleaved_to_sharded(
+    in_0_sharded = ttnn.interleaved_to_sharded(
         in_0,
         grid_size,
         [M // grid_size[1], K // grid_size[0]],

@@ -243,7 +243,7 @@ inline void process_remote_write_h() {
 void process_exec_buf_end_h() {
     if (split_prefetch) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(prefetch_h_local_downstream_sem_addr));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(prefetch_h_local_downstream_sem_addr));
 
         noc_semaphore_inc(get_noc_addr_helper(prefetch_h_noc_xy, (uint32_t)sem_addr), prefetch_h_max_credits, noc_index);
     }
@@ -470,9 +470,7 @@ void process_write_paged() {
     uint32_t pages = cmd->write_paged.pages;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
     uint32_t write_length = pages * page_size;
-    InterleavedAddrGen<is_dram> addr_gen;
-    addr_gen.bank_base_address = base_addr;
-    addr_gen.page_size = page_size;
+    InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
     uint64_t dst_addr_offset = 0;  // Offset into page.
 
     // DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size
@@ -810,10 +808,14 @@ static uint32_t process_debug_cmd(uint32_t cmd_ptr) {
         checksum += *data++;
     }
 
+#if 0
+    // Ugh, we are out of code memory for dispatcher+watcher
+    // Hack this off for now, have to revisit soon
     if (checksum != cmd->debug.checksum) {
         DEBUG_STATUS("!CHK");
         ASSERT(0);
     }
+#endif
 
     return cmd_ptr + cmd->debug.stride;
 }
@@ -851,7 +853,7 @@ static void process_wait() {
     }
 
     if (notify_prefetch) {
-        noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore(upstream_sync_sem)), 1, upstream_noc_index);
+        noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_sync_sem)), 1, upstream_noc_index);
     }
 
     cmd_ptr += sizeof(CQDispatchCmd);
@@ -1112,7 +1114,7 @@ void kernel_main() {
         // in case dispatch_h is connected to a depacketizing stage.
         // TODO: This should be replaced with a signal similar to what packetized
         // components use.
-        noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore(upstream_dispatch_cb_sem_id)), 0x80000000, upstream_noc_index);
+        noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_dispatch_cb_sem_id)), 0x80000000, upstream_noc_index);
     }
 
     // Release any held pages from the last block

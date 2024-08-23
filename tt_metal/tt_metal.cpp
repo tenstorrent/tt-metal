@@ -719,26 +719,31 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 // CircularBufferConfigVec -- common across all kernels, so written once to the core
-                llrt::CircularBufferConfigVec circular_buffer_config_vec = llrt::create_circular_buffer_config_vector();
+                std::vector<uint32_t> circular_buffer_config_vec(NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG, 0);
 
                 auto cbs_on_core = program.circular_buffers_on_core(logical_core);
                 for (auto circular_buffer : cbs_on_core) {
                     for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
-                        llrt::set_config_for_circular_buffer(
-                            circular_buffer_config_vec,
-                            buffer_index,
-                            circular_buffer->address(),
-                            circular_buffer->size(),
-                            circular_buffer->num_pages(buffer_index));
+                        uint32_t addr_in_bytes = circular_buffer->address();
+                        uint32_t size_in_bytes = circular_buffer->size();
+                        uint32_t num_pages = circular_buffer->num_pages(buffer_index);
+                        uint32_t page_size = size_in_bytes / num_pages;
+                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index) =
+                            addr_in_bytes >> 4;  // convert to addr in 16B words
+                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 1) =
+                            size_in_bytes >> 4;  // convert to addr in 16B words
+                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 2) = num_pages;
+                        circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index + 3) = page_size >> 4;
                     }
                 }  // PROF_END("CBS")
 
                 if (cbs_on_core.size()) {
-                    llrt::write_circular_buffer_config_vector_to_core(
-                        device_id, physical_core, circular_buffer_config_vec);
+                    uint64_t kernel_config_base = hal.get_dev_addr(index, HalMemAddrType::KERNEL_CONFIG);
+                    uint64_t addr = kernel_config_base + program.get_program_config(index).cb_offset;
+                    llrt::write_hex_vec_to_core(device_id, physical_core, circular_buffer_config_vec, addr);
                 }
             }
-            program.init_semaphores(*device, logical_core, hal.get_core_type(index));
+            program.init_semaphores(*device, logical_core, index);
         }
     }
 
@@ -753,7 +758,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program, bool force_slow_
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         for (auto& kg : program.get_kernel_groups(index)) {
-            uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base;
+            uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange &core_range : kg.core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -957,7 +962,7 @@ uint32_t CreateSemaphore(
                 if (!semaphore_id.has_value()) {
                     semaphore_id = semaphore_id_candidate;
                 } else {
-                    semaphore_id = std::max(semaphore_id.value(), semaphore_id.value());
+                    semaphore_id = std::max(semaphore_id.value(), semaphore_id_candidate.value());
                 }
             }
             TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");

@@ -12,7 +12,7 @@
 
 <h3>
 
-[API Reference](https://tenstorrent.github.io/ttnn/latest/index.html) | [Model Demos](./models/demos/)
+[API Reference](https://docs.tenstorrent.com/ttnn/latest/index.html) | [Model Demos](./models/demos/)
 
 </h3>
 
@@ -60,7 +60,7 @@
 
 [3] - Generating the `i`'th token in a sequence while the kv_cache is filled with `i-1` rows.
 
-[4] - Time to fill the kv_cache and generate the first output token (1st user). 
+[4] - Time to fill the kv_cache and generate the first output token (1st user).
 
 [5] - This model demo does not work on N150. It does work on N300.
 
@@ -75,7 +75,15 @@
 | [LLaMA-3.1-70B](./models/demos/t3000/llama3_70b)   | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) | Tensor Parallel    | 129th               |  32                   | coming soon             | 10.4 t/s/u - 333 t/s         |  15.8 t/s/u - 506 t/s        |   20 t/s/u      |
 | [Falcon40B](./models/demos/t3000/falcon40b)        | [v0.51.0-rc24](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc24) | Tensor Parallel    | 129th               |  32                   | coming soon             | 5.3 t/s/u - 168 t/s          |  12.2 t/s/u - 390 t/s        |   36 t/s/u      |
 | [Mixtral7Bx8](./models/demos/t3000/mixtral8x7b)    | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) | Tensor Parallel    | 129th               |  32                   | 0.22 s                  | 13.3 t/s/u - 426 t/s         |  21.4 t/s/u - 685 t/s        |   33 t/s/u      |
-| [ResNet-50](./models/demos/ttnn_resnet)            |                                                                           | Data Parallel      | -                   |  128                  | -                       | 31,700                       |  44,400                      |   56,000        |
+| [ResNet-50](./models/demos/ttnn_resnet) (fps)      |                                                                           | Data Parallel      | -                   |  128                  | -                       | 31,700                       |  44,400                      |   56,000        |
+
+## Single Galaxy (8x4 mesh of WHs) Models
+
+| Model                                              | Last verified release                                                     |   Technique        | Gen. Token [3]      |  Batch                | Time to first token [4] | End-to-end throughput [1]    | Device throughput [2]        | Target throughput |
+|----------------------------------------------------|---------------------------------------------------------------------------|--------------------|---------------------|-----------------------|-------------------------|------------------------------|------------------------------|-------------------|
+| [Falcon7B](./models/demos/tg/falcon7b)             | [v0.51.0-rc30](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc30) | Data Parallel      | 129th               |  1024                 | 0.30 s                  | 4.0 t/s/u - 4096 t/s         | 17.7 t/s/u - 18125 t/s       |   26 t/s/u        |
+
+
 
 ## Model Updates
 For the latest model updates and features, please see [MODEL_UPDATES.md](models/MODEL_UPDATES.md)
@@ -111,11 +119,11 @@ print(output)
 
 <h3>
 
-[Programming Guide](./METALIUM_GUIDE.md) | [API Reference](https://tenstorrent.github.io/tt-metalium/latest/tt_metal/apis/index.html)
+[Programming Guide](./METALIUM_GUIDE.md) | [API Reference](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/apis/index.html)
 
 </h3>
 </div>
 
 ## Getting started
 
-Get started with [simple kernels](https://tenstorrent.github.io/tt-metalium/latest/tt_metal/examples/index.html).
+Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html).

@@ -17,20 +17,13 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k tteager tests", arch: wormhole_b0, cmd: run_t3000_tteager_tests, timeout: 60,
-          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: ULMEPM2MA}, #Sean Nijjar
-          { name: "t3k ethernet tests", arch: wormhole_b0, cmd: run_t3000_ethernet_tests, timeout: 60,
-          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: ULMEPM2MA}, #Sean Nijjar
-          { name: "t3k trace stress tests", arch: wormhole_b0, cmd: run_t3000_trace_stress_tests, timeout: 120,
-          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: U03NG0A5ND7}, #Aditya Saigal
-          { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 120,
-          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: U04S2UV6L8N}, #Sofija Jovic
-          { name: "t3k llama2_70b tests", arch: wormhole_b0, cmd: run_t3000_llama2_70b_tests, timeout: 60,
-          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: U03FJB5TM5Y}, #Colman Glagovich
-          { name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 60,
-          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: U03PUAKE719}, #Miguel Tairum Cruz
-          { name: "t3k resnet tests", arch: wormhole_b0, cmd: run_t3000_resnet_tests, timeout: 30,
-          runs-on: ["config-t3000", "in-service", "pipeline-functional"], owner_id: U013121KDH9}, #Austin Ho
+          { name: "t3k tteager tests", arch: wormhole_b0, cmd: run_t3000_tteager_tests, timeout: 60, owner_id: ULMEPM2MA}, #Sean Nijjar
+          { name: "t3k ethernet tests", arch: wormhole_b0, cmd: run_t3000_ethernet_tests, timeout: 60, owner_id: ULMEPM2MA}, #Sean Nijjar
+          { name: "t3k trace stress tests", arch: wormhole_b0, cmd: run_t3000_trace_stress_tests, timeout: 120, owner_id: U03NG0A5ND7}, #Aditya Saigal
+          { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 120, owner_id: U04S2UV6L8N}, #Sofija Jovic
+          { name: "t3k llama2_70b tests", arch: wormhole_b0, cmd: run_t3000_llama2_70b_tests, timeout: 60, owner_id: U03FJB5TM5Y}, #Colman Glagovich
+          { name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 60, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
+          { name: "t3k resnet tests", arch: wormhole_b0, cmd: run_t3000_resnet_tests, timeout: 30, owner_id: U013121KDH9}, #Austin Ho
         ]
     name: ${{ matrix.test-group.name }}
     env:
@@ -39,7 +32,7 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "pipeline-functional"]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build

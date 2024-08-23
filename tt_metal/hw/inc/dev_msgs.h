@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "core_config.h"
 #include "noc/noc_parameters.h"
 #include "dev_mem_map.h"
 #include "eth_l1_address_map.h"
@@ -80,7 +81,9 @@ struct kernel_config_msg_t {
     volatile uint16_t host_assigned_id;
 
     // Ring buffer of kernel configuration data
-    volatile uint32_t kernel_config_base;
+    volatile uint32_t kernel_config_base[static_cast<int>(ProgrammableCoreType::COUNT)];
+    volatile uint16_t sem_offset[static_cast<int>(ProgrammableCoreType::COUNT)];
+    volatile uint16_t cb_offset;
     dyn_mem_map_t mem_map[DISPATCH_CLASS_MAX];
 
     volatile uint8_t mode;                   // dispatch mode host/dev

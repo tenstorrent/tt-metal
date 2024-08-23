@@ -20,7 +20,7 @@ jobs:
           {
             name: t3k perplexity tests,
             arch: wormhole_b0,
-            runs-on: [arch-wormhole_b0, "config-t3000", "in-service", "pipeline-perf", "t3k"],
+            runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "pipeline-perf"],
           },
         ]
     name: ${{ matrix.test-group.name }}

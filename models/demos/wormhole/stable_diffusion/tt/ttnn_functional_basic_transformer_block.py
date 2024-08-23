@@ -108,7 +108,7 @@ class basic_transformer_block:
 
         if attn_output.memory_config() != hidden_states.memory_config():
             if attn_output.memory_config().is_sharded():
-                attn_output = ttnn.experimental.tensor.reshard(attn_output, hidden_states.memory_config())
+                attn_output = ttnn.reshard(attn_output, hidden_states.memory_config())
             else:
                 attn_output = ttnn.to_memory_config(attn_output, hidden_states.memory_config())
         sum = ttnn.add(attn_output, hidden_states, memory_config=hidden_states.memory_config())
@@ -140,7 +140,7 @@ class basic_transformer_block:
             )
             if attn_output.memory_config() != hidden_states.memory_config():
                 if attn_output.memory_config().is_sharded():
-                    attn_output = ttnn.experimental.tensor.reshard(attn_output, hidden_states.memory_config())
+                    attn_output = ttnn.reshard(attn_output, hidden_states.memory_config())
                 else:
                     attn_output = ttnn.to_memory_config(attn_output, hidden_states.memory_config())
             sum = ttnn.add(attn_output, hidden_states, memory_config=hidden_states.memory_config())

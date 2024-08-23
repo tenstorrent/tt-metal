@@ -495,6 +495,7 @@ void configure_kernel_variant(
         {"UPSTREAM_NOC_Y", std::to_string(NOC_0_Y(upstream_noc_index, grid_size.y, phys_upstream_core.y))},
         {"DOWNSTREAM_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, phys_downstream_core.x))},
         {"DOWNSTREAM_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, phys_downstream_core.y))},
+        {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
     };
     compile_args.push_back(is_dram_variant);
     compile_args.push_back(is_host_variant);
@@ -590,8 +591,7 @@ inline void generate_random_paged_payload(Device *device,
     // Note: the dst address marches in unison regardless of whether or not a core is written to
     for (uint32_t page_id = start_page; page_id < start_page + cmd.write_paged.pages; page_id++) {
 
-        // 32B alignment taken from InterleavedAddrGen
-        const uint32_t page_size_alignment_bytes = 32;
+        constexpr uint32_t page_size_alignment_bytes = ALLOCATOR_ALIGNMENT;
         CoreCoord bank_core;
         uint32_t bank_id = page_id % num_banks;
         uint32_t bank_offset = align(cmd.write_paged.page_size, page_size_alignment_bytes) * (page_id / num_banks);
@@ -873,7 +873,7 @@ inline void gen_dispatcher_paged_write_cmd(Device *device,
                                              uint32_t page_size,
                                              uint32_t pages) {
 
-    const uint32_t page_size_alignment_bytes = 32;
+    constexpr uint32_t page_size_alignment_bytes = ALLOCATOR_ALIGNMENT;
     uint32_t num_banks = device->num_banks(is_dram ? BufferType::DRAM : BufferType::L1);
     CoreType core_type = is_dram ? CoreType::DRAM : CoreType::WORKER;
 

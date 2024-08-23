@@ -7,7 +7,7 @@ import ttnn
 
 
 def subalpha(x, y):
-    tt_lib.tensor.subalpha(x, y, 5)
+    ttnn.subalpha(x, y, 5)
 
 
 def addalpha(x, y):
@@ -409,6 +409,10 @@ def unary_div_bw(x, y):
 
 all_binary_ops = [
     {
+        "op": ttnn.assign,
+        "name": "ttnn.assign_binary",
+    },
+    {
         "op": ttnn.add,
         "name": "ttnn.add",
     },
@@ -465,7 +469,7 @@ all_binary_ops = [
     },
     {
         "op": subalpha,
-        "name": "tt_lib.tensor.subalpha",
+        "name": "ttnn.subalpha",
     },
     {
         "op": addalpha,
@@ -528,8 +532,8 @@ all_binary_ops = [
         "name": "ttnn.matmul",
     },
     {
-        "op": tt_lib.tensor.copy,
-        "name": "tt_lib.tensor.copy",
+        "op": ttnn.copy,
+        "name": "ttnn.copy",
     },
     {
         "op": bcast_add_h,
@@ -589,13 +593,13 @@ all_binary_ops = [
         "need_out_mem_cfg": True,
     },
     {
-        "op": ttnn.mul,
+        "op": ttnn.multiply,
         "name": "ttnn.complex_mul",
         "is_complex": [True, True],
         "need_out_mem_cfg": True,
     },
     {
-        "op": ttnn.div,
+        "op": ttnn.divide,
         "name": "ttnn.complex_div",
         "is_complex": [True, True],
         "need_out_mem_cfg": True,
@@ -1282,11 +1286,11 @@ def ttnn_slice(x):
 
 
 def typecast(x):
-    tt_lib.tensor.typecast(x, tt_lib.tensor.DataType.BFLOAT8_B)
+    ttnn.typecast(x, tt_lib.tensor.DataType.BFLOAT8_B)
 
 
 def arange(x):
-    ttnn.arange(0, 100, 2, x.device())
+    ttnn.arange(0, 100, 2, device=x.device())
 
 
 def full(x):
@@ -1307,6 +1311,14 @@ def zeros(x):
 
 def empty(x):
     ttnn.empty(shape=x.get_legacy_shape(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+
+
+def sum_dim_0(x):
+    ttnn.sum(x, dim=0)
+
+
+def sum_dim_1(x):
+    ttnn.sum(x, dim=1)
 
 
 def sum_dim_2(x):
@@ -1355,22 +1367,6 @@ def rsub(x):
 
 def rdiv(x):
     ttnn.rdiv(x, 3)
-
-
-def sum_0(x):
-    ttnn.sum(x, 0)
-
-
-def sum_1(x):
-    ttnn.sum(x, 1)
-
-
-def sum_2(x):
-    ttnn.sum(x, 2)
-
-
-def sum_3(x):
-    ttnn.sum(x, 3)
 
 
 def erf_slow(x):
@@ -1491,24 +1487,24 @@ def argmax_shape_func(input_shape):
     return [1, 1, 128, 128]
 
 
-def argmin_1(x):
-    tt_lib.argmin(x, dim=-1)
+def argmin_dim_3(x):
+    ttnn.argmin(x, dim=3)
 
 
-def argmin_2(x):
-    ttnn.argmin(x, dim=-2)
+def argmin_dim_2(x):
+    ttnn.argmin(x, dim=2)
 
 
-def argmin_3(x):
-    ttnn.argmin(x, dim=-3)
+def argmin_dim_1(x):
+    ttnn.argmin(x, dim=1)
 
 
-def argmin_4(x):
-    ttnn.argmin(x, dim=-4)
+def argmin_dim_0(x):
+    ttnn.argmin(x, dim=0)
 
 
 def argmin_all(x):
-    ttnn.argmin(x, dim=-1, all=True)
+    ttnn.argmin(x, dim=None)
 
 
 def primary_moreh_softmax_0(x):
@@ -1575,14 +1571,26 @@ def primary_moreh_norm_3(x):
     tt_lib.operations.primary.moreh_norm(x, p=2.0, dim=3)
 
 
-def clone(x):
-    ttnn.clone(x, ttnn.get_memory_config(x), dtype=x.dtype)
+def split_dim_3(x):
+    ttnn.split(x, 2, 3)
+
+
+def split_dim_2(x):
+    ttnn.split(x, 2, 2)
+
+
+def assign_unary(x):
+    ttnn.assign(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=x.get_dtype())
 
 
 from tt_lib.fused_ops.softmax import softmax as fused_softmax
 
 
 all_unary_ops = [
+    {
+        "op": assign_unary,
+        "name": "ttnn.assign_unary",
+    },
     {
         "op": add_unary,
         "name": "ttnn.add_unary",
@@ -1883,18 +1891,21 @@ all_unary_ops = [
     {
         "op": transpose_02,
         "name": "ttnn.transpose_02",
+        "num_repeats": 3,
     },
-    {
-        "op": transpose_03,
-        "name": "ttnn.transpose_03",
-    },
+    # {
+    #     "op": transpose_03,
+    #     "name": "ttnn.transpose_03",
+    # },
     {
         "op": transpose_12,
         "name": "ttnn.transpose_12",
+        "num_repeats": 3,
     },
     {
         "op": transpose_13,
         "name": "ttnn.transpose_13",
+        "num_repeats": 3,
     },
     {
         "op": transpose_23,
@@ -1936,12 +1947,12 @@ all_unary_ops = [
         "name": "ttnn.slice",
     },
     {
-        "op": clone,
+        "op": ttnn.clone,
         "name": "ttnn.clone",
     },
     {
         "op": typecast,
-        "name": "tt_lib.tensor.typecast",
+        "name": "ttnn.typecast",
     },
     {
         "op": arange,
@@ -1972,8 +1983,12 @@ all_unary_ops = [
         "name": "ttnn.full_like",
     },
     {
-        "op": ttnn.split,
-        "name": "tt_lib.tensor.split_last_dim_two_chunks_tiled",
+        "op": split_dim_3,
+        "name": "ttnn.split_dim_3",
+    },
+    {
+        "op": split_dim_2,
+        "name": "ttnn.split_dim_2",
     },
     {
         "op": empty,
@@ -1988,6 +2003,15 @@ all_unary_ops = [
         "op": ttnn.triu,
         "name": "ttnn.triu",
         "num_repeats": 3,
+    },
+    {
+        "op": sum_dim_0,
+        "name": "ttnn.sum_dim_0",
+        "num_repeats": 2,
+    },
+    {
+        "op": sum_dim_1,
+        "name": "ttnn.sum_dim_1",
     },
     {
         "op": sum_dim_2,
@@ -2088,15 +2112,6 @@ all_unary_ops = [
         "name": "ttnn.polar",
         "is_complex": [True],
         "need_out_mem_cfg": True,
-    },
-    {
-        "op": sum_0,
-        "name": "ttnn.sum_dim_0",
-        "num_repeats": 2,
-    },
-    {
-        "op": sum_1,
-        "name": "ttnn.sum_dim_1",
     },
     {
         "op": ttnn.log_sigmoid,
@@ -2257,26 +2272,27 @@ all_unary_ops = [
         "layout": "ROW_MAJOR",
         "num_repeats": 2,
     },
-    {
-        "op": argmin_1,
-        "name": "ttnn.argmin_dim_3",
-        "num_repeats": 2,
-    },
-    {
-        "op": argmin_2,
-        "name": "ttnn.argmin_dim_2",
-        "num_repeats": 2,
-    },
-    {
-        "op": argmin_3,
-        "name": "ttnn.argmin_dim_1",
-        "num_repeats": 2,
-    },
-    {
-        "op": argmin_all,
-        "name": "ttnn.argmin_all",
-        "num_repeats": 2,
-    },
+    # {
+    #     "op": argmin_dim_3,
+    #     "name": "ttnn.argmin_dim_3",
+    #     "shape_func": argmax_shape_func,
+    #     "layout": "ROW_MAJOR",
+    #     "num_repeats": 2,
+    # },
+    # {
+    #     "op": argmin_dim_2,
+    #     "name": "ttnn.argmin_dim_2",
+    #     "shape_func": argmax_shape_func,
+    #     "layout": "ROW_MAJOR",
+    #     "num_repeats": 2,
+    # },
+    # {
+    #     "op": argmin_all,
+    #     "name": "ttnn.argmin_all",
+    #     "shape_func": argmax_shape_func,
+    #     "layout": "ROW_MAJOR",
+    #     "num_repeats": 2,
+    # },
     {
         "op": ttnn.softmax_in_place,
         "name": "ttnn.softmax_in_place",
@@ -2583,10 +2599,10 @@ all_ternary_ops = [
         "op": addcdiv_bw,
         "name": "ttnn.addcdiv_bw",
     },
-    {
-        "op": ttnn.eq_bw,
-        "name": "ttnn.eq_bw",
-    },
+    # {
+    #     "op": ttnn.eq_bw,
+    #     "name": "ttnn.eq_bw",
+    # },
     {
         "op": div_bw,
         "name": "ttnn.div_bw",
@@ -2701,26 +2717,26 @@ all_ternary_ops = [
         "name": "ttnn.linear",
         "shape_func": linear_shape_func,
     },
-    {
-        "op": ttnn.ge_bw,
-        "name": "ttnn.ge_bw",
-    },
-    {
-        "op": ttnn.gt_bw,
-        "name": "ttnn.gt_bw",
-    },
-    {
-        "op": ttnn.le_bw,
-        "name": "ttnn.le_bw",
-    },
-    {
-        "op": ttnn.lt_bw,
-        "name": "ttnn.lt_bw",
-    },
-    {
-        "op": ttnn.ne_bw,
-        "name": "ttnn.ne_bw",
-    },
+    # {
+    #     "op": ttnn.ge_bw,
+    #     "name": "ttnn.ge_bw",
+    # },
+    # {
+    #     "op": ttnn.gt_bw,
+    #     "name": "ttnn.gt_bw",
+    # },
+    # {
+    #     "op": ttnn.le_bw,
+    #     "name": "ttnn.le_bw",
+    # },
+    # {
+    #     "op": ttnn.lt_bw,
+    #     "name": "ttnn.lt_bw",
+    # },
+    # {
+    #     "op": ttnn.ne_bw,
+    #     "name": "ttnn.ne_bw",
+    # },
 ]
 
 # Crashes

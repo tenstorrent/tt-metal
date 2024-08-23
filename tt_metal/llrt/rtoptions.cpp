@@ -102,6 +102,9 @@ RunTimeOptions::RunTimeOptions() {
         this->dispatch_core_type = tt_metal::DispatchCoreType::ETH;
     }
 
+    if (getenv("TT_METAL_SKIP_LOADING_FW")) {
+        this->skip_loading_fw = true;
+    }
 }
 
 const std::string &RunTimeOptions::get_root_dir() {

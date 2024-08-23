@@ -384,7 +384,7 @@ parameters = {
     },
     "2d_mcast_transposed": {
         "batch_sizes": [(1,)],
-        "input_sizes": [(1600, 256, 512)],
+        "input_shapes": [(1600, 256, 512)],
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -415,7 +415,7 @@ parameters = {
     },
     "2d_mcast_transposed_dram": {
         "batch_sizes": [(1,)],
-        "input_sizes": [(1600, 256, 512)],
+        "input_shapes": [(1600, 256, 512)],
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -435,7 +435,7 @@ parameters = {
     },
     "2d_mcast_in0_height_sharded_in1_width_sharded": {
         "batch_sizes": [(1,)],
-        "input_sizes": [(192, 64, 384)],
+        "input_shapes": [(192, 64, 384)],
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -477,7 +477,7 @@ parameters = {
     },
     "2d_mcast_in0_in1_dram": {
         "batch_sizes": [(1,)],
-        "input_sizes": [(192, 64, 384)],
+        "input_shapes": [(192, 64, 384)],
         "batch_matrix_multiply": [False],
         "program_config": [
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(

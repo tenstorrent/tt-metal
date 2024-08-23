@@ -39,7 +39,11 @@ void MAIN  {
     constexpr volatile uint32_t page_size = get_compile_time_arg_val(7);
 
     for (uint32_t i = 0; i < num_cbs; i++) {
-        uint32_t cb_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CIRCULAR_BUFFER_CONFIG_BASE + i * 16)[3];
+        tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+        uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
+        uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+            mailboxes->launch.kernel_config.cb_offset);
+        uint32_t cb_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_l1_base + i * 4)[3];
         uint32_t expected = ((i + 1) * page_size) >> 4;
         if (cb_val != expected) {
             DPRINT << "Problem with CB idx: " << i << " Expected: " << expected << " Got: " << cb_val << ENDL();
@@ -47,14 +51,16 @@ void MAIN  {
         }
     }
 
+#ifdef DATA_MOVEMENT
     for (uint32_t i = 0; i < num_sems; i++) {
-        uint32_t sem_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SEMAPHORE_BASE + i * 16)[0];
+        uint32_t sem_val = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(i))[0];
         uint32_t expected = i + 1;
         if (sem_val != expected) {
             DPRINT << "Problem with Sem idx: " << i << " Expected: " << expected << " Got: " << sem_val << ENDL();
             while(true); // Purposefully hang the kernel if semaphores did not arrive correctly
         }
     }
+#endif
 
     for (uint32_t i = 0; i < num_unique_rt_args; i++) {
         uint32_t rt_arg = get_arg_val<uint32_t>(i);
