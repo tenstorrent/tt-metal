@@ -40,6 +40,7 @@ jobs:
     name: ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on:
       - ${{ inputs.runner-label }}
+      - cloud-virtual-machines
       - "in-service"
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
