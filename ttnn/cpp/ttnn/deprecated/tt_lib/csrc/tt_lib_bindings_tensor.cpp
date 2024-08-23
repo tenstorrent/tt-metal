@@ -341,13 +341,6 @@ void TensorModule(py::module& m_tensor) {
         R"doc(Load tensor to file)doc");
 
     m_tensor.def(
-        "num_cores_to_corerange_set",
-        py::overload_cast<const uint32_t, const CoreCoord, const bool>(&ttnn::operations::core::work_split::num_cores_to_corerange_set),
-        R"doc(
-            Create a CoreRangeSet containing the specified number of cores
-        )doc");
-
-    m_tensor.def(
         "allocate_tensor_on_device",
         py::overload_cast<const ttnn::Shape&, DataType, Layout, Device*, const MemoryConfig&>(
             &allocate_tensor_on_device),
