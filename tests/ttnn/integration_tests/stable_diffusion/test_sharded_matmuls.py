@@ -1632,24 +1632,20 @@ def test_matmul(
         in_0_torch,
         device,
         tt_memory_config=l1_interleaved_memory_config,
-        tt_dtype=(
-            ttnn.experimental.tensor.DataType.BFLOAT8_B
-            if input_dtype == "BFLOAT8_B"
-            else ttnn.experimental.tensor.DataType.BFLOAT16
-        ),
+        tt_dtype=(ttnn.bfloat8_b if input_dtype == "BFLOAT8_B" else ttnn.bfloat16),
     )
     in_1 = torch2tt_tensor(
         in_1_torch,
         device,
         tt_memory_config=l1_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+        tt_dtype=ttnn.bfloat8_b,
     )
     if bias:
         in_2 = torch2tt_tensor(
             in_2_torch,
             device,
             tt_memory_config=l1_interleaved_memory_config,
-            tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+            tt_dtype=ttnn.bfloat8_b,
         )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -1665,24 +1661,16 @@ def test_matmul(
             in_0,
             grid_size,
             [M * Z0 * W0 // logical_grid[0], K // logical_grid[1]],
-            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            (
-                ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
-                if transpose_mcast
-                else ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
-            ),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (ttnn.ShardOrientation.COL_MAJOR if transpose_mcast else ttnn.ShardOrientation.ROW_MAJOR),
         )
     elif input_mem_config == "DEV_0_L1_HEIGHT_SHARDED":
         in_0 = ttnn.interleaved_to_sharded(
             in_0,
             grid_size,
             [round_up_to_tile_dim(M * Z0 * W0 // (grid_size[0] * grid_size[1])), round_up_to_tile_dim(K)],
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            (
-                ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
-                if transpose_mcast
-                else ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
-            ),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (ttnn.ShardOrientation.COL_MAJOR if transpose_mcast else ttnn.ShardOrientation.ROW_MAJOR),
         )
     elif input_mem_config == "DEV_0_L1_INTERLEAVED":
         in_0 = ttnn.to_memory_config(in_0, l1_interleaved_memory_config)
@@ -1745,11 +1733,7 @@ def test_matmul(
             bias=in_2 if bias else None,
             program_config=program_config,
             memory_config=output_mem_config,
-            dtype=(
-                ttnn.experimental.tensor.DataType.BFLOAT8_B
-                if output_dtype == "BFLOAT8_B"
-                else ttnn.experimental.tensor.DataType.BFLOAT16
-            ),
+            dtype=(ttnn.bfloat8_b if output_dtype == "BFLOAT8_B" else ttnn.bfloat16),
             compute_kernel_config=compute_kernel_config,
         )
 

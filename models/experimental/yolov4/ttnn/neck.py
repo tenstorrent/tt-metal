@@ -237,8 +237,8 @@ class TtNeck:
 
         # Once issue #7746 is resolved we will use ttnn.MaxPool instead of fallback.MaxPool
         output_tensor_conv3 = ttnn.to_layout(output_tensor_conv3, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor_conv3 = ttnn.reshape_on_device(
-            output_tensor_conv3, 1, 10, 10, 512
+        output_tensor_conv3 = ttnn.reshape(
+            output_tensor_conv3, (1, 10, 10, 512)
         )  # hard coded the shape as in future we will be using ttnn.MaxPool
         output_tensor_conv3 = ttnn.permute(output_tensor_conv3, (0, 3, 1, 2))
 
@@ -247,11 +247,11 @@ class TtNeck:
         pool_3 = self.p3(output_tensor_conv3)
 
         pool_1 = ttnn.permute(pool_1, (0, 2, 3, 1))
-        pool_1 = ttnn.reshape_on_device(pool_1, 1, 1, pool_1.shape[1] * pool_1.shape[2], pool_1.shape[3])
+        pool_1 = ttnn.reshape(pool_1, (1, 1, pool_1.shape[1] * pool_1.shape[2], pool_1.shape[3]))
         pool_2 = ttnn.permute(pool_2, (0, 2, 3, 1))
-        pool_2 = ttnn.reshape_on_device(pool_2, 1, 1, pool_2.shape[1] * pool_2.shape[2], pool_2.shape[3])
+        pool_2 = ttnn.reshape(pool_2, (1, 1, pool_2.shape[1] * pool_2.shape[2], pool_2.shape[3]))
         pool_3 = ttnn.permute(pool_3, (0, 2, 3, 1))
-        pool_3 = ttnn.reshape_on_device(pool_3, 1, 1, pool_3.shape[1] * pool_3.shape[2], pool_3.shape[3])
+        pool_3 = ttnn.reshape(pool_3, (1, 1, pool_3.shape[1] * pool_3.shape[2], pool_3.shape[3]))
         pool_1 = ttnn.to_layout(pool_1, layout=ttnn.TILE_LAYOUT)
         pool_2 = ttnn.to_layout(pool_2, layout=ttnn.TILE_LAYOUT)
         pool_3 = ttnn.to_layout(pool_3, layout=ttnn.TILE_LAYOUT)

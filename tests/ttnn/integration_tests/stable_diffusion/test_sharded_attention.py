@@ -928,7 +928,7 @@ def test_q_and_kv(
         in_1,
         program_config=program_config,
         memory_config=block_sharded_memory_config,
-        dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+        dtype=ttnn.bfloat8_b,
         compute_kernel_config=compute_kernel_config,
     )
     in_0_sharded.deallocate()

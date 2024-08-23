@@ -31,7 +31,7 @@ def test_run_sfpu_eps(device):
 def test_run_sfpu_tensor(device):
     value = device.sfpu_eps()
     shape = [1, 1, 32, 32]
-    eps = ttnn.full(ttnn.experimental.tensor.Shape(shape), value)
+    eps = ttnn.full(ttnn.Shape(shape), value)
     eps = eps.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
     passing = np.isclose(np.ones((1, 1, 32, 32)) * value, eps.float()).all()
     assert passing

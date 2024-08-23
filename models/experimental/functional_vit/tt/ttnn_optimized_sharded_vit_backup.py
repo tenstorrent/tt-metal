@@ -168,7 +168,7 @@ def vit_patch_embeddings(
     fold_h_padded = (batch_size * img_h * patch_count_all) + 224
     fold_w_padded = (4 * patch_size * patch_size) + 128
 
-    # pixel_values = ttnn.reshape_on_device(pixel_values, batch_size, img_h, img_w // patch_size, 4 * patch_size)
+    # pixel_values = ttnn.reshape(pixel_values, (batch_size, img_h, img_w // patch_size, 4 * patch_size))
     folded_pixel_values = ttnn.fold(pixel_values, stride_h, stride_w)  # 1568, 1024
     ttnn.deallocate(pixel_values)
     x = ttnn.reallocate(folded_pixel_values)
@@ -218,9 +218,7 @@ def vit_patch_embeddings(
     # ttnn.deallocate(pixel_values)
 
     patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
-    patch_embedding_output = ttnn.reshape_on_device(
-        patch_embedding_output, batch_size, patch_count_all, patch_size_sq_trpl
-    )
+    patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, patch_size_sq_trpl))
 
     return patch_embedding_output
 

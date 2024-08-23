@@ -66,7 +66,7 @@ def unet_concat(ttnn_tensors, dim=-1, use_reshard=True, perf_mode=False):
                 t_mem_config.shard_spec.shape = reshard_shape
                 t_mem_config.shard_spec.grid = output_mem_config.shard_spec.grid
                 t_mem_config.shard_spec.orientation = output_mem_config.shard_spec.orientation
-                ttlib_tensors[i] = ttnn.experimental.tensor.reshard(t, t_mem_config)
+                ttlib_tensors[i] = ttnn.reshard(t, t_mem_config)
     else:
         output_mem_config = ttnn.DRAM_MEMORY_CONFIG
         for i in range(0, len(ttlib_tensors)):

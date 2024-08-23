@@ -46,9 +46,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     # ttnn.deallocate(pixel_values)
 
     patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
-    patch_embedding_output = ttnn.reshape_on_device(
-        patch_embedding_output, batch_size, patch_count_all, patch_size_sq_trpl
-    )
+    patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, patch_size_sq_trpl))
 
     return patch_embedding_output
 
