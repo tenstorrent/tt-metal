@@ -100,7 +100,7 @@ def run_all_gather_matmul_on_t3000_impl(
             input_tensor_mesh,
             weight_tt,
             dim,
-            (0, 5),
+            (0, 4),
             num_links=num_links,
             memory_config=mem_config,
             program_config=program_config,
@@ -145,7 +145,7 @@ def run_all_gather_matmul_on_t3000_impl(
         logger.info(f"Output {i}: {output}")
         if not eq:
             logger.error(f"output mismatch for tensor {i}")
-    assert eq, f"{i} FAILED: {output}"
+        assert eq, f"{i} FAILED: {output}"
 
 
 # Enumerate the post-commit cases explicitly

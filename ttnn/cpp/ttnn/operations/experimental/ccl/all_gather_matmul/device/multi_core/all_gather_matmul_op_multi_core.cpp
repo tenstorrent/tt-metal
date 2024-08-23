@@ -56,7 +56,7 @@ DatacopyParams setup_datacopy(
     std::size_t num_edm_buffers_per_channel = 2;
     const auto& device = input_tensor.device();
     auto const& all_gather_config = ttnn::AllGatherConfig(input_tensor, all_gather_output_tensor, dim, ring_size, num_links, topology, num_edm_buffers_per_channel, true);
-    const uint32_t num_transfers = 4; // ring_size - 1;
+    const uint32_t num_transfers = 4;
 
     auto tensor_slicer = ttnn::ccl::InterleavedRingAllGatherTensorSlicer (
         input_tensor,
@@ -230,6 +230,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
 
 ) {
     tt::tt_metal::Program program{};
+    bool use_datacopy = false; /* Enable for debugging purposes */
 
     ////////////// Params for fused op signalers //////////////
 
@@ -280,29 +281,39 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     );
     const auto matmul_override_runtime_arguments_callback = matmul_program_with_callbacks.override_runtime_arguments_callback;
 
-    // DatacopyParams datacopy_params = setup_datacopy(
-    //     matmul_program_with_callbacks.program,
-    //     input_tensor,
-    //     all_gather_output_tensor,
-    //     datacopy_output_tensor,
-    //     dim,
-    //     num_links,
-    //     ring_size,
-    //     ring_index,
-    //     topology,
-    //     {0, 5},
-    //     matmul_fused_op_signaler.value()
-    // );
-    // const auto& datacopy_override_runtime_arguments_callback = datacopy_params.datacopy_override_runtime_arguments_callback;
+    // Datacopy
+    DatacopyParams datacopy_params;
+    if (use_datacopy) {
+        datacopy_params = setup_datacopy(
+            matmul_program_with_callbacks.program,
+            input_tensor,
+            all_gather_output_tensor,
+            datacopy_output_tensor,
+            dim,
+            num_links,
+            ring_size,
+            ring_index,
+            topology,
+            {0, 7},
+            matmul_fused_op_signaler.value()
+        );
+    }
 
+    // Create the all gather fused op signaler
     std::optional<AllGatherFusedOpSignaler> all_gather_fused_op_signaler = AllGatherFusedOpSignaler();
-    // all_gather_fused_op_signaler->init_fused_op(datacopy_params.datacopy_cores_noc, datacopy_params.datacopy_signal_semaphore_ids);
-    all_gather_fused_op_signaler->init_fused_op(
-        matmul_fused_op_signaler->fused_op_receiver_cores_noc,
-        matmul_fused_op_signaler->fused_op_receiver_signal_semaphores
-    );
+    if (use_datacopy) {
+        all_gather_fused_op_signaler->init_fused_op(
+            datacopy_params.datacopy_cores_noc,
+            datacopy_params.datacopy_signal_semaphore_ids
+        );
+    } else {
+        all_gather_fused_op_signaler->init_fused_op(
+            matmul_fused_op_signaler->fused_op_receiver_cores_noc,
+            matmul_fused_op_signaler->fused_op_receiver_signal_semaphores
+        );
+    }
 
-    // Pass in the datacopy cores and sempahore address (Using optional arguments)
+    // All Gather
     operation::ProgramWithCallbacks program_with_callbacks = ttnn::all_gather_multi_core_with_workers_helper(
         matmul_program_with_callbacks.program,
         input_tensor,
@@ -318,8 +329,10 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         core_grid_offset);
     const auto all_gather_override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback;
 
-    // Fuse the datacopy and all-gather overriden runtime arguments callbacks
-    auto override_runtime_arguments_callback = [all_gather_override_runtime_arguments_callback, matmul_override_runtime_arguments_callback] ( // , datacopy_override_runtime_arguments_callback] (
+
+
+    // Fuse the override runtime arguments callbacks
+    auto override_runtime_arguments_callback = [use_datacopy, all_gather_override_runtime_arguments_callback, matmul_override_runtime_arguments_callback, datacopy_params] (
         const void* operation,
         Program& program,
         const std::vector<Tensor>& input_tensors,
@@ -337,13 +350,24 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         }
 
         if (all_gather_override_runtime_arguments_callback.has_value()) {
-            all_gather_override_runtime_arguments_callback.value()(operation, program, input_tensors, optional_input_tensors, output_tensors);
+            all_gather_override_runtime_arguments_callback.value()(
+                operation,
+                program,
+                {input_tensors[0], output_tensors[0]}, /* input tensor, all gather output tensor */
+                optional_input_tensors,
+                {output_tensors[0]} /* all gather output tensor */
+            );
         }
 
-
-        // if (datacopy_override_runtime_arguments_callback.has_value()) {
-        //     datacopy_override_runtime_arguments_callback.value()(operation, program, input_tensors, optional_input_tensors, output_tensors);
-        // }
+        if (use_datacopy && datacopy_params.datacopy_override_runtime_arguments_callback.has_value()) {
+            datacopy_params.datacopy_override_runtime_arguments_callback.value()(
+                operation,
+                program,
+                {input_tensors[0], output_tensors[0]}, /* input tensor, all gather output tensor */
+                optional_input_tensors,
+                {output_tensors[2]} /* datacopy output tensor */
+            );
+        }
     };
 
     program_with_callbacks.override_runtime_arguments_callback = override_runtime_arguments_callback;

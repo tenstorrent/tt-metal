@@ -43,10 +43,11 @@ void kernel_main() {
 
 
     // Runtime args
-    const uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(0);
-    const uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(1);
-    const uint32_t* matmul_signal_sems = (uint32_t*)get_arg_addr(2); // Matmul signal semaphore address
-    const uint32_t* matmul_cores_noc_coords = (uint32_t*)get_arg_addr(4); // Matmul core NOC coordinates [x1, y1, x2, y2...]
+    uint32_t rt_args_idx = 0;
+    const uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t* matmul_signal_sems = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, 2)); // Matmul signal semaphore address
+    const uint32_t* matmul_cores_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, 2 * num_matmul_cores_to_signal)); // Matmul core NOC coordinates [x1, y1, x2, y2...]
 
     // Setup buffers
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -79,9 +80,7 @@ void kernel_main() {
     ttnn::ccl::coord_t tensor_slice_shape = {tensor_slice_shape_width, tensor_slice_shape_height};
 
     uint32_t ring_index_dir0 = start_ring_index;
-    // Adjust to include copying over the local tensor slice, which is at start_ring_index. If clockwise, then dir1 will be anticlockwise, which means that the ring index will update in ascending order.
-    // Therefore, to undo that, we subtract 1. If anticlockwise, then dir1 will be clockwise, which means that the ring index will update in descending order. Therefore, to undo that, we add 1.
-    uint32_t ring_index_dir1 = (is_clockwise_direction ? start_ring_index - 1 : start_ring_index + 1) % ring_size;
+    uint32_t ring_index_dir1 = start_ring_index;
 
     uint32_t start_page_idx_dir0 = ring_index_dir0 * output_page_offset;
     uint32_t start_page_idx_dir1 = ring_index_dir1 * output_page_offset;
@@ -93,13 +92,20 @@ void kernel_main() {
 
     // Main for loop where each iteration handles a tensor slice
     // The loop alternates between the two directions, hence it runs for double the number of transfers
-    for (uint32_t i = 0, dir = 0; i < num_transfers * 2; i++, dir = !dir) {
+    for (uint32_t i = 0, dir = 1; i < num_transfers * 2; i++, dir = !dir) {
         uint32_t tensor_slice_cnt = i / 2; // Since we are alternating between the two directions, we need to divide by 2 to get the correct tensor slice count in each direction
 
         // Update location in input and output tensor in DRAM
-        advance_start_page_idx(start_page_idxs[dir], ring_idxs[dir], ring_size, is_clockwise_dirs[dir], output_page_offset, last_output_page_offset);
-
-        // DPRINT << "DIRECTION 0 RING INDEX>>>> " << ring_index_dir0 << ENDL();
+        if (i > 0) { // Skip update for local tensor slice
+            advance_start_page_idx(
+                start_page_idxs[dir],
+                ring_idxs[dir],
+                ring_size,
+                is_clockwise_dirs[dir],
+                output_page_offset,
+                last_output_page_offset
+            );
+        }
 
         uint32_t curr_page_in_idx = start_page_idxs[dir];
         uint32_t curr_page_out_idx = start_page_idxs[dir];
@@ -113,9 +119,7 @@ void kernel_main() {
         ttnn::ccl::coord_t offset_worker_slice = {0, 0};
 
         // DPRINT << "WAITING FOR OP SIGNAL IN DATACOPY" << ENDL();
-        if ((!dir && tensor_slice_cnt < num_transfers) || (dir && tensor_slice_cnt < num_transfers - 1)) { // Using dir as a selector to select which logic to choose, because dir = 1 will have 1 less semaphore (because one is local already)
-            noc_semaphore_wait_min(signal_op_semaphore_ptrs[dir], tensor_slice_cnt + 1);
-        }
+        noc_semaphore_wait_min(signal_op_semaphore_ptrs[dir], tensor_slice_cnt + 1);
         // DPRINT << "RECEIVED OP SIGNAL IN DATACOPY" << ENDL();
 
         // Signal matmul to begin
