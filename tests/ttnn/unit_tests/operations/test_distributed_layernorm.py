@@ -29,15 +29,11 @@ def tt_distributed_layernorm(inp, gamma, beta, epsilon, is_rmsnorm, compute_kern
     for d in range(n_devices):
         if is_rmsnorm:
             tt_stats.append(
-                ttnn.experimental.operations.primary.rmsnorm_pre_allgather(
-                    inp[d], compute_kernel_config=compute_kernel_config, output_dtype=stats_dtype
-                )
+                ttnn.rms_norm_pre_all_gather(inp[d], compute_kernel_config=compute_kernel_config, dtype=stats_dtype)
             )
         else:
             tt_stats.append(
-                ttnn.experimental.operations.primary.layernorm_pre_allgather(
-                    inp[d], compute_kernel_config=compute_kernel_config, output_dtype=stats_dtype
-                )
+                ttnn.layer_norm_pre_all_gather(inp[d], compute_kernel_config=compute_kernel_config, dtype=stats_dtype)
             )
 
     tt_stats = ttnn.aggregate_as_tensor(tt_stats)
@@ -50,14 +46,19 @@ def tt_distributed_layernorm(inp, gamma, beta, epsilon, is_rmsnorm, compute_kern
     for d in range(n_devices):
         if is_rmsnorm:
             tt_out.append(
-                ttnn.experimental.operations.primary.rmsnorm_post_allgather(
-                    inp[d], tt_stats[d], epsilon, gamma[d], compute_kernel_config=compute_kernel_config
+                ttnn.rms_norm_post_all_gather(
+                    inp[d], tt_stats[d], epsilon=epsilon, weight=gamma[d], compute_kernel_config=compute_kernel_config
                 )
             )
         else:
             tt_out.append(
-                ttnn.experimental.operations.primary.layernorm_post_allgather(
-                    inp[d], tt_stats[d], epsilon, gamma[d], beta[d], compute_kernel_config=compute_kernel_config
+                ttnn.layer_norm_post_all_gather(
+                    inp[d],
+                    tt_stats[d],
+                    epsilon=epsilon,
+                    weight=gamma[d],
+                    bias=beta[d],
+                    compute_kernel_config=compute_kernel_config,
                 )
             )
         tt_stats[d].deallocate(True)
