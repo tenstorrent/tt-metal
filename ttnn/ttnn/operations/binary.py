@@ -443,7 +443,7 @@ def _golden_function_gcd(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.gcd(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.gcd, golden_function=_golden_function_gcd)
+ttnn.attach_golden_function(ttnn.gcd, golden_function=_golden_function_gcd)
 
 
 def _golden_function_lcm(input_tensor_a, input_tensor_b, *args, **kwargs):
@@ -452,7 +452,7 @@ def _golden_function_lcm(input_tensor_a, input_tensor_b, *args, **kwargs):
     return torch.lcm(input_tensor_a, input_tensor_b)
 
 
-ttnn.attach_golden_function(ttnn._ttnn.operations.binary.lcm, golden_function=_golden_function_lcm)
+ttnn.attach_golden_function(ttnn.lcm, golden_function=_golden_function_lcm)
 
 
 __all__ = []

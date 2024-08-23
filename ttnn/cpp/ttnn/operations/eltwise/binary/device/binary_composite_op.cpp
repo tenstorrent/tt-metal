@@ -272,7 +272,6 @@ Tensor ExecuteBinaryRemainder::invoke(const Tensor& input_a, const Tensor& input
     return typecast(result, input_dtype);
 }
 
-
 Tensor ExecuteBinaryRemainder::invoke(const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::unary_remainder(input, scalar);
 }
@@ -400,26 +399,33 @@ Tensor _polyval(const Tensor& input_a, const std::vector<float>& coeffs, const s
     return final_tensor;
 }
 
-Tensor ExecuteGCD::operator()(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor val;
-    Tensor tmp_result;
-    Tensor result = ttnn::full_like(input_a, 0);
-    for(int index =1; index <= 100 ; index++)
-    {
-        val = ttnn::full_like(input_a, index);
-        tmp_result = where(ttnn::logical_and(ttnn::eqz(ttnn::remainder(input_a,val), output_mem_config),ttnn::eqz(ttnn::remainder(input_b,val), output_mem_config)), val, 1);
-        result = ttnn::where(ttnn::gt(tmp_result, result),tmp_result, result);
+Tensor ExecuteGCD::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor input_a_abs = ttnn::abs(input_a);
+    Tensor input_b_abs = ttnn::abs(input_b);
+    Tensor a_gt_b = ttnn::gt(input_a_abs, input_b_abs);
+    Tensor min = ttnn::where(a_gt_b, input_b_abs, input_a_abs);
+    Tensor max = ttnn::where(a_gt_b, input_a_abs, input_b_abs);
+    a_gt_b.deallocate();
+    // https://en.wikipedia.org/wiki/Lam%C3%A9%27s_theorem
+    // While 186 is the theoretical maximum iterations for numbers within the floating point range according to Lame's
+    // theorem, in practice when evaluating gcd of consecutive Fibonacci numbers coerced to floating point, the
+    // maximum number of iterations reached is only 14 because the remainder converges to 0 much more quickly. In
+    // addition, limited precision in bfloat16 format decreases support for input to the range [-1024, 1024]
+    constexpr std::size_t max_iterations = 14;
+    for (std::size_t iteration = 0; iteration < max_iterations; ++iteration) {
+        Tensor isz = ttnn::eqz(min);
+        Tensor rem = ttnn::remainder(max, ttnn::where(isz, isz, min));
+        max = ttnn::where(isz, max, min);
+        min = rem;
     }
-    result =  ttnn::where(ttnn::logical_and(ttnn::eqz(input_a),ttnn::eqz(input_b)), ttnn::full_like(input_a, 0), result);
-    return result;
+    return max;
 }
 
-Tensor ExecuteLCM::operator()(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteLCM::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor val = ttnn::multiply(input_a, input_b, std::nullopt, output_mem_config);
     Tensor tmp_result = ttnn::gcd(input_a, input_b);
     Tensor result = ttnn::div(val, tmp_result, false, "None", output_mem_config);
-    result = ttnn::abs(result);
-    return result;
+    return ttnn::abs(result);
 }
 
 } // namespace ttnn::operations::binary

@@ -6,17 +6,13 @@ import torch
 import pytest
 import random
 import ttnn
-<<<<<<< HEAD
-from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc, compare_equal
-from models.utility_functions import is_grayskull, skip_for_grayskull, skip_for_wormhole_b0
-=======
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_int,
     compare_pcc,
+    compare_equal,
 )
 from models.utility_functions import is_grayskull, skip_for_grayskull
->>>>>>> #10033: Add forward support for gcd
 
 
 @pytest.mark.parametrize(
@@ -866,8 +862,8 @@ def test_nei_ttnn(input_shapes, scalar, device):
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_gcd_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range_int(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range_int(input_shapes, -100, 100, device)
+    in_data1, input_tensor1 = data_gen_with_range_int(input_shapes, -1024, 1024, device)
+    in_data2, input_tensor2 = data_gen_with_range_int(input_shapes, -1024, 1024, device)
     output_tensor = ttnn.gcd(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.gcd)
     golden_tensor = golden_function(in_data1, in_data2)
@@ -886,8 +882,8 @@ def test_binary_gcd_ttnn(input_shapes, device):
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder")
 def test_binary_lcm_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range_int(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range_int(input_shapes, -100, 100, device)
+    in_data1, input_tensor1 = data_gen_with_range_int(input_shapes, -1024, 1024, device)
+    in_data2, input_tensor2 = data_gen_with_range_int(input_shapes, -1024, 1024, device)
     output_tensor = ttnn.lcm(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.lcm)
     golden_tensor = golden_function(in_data1, in_data2)
