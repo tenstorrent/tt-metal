@@ -372,6 +372,7 @@ def create_custom_preprocessor(device, groups=1):
             parameters["output_layer"] = preprocess_conv2d(
                 model.output_layer.weight, model.output_layer.bias, ttnn_module_args.output_layer
             )
+            breakpoint()
 
         return parameters
 

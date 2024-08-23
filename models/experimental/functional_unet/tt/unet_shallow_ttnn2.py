@@ -231,28 +231,63 @@ class UNetDownblock:
         x = self.conv1(x)
         x = self.conv2(x)
         residual = ttnn.experimental.tensor.sharded_to_interleaved(
-            x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat8_b
+            x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16
         )
         x = self.pool1(x)
         return x, residual
 
 
 class UNetUpblock:
-    def __init__(self, conv1, bn1, conv2, bn2, conv3, bn3, device, conv_cache={}):
+    def __init__(self, conv1, bn1, conv2, bn2, conv3, bn3, device, conv_cache={}, should_reshard=False):
         self.device = device
         self.conv1 = UNetConv2D(conv1, bn1, device, conv_cache)
         self.conv2 = UNetConv2D(conv2, bn2, device, conv_cache)
         self.conv3 = UNetConv2D(conv3, bn3, device, conv_cache)
 
-    def __call__(self, x, residual, factor, perf_mode=False):
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        self.should_reshard = should_reshard
+        if self.should_reshard:
+            parallel_config = determine_parallel_config(
+                is_1d_systolic=True,
+                batch_size=self.conv1.batch_size,
+                input_channels=self.conv1.in_channels,
+                output_height=self.conv2.input_height,
+                output_width=self.conv2.input_width,
+                output_channels=self.conv1.out_channels,
+                device=device,
+                is_out_tiled=True,
+            )
+            self.sharded_memory_config = create_sharded_memory_config_from_parallel_config(
+                tensor_shape=[
+                    1,
+                    1,
+                    self.conv1.input_width * self.conv1.input_height * self.conv1.batch_size,
+                    self.conv1.in_channels,
+                ],
+                parallel_config=parallel_config,
+                tile_size=32 if conv1.dtype == ttnn.bfloat8_b else 1,
+            )
+            logger.info(f"Created shardspec: {parallel_config}, {self.sharded_memory_config}")
 
+    def __call__(self, x, residual, factor, perf_mode=False, use_reshard=False):
+        logger.info("to layout")
+        if not perf_mode:
+            # need to convert into interleaved, then back into sharded due to pcc issues
+            # for certain tensor shape sizes, you get pcc issues when trying to convert between data layouts
+            x = ttnn.experimental.tensor.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        logger.info("upsample op and reshape")
+        x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.upsample(x, (2, 2, 1))
         x = ttnn.reshape(x, (1, 1, factor, x.shape[-1]))
 
+        logger.info("concat")
         x = unet_concat([x, residual], dim=-1, perf_mode=perf_mode)
         ttnn.deallocate(residual)
+
+        if self.should_reshard and use_reshard:
+            # x = unet_reshard(x, self.sharded_memory_config, use_reshard=use_reshard)
+            x = ttnn.to_memory_config(x, self.sharded_memory_config)
 
         logger.info(f"conv1")
         x = self.conv1(x)
@@ -325,6 +360,7 @@ class UNet:
             parameters.b5_3,
             device,
             conv_cache=self.conv_cache,
+            should_reshard=False,
         )
         self.upsample2 = UNetUpblock(
             parameters.c6,
@@ -335,6 +371,7 @@ class UNet:
             parameters.b6_3,
             device,
             conv_cache=self.conv_cache,
+            should_reshard=True,
         )
         self.upsample3 = UNetUpblock(
             parameters.c7,
@@ -345,6 +382,7 @@ class UNet:
             parameters.b7_3,
             device,
             conv_cache=self.conv_cache,
+            should_reshard=True,
         )
         self.upsample4 = UNetUpblock(
             parameters.c8,
@@ -355,6 +393,7 @@ class UNet:
             parameters.b8_3,
             device,
             conv_cache=self.conv_cache,
+            should_reshard=True,
         )
 
         self.output_layer = UNetConv2D(
@@ -394,7 +433,7 @@ class UNet:
         x = self.upsample3(x, c2_residual, nhw // 4, perf_mode=perf_mode)
 
         logger.info(f"upsample4 {x.shape} {c1_residual.shape}")
-        x = self.upsample4(x, c1_residual, nhw, perf_mode=perf_mode)
+        x = self.upsample4(x, c1_residual, nhw, perf_mode=perf_mode, use_reshard=True)
 
         logger.info("output_layer")
         x = self.output_layer(x)
