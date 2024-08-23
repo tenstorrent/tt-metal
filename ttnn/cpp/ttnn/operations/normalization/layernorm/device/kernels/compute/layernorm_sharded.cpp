@@ -13,6 +13,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "debug/dprint.h"
 
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
@@ -308,7 +309,7 @@ void MAIN {
 
             }
             cb_pop_front(cb_ex2, num_tiles_per_allgather_worker);
-            cb_push_back(cb_ex_sqr, num_tiles_per_allgather_worker);
+            cb_pop_front(cb_ex_sqr, num_tiles_per_allgather_worker);
             #endif
 
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -392,7 +393,7 @@ void MAIN {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles_bcast_cols(cb_xmm, cb_ex_global, index, 0, w);
+                mul_tiles_bcast_cols(cb_xmm, cb_ex2_global, index, 0, w);
             }
             tile_regs_commit();
 
@@ -405,7 +406,7 @@ void MAIN {
             index_subblock_w_offset += subblock_w;
         }
         index_h_offset += block_w;
-        cb_pop_front(cb_ex_global, 1);
+        cb_pop_front(cb_ex2_global, 1);
     }
     cb_push_back(cb_im, num_tiles_per_block);
 
