@@ -466,38 +466,14 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
     [
         # General weights
         ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", 128, False),
-        (
-            "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/input_tale_of_two_cities_32k.txt",
-            4 * 1024,
-            False,
-        ),
-        (
-            "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/input_tale_of_two_cities_32k.txt",
-            8 * 1024,
-            False,
-        ),
-        (
-            "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/input_tale_of_two_cities_32k.txt",
-            16 * 1024,
-            False,
-        ),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 4 * 1024, False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 8 * 1024, False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 16 * 1024, False),
         # Instruct weights
         ("models/demos/t3000/mixtral8x7b/demo/input_data_questions_prefill_128.json", 128, True),
-        (
-            "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/input_tale_of_two_cities_32k.txt",
-            4 * 1024,
-            True,
-        ),
-        (
-            "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/input_tale_of_two_cities_32k.txt",
-            8 * 1024,
-            True,
-        ),
-        (
-            "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/input_tale_of_two_cities_32k.txt",
-            16 * 1024,
-            True,
-        ),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 4 * 1024, True),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 8 * 1024, True),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 16 * 1024, True),
     ],
     ids=[
         "128-general",
