@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
+#include "layernorm_pre_all_gather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
@@ -19,9 +19,7 @@ using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn::operations::normalization {
 
 void LayerNormPreAllGather::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Must have 1 input tensor");
@@ -34,24 +32,24 @@ void LayerNormPreAllGather::validate(const std::vector<Tensor> &input_tensors) c
     TT_FATAL(tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 }
 
-std::vector<Shape> LayerNormPreAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::Shape> LayerNormPreAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
     auto output_shape = input_tensor.get_legacy_shape();
     auto padding = output_shape.padding();
     uint32_t num_tiles_w = 1;
-    if (this->norm_type == LayerNormType::LAYERNORM) {
+    if (this->norm_type == LayerNormDistributedType::LAYERNORM) {
         num_tiles_w = 2;
     }
     output_shape[3] = num_tiles_w * TILE_WIDTH;
     padding[3] = Padding::PadDimension{0, 31};
 
-    return {Shape(output_shape, padding)};
+    return {tt::tt_metal::Shape(output_shape, padding)};
 }
 
 std::vector<Tensor> LayerNormPreAllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, input_tensor.memory_config());
+    return operation::generic_create_output_tensors(*this, input_tensors, this->dtype, Layout::TILE, input_tensor.memory_config());
 }
 
 operation::ProgramWithCallbacks LayerNormPreAllGather::create_program(
@@ -66,6 +64,4 @@ operation::ProgramWithCallbacks LayerNormPreAllGather::create_program(
     );
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace ttnn::operations::normalization
