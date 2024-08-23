@@ -116,6 +116,9 @@ export PYTHONPATH=$(pwd)
 source python_env/bin/activate
 ```
 
+where `ARCH_NAME` is one of `grayskull`, `wormhole_b0`, or `blackhole`,
+depending on your Tenstorrent card type.
+
 > [!NOTE]
 >
 > Note about Python environments: You do not have to use `create_venv.sh`. If you
