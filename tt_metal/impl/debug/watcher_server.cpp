@@ -802,7 +802,7 @@ static void __attribute__((noinline)) dump(FILE *f) {
                         kernel_names[info.kernel_id].c_str(),
                         info.stack_usage,
                         stack_size);
-                } else if (info.stack_usage >= stack_size * 9 / 10) {
+                } else if (stack_size - info.stack_usage <= std::min(32, stack_size / 10)) {
                     fprintf(f, " (Close to overflow)");
                     log_warning(
                         "Watcher detected stack usage within 10\% of max on Device {} Core {}: {}! Kernel {} uses "
