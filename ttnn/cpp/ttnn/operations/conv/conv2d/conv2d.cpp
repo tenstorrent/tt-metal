@@ -74,15 +74,15 @@ ParallelConfig determine_parallel_config(
     uint32_t max_num_cores = device_grid_size[0] * device_grid_size[1];
 
     auto calculate_num_cores_nhw = [&]() {
-        if(shard_layout == TensorMemoryLayout::HEIGHT_SHARDED){
+
+        if(shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             return find_closest_largest_divisor(conv_out_2d_matrix_height_ntiles, max_num_cores);
-        }
-        else if(shard_layout == TensorMemoryLayout::BLOCK_SHARDED){
+        } else if(shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             return find_closest_largest_divisor_with_num_padding(conv_out_2d_matrix_height_ntiles, device_grid_size[0]);
-        }
-        else if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED){
+        } else if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             return 1u;
         }
+
         TT_FATAL("Invalid Shard Layout",shard_layout);
         return 0u;
     };
@@ -91,12 +91,14 @@ ParallelConfig determine_parallel_config(
         if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             CoreRangeSet grid = num_cores_to_core_range_set(num_cores_nhw, device_grid_size_coord, true);
             return grid;
-        } else if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED){
+
+        } else if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t num_cores_channels = find_closest_common_largest_divisor(
                 conv_out_2d_matrix_width_ntiles, std::ceil((double)input_channels / (double)TILE_WIDTH), max_num_cores);
              log_debug(LogOp, "Num cores for Width Sharding : {}", num_cores_channels);
             CoreRangeSet grid = num_cores_to_core_range_set(num_cores_channels, device_grid_size_coord, true);
             return grid;
+
         } else if(shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             uint32_t total_cores_for_channels =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? device_grid_size[1] : device_grid_size[0];
@@ -109,6 +111,7 @@ ParallelConfig determine_parallel_config(
             CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
             CoreRangeSet grid = CoreRangeSet({core_range});
             return grid;
+
         } else {
             TT_FATAL("Invalid Shard Layout in Conv Config", shard_layout);
             return CoreRangeSet({});
@@ -737,7 +740,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             input_tensor_post_tm.memory_config().shard_spec.value().grid,
             true);
 
-        //TODO: Implement Bypass Halo functionality.
         bool bypass_halo = (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED &&
             sliding_window_config.pad_hw_.first==0 &&
             sliding_window_config.pad_hw_.second==0
