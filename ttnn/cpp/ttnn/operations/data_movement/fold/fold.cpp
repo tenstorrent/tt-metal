@@ -143,10 +143,16 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     uint32_t n = input.shape()[0], c = input.shape()[1], h = input.shape()[2], w = input.shape()[3];
     auto padded_c = c + pad_c; // end padding only
-    auto padded_h = h + pad_h; // end padding
-    auto padded_w = w + pad_w; // end padding
+    auto padded_h = h + pad_h * 2; // front and end padding
+    auto padded_w = w + pad_w * 2; // front and end padding
     auto padded_h32 = tt::round_up(padded_h, TILE_HEIGHT);
     auto padded_w32 = tt::round_up(padded_w, TILE_HEIGHT);
+    auto pad_h_right = padded_h32 - (h + pad_h);
+    auto pad_w_right = padded_w32 - (w + pad_w);
+    auto target_h = padded_h / stride_h;
+    auto target_w = padded_w / stride_w;
+    auto target_c = padded_c * stride_h * stride_w;
+    tt::tt_metal::Array4D slice_output_shape = {n, target_h, target_w, target_c};
 
     tt::log_debug("padded_c: {}", padded_c);
     tt::log_debug("padded_h: {}", padded_h);
@@ -159,13 +165,13 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     auto shard_spec = input.shard_spec().value();
 
     // pad input tensor
-    tt::tt_metal::Array4D padded_shape = {n, padded_c, padded_h32, padded_w32};
+    tt::tt_metal::Array4D padded_shape = {n, padded_c, padded_h32, w};
     auto pad_mem_config = create_sharded_memory_config(
         ttnn::Shape(padded_shape),
         grid_size,
         shard_spec.orientation
     );
-    auto tt_output_tensor = ttnn::pad(input, padded_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0, pad_mem_config);
+    auto tt_output_tensor = ttnn::pad(input, padded_shape, tt::tt_metal::Array4D({0, 0, pad_h, 0}), 0, pad_mem_config);
 
     tt::log_debug("pad_output: {}", tt_output_tensor.shape());
 
@@ -178,6 +184,17 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3, tphw_mem_config);
 
     tt::log_debug("transpose_hw_output: {}", tt_output_tensor.shape());
+
+    // pad tensor W dim
+    tt::tt_metal::Array4D padded_shape2 = {n, padded_c, padded_h32, padded_w32};
+    auto pad_mem_config2 = create_sharded_memory_config(
+        ttnn::Shape(padded_shape2),
+        grid_size,
+        shard_spec.orientation
+    );
+    tt_output_tensor = ttnn::pad(tt_output_tensor, padded_shape2, tt::tt_metal::Array4D({0, 0, pad_w, 0}), 0, pad_mem_config2);
+
+    tt::log_debug("pad_output: {}", tt_output_tensor.shape());
 
     // transpose
     auto tphc_mem_config = create_sharded_memory_config(
@@ -222,13 +239,14 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     tt::log_debug("transpose_hc_output2: {}", tt_output_tensor.shape());
 
     std::vector<Tensor> output_tensors;
+    // override output shape
     if (output_shape.has_value()) {
         // slice
-        n = output_shape.value()[0], w = output_shape.value()[1], h = output_shape.value()[2], c = output_shape.value()[3];
+        n = output_shape.value()[0], h = output_shape.value()[1], w = output_shape.value()[2], c = output_shape.value()[3];
         tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
-        tt::tt_metal::Array4D slice_output_tensor_end = {n - 1, w - 1, h - 1, c - 1};
+        tt::tt_metal::Array4D slice_output_tensor_end = {n - 1, h - 1, w - 1, c - 1};
         auto slice_mem_config = create_sharded_memory_config(
-            ttnn::Shape(tt::tt_metal::Array4D{n, w, h, c}),
+            ttnn::Shape(tt::tt_metal::Array4D{n, h, w, c}),
             grid_size,
             shard_spec.orientation,
             override_memory_config
@@ -239,7 +257,21 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
         tt::log_debug("slice_output: {}", tt_output_tensor.shape());
     } else {
+        // slice
+        n = slice_output_shape[0], h = slice_output_shape[1], w = slice_output_shape[2], c = slice_output_shape[3];
+        tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
+        tt::tt_metal::Array4D slice_output_tensor_end = {n - 1, h - 1, w - 1, c - 1};
+        auto slice_mem_config = create_sharded_memory_config(
+            ttnn::Shape(tt::tt_metal::Array4D{n, h, w, c}),
+            grid_size,
+            shard_spec.orientation,
+            override_memory_config
+        );
+        tt_output_tensor = ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, slice_mem_config);
+
         output_tensors.emplace_back(tt_output_tensor);
+
+        tt::log_debug("slice_output: {}", tt_output_tensor.shape());
     }
 
     return output_tensors;

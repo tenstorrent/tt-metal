@@ -871,6 +871,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runtime_args_rm(const Tensor &input_tensor,
                                                                                         Tensor &output_tensor,
+                                                                                        const tt::tt_metal::Shape &input_tensor_start,
                                                                                         uint32_t num_cores_total,
                                                                                         uint32_t num_cores,
                                                                                         uint32_t num_cores_y,
@@ -899,6 +900,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
 
 
     uint32_t max_read_size = 2048;
+    auto front_pad = ttnn::Shape(input_tensor_start);
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     for(uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -928,6 +930,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
             num_sticks_per_core_read,
             num_read_per_barrier,
             curr_sticks_read,
+            front_pad[-4],
+            front_pad[-3],
+            front_pad[-2],
         };
         reader_runtime_args.insert(reader_runtime_args.end(), start_dim_offset.begin(), start_dim_offset.end());
 
@@ -945,7 +950,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
 
         for (uint32_t i = 0; i < num_sticks_per_core; ++i) {
 
-            if (curr_h < H and curr_c < C and curr_n < N) {
+            if ((curr_h >= front_pad[-2] and curr_h < (H + front_pad[-2])) and (curr_c >= front_pad[-3] and curr_c < (C + front_pad[-3])) and (curr_n >= front_pad[-4] and curr_n < (N + front_pad[-4]))) {
                 curr_sticks_read++;
             }
 
@@ -980,9 +985,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
     uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
     uint32_t NCH_padded = H_padded * C_padded * N_padded;
 
+    auto front_pad = ttnn::Shape(input_tensor_start);
+
     auto stick_size = W * a.element_size();
     auto stick_size_padded = W_padded * a.element_size();
-    auto rem_stick_size_padded = stick_size_padded - stick_size;
+    auto stick_size_padded_front = front_pad[-1] * a.element_size();
+    auto stick_size_padded_end = stick_size_padded - stick_size - stick_size_padded_front;
     uint32_t row_major_min_bytes = 16;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -1027,19 +1035,23 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
     bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size_padded);
     uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t) std::log2(stick_size_padded) : 0;
     std::vector<uint32_t> reader_ct_args = {(std::uint32_t) src0_is_dram,
-                                            (std::uint32_t) N,
-                                            (std::uint32_t) H,
-                                            (std::uint32_t) C,
+                                            (std::uint32_t) N + front_pad[-4],
+                                            (std::uint32_t) H + front_pad[-2],
+                                            (std::uint32_t) C + front_pad[-3],
                                             (std::uint32_t) stick_size,
                                             (std::uint32_t) N_padded,
                                             (std::uint32_t) H_padded,
                                             (std::uint32_t) C_padded,
                                             (std::uint32_t) stick_size_padded,
-                                            (std::uint32_t) (stick_size_padded - stick_size),
+                                            (std::uint32_t) stick_size_padded_front,
+                                            (std::uint32_t) stick_size_padded_end,
+                                            (std::uint32_t) tt::div_up(stick_size_padded, 512), // max zero size is 512B
+                                            (std::uint32_t) (stick_size_padded % 512 == 0 ? 512 : stick_size_padded % 512),
                                             (std::uint32_t) not_pad_by_zero,
                                             (std::uint32_t) packed_pad_value,
                                             (std::uint32_t) row_major_min_bytes,
-                                            (std::uint32_t) (rem_stick_size_padded / row_major_min_bytes),
+                                            (std::uint32_t) (stick_size_padded_front / row_major_min_bytes),
+                                            (std::uint32_t) (stick_size_padded_end / row_major_min_bytes),
                                             (std::uint32_t) (stick_size_padded / row_major_min_bytes),
                                             (std::uint32_t) src_stick_size_is_power_of_two,
                                             (std::uint32_t) src_stick_size_is_power_of_two ? src_log2_stick_size : stick_size};
@@ -1058,7 +1070,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
                                                         total_cores,
                                                         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    auto all_runtime_args = get_runtime_args_rm(a, output, num_cores_total, num_cores, num_cores_y, core_group_1, num_sticks_padded_per_core_group_1, core_group_2, num_sticks_padded_per_core_group_2);
+    auto all_runtime_args = get_runtime_args_rm(a, output, input_tensor_start, num_cores_total, num_cores, num_cores_y, core_group_1, num_sticks_padded_per_core_group_1, core_group_2, num_sticks_padded_per_core_group_2);
 
     for(uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -1081,7 +1093,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
     auto override_runtime_args_callback = [
             reader_kernel_id,
             writer_kernel_id,
-            compute_with_storage_grid_size
+            compute_with_storage_grid_size,
+            input_tensor_start
         ]
     (
         const void* operation,
@@ -1104,7 +1117,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
         uint32_t NCH_padded = H_padded * C_padded * N_padded;
 
         auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_padded_per_core_group_1, num_sticks_padded_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
-        auto all_runtime_args = get_runtime_args_rm(src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, num_sticks_padded_per_core_group_1, core_group_2, num_sticks_padded_per_core_group_2);
+        auto all_runtime_args = get_runtime_args_rm(src_tensor, dst_tensor, input_tensor_start, num_cores_total, num_cores, num_cores_y, core_group_1, num_sticks_padded_per_core_group_1, core_group_2, num_sticks_padded_per_core_group_2);
 
         for(uint32_t i = 0; i < num_cores_total; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -1147,6 +1160,7 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_and_repeated_values(s
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_pad_runtime_args_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
+    const tt::tt_metal::Shape &input_tensor_start,
     uint32_t num_cores_padded,
     bool row_major,
     uint32_t num_cores_x_padded,
@@ -1174,6 +1188,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val(num_cores_padded);
 
+    auto front_pad = ttnn::Shape(input_tensor_start);
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     for(uint32_t i = 0, curr_sticks_read = 0; i < num_cores_padded; i++) {
         CoreCoord core;
@@ -1188,19 +1203,27 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         // writer rt args, set on top here as interleaved version.
         std::vector<uint32_t> writer_kernel_args = {
             num_sticks_per_core_padded,
-            curr_sticks_read
+            curr_sticks_read,
+            front_pad[-4],
+            front_pad[-3],
+            front_pad[-2],
         };
         writer_kernel_args.insert(writer_kernel_args.end(), start_dim_offset.begin(), start_dim_offset.end());
 
         // figure out the start read stick id for each core, and the start id for each dim
         std::vector<int> stick_ids_per_core;
+        int front_pad_stick_id = -2;
         int pad_stick_id = -1;
         for (uint32_t i = 0; i < num_sticks_per_core_padded; ++i) {
-            if (curr_h < H and curr_c < C and curr_n < N) {
+            if ((curr_h >= front_pad[-2] and curr_h < (H + front_pad[-2])) and (curr_c >= front_pad[-3] and curr_c < (C + front_pad[-3])) and (curr_n >= front_pad[-4] and curr_n < (N + front_pad[-4]))) {
                 stick_ids_per_core.push_back(curr_sticks_read);
                 curr_sticks_read++;
             } else {
-                stick_ids_per_core.push_back(pad_stick_id);
+                if (curr_h < front_pad[-2] or curr_c < front_pad[-3] or curr_n < front_pad[-4]) {
+                    stick_ids_per_core.push_back(front_pad_stick_id);
+                } else {
+                    stick_ids_per_core.push_back(pad_stick_id);
+                }
             }
 
             curr_h++;
@@ -1217,14 +1240,16 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         start_dim_offset = {0, curr_h, curr_c, curr_n};
 
         // figure out the stick id in a shard, and the core id for the stick.
-        std::map<std::pair<float, float>, std::vector<uint32_t>> core_stick_map;
-        std::pair<float, float> prev_xy_pair;
+        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
+        auto first_core = device->worker_core_from_logical_core(CoreCoord{0, 0});
+        std::pair<uint32_t, uint32_t> prev_xy_pair = std::make_pair(first_core.x, first_core.y);
         for (uint32_t j = 0; j < num_sticks_per_core_padded; ++j) {
             int stick_id = stick_ids_per_core[j];
 
             // if it is pad stick, we need to leave a gap between the previous non-pad stick and next non-pad stick.
-            if (stick_id < 0) {
-                std::pair<float, float> xy_pair = {prev_xy_pair.first, prev_xy_pair.second + 0.5};
+            if (stick_id == -2) { // front padding
+                core_stick_map[prev_xy_pair].push_back(stick_id);
+            } else if (stick_id == -1) { // end padding
                 core_stick_map[prev_xy_pair].push_back(stick_id);
             } else {
                 uint32_t shard_id = stick_id / num_sticks_per_core_unpadded;
@@ -1240,7 +1265,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 if (worker_x_logical < num_cores_x_unpadded and worker_y_logical < num_cores_y_unpadded) {
                     auto core_physical = device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
                     // save stick id in a shard, and core coord into a map
-                    std::pair<float, float> xy_pair = row_major ? std::make_pair(core_physical.y, core_physical.x)
+                    std::pair<uint32_t, uint32_t> xy_pair = row_major ? std::make_pair(core_physical.y, core_physical.x)
                                                                         : std::make_pair(core_physical.x, core_physical.y);
                     core_stick_map[xy_pair].push_back(stick_id_in_shard);
                     prev_xy_pair = xy_pair;
@@ -1306,11 +1331,22 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
     uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
     uint32_t num_padded_sticks = H_padded * C_padded * N_padded;
 
+    auto front_pad = ttnn::Shape(input_tensor_start);
+
+    tt::log_debug("H_padded: {}", H_padded);
+    tt::log_debug("front_pad: {}", front_pad);
+
     // stick sizes
     auto stick_size_unpadded = W * a.element_size();
     auto stick_size_padded = W_padded * a.element_size();
     auto rem_stick_size_padded = stick_size_padded - stick_size_unpadded;
     uint32_t row_major_min_bytes = 16;
+
+    uint32_t zero_pad_stick_size = tt::tt_metal::find_max_divisor(stick_size_padded, 512);
+    uint32_t num_zero_pad_sticks_read = stick_size_padded / zero_pad_stick_size;
+
+    tt::log_debug("zero_pad_stick_size: {}", zero_pad_stick_size);
+    tt::log_debug("num_zero_pad_sticks_read: {}", num_zero_pad_sticks_read);
 
     // TODO: add a general case, where we can pad on any dim.
     TT_FATAL(stick_size_unpadded == stick_size_padded, "sharded pad does not support pad on last dim currently as that will cause perf degradation");
@@ -1374,12 +1410,10 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
-    if (not_pad_by_zero) {
-        uint32_t src1_cb_index = 1;
-        tt::tt_metal::CircularBufferConfig cb_src1_config = tt::tt_metal::CircularBufferConfig(row_major_min_bytes, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, row_major_min_bytes);
-        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
-    }
+    uint32_t src1_cb_index = 1;
+    tt::tt_metal::CircularBufferConfig cb_src1_config = tt::tt_metal::CircularBufferConfig(stick_size_padded, {{src1_cb_index, cb_data_format}})
+        .set_page_size(src1_cb_index, stick_size_padded);
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
@@ -1388,13 +1422,15 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
     std::vector<uint32_t> reader_ct_args = {(std::uint32_t) stick_size_padded,
                                             (std::uint32_t) shard_height_padded};
 
-    std::vector<uint32_t> writer_ct_args = {(std::uint32_t) N,
-                                            (std::uint32_t) H,
-                                            (std::uint32_t) C,
+    std::vector<uint32_t> writer_ct_args = {(std::uint32_t) N + front_pad[-4],
+                                            (std::uint32_t) H + front_pad[-2],
+                                            (std::uint32_t) C + front_pad[-3],
                                             (std::uint32_t) stick_size_padded,
                                             (std::uint32_t) N_padded,
                                             (std::uint32_t) H_padded,
                                             (std::uint32_t) C_padded,
+                                            (std::uint32_t) num_zero_pad_sticks_read,
+                                            (std::uint32_t) zero_pad_stick_size,
                                             (std::uint32_t) not_pad_by_zero,
                                             (std::uint32_t) packed_pad_value,
                                             (std::uint32_t) row_major_min_bytes,
@@ -1415,6 +1451,7 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
     auto all_runtime_args = get_pad_runtime_args_rm_sharded(
         a,
         output,
+        input_tensor_start,
         num_cores_padded,
         row_major,
         num_cores_x_padded,
