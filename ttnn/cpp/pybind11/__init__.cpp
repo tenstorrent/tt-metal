@@ -26,7 +26,7 @@ PYBIND11_MODULE(_ttnn, module) {
     module.doc() = "Python bindings for TTNN";
 
     auto m_graph = module.def_submodule("graph", "Contains graph capture functions");
-    ttnn::py_graph_module(m_graph);
+    ttnn::graph::py_graph_module(m_graph);
 
     auto m_deprecated = module.def_submodule("deprecated", "Contains deprecated tt_lib bindings for tensor, device, profiler");
     tt::bind_deprecated(m_deprecated);
@@ -57,7 +57,15 @@ PYBIND11_MODULE(_ttnn, module) {
 
     module.attr("CONFIG") = &ttnn::CONFIG;
 
-    module.def("get_operation_id", []() { return ttnn::OPERATION_ID; }, "Get operation id");
-    module.def("set_operation_id", [](int operation_id) { ttnn::OPERATION_ID = operation_id; }, "Set operation id");
-    module.def("increment_operation_id", []() { ttnn::OPERATION_ID++; }, "Increment operation id");
+    module.def("get_python_operation_id", ttnn::get_python_operation_id, "Get operation id");
+    module.def("set_python_operation_id", ttnn::set_python_operation_id, "Set operation id");
+    module.def("increment_python_operation_id", ttnn::increment_python_operation_id, "Increment operation id");
+
+    module.def("get_tensor_id", ttnn::get_tensor_id, "Get tensor id");
+    module.def("set_tensor_id", ttnn::set_tensor_id, "Set tensor id");
+    module.def("increment_tensor_id", ttnn::increment_tensor_id, "Increment tensor id");
+
+    module.def("get_device_operation_id", ttnn::get_device_operation_id, "Get device operation id");
+    module.def("set_device_operation_id", ttnn::set_device_operation_id, "Set device operation id");
+    module.def("increment_device_operation_id", ttnn::increment_device_operation_id, "Increment device operation id");
 }

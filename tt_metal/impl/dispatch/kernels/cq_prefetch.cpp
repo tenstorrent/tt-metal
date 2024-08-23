@@ -871,7 +871,7 @@ uint32_t process_stall(uint32_t cmd_ptr) {
 
     DEBUG_STATUS("PSW");
     volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(downstream_sync_sem_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(downstream_sync_sem_id));
     uint32_t heartbeat = 0;
     while (*sem_addr != count) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, CQ_PREFETCH_CMD_BARE_MIN_SIZE);
@@ -1216,7 +1216,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
         // prefetch_h stalls sending commands to prefetch_d until notified by dispatch_d that the exec_buf is done
         // exec_buf completing on dispatch_h will free the pages and allow sending again
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(my_downstream_cb_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_downstream_cb_sem_id));
         noc_semaphore_inc(get_noc_addr_helper(my_noc_xy, (uint32_t)sem_addr), -downstream_cb_pages);
 
         // OK to continue prefetching once the page credits are returned
@@ -1389,7 +1389,7 @@ void kernel_main_d() {
     // TODO: This should be replaced with a signal similar to what packetized
     // components use.
     DPRINT << "prefetch_d done" << ENDL();
-    noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore(upstream_cb_sem_id)), 0x80000000);
+    noc_semaphore_inc(get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_cb_sem_id)), 0x80000000);
 }
 
 void kernel_main_hd() {
@@ -1415,9 +1415,6 @@ void kernel_main_hd() {
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
     upstream_total_acquired_page_count = 0;
-
-    volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(my_downstream_cb_sem_id));
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();

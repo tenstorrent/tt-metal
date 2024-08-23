@@ -21,10 +21,6 @@ from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 
 
 class TtFalconRotaryEmbedding(torch.nn.Module):
-    """
-    See FalconRotaryEmbedding from hf_modeling_falcon.py
-    """
-
     def __init__(
         self,
         device_mesh,

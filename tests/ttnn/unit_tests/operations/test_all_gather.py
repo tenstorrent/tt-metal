@@ -9,6 +9,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 import itertools
+from ttnn import ShardTensorToMesh
 
 
 def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
@@ -366,6 +367,60 @@ def test_all_gather_on_t3000_post_commit(
 
 
 def run_line_all_gather(
+    t3k_device_mesh,
+    num_devices,
+    input_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    num_iters=1,
+):
+    if t3k_device_mesh.get_num_devices() != 8:
+        pytest.skip("Not T3000!")
+
+    for device in t3k_device_mesh.get_devices():
+        device.enable_async(enable_async)
+
+    logger.info(f"Input shape: {input_shape}")
+    logger.info(f"dim: {dim}")
+
+    (is_known_failure, message) = is_unsupported_case(
+        input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout
+    )
+    if is_known_failure:
+        pytest.skip(f"Skipping unsupported case {message}.")
+
+    logger.info(f"Input shape: {input_shape}")
+    logger.info(f"dim: {dim}")
+
+    input_tensor = torch.rand(input_shape).bfloat16()
+
+    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=dim))
+    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_device_mesh)
+
+    for i in range(num_iters):
+        tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
+
+        logger.info(f"Done iteration {i}")
+
+    for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        if input_dtype == ttnn.bfloat16:
+            eq, output = comp_equal(tt_output_tensor, input_tensor)
+        else:
+            eq, output = comp_pcc(tt_output_tensor, input_tensor)
+        if not eq:
+            logger.error(f"output mismatch for tensor {i}")
+        assert eq, f"{i} FAILED: {output}"
+
+
+# This run function is deprecated and is only intended to be used by 2-link tests on t3k
+def run_line_all_gather_deprecated(
     all_devices,
     num_devices,
     input_shape,
@@ -430,7 +485,7 @@ def run_line_all_gather(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        (4, 2, [1, 4, 32, 3584], 1, ttnn.TILE_LAYOUT),
+        # (4, 2, [1, 4, 32, 3584], 1, ttnn.TILE_LAYOUT),
         (8, 1, [1, 8, 32, 2048], 1, ttnn.TILE_LAYOUT),
         (8, 1, [1, 8, 32, 4096], 1, ttnn.TILE_LAYOUT),
         # (4, 1, [4, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT), # https://github.com/tenstorrent/tt-metal/issues/9686
@@ -462,7 +517,7 @@ def run_line_all_gather(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_post_commit(
-    all_devices,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -476,6 +531,64 @@ def test_line_all_gather_on_t3000_post_commit(
     num_iters=1,
 ):
     run_line_all_gather(
+        t3k_device_mesh,
+        num_devices,
+        input_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
+        enable_async,
+        num_iters,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links, input_shape, dim, layout",
+    [
+        (
+            4,
+            2,
+            [1, 4, 32, 3584],
+            1,
+            ttnn.TILE_LAYOUT,
+        ),  # test cases with num_links = 2 is currently not supported by new mesh fixture
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("enable_async", [True, False])
+def test_line_all_gather_on_t3000_post_commit_two_link(
+    all_devices,
+    num_devices,
+    input_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    num_iters=1,
+):
+    run_line_all_gather_deprecated(
         all_devices,
         num_devices,
         input_shape,
@@ -500,7 +613,7 @@ def test_line_all_gather_on_t3000_post_commit(
         (8, 1, [8, 1, 33, 256], 0, ttnn.ROW_MAJOR_LAYOUT),
         # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),
         (8, 1, [8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT),
-        (4, 2, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),
+        # (4, 2, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),
         (8, 1, [8, 8, 256, 384], 1, ttnn.TILE_LAYOUT),
         (4, 1, [8, 5, 13, 384], 3, ttnn.ROW_MAJOR_LAYOUT),
         (8, 1, [8, 5, 13, 512], 3, ttnn.ROW_MAJOR_LAYOUT),
@@ -525,7 +638,7 @@ def test_line_all_gather_on_t3000_post_commit(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_nightly(
-    all_devices,
+    t3k_device_mesh,
     num_devices,
     input_shape,
     dim,
@@ -539,7 +652,7 @@ def test_line_all_gather_on_t3000_nightly(
     num_iters=1,
 ):
     run_line_all_gather(
-        all_devices,
+        t3k_device_mesh,
         num_devices,
         input_shape,
         dim,

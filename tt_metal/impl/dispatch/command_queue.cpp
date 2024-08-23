@@ -331,7 +331,7 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
 }
 
-void EnqueueProgramCommand::assemble_preamble_commands(uint32_t tensix_l1_config_base, uint32_t eth_l1_config_base) {
+void EnqueueProgramCommand::assemble_preamble_commands(std::vector<ConfigBufferEntry>& kernel_config_addrs) {
     constexpr uint32_t uncached_cmd_sequence_sizeB =
         CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_SET_WRITE_OFFSET
 
@@ -339,8 +339,17 @@ void EnqueueProgramCommand::assemble_preamble_commands(uint32_t tensix_l1_config
         HostMemDeviceCommand(uncached_cmd_sequence_sizeB);
 
     // Send write offsets
-    this->cached_program_command_sequences[program.id].preamble_command_sequence.add_dispatch_set_write_offsets(
-        0, tensix_l1_config_base, eth_l1_config_base);
+    if (hal.get_programmable_core_type_count() >= 2) {
+        this->cached_program_command_sequences[program.id].preamble_command_sequence.add_dispatch_set_write_offsets(
+            0,
+            kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)].addr,
+            kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)].addr);
+    } else {
+        this->cached_program_command_sequences[program.id].preamble_command_sequence.add_dispatch_set_write_offsets(
+            0,
+            kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)].addr,
+            0);
+    }
 }
 
 void EnqueueProgramCommand::assemble_stall_commands(bool prefetch_stall) {
@@ -696,7 +705,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands() {
 }
 
 void EnqueueProgramCommand::assemble_device_commands(
-    bool is_cached, uint32_t tensix_l1_kernel_config_base, uint32_t eth_l1_kernel_config_base) {
+    bool is_cached, std::vector<ConfigBufferEntry>& kernel_config_addrs) {
     auto& cached_program_command_sequence = this->cached_program_command_sequences[this->program.id];
     if (not is_cached) {
         // Calculate size of command and fill program indices of data to update
@@ -986,7 +995,9 @@ void EnqueueProgramCommand::assemble_device_commands(
             kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
             kernel_group.launch_msg.kernel_config.dispatch_core_x = this->dispatch_core.x;
             kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
-            kernel_group.launch_msg.kernel_config.kernel_config_base = tensix_l1_kernel_config_base;
+            for (uint32_t i = 0; i < kernel_config_addrs.size(); i++) {
+                kernel_group.launch_msg.kernel_config.kernel_config_base[i] = kernel_config_addrs[i].addr;
+            }
             kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
             const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
@@ -1019,7 +1030,9 @@ void EnqueueProgramCommand::assemble_device_commands(
                 kernel_group.launch_msg.kernel_config.mode = DISPATCH_MODE_DEV;
                 kernel_group.launch_msg.kernel_config.dispatch_core_x = this->dispatch_core.x;
                 kernel_group.launch_msg.kernel_config.dispatch_core_y = this->dispatch_core.y;
-                kernel_group.launch_msg.kernel_config.kernel_config_base = eth_l1_kernel_config_base;
+                for (uint32_t i = 0; i < kernel_config_addrs.size(); i++) {
+                    kernel_group.launch_msg.kernel_config.kernel_config_base[i] = kernel_config_addrs[i].addr;
+                }
                 kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
                 const void* launch_message_data = (const launch_msg_t*)(&kernel_group.launch_msg);
                 for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
@@ -1051,18 +1064,21 @@ void EnqueueProgramCommand::assemble_device_commands(
 
         // Semaphores
         // Multicast Semaphore Cmd
+        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         for (uint32_t i = 0; i < num_multicast_semaphores; ++i) {
             uint32_t curr_sub_cmd_idx = 0;
             for (const auto& [num_sub_cmds_in_cmd, multicast_sem_payload_sizeB] : multicast_sem_payload[i]) {
                 program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
                     num_sub_cmds_in_cmd,
-                    multicast_sem_dst_size[i].first,
+                    multicast_sem_dst_size[i].first + program.get_program_config(index).sem_offset,
                     multicast_sem_dst_size[i].second,
                     multicast_sem_payload_sizeB,
                     multicast_sem_sub_cmds[i],
                     multicast_sem_data[i],
                     this->packed_write_max_unicast_sub_cmds,
-                    curr_sub_cmd_idx);
+                    curr_sub_cmd_idx,
+                    false,
+                    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 for (auto &data_and_size : multicast_sem_data[i]) {
                     RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
@@ -1071,18 +1087,21 @@ void EnqueueProgramCommand::assemble_device_commands(
         }
 
         // Unicast Semaphore Cmd
+        index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
         for (uint32_t i = 0; i < num_unicast_semaphores; ++i) {
             uint32_t curr_sub_cmd_idx = 0;
             for (const auto& [num_sub_cmds_in_cmd, unicast_sem_payload_sizeB] : unicast_sem_payload[i]) {
                 program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
                     num_sub_cmds_in_cmd,
-                    unicast_sem_dst_size[i].first,
+                    unicast_sem_dst_size[i].first + program.get_program_config(index).sem_offset,
                     unicast_sem_dst_size[i].second,
                     unicast_sem_payload_sizeB,
                     unicast_sem_sub_cmds[i],
                     unicast_sem_data[i],
                     this->packed_write_max_unicast_sub_cmds,
-                    curr_sub_cmd_idx);
+                    curr_sub_cmd_idx,
+                    false,
+                    DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 for (auto &data_and_size : unicast_sem_data[i]) {
                     RecordDispatchData(program, DISPATCH_DATA_SEMAPHORE, data_and_size.second);
@@ -1091,6 +1110,7 @@ void EnqueueProgramCommand::assemble_device_commands(
         }
 
         // CB Configs commands
+        index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
         if (num_multicast_cb_sub_cmds > 0) {
             uint32_t curr_sub_cmd_idx = 0;
             cached_program_command_sequence.cb_configs_payloads.reserve(num_multicast_cb_sub_cmds);
@@ -1099,13 +1119,15 @@ void EnqueueProgramCommand::assemble_device_commands(
                 uint32_t write_offset_bytes = program_command_sequence.write_offset_bytes();
                 program_command_sequence.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
                     num_sub_cmds_in_cmd,
-                    CIRCULAR_BUFFER_CONFIG_BASE,
+                    program.get_program_config(index).cb_offset,
                     cb_config_size_bytes,
                     mcast_cb_payload_sizeB,
                     multicast_cb_config_sub_cmds,
                     multicast_cb_config_data,
                     this->packed_write_max_unicast_sub_cmds,
-                    curr_sub_cmd_idx);
+                    curr_sub_cmd_idx,
+                    false,
+                    DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
                 for (auto &data_and_size : multicast_cb_config_data) {
                     RecordDispatchData(program, DISPATCH_DATA_CB_CONFIG, data_and_size.second);
                 }
@@ -1223,11 +1245,10 @@ void EnqueueProgramCommand::assemble_device_commands(
         for (auto& go_signal : cached_program_command_sequence.go_signals) {
             go_signal->kernel_config.dispatch_core_x = this->dispatch_core.x;
             go_signal->kernel_config.dispatch_core_y = this->dispatch_core.y;
-            if (go_signal_count < program.tensix_go_signal_count_) {
-                go_signal->kernel_config.kernel_config_base = tensix_l1_kernel_config_base;
-            } else {
-                go_signal->kernel_config.kernel_config_base = eth_l1_kernel_config_base;
+            for (uint32_t i = 0; i < kernel_config_addrs.size(); i++) {
+                go_signal->kernel_config.kernel_config_base[i] = kernel_config_addrs[i].addr;
             }
+
             go_signal_count++;
             go_signal->kernel_config.host_assigned_id = program.get_runtime_id();
         }
@@ -1248,15 +1269,14 @@ void EnqueueProgramCommand::process() {
     this->manager.get_config_buffer_mgr().free(reservation.first.sync_count);
     this->manager.get_config_buffer_mgr().alloc(
         this->expected_num_workers_completed + program.program_transfer_info.num_active_cores);
-    // TODO: fix hard coded values below
-    uint32_t tensix_l1_write_offset = reservation.second[0].addr;
-    uint32_t eth_l1_write_offset = reservation.second[1].addr;
+
+    std::vector<ConfigBufferEntry>& kernel_config_addrs = reservation.second;
 
     // Calculate all commands size and determine how many fetch q entries to use
     // Preamble, some waits and stalls
     // can be written directly to the issue queue
     if (not is_cached) {
-        this->assemble_preamble_commands(tensix_l1_write_offset, eth_l1_write_offset);
+        this->assemble_preamble_commands(kernel_config_addrs);
         this->assemble_stall_commands(true);
         // Runtime Args Command Sequence
         this->assemble_runtime_args_commands();
@@ -1280,14 +1300,18 @@ void EnqueueProgramCommand::process() {
             wait_count_offset, &this->expected_num_workers_completed, sizeof(uint32_t));
 
         this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
-            tensix_l1_write_offset_offset, &tensix_l1_write_offset, sizeof(uint32_t));
-        this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
-            eth_l1_write_offset_offset, &eth_l1_write_offset, sizeof(uint32_t));
+            tensix_l1_write_offset_offset, &kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
+            sizeof(uint32_t));
+        if (hal.get_programmable_core_type_count() >= 2) {
+             this->cached_program_command_sequences[program.id].preamble_command_sequence.update_cmd_sequence(
+             eth_l1_write_offset_offset, &kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)],
+                 sizeof(uint32_t));
+        }
     }
     RecordProgramRun(program);
 
     // Main Command Sequence
-    this->assemble_device_commands(is_cached, tensix_l1_write_offset, eth_l1_write_offset);
+    this->assemble_device_commands(is_cached, kernel_config_addrs);
 
     const auto& cached_program_command_sequence = this->cached_program_command_sequences[program.id];
 
