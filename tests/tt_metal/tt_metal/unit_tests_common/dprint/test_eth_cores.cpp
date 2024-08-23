@@ -94,7 +94,7 @@ TEST_F(DPrintFixture, TestPrintEthCores) {
 }
 TEST_F(DPrintFixture, TestPrintIEthCores) {
     if (!this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "Skip due to #7771");
+        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
     for (Device* device : this->devices_) {
