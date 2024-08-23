@@ -1,0 +1,13 @@
+version: '3'
+
+services:
+  tt-metal:
+    container_name: tt-metal
+    build:
+      context: .
+      dockerfile: dockerfile/ubuntu-22.04-amd64.Dockerfile
+    volumes:
+      - /dev/tenstorrent:/dev/tenstorrent
+      - /dev/hugepages-1G:/dev/hugepages-1G
+    privileged: true
+    tty: true
