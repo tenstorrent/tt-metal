@@ -96,6 +96,8 @@ void kernel_main() {
         .bank_base_address = in3_tensor_addr,
         .page_size = bias_single_tile_size_bytes,
         .data_format = bias_data_format};
+#else
+    rt_args_idx += 2; // Skip over placeholders
 #endif
 
     constexpr bool fuse_op = (bool)get_compile_time_arg_val(26);

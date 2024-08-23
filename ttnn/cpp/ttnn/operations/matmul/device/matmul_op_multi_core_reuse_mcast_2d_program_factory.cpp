@@ -990,7 +990,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back((std::uint32_t)bias_buffer->address());
                     mm_in1_sender_writer_args.push_back(
                         (std::uint32_t)per_core_N * in1_idx);  // in1_tensor_start_tile_id
-                } else if (!fuse_op) { // Don't push the place holder if fused op is present.
+                } else {
                     mm_in1_sender_writer_args.push_back(0);  // Placeholder; not used
                     mm_in1_sender_writer_args.push_back(0);  // Placeholder; not used
                 }
