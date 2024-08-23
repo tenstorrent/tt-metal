@@ -32,6 +32,11 @@ ENV PYTHON_ENV_DIR=${TT_METAL_INFRA_DIR}/tt-metal/python_env
 # RUN python3 -m venv $PYTHON_ENV_DIR
 # ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
 
+# Create directories for infra
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
+
 # Copy requirements from tt-metal folders with requirements.txt docs
 COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 # Copy requirements from tt-metal folders for sweeps (requirements-sweeps.txt)
