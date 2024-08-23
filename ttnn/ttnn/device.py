@@ -182,4 +182,26 @@ def is_grayskull(device):
     return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
 
 
+def SetDefaultDevice(device):
+    ttnn._ttnn.device.SetDefaultDevice(device)
+
+
+def GetDefaultDevice():
+    return ttnn._ttnn.device.GetDefaultDevice()
+
+
+def format_input_tensor(input, device, padded_shape, pad_value, target_layout, target_mem_config=None):
+    return ttnn._ttnn.device.format_input_tensor(
+        input, device, padded_shape, pad_value, target_layout, target_mem_config
+    )
+
+
+def format_output_tensor(output, shape, device, target_layout, target_mem_config=None):
+    return ttnn._ttnn.device.format_output_tensor(output, shape, device, target_layout, target_mem_config)
+
+
+def pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w):
+    return ttnn._ttnn.device.pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w)
+
+
 __all__ = []

@@ -131,7 +131,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
-        device = AutoFormat::GetDefaultDevice();
+        device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {
         device = input.device();

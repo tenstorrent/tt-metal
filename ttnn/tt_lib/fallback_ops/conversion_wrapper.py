@@ -8,6 +8,7 @@ import torch
 from functools import wraps
 from loguru import logger
 from contextlib import contextmanager
+import ttnn
 
 
 # Log only once to not pollute output
