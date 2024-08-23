@@ -4851,3 +4851,77 @@ def unary_remainder_bw(
     t2 = ttnn.remainder_bw(t0, t1, scalar, memory_config=output_mem_config)[0]
 
     return ttnn_tensor_to_torch(t2)
+
+
+def topk(
+    x,
+    *args,
+    dim,
+    k,
+    largest,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1_values, t1_indices = ttnn.topk(t0, k=k, dim=dim, largest=largest, sorted=True)
+    t1_values = ttnn_tensor_to_torch(t1_values)
+    t1_indices = ttnn_tensor_to_torch(t1_indices).to(torch.int64)
+    t1_gather_values = torch.gather(x, dim, t1_indices)
+
+    return [t1_values, t1_gather_values]
+
+
+def eltwise_trunc(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.trunc(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_frac(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.frac(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
+
+
+def eltwise_ceil(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.ceil(t0, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
