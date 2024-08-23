@@ -23,13 +23,7 @@ test_sweep_args = [
     #     ttnn.DRAM_MEMORY_CONFIG,
     #     ttnn.DRAM_MEMORY_CONFIG,
     # ),
-    (
-        (1, 4, 1024, 1024),
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-        ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.DRAM_MEMORY_CONFIG
-    ),
+    ((1, 4, 1024, 1024), ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
 ]
 
 all_num_call_to_stack = [20]  # For 10 and more test  execution spills to dispatch
