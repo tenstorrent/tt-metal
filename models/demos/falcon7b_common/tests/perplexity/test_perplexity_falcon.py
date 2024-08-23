@@ -43,9 +43,6 @@ def test_perplexity(
     device_mesh,
     use_program_cache,
 ):
-    if llm_mode == "decode" and max_seq_len == 2048:
-        pytest.skip("Skipping decode-seq2048 due to Issue #10365")
-
     assert is_wormhole_b0(), "This test is only for Wormhole B0"
 
     run_test_perplexity(
