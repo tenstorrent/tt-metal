@@ -65,7 +65,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
 
     profiler.start("compile")
     ttnn.wait_for_event(1, op_event)
-    ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+    ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res, 1)
     ttnn.record_event(1, write_event)
     _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
     profiler.end("compile")
@@ -73,7 +73,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
 
     for iter in range(0, num_warmup_iterations):
         ttnn.wait_for_event(1, op_event)
-        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res, 1)
         ttnn.record_event(1, write_event)
         _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
         ttnn.experimental.device.DumpDeviceProfiler(device)
@@ -82,7 +82,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
         ttnn.wait_for_event(1, op_event)
-        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res, 1)
         ttnn.record_event(1, write_event)
         outputs.append(tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=False))
     ttnn.synchronize_device(device)
@@ -109,7 +109,7 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
     )
     # Compile
     profiler.start("compile")
-    ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res)
+    ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res)
     tt_resnet50(tt_image_res).cpu(blocking=True)
     profiler.end("compile")
     ttnn.experimental.device.DumpDeviceProfiler(device)
@@ -121,7 +121,7 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
     ttnn.experimental.device.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
-        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res)
+        ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res)
         ttnn.experimental.device.ReplayTrace(device, 0, tid, False)
         _ = tt_output_res.cpu(blocking=True)
         ttnn.experimental.device.DumpDeviceProfiler(device)
@@ -129,7 +129,7 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
-        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res)
+        ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res)
         ttnn.experimental.device.ReplayTrace(device, 0, tid, False)
         outputs.append(tt_output_res.cpu(blocking=False))
     ttnn.synchronize_device(device)
@@ -178,7 +178,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     # Compile
     profiler.start("compile")
     ttnn.wait_for_event(1, op_event)
-    ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+    ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res, 1)
     ttnn.record_event(1, write_event)
 
     ttnn.wait_for_event(0, write_event)
@@ -192,7 +192,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
 
     # Capture
     ttnn.wait_for_event(1, op_event)
-    ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+    ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res, 1)
     ttnn.record_event(1, write_event)
 
     ttnn.wait_for_event(0, write_event)
@@ -210,7 +210,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
 
     for iter in range(0, num_warmup_iterations):
         ttnn.wait_for_event(1, op_event)
-        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res, 1)
         ttnn.record_event(1, write_event)
 
         ttnn.wait_for_event(0, write_event)
@@ -225,7 +225,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
         ttnn.wait_for_event(1, op_event)
-        ttnn.experimental.tensor.write_tensor(tt_inputs, tt_image_res, 1)
+        ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res, 1)
         ttnn.record_event(1, write_event)
 
         ttnn.wait_for_event(0, write_event)

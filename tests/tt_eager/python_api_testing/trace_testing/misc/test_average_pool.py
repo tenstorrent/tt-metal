@@ -81,7 +81,7 @@ def test_run_average_pool(act_shape, dtype, device, use_program_cache, enable_as
         act_shape_padded = shape_padded(act_shape)
         if act_shape != act_shape_padded:
             ttact_updated = ttact_updated.pad_to_tile(0.0)
-        ttnn.experimental.tensor.write_tensor(ttact_updated, ttact_res)
+        ttnn.copy_host_to_device_tensor(ttact_updated, ttact_res)
 
         logger.info(f"Running iteration {iter}")
         ttnn.experimental.device.ReplayTrace(device, 0, tid, True)
