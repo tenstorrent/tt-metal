@@ -85,3 +85,6 @@ CoreCoord = ttnn._ttnn.deprecated.tensor.CoreCoord
 UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
 UnaryOpType = ttnn._ttnn.activation.UnaryOpType
 BinaryOpType = ttnn._ttnn.operations.binary.BinaryOpType
+
+BcastOpMath = ttnn._ttnn.types.BcastOpMath
+BcastOpDim = ttnn._ttnn.types.BcastOpDim

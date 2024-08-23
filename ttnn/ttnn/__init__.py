@@ -139,6 +139,8 @@ from ttnn.types import (
     UnaryWithParam,
     UnaryOpType,
     BinaryOpType,
+    BcastOpMath,
+    BcastOpDim,
 )
 
 from ttnn.device import (

@@ -10,6 +10,7 @@
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
 
 namespace ttnn::operations::unary{
 

@@ -468,7 +468,6 @@ void TensorModule(py::module& m_tensor) {
         )doc");
 
     detail::TensorModulePyTensor(m_tensor);
-    detail::TensorModuleDMOPs(m_tensor);
 }
 
 }  // namespace tt::tt_metal

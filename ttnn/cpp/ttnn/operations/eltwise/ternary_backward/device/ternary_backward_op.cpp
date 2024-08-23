@@ -7,7 +7,7 @@
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 
 #include "tt_metal/common/constants.hpp"

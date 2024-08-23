@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
@@ -11,15 +11,15 @@
 #include "tt_metal/detail/util.hpp"
 
 
+using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::constants;
+using namespace	tt::constants;
 
 
-namespace tt {
 
-namespace tt_metal {
-
+namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math/*, BcastOpDim bcast_dim*/){
+
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();
     uint32_t N  = ashape.rank() >= 4 ? ashape[-4] : 1, C  = ashape.rank() >= 3 ? ashape[-3] : 1, H  = ashape[-2], W  = ashape[-1];
@@ -40,9 +40,9 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
     auto out_shard_spec = output.shard_spec().value();
     TT_FATAL(out_shard_spec.num_cores() == ncores, "Output tensor should have same number of cores {} as input tensor {}", out_shard_spec.num_cores(), ncores);
 
-    DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    auto act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    auto b_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    auto out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
     uint32_t input1_tile_size = tt::tt_metal::detail::TileSize(b_df);
@@ -101,7 +101,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_h_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_h_sharded.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -109,7 +109,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
     //const char* compute_name = bcast_op_utils::get_compute_name(BcastOpDim::H));
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/compute/bcast_h.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
     );
@@ -254,6 +254,4 @@ operation::ProgramWithCallbacks bcast_sharded_h(const Tensor &a, const Tensor &b
 }
 
 
-}  // namespace tt_metal
-
-}  // namespace tt
+} // ttnn::operations::data_movement
