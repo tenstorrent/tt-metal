@@ -24,8 +24,6 @@
 
 uint8_t noc_index = NOC_INDEX;
 
-
-tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 void kernel_launch() {
 
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
