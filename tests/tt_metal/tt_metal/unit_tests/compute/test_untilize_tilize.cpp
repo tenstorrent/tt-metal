@@ -38,8 +38,8 @@ enum TilizeType : uint8_t {
 
 // TilizeA_B takes 2 input source vectors instead of one
 using GoldenFunc = std::variant<
-    std::function<std::vector<uint32_t>(const std::vector<uint32_t>&, const std::vector<uint32_t>&)>,
-    std::function<std::vector<uint32_t>(const std::vector<uint32_t>&, const std::vector<uint32_t>&, const std::vector<uint32_t>&)> >;
+    std::function<std::vector<uint32_t>(const std::vector<uint32_t>&, const GoldenConfig &config)>,
+    std::function<std::vector<uint32_t>(const std::vector<uint32_t>&, const std::vector<uint32_t>&, const GoldenConfig &config)> >;
 
 struct TestConfig {
     bool short_init = false;
@@ -147,6 +147,10 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
         string untilize_type = magic_enum::enum_name(test_config.untilize_type.value()).data();
         std::transform(untilize_type.begin(), untilize_type.end(), untilize_type.begin(), [](unsigned char c){ return std::tolower(c); });
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/" + untilize_type + "_untilize.cpp";
+        if (test_config.untilize_type == UntilizeType::DST) {
+            compute_kernel_args.push_back(test_config.num_faces_per_tile);
+            compute_kernel_args.push_back(test_config.face_r_dim);
+        }
     } else if (test_config.tilize_type.has_value()) {
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/";
         compute_kernel += (test_config.tilize_type == TilizeType::UNPACK_A) ? "tilize.cpp" : "unpack_tilizeA_B.cpp";
@@ -218,16 +222,22 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
     vector<uint32_t> golden;
-    vector<uint32_t> shape = {test_config.num_tiles_r * 32, test_config.num_tiles_c * 32};
+    GoldenConfig config = {
+        .num_tiles_r_dim = test_config.num_tiles_r,
+        .num_tiles_c_dim = test_config.num_tiles_c,
+        .face_r_dim = test_config.face_r_dim,
+        .face_c_dim = 16,
+        .num_faces = test_config.num_faces_per_tile,
+    };
     bool pass = true;
 
     //Call golden function with correct number of parameters depending on test
     std::visit([&](auto&& func) {
     using FuncType = std::decay_t<decltype(func)>;
-        if constexpr (std::is_same_v<FuncType, std::function<std::vector<uint32_t>(const std::vector<uint32_t>&, const std::vector<uint32_t>&)> >) {
-            golden = func(src0_vec, shape);
-        } else if constexpr (std::is_same_v<FuncType, std::function<std::vector<uint32_t>(const std::vector<uint32_t>&, const std::vector<uint32_t>&, const std::vector<uint32_t>&)> >) {
-            golden = func(src0_vec, src1_vec, shape);
+        if constexpr (std::is_same_v<FuncType, std::function<std::vector<uint32_t>(const std::vector<uint32_t>&, const GoldenConfig &config)> >) {
+            golden = func(src0_vec, config);
+        } else if constexpr (std::is_same_v<FuncType, std::function<std::vector<uint32_t>(const std::vector<uint32_t>&, const std::vector<uint32_t>&, const GoldenConfig &config)> >) {
+            golden = func(src0_vec, src1_vec, config);
         } else {
             log_fatal("Invalid golden function type");
         }
@@ -258,6 +268,10 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
 }
 
 } // namespace unit_tests::compute::tilize
+
+/**************************************
+Following tests are for Unpack Tilize
+***************************************/
 
 TEST_F(DeviceFixture, ComputeUnpackTilize) {
     vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
@@ -306,6 +320,10 @@ TEST_F(DeviceFixture, ComputeUnpackTilizeShortInit) {
     }
 }
 
+/**************************************
+Following tests are for Unpack Untilize
+***************************************/
+
 TEST_F(DeviceFixture, ComputeUnpackUntilize) {
     vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
@@ -321,6 +339,25 @@ TEST_F(DeviceFixture, ComputeUnpackUntilize) {
     }
 }
 
+TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit) {
+    vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
+    for(auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .short_init = true,
+            .input_single_tile_size = 2 * 1024,
+            .output_single_tile_size = 2 * 1024,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
+            .golden_function = unit_tests::compute::gold_standard_untilize
+        };
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+    }
+}
+
+/**************************************
+Following tests are for pack untilize
+***************************************/
 TEST_F(DeviceFixture, ComputePackUntilize) {
     vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
@@ -353,33 +390,38 @@ TEST_F(DeviceFixture, ComputePackUntilizeShortInit) {
 
 }
 
-TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit) {
+TEST_F(DeviceFixture, ComputePackUntilizeDst) {
     vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         unit_tests::compute::tilize::TestConfig test_config = {
-            .short_init = true,
             .input_single_tile_size = 2 * 1024,
             .output_single_tile_size = 2 * 1024,
             .num_tiles_r = num_tile[0],
             .num_tiles_c = num_tile[1],
-            .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
+            .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
             .golden_function = unit_tests::compute::gold_standard_untilize
         };
         unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
     }
 }
 
-TEST_F(DeviceFixture, ComputePackUntilizeDst) {
-    vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
-    for(auto num_tile : num_tiles) {
-        if (arch_ == tt::ARCH::BLACKHOLE) {
-            GTEST_SKIP();
-        }
+//Tests pack_untilize with tiny tile dims.
+//Row dim 1x32, which is faces = 2, rows = 1
+//Row dim 1x16, which is faces = 1, rows = 1
+TEST_F(DeviceFixture, ComputePackUntilizeDstTinyTile) {
+    vector<vector<uint32_t> > test_config_values = {{1, 1, 1, 1}, {1, 1, 2, 1}, {1, 2, 2, 1}};
+    uint32_t face_c_dim = 16;
+    for(auto test_config_value : test_config_values) {
+        uint32_t num_faces_per_tile = test_config_value[2];
+        uint32_t face_r_dim = test_config_value[3];
         unit_tests::compute::tilize::TestConfig test_config = {
+            .short_init = true,
             .input_single_tile_size = 2 * 1024,
-            .output_single_tile_size = 2 * 1024,
-            .num_tiles_r = num_tile[0],
-            .num_tiles_c = num_tile[1],
+            .output_single_tile_size = 2 * num_faces_per_tile * face_r_dim * face_c_dim,
+            .num_tiles_r = test_config_value[0],
+            .num_tiles_c = test_config_value[1],
+            .num_faces_per_tile = num_faces_per_tile,
+            .face_r_dim = face_r_dim,
             .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
             .golden_function = unit_tests::compute::gold_standard_untilize
         };
