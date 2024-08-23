@@ -59,13 +59,9 @@ def _setup_env(site_pkgs_ttnn):
         # Workaround: treat $SITE_PACKAGES as TT_METAL_HOME
         os.environ["TT_METAL_HOME"] = str(site_pkgs_ttnn.parent)
 
-    # jit build needs linker script under $TT_METAL_HOME/build/hw/toolchain/,
-    # so when TT_METAL_HOME is site-packags,
+    # jit build needs linker script under $TT_METAL_HOME/hw/toolchain/,
+    # so when TT_METAL_HOME is site-packages,
     # it needs to softlink build/ from site-packages/tt_lib
-    build_soft_link = site_pkgs_ttnn / ".." / "build"
-    build_soft_link_src = site_pkgs_ttnn / "build"
-    if not os.path.exists(build_soft_link) and os.path.exists(build_soft_link_src):
-        os.symlink(build_soft_link_src, build_soft_link)
 
 
 def setup_ttnn_so():
