@@ -32,8 +32,9 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/reshard_pybind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/copy/copy_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/move/move_pybind.hpp"
+#include "ttnn/operations/data_movement/copy/copy_pybind.hpp"
+#include "ttnn/operations/data_movement/move/move_pybind.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -71,7 +72,7 @@ void py_module(py::module& module) {
     py_bind_sharded_to_interleaved(module);
     py_bind_interleaved_to_sharded(module);
     py_bind_reshard(module);
-
+    detail::py_bind_bcast(module);
 }
 
 }  // namespace data_movement

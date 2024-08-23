@@ -8,8 +8,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "export_enum.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 
 namespace py = pybind11;
 
@@ -32,6 +34,10 @@ void py_module(py::module& module) {
 
     module.attr("DRAM_MEMORY_CONFIG") = py::cast(DRAM_MEMORY_CONFIG);
     module.attr("L1_MEMORY_CONFIG") = py::cast(L1_MEMORY_CONFIG);
+
+    export_enum<ttnn::BcastOpMath>(module, "BcastOpMath");
+    export_enum<ttnn::BcastOpDim>(module, "BcastOpDim");
+
 
     py::class_<ttnn::CoreGrid>(module, "CoreGrid")
         .def(py::init<std::size_t, std::size_t>(), py::kw_only(), py::arg("x"), py::arg("y"))

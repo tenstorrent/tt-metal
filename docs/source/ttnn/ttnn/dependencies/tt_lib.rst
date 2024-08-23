@@ -242,15 +242,11 @@ Primary Operations
 Enums
 =====
 
-.. autoclass:: tt_lib.tensor.BcastOpMath
+.. autoclass:: ttnn.BcastOpMath
 
-.. autoclass:: tt_lib.tensor.BcastOpDim
+.. autoclass:: ttnn.BcastOpDim
 
 
-Broadcast and Reduce
-====================
-
-.. autofunction:: tt_lib.tensor.bcast
 
 
 
