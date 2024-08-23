@@ -88,7 +88,7 @@ class geglu:
         grid_size = self.grid_sizes[size]
         M, K, N = hidden_states.shape[-2], hidden_states.shape[-1], self.parameters.proj.proj_weight.shape[-1]
         if not hidden_states.is_sharded():
-            hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+            hidden_states = ttnn.interleaved_to_sharded(
                 hidden_states,
                 grid_size,
                 [M // grid_size[1], K // grid_size[0]],
@@ -122,7 +122,7 @@ class geglu:
             compute_kernel_config=self.compute_kernel_config,
         )
         if interleaved_output:
-            proj = ttnn.experimental.tensor.interleaved_to_sharded(
+            proj = ttnn.interleaved_to_sharded(
                 proj,
                 grid_size,
                 [proj.shape[-2] // grid_size[1], proj.shape[-1] // grid_size[0]],
@@ -152,7 +152,7 @@ class geglu:
             compute_kernel_config=self.compute_kernel_config,
         )
         if interleaved_output:
-            gate = ttnn.experimental.tensor.interleaved_to_sharded(
+            gate = ttnn.interleaved_to_sharded(
                 gate,
                 grid_size,
                 [gate.shape[-2] // grid_size[1], gate.shape[-1] // grid_size[0]],

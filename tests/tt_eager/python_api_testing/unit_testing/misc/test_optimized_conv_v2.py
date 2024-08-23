@@ -372,7 +372,7 @@ def test_simple(
     else:
         interleaved_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
         conv_input = conv_input.to(device, interleaved_mem_config)
-        conv_input = ttnn.experimental.tensor.interleaved_to_sharded(conv_input, conv.input_sharded_memory_config)
+        conv_input = ttnn.interleaved_to_sharded(conv_input, conv.input_sharded_memory_config)
 
     # Optimized conv v2
     output_on_device = conv(conv_input)

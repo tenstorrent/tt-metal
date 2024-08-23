@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         };
         writer_kernel_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {

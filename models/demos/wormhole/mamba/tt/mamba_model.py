@@ -147,7 +147,7 @@ class MambaTT(torch.nn.Module):
             x = layer(x)
 
         if self.return_logits or self.configs["mode"] == ModelMode.DECODE:
-            x = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])
+            x = ttnn.interleaved_to_sharded(x, self.configs["sharded_h"])
             x = ttnn.rms_norm(
                 x,
                 epsilon=self.args.eps,
@@ -155,7 +155,7 @@ class MambaTT(torch.nn.Module):
                 program_config=self.configs["SHARDED_NORM_PRGM_CFG"],
                 memory_config=self.configs["sharded_h"],
             )
-            x = ttnn.experimental.tensor.sharded_to_interleaved(x)
+            x = ttnn.sharded_to_interleaved(x)
             x = ttnn.linear(
                 x,
                 self.lm_head_weights,

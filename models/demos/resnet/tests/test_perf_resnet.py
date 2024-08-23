@@ -182,7 +182,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     ttnn.record_event(1, write_event)
 
     ttnn.wait_for_event(0, write_event)
-    reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config)
+    reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config)
     ttnn.record_event(0, op_event)
 
     first_out_addr = reshard_out.buffer_address()
@@ -196,7 +196,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     ttnn.record_event(1, write_event)
 
     ttnn.wait_for_event(0, write_event)
-    reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config)
+    reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config)
     ttnn.record_event(0, op_event)
 
     tid = ttnn.experimental.device.BeginTraceCapture(device, 0)
@@ -214,7 +214,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.record_event(1, write_event)
 
         ttnn.wait_for_event(0, write_event)
-        reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
+        reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config, reshard_out)
         ttnn.record_event(0, op_event)
         ttnn.experimental.device.ReplayTrace(device, 0, tid, False)
 
@@ -229,7 +229,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.record_event(1, write_event)
 
         ttnn.wait_for_event(0, write_event)
-        reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, reshard_mem_config, reshard_out)
+        reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config, reshard_out)
         ttnn.record_event(0, op_event)
         ttnn.experimental.device.ReplayTrace(device, 0, tid, False)
 

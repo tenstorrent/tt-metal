@@ -383,7 +383,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        (block_sharded and not out_sharded) ? "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/"
+        (block_sharded and not out_sharded) ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
                                               "writer_unary_sharded_blocks_interleaved_start_id.cpp"
                                             : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,

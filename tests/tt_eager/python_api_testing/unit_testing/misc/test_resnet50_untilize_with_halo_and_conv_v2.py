@@ -672,7 +672,7 @@ def test_resnet50_conv(
         untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
         # Convert interleaved to sharded
         if act_c_num_blocks > 1:  # 2D conv
-            conv_input_on_device = ttnn.experimental.tensor.interleaved_to_sharded(
+            conv_input_on_device = ttnn.interleaved_to_sharded(
                 conv_input_on_device,
                 grid_size,
                 [
@@ -683,7 +683,7 @@ def test_resnet50_conv(
                 ttnn.ShardOrientation.COL_MAJOR,
             )
         else:
-            conv_input_on_device = ttnn.experimental.tensor.interleaved_to_sharded(
+            conv_input_on_device = ttnn.interleaved_to_sharded(
                 conv_input_on_device,
                 grid_size,
                 [
@@ -698,7 +698,7 @@ def test_resnet50_conv(
         output_on_device = conv(conv_input_on_device)
 
         # Convert sharded output to tiled interleaved
-        output_on_device = ttnn.experimental.tensor.sharded_to_interleaved(output_on_device, interleaved_mem_config)
+        output_on_device = ttnn.sharded_to_interleaved(output_on_device, interleaved_mem_config)
 
         # convert tiled output to RM
         assert output_on_device.get_layout() == ttnn.TILE_LAYOUT

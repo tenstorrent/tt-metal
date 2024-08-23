@@ -43,8 +43,6 @@ class TtFalconEmbeddings(torch.nn.Module):
         x = ttnn.reshape(x, [x.shape[0], 1, x.shape[1], x.shape[2]])
 
         if self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"].is_sharded():
-            x = ttnn.experimental.tensor.interleaved_to_sharded(
-                x, sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-            )
+            x = ttnn.interleaved_to_sharded(x, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
 
         return x

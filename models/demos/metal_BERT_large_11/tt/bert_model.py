@@ -92,7 +92,7 @@ class TtBertBatchDram:
     def model_embedding(self, input_ids, token_type_ids=None, position_ids=None):
         tt_embeddings = self.embeddings(input_ids, token_type_ids, position_ids)
         if "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG" in self.model_config:
-            tt_embeddings = ttnn.experimental.tensor.interleaved_to_sharded(
+            tt_embeddings = ttnn.interleaved_to_sharded(
                 tt_embeddings,
                 self.model_config["GRID_SIZE"],
                 self.model_config["SHARD_SIZE"],
@@ -149,7 +149,7 @@ class TtBertBatchDram:
                 hidden_states = ttnn.move(hidden_states)
             # profiler.end("__one_encoder")
         if hidden_states.memory_config().is_sharded():
-            hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
+            hidden_states = ttnn.sharded_to_interleaved(
                 hidden_states,
                 self.model_config["QA_LINEAR_OUTPUT_MEMCFG"],
                 self.model_config["QA_LINEAR_WEIGHTS_DTYPE"],

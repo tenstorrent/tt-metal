@@ -301,13 +301,13 @@ def test_tensor_conversion_between_torch_and_tt_tile(
     # test not doing direct write
     if direct_read_write_type == DirectReadWriteType.READ_ONLY:
         tt_tensor = tt_tensor.to(device, interleaved_mem_config)
-        tt_tensor = ttnn.experimental.tensor.interleaved_to_sharded(tt_tensor, mem_config)
+        tt_tensor = ttnn.interleaved_to_sharded(tt_tensor, mem_config)
     else:
         tt_tensor = tt_tensor.to(device, mem_config)
     ttnn.synchronize_device(device)
     # not doing direct read
     if direct_read_write_type == DirectReadWriteType.WRITE_ONLY:
-        tt_tensor = ttnn.experimental.tensor.sharded_to_interleaved(tt_tensor, interleaved_mem_config)
+        tt_tensor = ttnn.sharded_to_interleaved(tt_tensor, interleaved_mem_config)
     tt_tensor = tt_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     torch_tensor_after_round_trip = tt_tensor.to_torch()
 

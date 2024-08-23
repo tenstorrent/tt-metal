@@ -68,7 +68,7 @@ def test_group_attn_matmul(
     )
 
     if in0_sharded:
-        tt_input_tensor_a = ttnn.experimental.tensor.interleaved_to_sharded(
+        tt_input_tensor_a = ttnn.interleaved_to_sharded(
             tt_input_tensor_a,
             compute_grid_size,
             [q_len * batch, K],
@@ -77,7 +77,7 @@ def test_group_attn_matmul(
         )
 
     if in1_sharded:
-        tt_input_tensor_b = ttnn.experimental.tensor.interleaved_to_sharded(
+        tt_input_tensor_b = ttnn.interleaved_to_sharded(
             tt_input_tensor_b,
             compute_grid_size,
             [kv_heads * K, seq_len],
@@ -101,9 +101,7 @@ def test_group_attn_matmul(
         dtype=output_dtype,
     )
     if output_sharded:
-        tt_output_tensor_on_device = ttnn.experimental.tensor.sharded_to_interleaved(
-            tt_output_tensor_on_device, interleaved_mem_config
-        )
+        tt_output_tensor_on_device = ttnn.sharded_to_interleaved(tt_output_tensor_on_device, interleaved_mem_config)
 
     tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttnn.experimental.tensor.Layout.ROW_MAJOR).to_torch()
 
@@ -154,7 +152,7 @@ def test_sharded_matmul_1d_in0(
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     if in0_sharded:
-        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+        in0_t = ttnn.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M, K // num_cores],
@@ -182,7 +180,7 @@ def test_sharded_matmul_1d_in0(
         dtype=activations_dtype,
     )
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config)
 
     pt_out = in0 @ in1 + bias
 
@@ -248,7 +246,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
         in0_temp = torch2tt_tensor(in0, devices[i], tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
 
         if in0_sharded:
-            in0_temp = ttnn.experimental.tensor.interleaved_to_sharded(
+            in0_temp = ttnn.interleaved_to_sharded(
                 in0_temp,
                 grid_size,
                 [M, K // num_cores],
@@ -361,7 +359,7 @@ def test_sharded_matmul_1d_in0_multi_chip(
         in0_temp = torch2tt_tensor(in0, devices[i], tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
 
         if in0_sharded:
-            in0_temp = ttnn.experimental.tensor.interleaved_to_sharded(
+            in0_temp = ttnn.interleaved_to_sharded(
                 in0_temp,
                 grid_size,
                 [M, K // num_cores],

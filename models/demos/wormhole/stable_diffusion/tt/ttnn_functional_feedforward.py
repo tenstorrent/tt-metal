@@ -92,7 +92,7 @@ class feedforward:
             compute_kernel_config=self.compute_kernel_config,
         )
         if interleaved_output:
-            hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+            hidden_states = ttnn.interleaved_to_sharded(
                 hidden_states,
                 grid_size,
                 [hidden_states.shape[-2] // grid_size[1], hidden_states.shape[-1] // grid_size[0]],

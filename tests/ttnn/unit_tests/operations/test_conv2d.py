@@ -51,9 +51,7 @@ def prepare_conv_input_and_copy_to_device_interleaved(
         else:
             interleaved_mem_config = ttnn.DRAM_MEMORY_CONFIG
             tt_input_tensor_on_device = tt_input_tensor.to(device, interleaved_mem_config)
-            tt_input_tensor_on_device = ttnn.experimental.tensor.interleaved_to_sharded(
-                tt_input_tensor_on_device, mem_config
-            )
+            tt_input_tensor_on_device = ttnn.interleaved_to_sharded(tt_input_tensor_on_device, mem_config)
     else:
         tt_input_tensor_on_device = ttnn.to_device(tt_input_tensor, device)
 
@@ -165,9 +163,11 @@ def run_conv(
             torch_input_tensor,
             [batch_size, input_height, input_width, input_channels],
             use_shallow_conv_variant,
-            mem_config=conv.conv.input_sharded_memory_config
-            if config_override is not None and "act_reshard_num_cores_nhw" in config_override
-            else None,
+            mem_config=(
+                conv.conv.input_sharded_memory_config
+                if config_override is not None and "act_reshard_num_cores_nhw" in config_override
+                else None
+            ),
         )
     else:
         tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)

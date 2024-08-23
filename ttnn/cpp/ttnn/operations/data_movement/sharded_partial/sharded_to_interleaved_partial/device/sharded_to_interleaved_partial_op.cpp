@@ -6,7 +6,7 @@
 
 #include "tt_metal/host_api.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
 
 
 namespace ttnn::operations::data_movement {
@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks ShardedToInterleavedPartialDeviceOperation::crea
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = input_tensors[1];
     //Will move with sharded ops
-    return tt::tt_metal::sharded_to_interleaved_multi_core(input_tensor, output_tensor, this->num_slices, this->slice_index);
+    return detail::sharded_to_interleaved_multi_core(input_tensor, output_tensor, this->num_slices, this->slice_index);
 }
 
 

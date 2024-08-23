@@ -52,9 +52,9 @@ class TT_bmm:
         #     # output_dtype=ttnn.bfloat16,
         # )
 
-        # q = ttnn.experimental.tensor.interleaved_to_sharded(
+        # q = ttnn.interleaved_to_sharded(
         #     q,
-        #     sharded_mem_config=q_mem_config,
+        #     q_mem_config,
         # )
 
         #### OPTION 2: pad, then tranpsose, then shard?
@@ -63,14 +63,14 @@ class TT_bmm:
 
         q = ttnn.transpose(q, -2, -3)
 
-        q = ttnn.experimental.tensor.interleaved_to_sharded(
+        q = ttnn.interleaved_to_sharded(
             q,
-            sharded_mem_config=q_mem_config,
+            q_mem_config,
         )
 
-        q = ttnn.experimental.tensor.interleaved_to_sharded(
+        q = ttnn.interleaved_to_sharded(
             q,
-            sharded_mem_config=q_mem_config,
+            q_mem_config,
         )
 
         out = ttnn.matmul(

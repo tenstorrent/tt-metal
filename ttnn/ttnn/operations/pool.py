@@ -412,7 +412,7 @@ class TTPyMaxPool(TTPyOp):
         shard_shape[1] = in_c
         mem_config.shard_spec.shape = shard_shape
         act_reshaped = act_reshaped.to(self.device, interleaved_mem_config)
-        return ttl.tensor.interleaved_to_sharded(
+        return ttnn.interleaved_to_sharded(
             act_reshaped,
             mem_config,
             input.get_dtype(),
@@ -420,7 +420,7 @@ class TTPyMaxPool(TTPyOp):
 
     def copy_output_from_device(self, output_d: ttnn.Tensor):
         interleaved_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
-        output_d = ttl.tensor.sharded_to_interleaved(output_d, interleaved_mem_config)
+        output_d = ttnn.sharded_to_interleaved(output_d, interleaved_mem_config)
         return output_d.cpu()
 
 

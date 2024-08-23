@@ -4,8 +4,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/auto_format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sharding_utilities.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute_kernel_config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sharded/sharded_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/sharded/multi_core/sharded_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/bcast_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_multi_core_h.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/bcast/multi_core_h/bcast_op_sharded_h.cpp

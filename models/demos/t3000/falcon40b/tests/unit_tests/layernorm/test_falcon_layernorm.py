@@ -187,9 +187,9 @@ def run_test_FalconLayernorm_inference(pcc, device, model_location_generator, ge
         #         ),
         #     }
         # )
-        # input = ttnn.experimental.tensor.interleaved_to_sharded(
+        # input = ttnn.interleaved_to_sharded(
         #     input,
-        #     sharded_mem_config=ttnn.experimental.tensor.MemoryConfig(
+        #     ttnn.experimental.tensor.MemoryConfig(
         #         ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
         #         ttnn.experimental.tensor.BufferType.L1,
         #         ttnn.experimental.tensor.ShardSpec(
@@ -213,9 +213,9 @@ def run_test_FalconLayernorm_inference(pcc, device, model_location_generator, ge
                 ),
             }
         )
-        input = ttnn.experimental.tensor.interleaved_to_sharded(
+        input = ttnn.interleaved_to_sharded(
             input,
-            sharded_mem_config=ttnn.experimental.tensor.MemoryConfig(
+            ttnn.experimental.tensor.MemoryConfig(
                 ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 ttnn.experimental.tensor.BufferType.L1,
                 ttnn.experimental.tensor.ShardSpec(

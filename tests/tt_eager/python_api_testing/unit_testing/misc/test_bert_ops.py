@@ -147,7 +147,7 @@ def test_bert_linear(
     bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttnn.bfloat8_b)[0]
 
     if in0_sharded:
-        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+        in0_t = ttnn.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M // grid_size[0], K // grid_size[1]],
@@ -188,7 +188,7 @@ def test_bert_linear(
         )
 
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 
@@ -338,7 +338,7 @@ def test_bert_linear_batch7(
     bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttnn.bfloat8_b)[0]
 
     if in0_sharded:
-        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+        in0_t = ttnn.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M // grid_size[1], K // grid_size[0]],
@@ -383,7 +383,7 @@ def test_bert_linear_batch7(
         )
 
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 
@@ -466,7 +466,7 @@ def run_bert_linear_batch4(
     bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config_L1, tt_dtype=ttnn.bfloat8_b)[0]
 
     if in0_sharded:
-        in0_t = ttnn.experimental.tensor.interleaved_to_sharded(
+        in0_t = ttnn.interleaved_to_sharded(
             in0_t,
             grid_size,
             [M // grid_size[1], K // grid_size[0]],
@@ -511,7 +511,7 @@ def run_bert_linear_batch4(
         )
 
     if out_sharded:
-        output_t = ttnn.experimental.tensor.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
+        output_t = ttnn.sharded_to_interleaved(output_t, interleaved_mem_config_L1)
 
     pt_out = in0 @ in1
 
