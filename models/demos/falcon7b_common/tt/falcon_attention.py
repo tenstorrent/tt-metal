@@ -620,7 +620,7 @@ class TtFalconAttentionDecode(nn.Module):
         if self.model_config["l1_sharded"]:
             key_layer = ttnn.interleaved_to_sharded(
                 key_layer,
-                sharded_mem_config=self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](padded_layer_past_len, self.head_dim),
+                self.model_config["ATTN_BATCH_SHARDED_MEMCFG"](padded_layer_past_len, self.head_dim),
             )
 
             # Pad and transpose Q for batched matmul
