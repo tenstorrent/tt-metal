@@ -132,7 +132,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         std::vector<uint32_t> writer_ct_args = {(std::uint32_t)output_cb_index};
         unary_writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
             all_cores,
             tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
     } else {

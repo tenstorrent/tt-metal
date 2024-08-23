@@ -119,7 +119,7 @@ def test_run_downsample(
     logger.debug(f"shard_memory_layout={sharded_memory_layout}")
     logger.debug(f"input_shard_height={input_shard_height}, input_shard_width={input_shard_width}")
 
-    A_sharded = ttnn.experimental.tensor.interleaved_to_sharded(
+    A_sharded = ttnn.interleaved_to_sharded(
         A_interleaved,
         grid_size,
         [input_shard_height, input_shard_width],
@@ -140,7 +140,7 @@ def test_run_downsample(
     sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
     # Run downsample op
     A_downampled_sharded = ttnn.downsample(A_sharded, downsample_params, dtype=dtype)
-    A_downsampled = ttnn.experimental.tensor.sharded_to_interleaved(
+    A_downsampled = ttnn.sharded_to_interleaved(
         A_downampled_sharded,
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     )

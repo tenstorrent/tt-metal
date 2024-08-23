@@ -785,7 +785,7 @@ def test_resnet50_conv(
 
         output_on_device = conv(conv_input_on_device)
         if output_mem_config.is_sharded():
-            output_on_device = ttnn.experimental.tensor.sharded_to_interleaved(output_on_device, memory_config)
+            output_on_device = ttnn.sharded_to_interleaved(output_on_device, memory_config)
 
         # convert tiled output to RM
         assert output_on_device.get_layout() == ttnn.TILE_LAYOUT

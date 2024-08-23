@@ -300,6 +300,14 @@ struct registered_operation_t {
         tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
         auto output = invoke(std::forward<args_t>(args)...);
+
+        // Should every output tensor be tracked?
+        /*
+        if (GraphTracker::instance().is_enabled()) {
+            output = tt::stl::reflection::transform_object_of_type<Tensor>(tt::tt_metal::set_tensor_id, output);
+        }
+        */
+
         GraphTracker::instance().track_function_end(output);
         tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;

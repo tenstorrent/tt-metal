@@ -10,10 +10,6 @@ namespace ttnn {
 namespace operations::complex {
 
 
-ComplexTensor::ComplexTensor(std::array<Tensor, 2> val): m_real_imag(val) {
-            TT_ASSERT( m_real_imag[0].get_legacy_shape() == m_real_imag[1].get_legacy_shape() , "Tensor shapes of real and imag should be identical");
-        }
-
 const Tensor& ComplexTensor::operator[](uint32_t index) const {
             return m_real_imag[index];
         }
@@ -33,9 +29,10 @@ void ComplexTensor::deallocate() {
 
 
 ComplexTensor CreateComplexTensor::invoke(
-        const Tensor &input_tensor_a_arg,
-        const Tensor &input_tensor_b_arg) {
-            return ComplexTensor({input_tensor_a_arg, input_tensor_b_arg});
+        const Tensor &real,
+        const Tensor &imag) {
+            TT_ASSERT(real.get_legacy_shape() == imag.get_legacy_shape() , "Tensor shapes of real and imag should be identical");
+            return ComplexTensor({real, imag});
     }
 
 }  // namespace operations::complex

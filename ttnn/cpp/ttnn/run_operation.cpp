@@ -17,10 +17,6 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace tt::tt_metal {
-    std::atomic<uint32_t> operation_id_atomic_count = 0;
-}
-
 namespace tt::tt_metal::operation {
 
 namespace detail {

@@ -5,7 +5,6 @@
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
 
 namespace tt::tt_metal::detail{
 
@@ -68,23 +67,6 @@ namespace tt::tt_metal::detail{
                 "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
         )doc");
 
-        // Sharding ops
-        m_tensor.def("interleaved_to_sharded", py::overload_cast<const Tensor&, const std::variant<CoreCoord, CoreRangeSet>,  std::array<uint32_t, 2>, const TensorMemoryLayout, const ShardOrientation, const std::optional<const DataType>>(&interleaved_to_sharded),
-            py::arg("input"), py::arg("grid"), py::arg("shard_shape"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
-            R"doc(Converts tensor from interleaved to sharded memory layout)doc"
-        );
-        m_tensor.def("interleaved_to_sharded", py::overload_cast<const Tensor&, const MemoryConfig &, const std::optional<const DataType>>(&interleaved_to_sharded),
-            py::arg("input"), py::arg("sharded_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
-            R"doc(Converts tensor from interleaved to sharded memory layout)doc"
-        );
-        m_tensor.def("sharded_to_interleaved", &sharded_to_interleaved,
-            py::arg("input"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
-            R"doc(Converts tensor from sharded_to_interleaved memory layout)doc"
-        );
-        m_tensor.def("reshard", &reshard,
-            py::arg("input"), py::arg("output_mem_config").noconvert(), py::arg("output_tensor").noconvert() = std::nullopt,
-            R"doc(Converts a tensor sharded one way to another way)doc"
-        );
     }
 
 }

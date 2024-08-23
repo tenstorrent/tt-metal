@@ -103,7 +103,7 @@ class MambaConv:
                 groups=self.config.groups // self.config.channels_split_factor,
             )
             self.tt_weight_tensor_splits[i] = weights_device
-            output_tensor_splits.append(ttnn.experimental.tensor.sharded_to_interleaved(tt_output_tensor_on_device))
+            output_tensor_splits.append(ttnn.sharded_to_interleaved(tt_output_tensor_on_device))
         if self.config.channels_split_factor == 1:
             return output_tensor_splits[0]
         else:

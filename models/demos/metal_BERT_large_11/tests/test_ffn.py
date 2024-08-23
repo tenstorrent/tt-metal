@@ -54,7 +54,7 @@ def run_ffn_inference(
     ).to(ttnn.TILE_LAYOUT)
     if model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"].is_sharded():
         tilized_ffn_input = tilized_ffn_input.to(device)
-        tilized_ffn_input = ttnn.experimental.tensor.interleaved_to_sharded(
+        tilized_ffn_input = ttnn.interleaved_to_sharded(
             tilized_ffn_input,
             model_config["GRID_SIZE"],
             model_config["SHARD_SIZE"],
@@ -66,7 +66,7 @@ def run_ffn_inference(
 
     tt_out = tt_ffn_model(tilized_ffn_input)
     if tt_out.is_sharded():
-        tt_out = ttnn.experimental.tensor.sharded_to_interleaved(tt_out)
+        tt_out = ttnn.sharded_to_interleaved(tt_out)
     tt_out = tt_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)

@@ -22,6 +22,7 @@
 #include "third_party/json/json.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "type_name.hpp"
+#include "tt_metal/common/logger.hpp"
 
 namespace tt {
 namespace stl {
@@ -626,7 +627,8 @@ struct transform_object_of_type_t<T> {
     template<typename object_t>
     requires (not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, T&& value) const {
-        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported transform of object of type");
+        log_debug("Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
+        return value;
     }
 
     template<typename object_t>
@@ -638,7 +640,8 @@ struct transform_object_of_type_t<T> {
     template<typename object_t>
     requires (not std::same_as<std::decay_t<T>, object_t>)
     T operator()(auto&& callback, const T& value) const {
-        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported transform of object of type");
+        log_debug("Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
+        return value;
     }
 };
 
