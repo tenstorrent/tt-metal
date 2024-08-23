@@ -63,6 +63,17 @@ def tt_llama_mlp_prepare_inputs(llama_mlp_model, x):
                 llama_mlp_model.device_mesh, dims=(3, None), cluster_shape=llama_mlp_model.cluster_shape
             ),
         )
+    elif llama_mlp_model.model_config["LLM_MODE"] == "prefill":
+        x_multichip = ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=llama_mlp_model.device_mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ShardTensor2dMesh(
+                llama_mlp_model.device_mesh, dims=(3, None), cluster_shape=llama_mlp_model.cluster_shape
+            ),
+        )
 
     return x_multichip
 
@@ -103,7 +114,8 @@ def run_test_LlamaMLP_inference(
     if model_config["LLM_MODE"] == "decode":
         # shape should be (1, seq_len, batch, dim)
         pt_inp_normed = pt_inp_normed.unsqueeze(1).permute(2, 1, 0, 3)
-    else:
+    else:  # prefill
+        # shape should be (1, batch, seq_len, dim)
         pt_inp_normed = pt_inp_normed.unsqueeze(0)
 
     tt_inp = pt_inp_normed.clone()
@@ -154,8 +166,8 @@ def run_test_LlamaMLP_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    [(32, 1, 0.9997)],
-    ids=["decode"],
+    [(32, 1, 0.9997), (1, 256, 0.9995)],
+    ids=["decode", "prefill"],
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",

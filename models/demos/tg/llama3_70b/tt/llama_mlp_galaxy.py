@@ -204,6 +204,8 @@ class TtLlamaMLP_galaxy:
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         if self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(x)
+        elif self.model_config["LLM_MODE"] == "prefill":
+            return self.prefill_forward(x)
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
@@ -269,5 +271,67 @@ class TtLlamaMLP_galaxy:
         )
 
         hidden_states = ttnn.to_memory_config(hidden_states, self.FF1_ACT_MEMCFG)
+
+        return hidden_states
+
+    def prefill_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
+        w1_out = ttnn.matmul(
+            x,
+            self.w1,
+            dtype=ttnn.bfloat16,
+        )
+        w3_out = ttnn.matmul(
+            x,
+            self.w3,
+            dtype=ttnn.bfloat16,
+        )
+        x.deallocate(True)
+
+        w1_out = tt_all_reduce(
+            w1_out,
+            self.device_mesh,
+            cluster_axis=1,
+            num_links=2,
+        )
+        w3_out = tt_all_reduce(
+            w3_out,
+            self.device_mesh,
+            cluster_axis=1,
+            num_links=2,
+        )
+
+        # w1_out = ttnn.to_memory_config(w1_out, self.FULL_GRID_MEMCFG)
+        # w3_out = ttnn.to_memory_config(w3_out, self.FULL_GRID_MEMCFG)
+
+        hidden_states = ttnn.mul(
+            w1_out,
+            w3_out,
+            # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            dtype=ttnn.bfloat16,
+        )
+        w1_out.deallocate(True)
+        w3_out.deallocate(True)
+
+        # hidden_states = ttnn.to_memory_config(hidden_states, self.FF2_ACT_MEMCFG)
+        hidden_states = ttnn.matmul(
+            hidden_states,
+            self.w2,
+            # program_config=self.FF2_DRAM_SHARDED_PROGCFG,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
+            # core_grid=ttnn.CoreGrid(y=1, x=8),
+            # compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+
+        hidden_states = tt_all_reduce(
+            hidden_states,
+            self.device_mesh,
+            cluster_axis=0,
+            num_links=2,
+            # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+
+        # hidden_states = ttnn.to_memory_config(hidden_states, self.FF1_ACT_MEMCFG)
 
         return hidden_states
