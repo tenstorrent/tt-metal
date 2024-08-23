@@ -38,22 +38,17 @@ void DeviceProfiler::readRiscProfilerResults(
 
     auto ethCores = soc_d.get_physical_ethernet_cores() ;
 
-    std::vector<uint32_t> riscEndIndices;
-
+    HalProgrammableCoreType CoreType;
     profiler_msg_t *profiler_msg;
     if (std::find(ethCores.begin(), ethCores.end(), worker_core) == ethCores.end())
     {
         profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::TENSIX, HalMemAddrType::PROFILER);
-        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_BR);
-        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_NC);
-        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_T0);
-        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_T1);
-        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_T2);
+        CoreType = HalProgrammableCoreType::TENSIX;
     }
     else
     {
         profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::PROFILER);
-        riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_ER);
+        CoreType = HalProgrammableCoreType::ACTIVE_ETH;
     }
 
     vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
@@ -62,16 +57,24 @@ void DeviceProfiler::readRiscProfilerResults(
         reinterpret_cast<uint64_t>(profiler_msg->control_vector),
         kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
 
-    if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR] == 0) &&
-        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0) &&
-        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_ER] == 0))
+    if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
+        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0))
     {
         return;
     }
 
     int riscNum = 0;
-    for (auto riscEndIndex : riscEndIndices) {
+    for (int riscEndIndex = 0; riscEndIndex < PROFILER_RISC_COUNT; riscEndIndex ++ ) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
+        uint32_t riscType;
+        if(CoreType == HalProgrammableCoreType::TENSIX)
+        {
+            riscType = riscEndIndex;
+        }
+        else
+        {
+            riscType = 5;
+        }
         if (bufferEndIndex > 0)
         {
             uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
@@ -152,7 +155,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                     device_id,
                                     worker_core,
                                     coreFlatID,
-                                    riscEndIndex,
+                                    riscType,
                                     0,
                                     marker,
                                     (uint64_t(time_H) << 32) | time_L);
@@ -171,7 +174,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                 device_id,
                                 worker_core,
                                 coreFlatID,
-                                riscEndIndex,
+                                riscType,
                                 sum,
                                 marker,
                                 (uint64_t(time_H) << 32) | time_L);
