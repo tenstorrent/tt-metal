@@ -25,6 +25,13 @@ const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "ATOMIC_DEBUG_DELAY",
 };
 
+const char *RunTimeDebugClassNames[RunTimeDebugClassCount] = {
+    "N/A",
+    "worker",
+    "dispatch",
+    "all"
+};
+
 // Note: global initialization order is non-deterministic
 // This is ok so long as this gets initialized before decisions are based on
 // env state
@@ -181,7 +188,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
     // Set feature enabled if the user asked for any feature cores
     feature_targets[feature].enabled = false;
     for (auto &core_type_and_all_flag : feature_targets[feature].all_cores)
-        if (core_type_and_all_flag.second)
+        if (core_type_and_all_flag.second != RunTimeDebugClassNoneSpecified)
             feature_targets[feature].enabled = true;
     for (auto &core_type_and_cores : feature_targets[feature].cores)
         if (core_type_and_cores.second.size() > 0)
@@ -198,9 +205,14 @@ void RunTimeOptions::ParseFeatureCoreRange(
     vector<CoreCoord> cores;
 
     // Check if "all" is specified, rather than a range of cores.
-    if (str != nullptr && strcmp(str, "all") == 0) {
-        feature_targets[feature].all_cores[core_type] = true;
-        return;
+    feature_targets[feature].all_cores[core_type] = RunTimeDebugClassNoneSpecified;
+    if (str != nullptr) {
+        for (int idx = 0; idx < RunTimeDebugClassCount; idx++) {
+            if (strcmp(str, RunTimeDebugClassNames[idx]) == 0) {
+                feature_targets[feature].all_cores[core_type] = idx;
+                return;
+            }
+        }
     }
     if (str != nullptr) {
         if (isdigit(str[0])) {
