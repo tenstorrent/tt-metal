@@ -406,57 +406,26 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    bool row_wise = input_tensors[0].shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
-    auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
-    auto input_cores = input_tensors[0].shard_spec().value().grid;
-    uint32_t num_output_rows_per_core = div_up(num_output_rows, input_cores.num_cores());
-
-    uint32_t core_id = 0;
-    for (auto core : cores) {
-        auto input_shard_spec = input_tensors[0].shard_spec().value();
-        uint32_t curr_num_input_tensors;
-        uint32_t curr_num_output_rows;
-        if (input_cores.core_coord_in_core_ranges(core)) {
-            curr_num_input_tensors = num_input_tensors;
-            curr_num_output_rows = num_output_rows_per_core;
-        } else {
-            curr_num_input_tensors = 0;
-            curr_num_output_rows = 0;
-        }
-
-        vector<uint32_t> reader_runtime_args = {};
-        vector<uint32_t> writer_runtime_args = {
-            output.buffer()->address(),
-            core_id,
-            curr_num_output_rows,
-            input_unit_size,
-            num_input_tensors * input_shard_spec.shape[0],
-            input_shard_spec.shape[0]};
-        for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-            reader_runtime_args.push_back(input_id);
-            reader_runtime_args.push_back(input_shard_spec.shape[0]);
-            writer_runtime_args.push_back(input_id);
-        }
-        tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
-
-        tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
-        core_id++;
-    }
-
     auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, all_cores, num_input_tensors](
-            const void *operation,
-            Program &program,
-            const std::vector<Tensor> &input_tensors,
-            const std::vector<std::optional<const Tensor>> &,
-            const std::vector<Tensor> &output_tensors) {
+        [unary_reader_kernel_id,
+         unary_writer_kernel_id,
+         all_cores,
+         num_input_tensors,
+         num_output_rows,
+         output,
+         input_unit_size] (const void *operation,
+                           Program &program,
+                           const std::vector<Tensor> &input_tensors,
+                           const std::vector<std::optional<const Tensor>> &,
+                           const std::vector<Tensor> &output_tensors) {
             bool row_wise = input_tensors[0].shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
-            auto dst_buffer = output_tensors.at(0).buffer();
             auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
             auto input_cores = input_tensors[0].shard_spec().value().grid;
-            uint32_t num_output_rows = output_tensors[0].get_legacy_shape()[-1];
             uint32_t num_output_rows_per_core = div_up(num_output_rows, input_cores.num_cores());
+
+            uint32_t core_id = 0;
             for (auto core : cores) {
+                auto input_shard_spec = input_tensors[0].shard_spec().value();
                 uint32_t curr_num_input_tensors;
                 uint32_t curr_num_output_rows;
                 if (input_cores.core_coord_in_core_ranges(core)) {
@@ -467,21 +436,31 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
                     curr_num_output_rows = 0;
                 }
 
-                vector<uint32_t> reader_runtime_args = {curr_num_input_tensors};
+                vector<uint32_t> reader_runtime_args = {};
                 vector<uint32_t> writer_runtime_args = {
-                    dst_buffer->address(), curr_num_input_tensors, curr_num_output_rows};
+                    output.buffer()->address(),
+                    core_id,
+                    curr_num_output_rows,
+                    input_unit_size,
+                    num_input_tensors * input_shard_spec.shape[0],
+                    input_shard_spec.shape[0]};
                 for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-                    UpdateDynamicCircularBufferAddress(program, input_id, *dst_buffer);
-                    auto input_shard_spec = input_tensors[input_id].shard_spec().value();
                     reader_runtime_args.push_back(input_id);
-                    reader_runtime_args.push_back(input_shard_spec.shape[1]);
+                    reader_runtime_args.push_back(input_shard_spec.shape[0]);
                     writer_runtime_args.push_back(input_id);
                 }
                 tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
 
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+                core_id++;
             }
         };
+
+    override_runtime_arguments_callback((void *)0,
+                                        program,
+                                        input_tensors,
+                                        {},
+                                        {output});
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
