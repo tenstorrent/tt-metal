@@ -29,5 +29,5 @@ def test_unet_model(batch, groups, perf_mode, device):
     output_tensor = ttnn_model(device, ttnn_input, list(torch_input.shape), perf_mode=perf_mode)
 
     B, C, H, W = torch_output_tensor.shape
-    ttnn_tensor = ttnn.to_torch(output_tensor).reshape(B, H, W, C).permute(0, 3, 1, 2)
+    ttnn_tensor = ttnn.to_torch(output_tensor).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)
     assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.99)

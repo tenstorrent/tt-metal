@@ -29,8 +29,8 @@ def unet_reshard(
         )
     else:
         ttl_tensor = ttnn_tensor
-        ttl_tensor = ttnn.experimental.tensor.sharded_to_interleaved(ttl_tensor, interleaved_memory_config, dtype)
-        ttl_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+        ttl_tensor = ttnn.sharded_to_interleaved(ttl_tensor, interleaved_memory_config, dtype)
+        ttl_tensor = ttnn.interleaved_to_sharded(
             ttl_tensor,
             sharded_memory_config,
             dtype,
@@ -117,14 +117,18 @@ class UNetConv2D:
 
         weight = weight
         bias = torch.reshape(bias, (1, 1, 1, -1))
+
+        if bias.shape[-1] == 1:
+            bias = bias.repeat((1, 1, 32, 32))
+            logger.warning(f"Found a bias we need to replicate {bias.shape}")
+
         self.weight = ttnn.from_torch(weight, dtype=ttnn.float32)
         self.bias = ttnn.from_torch(bias, dtype=ttnn.float32)
 
     def __call__(self, x):
         logger.info(
-            f"running conv - input={x.shape} in_h={self.input_height}, in_w={self.input_width}, in_c={self.in_channels}, out=c{self.out_channels}, pad={self.padding}"
+            f"running conv - input={x.shape} in_h={self.input_height}, in_w={self.input_width}, in_c={self.in_channels}, out=c{self.out_channels}, pad={self.padding}, weight={self.weight.shape}"
         )
-        logger.info(f"config:{self.conv_config}")
         x, output_height, output_width, self.weight, self.bias = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -230,9 +234,7 @@ class UNetDownblock:
             x = unet_reshard(x, self.sharded_memory_config, use_reshard=False)
         x = self.conv1(x)
         x = self.conv2(x)
-        residual = ttnn.experimental.tensor.sharded_to_interleaved(
-            x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16
-        )
+        residual = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
         x = self.pool1(x)
         return x, residual
 
@@ -273,7 +275,7 @@ class UNetUpblock:
         if not perf_mode:
             # need to convert into interleaved, then back into sharded due to pcc issues
             # for certain tensor shape sizes, you get pcc issues when trying to convert between data layouts
-            x = ttnn.experimental.tensor.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         logger.info("upsample op and reshape")
@@ -420,6 +422,7 @@ class UNet:
         x, c4_residual = self.downblock4(x, perf_mode=perf_mode)
 
         logger.info("bnc")
+        # TODO: Need to reshard here
         x = self.bnc(x)
         x = self.bnc2(x)
 
@@ -430,12 +433,14 @@ class UNet:
         x = self.upsample2(x, c3_residual, nhw // 16, perf_mode=perf_mode)
 
         logger.info("upsample3")
+        # TODO: Need to add 'padded_input_channels' in conv1
         x = self.upsample3(x, c2_residual, nhw // 4, perf_mode=perf_mode)
 
         logger.info(f"upsample4 {x.shape} {c1_residual.shape}")
         x = self.upsample4(x, c1_residual, nhw, perf_mode=perf_mode, use_reshard=True)
 
         logger.info("output_layer")
+        x = x.cpu().pad_to_tile(0)
         x = self.output_layer(x)
 
         return ttnn.from_device(x)
