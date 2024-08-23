@@ -150,6 +150,7 @@ void MAIN {
 
     #ifndef RMSNORM
     // E[x],
+    unpack_reconfig_data_format(cb_in, cb_scaler);
     index_h_offset = 0;
     reduce_init_delta<false>();
     cb_wait_front(cb_scaler, 1);
@@ -190,9 +191,10 @@ void MAIN {
         }
         reduce_revert_delta();
         cb_push_back(cb_ex, num_tiles_per_allgather_worker);
-        cb_wait_front(cb_ex, num_tiles_per_allgather_worker);
     }
     #endif // not RMSNORM
+
+    unpack_reconfig_data_format(cb_ex_external, cb_in, cb_scaler, cb_in);
 
     // (x)^2, cb_x2 <-- cb_in
     mul_tiles_init();
@@ -221,9 +223,7 @@ void MAIN {
     #if defined RMSNORM and not defined FUSED_PRE_ADD
     unpack_reconfig_data_format(cb_in, cb_x2, cb_in, cb_scaler);
     #else
-    if constexpr (FLOAT32_DTYPE) {
-        unpack_reconfig_data_format(cb_in, cb_x2, cb_in, cb_scaler);
-    }
+    unpack_reconfig_data_format(cb_in, cb_x2, cb_in, cb_scaler);
     #endif
 
     cb_wait_front(cb_x2, num_tiles_per_block);
@@ -279,6 +279,7 @@ void MAIN {
             // calculate var = E(x^2) - E(x)^2
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // E(x)^2
+                unpack_reconfig_data_format(cb_ex_global, cb_ex_global);
                 cb_wait_front(cb_ex_global, 1);
                 cb_reserve_back(cb_ex_sqr, 1);
                 tile_regs_acquire();
@@ -292,6 +293,7 @@ void MAIN {
 
 
                 // E(x^2) - E(x)^2
+                unpack_reconfig_data_format(cb_ex_global, cb_ex2, cb_ex_global, cb_ex_sqr);
                 cb_wait_front(cb_ex2, 1);
                 cb_wait_front(cb_ex_sqr, 1);
                 cb_reserve_back(cb_var, 1);
@@ -309,6 +311,7 @@ void MAIN {
             cb_pop_front(cb_ex_sqr, num_tiles_per_allgather_worker);
             #endif
 
+            unpack_reconfig_data_format(cb_var, cb_eps);
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // 1/[sqrt(Var + eps)],
                 cb_wait_front(cb_var, 1);
@@ -335,11 +338,8 @@ void MAIN {
 
     #ifndef RMSNORM
     // x - E[x]
-    if constexpr (FLOAT32_DTYPE) {
-        unpack_reconfig_data_format(cb_in, cb_ex_global);
-    }
+    unpack_reconfig_data_format(cb_in, cb_ex_global);
     index_h_offset = 0;
-    unpack_reconfig_data_format_srca(cb_ex_external, cb_in);
     sub_bcast_cols_init_short();
     cb_reserve_back(cb_xmm, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -369,17 +369,8 @@ void MAIN {
         pack_reconfig_data_format(cb_out);
     }
     // (x - Ex) * 1/[sqrt(Var + eps)]
-    #if defined RMSNORM and not defined FUSE_PRE_ADD
-    if constexpr (FLOAT32_DTYPE) {
-        unpack_reconfig_data_format(cb_xmm, cb_ex2_global);
-    } else {
-        unpack_reconfig_data_format_srca(cb_var, cb_xmm);
-    }
-    #else
-    if constexpr (FLOAT32_DTYPE) {
-        unpack_reconfig_data_format(cb_xmm, cb_ex2_global);
-    }
-    #endif
+
+    unpack_reconfig_data_format(cb_xmm, cb_ex2_global);
     mul_bcast_cols_init_short();
     index_h_offset = 0;
     cb_reserve_back(cb_im, num_tiles_per_block);
