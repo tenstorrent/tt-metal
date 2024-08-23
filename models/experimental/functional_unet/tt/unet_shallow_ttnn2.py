@@ -287,15 +287,11 @@ class UNetUpblock:
         x = unet_concat([x, residual], dim=-1, perf_mode=perf_mode)
         ttnn.deallocate(residual)
 
-        if self.should_reshard and use_reshard:
-            # x = unet_reshard(x, self.sharded_memory_config, use_reshard=use_reshard)
+        if self.should_reshard:
             x = ttnn.to_memory_config(x, self.sharded_memory_config)
 
-        logger.info(f"conv1")
         x = self.conv1(x)
-        logger.info(f"conv2")
         x = self.conv2(x)
-        logger.info(f"conv3")
         x = self.conv3(x)
 
         return x
@@ -352,6 +348,27 @@ class UNet:
 
         self.bnc = UNetConv2D(parameters.bnc, parameters.bnb, device, cache=self.conv_cache)
         self.bnc2 = UNetConv2D(parameters.bnc_2, parameters.bnb_2, device, cache=self.conv_cache)
+        bnc_parallel_config = determine_parallel_config(
+            is_1d_systolic=True,
+            batch_size=self.bnc.batch_size,
+            input_channels=self.bnc.in_channels,
+            output_height=self.bnc2.input_height,
+            output_width=self.bnc2.input_width,
+            output_channels=self.bnc.out_channels,
+            device=device,
+            is_out_tiled=True,
+        )
+        self.bnc_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
+            tensor_shape=[
+                1,
+                1,
+                self.bnc.input_width * self.bnc.input_height * self.bnc.batch_size,
+                self.bnc.in_channels,
+            ],
+            parallel_config=bnc_parallel_config,
+            tile_size=32,  # if self.bnc.dtype == ttnn.bfloat8_b else 1,
+        )
+        logger.info(f"Created bottleneck shard spec: {bnc_parallel_config}, {self.bnc_sharded_memory_config}")
 
         self.upsample1 = UNetUpblock(
             parameters.c5,
@@ -384,7 +401,7 @@ class UNet:
             parameters.b7_3,
             device,
             conv_cache=self.conv_cache,
-            should_reshard=True,
+            should_reshard=False,  # TODO: Fix this
         )
         self.upsample4 = UNetUpblock(
             parameters.c8,
@@ -422,7 +439,7 @@ class UNet:
         x, c4_residual = self.downblock4(x, perf_mode=perf_mode)
 
         logger.info("bnc")
-        # TODO: Need to reshard here
+        unet_reshard(x, self.bnc_sharded_memory_config, use_reshard=False)
         x = self.bnc(x)
         x = self.bnc2(x)
 
@@ -439,7 +456,6 @@ class UNet:
         logger.info(f"upsample4 {x.shape} {c1_residual.shape}")
         x = self.upsample4(x, c1_residual, nhw, perf_mode=perf_mode, use_reshard=True)
 
-        logger.info("output_layer")
         x = x.cpu().pad_to_tile(0)
         x = self.output_layer(x)
 
