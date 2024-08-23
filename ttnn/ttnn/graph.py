@@ -44,7 +44,7 @@ def pretty_format(captured_graph):
         elif node["node_type"] == "tensor":
             node_string = format_string.format("Add Tensor: " + node["params"]["tensor_id"])
         elif node["node_type"] == "circular_buffer_allocate":
-            node_string = format_string.format("Allocate Buffer Allocate")
+            node_string = format_string.format("Allocate Circular Buffer")
         elif node["node_type"] == "circular_buffer_deallocate_all":
             node_string = format_string.format("Deallocate All Circular Buffers")
         else:
