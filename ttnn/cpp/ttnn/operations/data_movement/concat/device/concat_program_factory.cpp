@@ -406,15 +406,14 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    auto override_runtime_arguments_callback =
+    auto setup_runtime_arguments =
         [unary_reader_kernel_id,
          unary_writer_kernel_id,
          all_cores,
          num_input_tensors,
          num_output_rows,
          output,
-         input_unit_size] (const void *operation,
-                           Program &program,
+         input_unit_size] (Program &program,
                            const std::vector<Tensor> &input_tensors,
                            const std::vector<std::optional<const Tensor>> &,
                            const std::vector<Tensor> &output_tensors) {
@@ -456,11 +455,18 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             }
         };
 
-    override_runtime_arguments_callback((void *)0,
-                                        program,
-                                        input_tensors,
-                                        {},
-                                        {output});
+    setup_runtime_arguments(program,
+                            input_tensors,
+                            {},
+                            {output});
+
+    auto override_runtime_arguments_callback =
+        [setup_runtime_arguments] (const void *operation,
+                                   Program &program,
+                                   const std::vector<Tensor> &input_tensors,
+                                   const std::vector<std::optional<const Tensor>> &optional_tensors,
+                                   const std::vector<Tensor> &output_tensors)
+        { setup_runtime_arguments(program, input_tensors, optional_tensors, output_tensors); };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
