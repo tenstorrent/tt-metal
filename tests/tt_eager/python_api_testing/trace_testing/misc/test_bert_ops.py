@@ -173,7 +173,7 @@ class TestBertOpsTrace:
             in0_t_updated = torch2tt_tensor(
                 in0, None, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttnn.bfloat8_b
             )
-            ttnn.experimental.tensor.write_tensor(in0_t_updated, in0_t_res)
+            ttnn.copy_host_to_device_tensor(in0_t_updated, in0_t_res)
             logger.info(f"Running iteration {iter}")
             ttnn.experimental.device.ReplayTrace(device, cq_id, tid, True)
 
