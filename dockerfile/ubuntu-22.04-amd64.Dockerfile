@@ -30,6 +30,30 @@ RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_test_deps.sh ${DOXYGEN_
 COPY /scripts /opt/tt_metal_infra/scripts
 COPY build_metal.sh /scripts/build_metal.sh
 
+# Setup Env variables to setup Python Virtualenv - Install TT-Metal Python deps
+ENV TT_METAL_INFRA_DIR=/opt/tt_metal_infra
+ENV PYTHON_ENV_DIR=${TT_METAL_INFRA_DIR}/tt-metal/python_env
+
+# Disable using venv since this is isolated in a docker container
+# RUN python3 -m venv $PYTHON_ENV_DIR
+# ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+
+# Create directories for infra
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
+RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
+
+# Copy requirements from tt-metal folders with requirements.txt docs
+COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
+# Copy requirements from tt-metal folders for sweeps (requirements-sweeps.txt)
+COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
+COPY /tt_metal/python_env/* ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu \
+    && python3 -m pip install setuptools wheel
+
+RUN python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt
+RUN python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
+
 # Install Clang-17
 RUN cd $TT_METAL_INFRA_DIR \
     && wget https://apt.llvm.org/llvm.sh \
