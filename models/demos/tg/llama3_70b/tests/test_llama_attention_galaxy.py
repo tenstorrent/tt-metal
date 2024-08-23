@@ -58,10 +58,10 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 
 
 class PytorchLlamaAttentionModel(torch.nn.Module):
-    def __init__(self, hf_reference_model, layer_num):
+    def __init__(self, hf_reference_model, layer_num, rope_theta):
         super().__init__()
         self.attention = hf_reference_model.layers[layer_num].attention
-
+        self.rope_theta = rope_theta
         # Disable dropout
         self.attention.eval()
 
@@ -93,7 +93,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         """
         batch = x.size(0)
         seq_len = x.size(1)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
         freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
 
         attn_mask = torch.full((seq_len, seq_len), float("-inf"))
@@ -120,7 +120,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         return result
 
 
-def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
+def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_theta):
     assert len(x.size()) == 3
     batch, seq_len, _ = x.shape
 
@@ -151,7 +151,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
 
         batch_size_per_group = llama_attention_model.batch_size_per_device_group
 
-        rot_emb = generate_rot_emb(llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2)
+        rot_emb = generate_rot_emb(llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2, rope_theta)
         rot_mat = get_rotation_mat(rot_emb, start_pos, seq_len, batch=batch_size_per_group)
         assert rot_mat.size() == (
             1,
@@ -202,9 +202,10 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
                 llama_attention_model.device_mesh, dims=(3, None), cluster_shape=llama_attention_model.cluster_shape
             ),
         )
-        xs = ttnn.to_device(xs, llama_attention_model.device_mesh)
 
-        cos, sin = precompute_freqs(llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2)
+        cos, sin = precompute_freqs(
+            llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2, rope_theta, use_scaled=True
+        )
         cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
         assert cos_gathered.size() == (1, 1, seq_len, llama_attention_model.head_dim)
         assert sin_gathered.size() == (1, 1, seq_len, llama_attention_model.head_dim)
@@ -228,8 +229,6 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
             mesh_mapper=ReplicateTensorToMesh(llama_attention_model.device_mesh),
         )
 
-        cos_gathereds = ttnn.to_device(cos_gathereds, llama_attention_model.device_mesh)
-        sin_gathereds = ttnn.to_device(sin_gathereds, llama_attention_model.device_mesh)
         rot_mats = [cos_gathereds, sin_gathereds]
 
         attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
@@ -244,7 +243,6 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_attention_model.device_mesh,
         )
-        attn_masks = ttnn.to_device(attn_masks, llama_attention_model.device_mesh)
 
     return (
         xs,
@@ -285,7 +283,9 @@ def run_test_LlamaAttention_inference(
     configuration = hugging_face_reference_model.params
 
     # PyTorch model --------------------------------------------------------------------
-    pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
+    pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(
+        hugging_face_reference_model, UNIT_TEST_LAYER_NUM, configuration.rope_theta
+    )
     # TT model -------------------------------------------------------------------------
     transformation_mat_torch = get_rot_transformation_mat(32)  # 32 for tile size
 
@@ -345,7 +345,7 @@ def run_test_LlamaAttention_inference(
 
         # TT hardware execution -------------------------------------------------------------
         attention_input, start_pos, rot_mat, attn_mask = tt_llama_attention_prepare_inputs(
-            tt_LlamaAttention_model, tt_input, start_pos
+            tt_LlamaAttention_model, tt_input, start_pos, configuration.rope_theta
         )
         tt_out = tt_LlamaAttention_model(
             attention_input,
@@ -429,7 +429,7 @@ def run_test_LlamaAttention_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len, pcc",
-    [(32, 1, 0.9995), (1, 256, 0.9995)],
+    [(32, 1, 0.9995), (1, 256, 0.999)],
     ids=["decode", "prefill"],
 )
 @pytest.mark.parametrize(

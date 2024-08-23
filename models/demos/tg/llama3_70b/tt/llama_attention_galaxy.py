@@ -515,7 +515,6 @@ class TtLlamaAttention_galaxy:
         max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
         batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
 
-        # TODO: add batch dim for looping along it in case of seq_len > max_mm_seq_len
         xs = ttnn.reshape(xs, (1, batch_dim, seq_len // batch_dim, -1))
 
         # Fused QKV
@@ -564,21 +563,6 @@ class TtLlamaAttention_galaxy:
         )
         key_layer.deallocate(True)
 
-        # query_layer = ttnn.matmul(
-        #     query_layer,
-        #     rot_mats,
-        #     # program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     compute_kernel_config=self.COMPUTE_KERNEL_ROTARY,
-        # )
-
-        # key_layer = ttnn.matmul(
-        #     key_layer,
-        #     rot_mats,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     compute_kernel_config=self.COMPUTE_KERNEL_ROTARY,
-        # )
-
         return query_layer_ret, key_layer_ret, value_layer
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
@@ -587,7 +571,7 @@ class TtLlamaAttention_galaxy:
         tensors = ttnn.get_device_tensors(tensor_copy)
         # Get only tensors from specific column chips
         # Get every 4th tensor starting from user_id // 8
-        single_column_tensors = tensors[user_id // 8 :: 4]
+        single_column_tensors = tensors[user_id // self.batch_size_per_device_group :: self.cluster_shape[0]]
         # Create multi-device tensor
         multi_device_tensor = ttnn.aggregate_as_tensor(single_column_tensors)
 
@@ -612,7 +596,7 @@ class TtLlamaAttention_galaxy:
         ttnn.experimental.tensor.fill_cache(
             keys_reshaped,
             ttnn.experimental.typecast(single_user_key_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            user_id % 8,
+            user_id % self.batch_size_per_device_group,
         )
 
         # FILL V CACHE
@@ -627,7 +611,7 @@ class TtLlamaAttention_galaxy:
         ttnn.experimental.tensor.fill_cache(
             values_reshaped,
             ttnn.experimental.typecast(single_user_value_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            user_id % 8,
+            user_id % self.batch_size_per_device_group,
         )
 
         # SDPA
@@ -638,7 +622,6 @@ class TtLlamaAttention_galaxy:
             attn_masks,
             is_causal=True,
             scale=self.scale,
-            # program_config=self.model_config["SDPA_PROGCFG"],
         )
 
         # deallocate keys and values
@@ -653,7 +636,7 @@ class TtLlamaAttention_galaxy:
         attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # seqlen, 1, batch, hidden_size
+        )  # bsz, 1, seqlen, hidden_size
 
         _, _, seq_len, _ = attn_output.shape
 
@@ -664,11 +647,9 @@ class TtLlamaAttention_galaxy:
         attn_output = ttnn.matmul(
             attn_output,
             self.wo,
-            # program_config=self.model_config["SELFOUT_MM_PROGCFG"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
-            # compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-        )  # seqlen, 1, batch, hidden_size
+        )  # bsz, 1, seqlen, hidden_size
 
         attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, -1))
 
