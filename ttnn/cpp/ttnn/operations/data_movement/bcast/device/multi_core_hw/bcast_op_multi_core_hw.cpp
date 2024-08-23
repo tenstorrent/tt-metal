@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <optional>
 #include "impl/buffers/buffer.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
+
+#include "ttnn/cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
@@ -12,15 +12,11 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
+using namespace	tt;
+using namespace constants;
 
-using namespace tt::tt_metal;
-using namespace tt::constants;
 
-
-namespace tt {
-
-namespace tt_metal {
-
+namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tensor &b, const Tensor& output, BcastOpMath bcast_math, bool inplace) {
     const auto ashape = a.get_legacy_shape();
     const auto bshape = b.get_legacy_shape();
@@ -43,9 +39,9 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 
     uint32_t bnc1 = (bN*bC == 1);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt_metal::Device *device = a.device();
+    tt::tt_metal::Device *device = a.device();
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool src0_sharded = a.memory_config().is_sharded();
@@ -56,13 +52,13 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
         shard_spec = output.shard_spec().value();
     }
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat src1_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
-    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
-    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src1_single_tile_size = tt::tt_metal::detail::TileSize(src1_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -132,7 +128,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
     }
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/dataflow/reader_bcast_hw_interleaved_partitioned.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_hw_interleaved_partitioned.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -148,7 +144,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/compute/bcast_hw.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw.cpp",
         all_device_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_compute_defines}
     );
@@ -339,6 +335,4 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
+} // ttnn::operations::data_movement
