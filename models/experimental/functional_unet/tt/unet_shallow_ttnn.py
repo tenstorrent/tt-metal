@@ -248,6 +248,8 @@ class UNet:
         output_tensor = self.c8(output_tensor)
         output_tensor = self.c8_2(output_tensor)
         output_tensor = self.c8_3(output_tensor)
+
+        output_tensor = output_tensor.cpu().pad_to_tile(0)
         output_tensor, _, _, self.output_layer.conv.weight, self.output_layer.conv.bias = ttnn.conv2d(
             input_tensor=output_tensor,
             weight_tensor=self.output_layer.conv.weight,

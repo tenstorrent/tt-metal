@@ -140,18 +140,7 @@ class UNet(nn.Module):
         p4 = self.p4(r4_2)
         return p4, r4_2
 
-    def forward(self, x):
-        p1, r1_2 = self.downblock1(x)
-        p2, r2_2 = self.downblock2(p1)
-        p3, r3_2 = self.downblock3(p2)
-        p4, r4_2 = self.downblock4(p3)
-
-        bnc = self.bnc(p4)
-        bnb = self.bnb(bnc)
-        bnr = self.bnr(bnb)
-        bnc_2 = self.bnc_2(bnr)
-        bnb_2 = self.bnb_2(bnc_2)
-        bnr_2 = self.bnr_2(bnb_2)
+    def upblock1(self, bnr_2, r4_2):
         u4 = self.u4(bnr_2)
         conc1 = torch.cat([u4, r4_2], dim=1)
 
@@ -164,6 +153,9 @@ class UNet(nn.Module):
         c5_3 = self.c5_3(r5_2)
         b5_3 = self.b5_3(c5_3)
         r5_3 = self.r5_3(b5_3)
+        return r5_3
+
+    def upblock2(self, r5_3, r3_2):
         u3 = self.u3(r5_3)
         conc2 = torch.cat([u3, r3_2], dim=1)
 
@@ -176,6 +168,9 @@ class UNet(nn.Module):
         c6_3 = self.c6_3(r6_2)
         b6_3 = self.b6_3(c6_3)
         r6_3 = self.r6_3(b6_3)
+        return r6_3
+
+    def upblock3(self, r6_3, r2_2):
         u2 = self.u2(r6_3)
         conc3 = torch.cat([u2, r2_2], dim=1)
 
@@ -188,6 +183,9 @@ class UNet(nn.Module):
         c7_3 = self.c7_3(r7_2)
         b7_3 = self.b7_3(c7_3)
         r7_3 = self.r7_3(b7_3)
+        return r7_3
+
+    def upblock4(self, r7_3, r1_2):
         u1 = self.u1(r7_3)
         conc4 = torch.cat([u1, r1_2], dim=1)
 
@@ -200,8 +198,30 @@ class UNet(nn.Module):
         c8_3 = self.c8_3(r8_2)
         b8_3 = self.b8_3(c8_3)
         r8_3 = self.r8_3(b8_3)
+        return r8_3
 
-        # Output layer
+    def bottleneck(self, p4):
+        bnc = self.bnc(p4)
+        bnb = self.bnb(bnc)
+        bnr = self.bnr(bnb)
+        bnc_2 = self.bnc_2(bnr)
+        bnb_2 = self.bnb_2(bnc_2)
+        bnr_2 = self.bnr_2(bnb_2)
+        return bnr_2
+
+    def forward(self, x):
+        p1, r1_2 = self.downblock1(x)
+        p2, r2_2 = self.downblock2(p1)
+        p3, r3_2 = self.downblock3(p2)
+        p4, r4_2 = self.downblock4(p3)
+
+        bnr_2 = self.bottleneck(p4)
+
+        r5_3 = self.upblock1(bnr_2, r4_2)
+        r6_3 = self.upblock2(r5_3, r3_2)
+        r7_3 = self.upblock3(r6_3, r2_2)
+        r8_3 = self.upblock4(r7_3, r1_2)
+
         output = self.output_layer(r8_3)
 
         return output

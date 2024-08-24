@@ -234,7 +234,7 @@ class UNetDownblock:
             x = unet_reshard(x, self.sharded_memory_config, use_reshard=False)
         x = self.conv1(x)
         x = self.conv2(x)
-        residual = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+        residual = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # pool deletes its activation
         x = self.pool1(x)
         return x, residual
 
@@ -401,7 +401,7 @@ class UNet:
             parameters.b7_3,
             device,
             conv_cache=self.conv_cache,
-            should_reshard=False,  # TODO: Fix this
+            should_reshard=False,  # TODO: Fix this - shard width is 48
         )
         self.upsample4 = UNetUpblock(
             parameters.c8,
@@ -439,7 +439,8 @@ class UNet:
         x, c4_residual = self.downblock4(x, perf_mode=perf_mode)
 
         logger.info("bnc")
-        unet_reshard(x, self.bnc_sharded_memory_config, use_reshard=False)
+        breakpoint()
+        x = unet_reshard(x, self.bnc_sharded_memory_config, use_reshard=False)
         x = self.bnc(x)
         x = self.bnc2(x)
 
@@ -450,11 +451,10 @@ class UNet:
         x = self.upsample2(x, c3_residual, nhw // 16, perf_mode=perf_mode)
 
         logger.info("upsample3")
-        # TODO: Need to add 'padded_input_channels' in conv1
         x = self.upsample3(x, c2_residual, nhw // 4, perf_mode=perf_mode)
 
         logger.info(f"upsample4 {x.shape} {c1_residual.shape}")
-        x = self.upsample4(x, c1_residual, nhw, perf_mode=perf_mode, use_reshard=True)
+        x = self.upsample4(x, c1_residual, nhw, perf_mode=perf_mode)
 
         x = x.cpu().pad_to_tile(0)
         x = self.output_layer(x)
