@@ -32,7 +32,7 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     const bool row_major = false;
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
-            ttnn::operations::core::work_split::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total, row_major);
+            ttnn::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total, row_major);
 
     const auto create_circular_buffer = [&program, &cores = all_cores](
                                             uint32_t index,

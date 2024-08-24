@@ -57,7 +57,7 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] = ttnn::operations::core::work_split::split_work_to_cores(compute_with_storage_grid_size, Wt);
+    auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] = ttnn::split_work_to_cores(compute_with_storage_grid_size, Wt);
 
 	auto src0_buffer = a.buffer();
 	auto src1_buffer = b.buffer();
@@ -221,7 +221,7 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
         uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
 
         auto [num_cores, all_cores, core_group_1, core_group_2, Wt_per_core_group_1, Wt_per_core_group_2] =
-            ttnn::operations::core::work_split::split_work_to_cores(compute_with_storage_grid_size, Wt);
+            ttnn::split_work_to_cores(compute_with_storage_grid_size, Wt);
 
         for (uint32_t i = 0, num_Wtiles_read = 0; i < num_cores_y * num_cores_x; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
