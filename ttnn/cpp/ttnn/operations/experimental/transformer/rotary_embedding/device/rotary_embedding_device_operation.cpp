@@ -87,7 +87,7 @@ std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Ten
                 }
             }
             uint32_t Ht = div_up(num_blocks, num_cores);
-            shard_spec.grid = ttnn::operations::core::work_split::num_cores_to_corerange_set(num_cores, core_grid, true);
+            shard_spec.grid = ttnn::num_cores_to_corerange_set(num_cores, core_grid, true);
             shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.get_legacy_shape()[-1]};
             shard_spec.orientation = ShardOrientation::ROW_MAJOR;
         }
