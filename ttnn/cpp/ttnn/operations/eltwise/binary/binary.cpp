@@ -382,7 +382,7 @@ template struct BinaryOperation<BinaryOpType::LDEXP>;
 template struct BinaryOperation<BinaryOpType::LOGADDEXP>;
 template struct BinaryOperation<BinaryOpType::LOGADDEXP2>;
 template struct BinaryOperation<BinaryOpType::SQUARED_DIFFERENCE>;
-template struct BinaryOperationOverload<BinaryOpType::DIV_FAST>;
+template struct BinaryOperation<BinaryOpType::DIV_FAST>;
 template struct BinaryOperation<BinaryOpType::BIAS_GELU>;
 
 template struct RelationalBinary<BinaryOpType::EQ>;

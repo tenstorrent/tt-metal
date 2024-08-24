@@ -153,13 +153,13 @@ constexpr auto add = ttnn::register_operation_with_auto_launch_op<
 constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::add_",
     operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::ADD>>();
-constexpr auto subtract = ttnn::register_operation<
+constexpr auto subtract = ttnn::register_operation_with_auto_launch_op<
     "ttnn::subtract",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB>>();
 constexpr auto subtract_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::subtract_",
     operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::SUB>>();
-constexpr auto multiply = ttnn::register_operation<
+constexpr auto multiply = ttnn::register_operation_with_auto_launch_op<
     "ttnn::multiply",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL>>();
 constexpr auto multiply_ = ttnn::register_operation_with_auto_launch_op<
@@ -201,7 +201,7 @@ constexpr auto logaddexp2 = ttnn::register_operation_with_auto_launch_op<
 constexpr auto squared_difference = ttnn::register_operation_with_auto_launch_op<
     "ttnn::squared_difference",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::SQUARED_DIFFERENCE>>();
-constexpr auto divide = ttnn::register_operation<
+constexpr auto divide = ttnn::register_operation_with_auto_launch_op<
     "ttnn::divide",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::DIV_FAST>>();
 constexpr auto gt_ = ttnn::register_operation_with_auto_launch_op<
