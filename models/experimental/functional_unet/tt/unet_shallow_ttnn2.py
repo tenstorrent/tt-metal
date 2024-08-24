@@ -6,11 +6,10 @@ import ttnn
 import torch
 
 from loguru import logger
-from typing import Optional, Tuple
-from tt_lib import profiler
 
 from ttnn.operations.conv2d import determine_parallel_config, create_sharded_memory_config_from_parallel_config
 
+from models.utility_functions import nearest_32
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, ParameterDict
 
 
@@ -219,6 +218,13 @@ class UNetDownblock:
             )
 
     def __call__(self, x):
+        assert list(x.shape) == [
+            1,
+            1,
+            nearest_32(self.conv1.input_height * self.conv1.input_width * self.conv1.batch_size),
+            x.shape[-1],  # Channels can be padded
+        ], f"Expected downblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
+
         if self.should_reshard:
             sharded_memory_config = create_sharded_memory_config_from_parallel_config(
                 tensor_shape=[
@@ -272,24 +278,22 @@ class UNetUpblock:
             )
             logger.info(f"Created shardspec: {parallel_config}, {self.sharded_memory_config}")
 
-    def __call__(self, x, residual, factor, perf_mode=False):
+    def __call__(self, x, residual, factor):
         logger.info(
             f"Running upsample block with {x.shape}, {x.memory_config()}, {residual.shape}, {residual.memory_config()}, factor={factor}"
         )
-        logger.info("to layout")
-        if not perf_mode:
-            # need to convert into interleaved, then back into sharded due to pcc issues
-            # for certain tensor shape sizes, you get pcc issues when trying to convert between data layouts
-            x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+        assert list(x.shape)[:2] == [
+            1,
+            1,
+        ], f"Expected downblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
+
+        x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # TODO: Swap this and below
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        logger.info("upsample op and reshape")
-        x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.upsample(x, (2, 2, 1))
         x = ttnn.reshape(x, (1, 1, factor, x.shape[-1]))
 
-        logger.info("concat")
-        x = unet_concat([x, residual], dim=-1, perf_mode=perf_mode)
+        x = unet_concat([x, residual], dim=-1, perf_mode=True)
         ttnn.deallocate(residual)
 
         if self.should_reshard:
@@ -376,7 +380,7 @@ class UNet:
         )
         logger.info(f"Created bottleneck shard spec: {bnc_parallel_config}, {self.bnc_sharded_memory_config}")
 
-        self.upsample1 = UNetUpblock(
+        self.upblock1 = UNetUpblock(
             parameters.c5,
             parameters.b5,
             parameters.c5_2,
@@ -387,7 +391,7 @@ class UNet:
             conv_cache=self.conv_cache,
             should_reshard=False,
         )
-        self.upsample2 = UNetUpblock(
+        self.upblock2 = UNetUpblock(
             parameters.c6,
             parameters.b6,
             parameters.c6_2,
@@ -398,7 +402,7 @@ class UNet:
             conv_cache=self.conv_cache,
             should_reshard=True,
         )
-        self.upsample3 = UNetUpblock(
+        self.upblock3 = UNetUpblock(
             parameters.c7,
             parameters.b7,
             parameters.c7_2,
@@ -409,7 +413,7 @@ class UNet:
             conv_cache=self.conv_cache,
             should_reshard=False,  # TODO: Fix this - shard width is 48
         )
-        self.upsample4 = UNetUpblock(
+        self.upblock4 = UNetUpblock(
             parameters.c8,
             parameters.b8,
             parameters.c8_2,
@@ -446,16 +450,16 @@ class UNet:
         x = self.bottleneck(x)
 
         logger.info("upsample1")
-        x = self.upsample1(x, c4_residual, nhw // 64, perf_mode=perf_mode)
+        x = self.upblock1(x, c4_residual, nhw // 64)
 
         logger.info("upsample2")
-        x = self.upsample2(x, c3_residual, nhw // 16, perf_mode=perf_mode)
+        x = self.upblock2(x, c3_residual, nhw // 16)
 
         logger.info("upsample3")
-        x = self.upsample3(x, c2_residual, nhw // 4, perf_mode=perf_mode)
+        x = self.upblock3(x, c2_residual, nhw // 4)
 
         logger.info(f"upsample4 {x.shape} {c1_residual.shape}")
-        x = self.upsample4(x, c1_residual, nhw, perf_mode=perf_mode)
+        x = self.upblock4(x, c1_residual, nhw)
 
         x = x.cpu().pad_to_tile(0)
         x = self.output_layer(x)
