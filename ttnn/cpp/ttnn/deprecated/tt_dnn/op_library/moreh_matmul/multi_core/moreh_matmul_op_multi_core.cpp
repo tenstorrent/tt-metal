@@ -193,7 +193,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
          core_group_1,
          core_group_2,
          num_output_tiles_per_core_group_1,
-         num_output_tiles_per_core_group_2] = ttnn::operations::core::work_split::split_work_to_cores(grid, num_output_tiles);
+         num_output_tiles_per_core_group_2] = ttnn::split_work_to_cores(grid, num_output_tiles);
 
     log_debug(LogOp, "{}:{} num_output_tiles: {}", __func__, __LINE__, num_output_tiles);
     log_debug(LogOp, "{}:{} num_output_tiles_per_core_group1: {}, 2: {} ", __func__, __LINE__, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2);

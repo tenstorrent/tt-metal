@@ -75,7 +75,7 @@ operation::ProgramWithCallbacks moreh_sum_int_w_impl(const Tensor &input, const 
          core_group_1,
          core_group_2,
          num_rows_per_core_group_1,
-         num_rows_per_core_group_2] = ttnn::operations::core::work_split::split_work_to_cores(grid, num_rows);
+         num_rows_per_core_group_2] = ttnn::split_work_to_cores(grid, num_rows);
 
     log_debug(LogOp, "num_tiles {}, num_rows {}, num_rows_per_core_group_1 {}, num_rows_per_core_group_2 {}", num_tiles, num_rows, num_rows_per_core_group_1, num_rows_per_core_group_2);
 

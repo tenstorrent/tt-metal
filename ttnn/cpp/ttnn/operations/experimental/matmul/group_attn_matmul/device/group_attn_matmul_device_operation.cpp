@@ -75,7 +75,7 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
             const tt::tt_metal::Shape output_shape = this->compute_output_shapes(input_tensors).at(0);
             const uint32_t num_cores = output_shape[1];
             CoreRangeSet all_cores =
-                ttnn::operations::core::work_split::num_cores_to_corerange_set(num_cores, this->compute_with_storage_grid_size, this->row_major);
+                ttnn::num_cores_to_corerange_set(num_cores, this->compute_with_storage_grid_size, this->row_major);
 
             auto shard_shape = this->output_mem_config.shard_spec.value().shape;
             TT_FATAL(
@@ -146,7 +146,7 @@ std::vector<Tensor> GroupAttnMatmulDeviceOperation::create_output_tensors(const 
             const tt::tt_metal::Shape output_shape = this->compute_output_shapes(input_tensors).at(0);
             const uint32_t num_cores = output_shape[1];
             CoreRangeSet all_cores =
-                ttnn::operations::core::work_split::num_cores_to_corerange_set(num_cores, this->compute_with_storage_grid_size, this->row_major);
+                ttnn::num_cores_to_corerange_set(num_cores, this->compute_with_storage_grid_size, this->row_major);
 
             ShardOrientation shard_orientation =
                 this->row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;

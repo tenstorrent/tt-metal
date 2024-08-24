@@ -13,7 +13,7 @@
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/host_api.hpp"
 
-namespace ttnn::operations::core::work_split {
+namespace ttnn {
 
 inline uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_size_bytes, uint32_t max_read_size) {
     uint32_t total_bytes = num_sticks_to_read * stick_size_bytes;

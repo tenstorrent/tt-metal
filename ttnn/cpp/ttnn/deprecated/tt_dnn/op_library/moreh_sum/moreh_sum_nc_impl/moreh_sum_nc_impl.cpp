@@ -62,7 +62,7 @@ operation::ProgramWithCallbacks moreh_sum_nc_impl(const Tensor &input, const Ten
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = ttnn::operations::core::work_split::split_work_to_cores(grid, num_output_tiles);
+         num_cols_per_core_group_2] = ttnn::split_work_to_cores(grid, num_output_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

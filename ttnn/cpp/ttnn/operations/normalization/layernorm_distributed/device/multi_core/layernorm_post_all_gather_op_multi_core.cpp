@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
 
     }, compute_kernel_config);
 
-    uint32_t block_size = fp32_dest_acc_en ? ttnn::operations::core::work_split::find_max_divisor(Wt, 4) : ttnn::operations::core::work_split::find_max_divisor(Wt, 8);
+    uint32_t block_size = fp32_dest_acc_en ? ttnn::find_max_divisor(Wt, 4) : ttnn::find_max_divisor(Wt, 8);
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.get_dtype());
@@ -218,7 +218,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
 
 
     auto grid_size = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = ttnn::operations::core::work_split::split_work_to_cores(grid_size, num_tile_rows, true);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = ttnn::split_work_to_cores(grid_size, num_tile_rows, true);
 
     tt::log_debug("num_cores: {}", num_cores);
     tt::log_debug("grid_size: {}", grid_size);

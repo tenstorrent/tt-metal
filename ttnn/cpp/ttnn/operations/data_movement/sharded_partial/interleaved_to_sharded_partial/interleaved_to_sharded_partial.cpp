@@ -48,7 +48,7 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
                         break;
                     default: TT_ASSERT(false, "Unsupported sharding scheme");
                 }
-                grid_set = ttnn::operations::core::work_split::num_cores_to_corerange_set(num_cores, grid_size, row_wise);
+                grid_set = ttnn::num_cores_to_corerange_set(num_cores, grid_size, row_wise);
             } else if constexpr (std::is_same_v<GridType, CoreRangeSet>) {
                 TT_FATAL("Unsupported type for grid.");
             }

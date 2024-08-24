@@ -133,7 +133,7 @@ operation::ProgramWithCallbacks create_program(
             core_group_1,
             core_group_2,
             num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) = ttnn::operations::core::work_split::split_work_to_cores(core_range, num_output_blocks_total);
+            num_blocks_per_core_group_2) = ttnn::split_work_to_cores(core_range, num_output_blocks_total);
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     }

@@ -84,7 +84,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t num_blocks_y = M / per_core_M;
     uint32_t num_blocks_x = N / per_core_N;
 
-    CoreRangeSet all_cores(ttnn::operations::core::work_split::num_cores_to_corerange_set(
+    CoreRangeSet all_cores(ttnn::num_cores_to_corerange_set(
         num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
 
     // Create circular buffers
