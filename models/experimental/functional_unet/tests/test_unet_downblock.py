@@ -53,7 +53,6 @@ def test_unet_downblock(batch, groups, block_name, input_channels, input_height,
         input_channels=input_channels,
         input_height=input_height,
         input_width=input_width,
-        collapse=False,
     )
     torch_output, torch_residual = getattr(model, block_name)(torch_input)
 

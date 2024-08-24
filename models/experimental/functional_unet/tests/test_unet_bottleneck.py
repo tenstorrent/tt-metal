@@ -31,7 +31,7 @@ def test_unet_downblocks(batch, groups, device):
         assert_with_pcc(torch_tensor, ttnn_tensor, pcc)
 
     torch_input, ttnn_input = create_unet_input_tensors(
-        device, batch, groups, pad_input=False, input_channels=32, input_height=66, input_width=10, collapse=True
+        device, batch, groups, pad_input=True, input_channels=32, input_height=66, input_width=10
     )
     torch_output = model.bottleneck(torch_input)
 

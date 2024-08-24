@@ -220,7 +220,6 @@ class UNetDownblock:
 
     def __call__(self, x):
         if self.should_reshard:
-            breakpoint()
             sharded_memory_config = create_sharded_memory_config_from_parallel_config(
                 tensor_shape=[
                     1,
@@ -273,7 +272,10 @@ class UNetUpblock:
             )
             logger.info(f"Created shardspec: {parallel_config}, {self.sharded_memory_config}")
 
-    def __call__(self, x, residual, factor, perf_mode=False, use_reshard=False):
+    def __call__(self, x, residual, factor, perf_mode=False):
+        logger.info(
+            f"Running upsample block with {x.shape}, {x.memory_config()}, {residual.shape}, {residual.memory_config()}, factor={factor}"
+        )
         logger.info("to layout")
         if not perf_mode:
             # need to convert into interleaved, then back into sharded due to pcc issues
@@ -434,7 +436,7 @@ class UNet:
     def __call__(self, x, original_shape, perf_mode=False):
         nhw = original_shape[-4] * original_shape[-2] * original_shape[-1]
 
-        x = x.to(self.device, self.input_sharded_memory_config)
+        x = x.to(self.device, ttnn.L1_MEMORY_CONFIG)
 
         x, c1_residual = self.downblock1(x)
         x, c2_residual = self.downblock2(x)

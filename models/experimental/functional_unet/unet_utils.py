@@ -45,12 +45,10 @@ def create_unet_models(device, groups, torch_input_tensor):
 
 
 def create_unet_input_tensors(
-    device, batch, groups, pad_input=True, input_channels=4, input_height=1056, input_width=160, collapse=False
+    device, batch, groups, pad_input=True, input_channels=4, input_height=1056, input_width=160
 ):
     torch_input_tensor = torch.randn(batch, input_channels * groups, input_height, input_width)
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    # if collapse:
-    # ttnn_input_tensor = torch.reshape(ttnn_input_tensor, (1, 1, batch * input_height * input_width, input_channels))
 
     if pad_input:
         # Pad to 16 if grayskull run and 32 for wormhole
