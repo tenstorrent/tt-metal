@@ -16,9 +16,8 @@ from models.experimental.functional_unet.tt import model_preprocessing
 
 @pytest.mark.parametrize("batch", [2])
 @pytest.mark.parametrize("groups", [1])
-@pytest.mark.parametrize("perf_mode", [1])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_unet_model(batch, groups, perf_mode, device):
+def test_unet_model(batch, groups, device):
     torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups, pad_input=False)
     model = unet_shallow_torch.UNet.from_random_weights(groups=1)
 
@@ -26,7 +25,7 @@ def test_unet_model(batch, groups, perf_mode, device):
     ttnn_model = unet_shallow_ttnn2.UNet(parameters, device)
 
     torch_output_tensor = model(torch_input)
-    output_tensor = ttnn_model(device, ttnn_input, list(torch_input.shape), perf_mode=perf_mode)
+    output_tensor = ttnn_model(ttnn_input, list(torch_input.shape))
 
     B, C, H, W = torch_output_tensor.shape
     ttnn_tensor = ttnn.to_torch(output_tensor).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)

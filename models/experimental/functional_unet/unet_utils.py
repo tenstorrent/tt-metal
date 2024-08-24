@@ -49,8 +49,8 @@ def create_unet_input_tensors(
 ):
     torch_input_tensor = torch.randn(batch, input_channels * groups, input_height, input_width)
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    if collapse:
-        ttnn_input_tensor = torch.reshape(ttnn_input_tensor, (1, 1, batch * input_height * input_width, input_channels))
+    # if collapse:
+    # ttnn_input_tensor = torch.reshape(ttnn_input_tensor, (1, 1, batch * input_height * input_width, input_channels))
 
     if pad_input:
         # Pad to 16 if grayskull run and 32 for wormhole

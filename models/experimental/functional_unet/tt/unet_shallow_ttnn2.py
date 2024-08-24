@@ -207,7 +207,7 @@ class UNetDownblock:
 
         self.should_reshard = should_reshard
         if self.should_reshard:
-            parallel_config = determine_parallel_config(
+            self.parallel_config = determine_parallel_config(
                 is_1d_systolic=True,
                 batch_size=self.conv1.batch_size,
                 input_channels=self.conv1.in_channels,
@@ -217,21 +217,24 @@ class UNetDownblock:
                 device=device,
                 is_out_tiled=True,
             )
-            self.sharded_memory_config = create_sharded_memory_config_from_parallel_config(
+
+    def __call__(self, x):
+        if self.should_reshard:
+            breakpoint()
+            sharded_memory_config = create_sharded_memory_config_from_parallel_config(
                 tensor_shape=[
                     1,
                     1,
-                    self.conv1.input_width * self.conv1.input_height * self.conv1.batch_size,
-                    self.conv1.in_channels,
+                    x.shape[0] * x.shape[1] * x.shape[2],
+                    x.shape[3],
                 ],
-                parallel_config=parallel_config,
-                tile_size=32 if conv1.dtype == ttnn.bfloat8_b else 1,
+                parallel_config=self.parallel_config,
+                tile_size=32 if x.dtype == ttnn.bfloat8_b else 1,
             )
-            logger.info(f"Created shardspec: {parallel_config}, {self.sharded_memory_config}")
-
-    def __call__(self, x, perf_mode=False):
-        if self.should_reshard:
-            x = unet_reshard(x, self.sharded_memory_config, use_reshard=False)
+            x = ttnn.to_memory_config(
+                x,
+                memory_config=sharded_memory_config,
+            )
         x = self.conv1(x)
         x = self.conv2(x)
         residual = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # pool deletes its activation
@@ -299,6 +302,7 @@ class UNetUpblock:
 
 class UNet:
     def __init__(self, parameters: ParameterDict, device) -> None:
+        self.device = device
         self.conv_cache = {}
         self.max_pool_cache = {}
         self.downblock1 = UNetDownblock(
@@ -310,7 +314,7 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             max_pool_cache=self.max_pool_cache,
-            should_reshard=False,
+            should_reshard=True,
         )
         self.downblock2 = UNetDownblock(
             parameters.c2,
@@ -427,25 +431,16 @@ class UNet:
         x = self.bnc(x)
         return self.bnc2(x)
 
-    def __call__(self, device, input_tensor, original_shape, perf_mode=False):
+    def __call__(self, x, original_shape, perf_mode=False):
         nhw = original_shape[-4] * original_shape[-2] * original_shape[-1]
 
-        input_tensor = input_tensor.to(device, ttnn.L1_MEMORY_CONFIG)
+        x = x.to(self.device, self.input_sharded_memory_config)
 
-        logger.info(f"C1 {input_tensor.shape}")
-        x, c1_residual = self.downblock1(input_tensor, perf_mode=perf_mode)
+        x, c1_residual = self.downblock1(x)
+        x, c2_residual = self.downblock2(x)
+        x, c3_residual = self.downblock3(x)
+        x, c4_residual = self.downblock4(x)
 
-        logger.info(f"C2 {x.shape}")
-        x, c2_residual = self.downblock2(x, perf_mode=perf_mode)
-
-        logger.info(f"C3 {x.shape}")
-        x, c3_residual = self.downblock3(x, perf_mode=perf_mode)
-
-        logger.info("C4")
-        x, c4_residual = self.downblock4(x, perf_mode=perf_mode)
-
-        logger.info("bnc")
-        breakpoint()
         x = self.bottleneck(x)
 
         logger.info("upsample1")
