@@ -366,7 +366,7 @@ class UNet:
                 self.bnc.in_channels,
             ],
             parallel_config=bnc_parallel_config,
-            tile_size=32,  # if self.bnc.dtype == ttnn.bfloat8_b else 1,
+            tile_size=(32 if self.bnc.conv_config.dtype == ttnn.bfloat8_b else 1),
         )
         logger.info(f"Created bottleneck shard spec: {bnc_parallel_config}, {self.bnc_sharded_memory_config}")
 
@@ -419,7 +419,13 @@ class UNet:
             parameters.output_layer, bn=None, device=device, cache=self.conv_cache, activation=""
         )
 
-        self.cache = {}
+    def bottleneck(self, x):
+        x = ttnn.to_memory_config(
+            x,
+            memory_config=self.bnc_sharded_memory_config,
+        )
+        x = self.bnc(x)
+        return self.bnc2(x)
 
     def __call__(self, device, input_tensor, original_shape, perf_mode=False):
         nhw = original_shape[-4] * original_shape[-2] * original_shape[-1]
@@ -440,9 +446,7 @@ class UNet:
 
         logger.info("bnc")
         breakpoint()
-        x = unet_reshard(x, self.bnc_sharded_memory_config, use_reshard=False)
-        x = self.bnc(x)
-        x = self.bnc2(x)
+        x = self.bottleneck(x)
 
         logger.info("upsample1")
         x = self.upsample1(x, c4_residual, nhw // 64, perf_mode=perf_mode)

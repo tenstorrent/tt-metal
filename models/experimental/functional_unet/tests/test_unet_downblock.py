@@ -26,12 +26,12 @@ def test_unet_downblocks(batch, groups, perf_mode, device):
     parameters = model_preprocessing.create_unet_model_parameters(model, torch_input, groups=groups, device=device)
     ttnn_model = unet_shallow_ttnn2.UNet(parameters, device)
 
-    def check_pcc_conv(torch_tensor, ttnn_tensor, pcc=0.995):
+    def check_pcc_conv(torch_tensor, ttnn_tensor, pcc=0.999):
         B, C, H, W = torch_tensor.shape
         ttnn_tensor = ttnn.to_torch(ttnn_tensor).reshape(B, H, W, C).permute(0, 3, 1, 2)
         assert_with_pcc(torch_tensor, ttnn_tensor, pcc)
 
-    def check_pcc_pool(torch_tensor, ttnn_tensor, pcc=0.995):
+    def check_pcc_pool(torch_tensor, ttnn_tensor, pcc=0.999):
         B, C, H, W = torch_tensor.shape
         ttnn_tensor = ttnn.to_torch(ttnn_tensor).reshape(B, H, W, -1).permute(0, 3, 1, 2)[:, :C, :, :]
         assert_with_pcc(torch_tensor, ttnn_tensor, pcc)
