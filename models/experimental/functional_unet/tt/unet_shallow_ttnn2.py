@@ -167,7 +167,13 @@ class UNetMaxPool2D:
         )
 
     def __call__(self, x):
-        logger.info(f"running max_pool - input={x.shape}, in_h={self.pool.input_height}, in_w={self.pool.input_width}")
+        # For some reason the shard widths don't always match - so don't assert on it
+        assert (
+            x.memory_config().shard_spec.num_cores()
+            == self.max_pool.max_pool.input_sharded_memory_config.shard_spec.num_cores()
+            and x.memory_config().shard_spec.shape[0]
+            == self.max_pool.max_pool.input_sharded_memory_config.shard_spec.shape[0]
+        ), "Expected same input shard to match max pool's shard configuration"
         return self.max_pool(x)
 
 
