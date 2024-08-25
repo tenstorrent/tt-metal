@@ -283,23 +283,37 @@ class UNetUpblock:
             )
             logger.info(f"Created shardspec: {parallel_config}, {self.sharded_memory_config}")
 
-    def __call__(self, x, residual, factor):
+    def upsample(self, x):
+        # Need to reshape into (B, H, W, C) to get correct output from ttnn.upsample
+        x = ttnn.reshape(
+            x, (self.conv1.batch_size, self.conv1.input_height // 2, self.conv1.input_width // 2, x.shape[-1])
+        )
+        x = ttnn.upsample(x, (2, 2, 1))
+        x = ttnn.reshape(
+            x, (1, 1, self.conv1.batch_size * self.conv1.input_height * self.conv1.input_width, x.shape[-1])
+        )
+        return x
+
+    def __call__(self, x, residual):
         logger.info(
-            f"Running upsample block with {x.shape}, {x.memory_config()}, {residual.shape}, {residual.memory_config()}, factor={factor}"
+            f"Running upsample block with {x.shape}, {x.memory_config()}, {residual.shape}, {residual.memory_config()}"
         )
         assert list(x.shape)[:2] == [
             1,
             1,
         ], f"Expected downblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
 
-        x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # TODO: Swap this and below
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        x = ttnn.upsample(x, (2, 2, 1))
-        x = ttnn.reshape(x, (1, 1, factor, x.shape[-1]))
+        x = self.upsample(x)
+
+        residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
 
         x = unet_concat([x, residual], dim=-1, perf_mode=True)
         ttnn.deallocate(residual)
+
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         if self.should_reshard:
             x = ttnn.to_memory_config(x, self.sharded_memory_config)
@@ -416,7 +430,8 @@ class UNet:
             parameters.b7_3,
             device,
             conv_cache=self.conv_cache,
-            should_reshard=False,  # TODO: Fix this - shard width is 48
+            should_reshard=True,
+            hacked_shard_shape=True,  # TODO: Don't use this hack
         )
         self.upblock4 = UNetUpblock(
             parameters.c8,
@@ -463,4 +478,6 @@ class UNet:
         x = x.cpu().pad_to_tile(0)
         x = self.output_layer(x)
 
-        return ttnn.from_device(x)
+        x = ttnn.from_device(x)
+
+        return x
