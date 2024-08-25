@@ -230,7 +230,6 @@ class UNetDownblock:
             nearest_32(self.conv1.input_height * self.conv1.input_width * self.conv1.batch_size),
             x.shape[-1],  # Channels can be padded
         ], f"Expected downblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
-
         if self.should_reshard:
             sharded_memory_config = create_sharded_memory_config_from_parallel_config(
                 tensor_shape=[
@@ -446,8 +445,6 @@ class UNet:
     def __call__(self, x, original_shape, perf_mode=False):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
 
-        nhw = original_shape[-4] * original_shape[-2] * original_shape[-1]
-
         x = x.to(self.device, ttnn.L1_MEMORY_CONFIG)
 
         x, c1_residual = self.downblock1(x)
@@ -457,17 +454,10 @@ class UNet:
 
         x = self.bottleneck(x)
 
-        logger.info("upsample1")
-        x = self.upblock1(x, c4_residual, nhw // 64)
-
-        logger.info("upsample2")
-        x = self.upblock2(x, c3_residual, nhw // 16)
-
-        logger.info("upsample3")
-        x = self.upblock3(x, c2_residual, nhw // 4)
-
-        logger.info(f"upsample4 {x.shape} {c1_residual.shape}")
-        x = self.upblock4(x, c1_residual, nhw)
+        x = self.upblock1(x, c4_residual)
+        x = self.upblock2(x, c3_residual)
+        x = self.upblock3(x, c2_residual)
+        x = self.upblock4(x, c1_residual)
 
         # Pointwise convolutions currently don't handle padded inputs
         x = x.cpu().pad_to_tile(0)
