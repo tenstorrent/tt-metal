@@ -438,6 +438,8 @@ class UNet:
         return self.bnc2(x)
 
     def __call__(self, x, original_shape, perf_mode=False):
+        assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
+
         nhw = original_shape[-4] * original_shape[-2] * original_shape[-1]
 
         x = x.to(self.device, ttnn.L1_MEMORY_CONFIG)
@@ -461,6 +463,7 @@ class UNet:
         logger.info(f"upsample4 {x.shape} {c1_residual.shape}")
         x = self.upblock4(x, c1_residual, nhw)
 
+        # Pointwise convolutions currently don't handle padded inputs
         x = x.cpu().pad_to_tile(0)
         x = self.output_layer(x)
 
