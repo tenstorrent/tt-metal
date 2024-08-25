@@ -109,7 +109,7 @@ class UNetConv2D:
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
-        if bn:
+        if bn is not None:
             weight, bias = fold_batch_norm2d_into_conv2d(conv.module, bn.module)
         else:
             weight, bias = conv.module.weight, conv.module.bias
@@ -242,7 +242,7 @@ class UNetDownblock:
             )
         x = self.conv1(x)
         x = self.conv2(x)
-        residual = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # pool deletes its activation
+        residual = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # pool deletes its activation
         x = self.pool1(x)
         return x, residual
 

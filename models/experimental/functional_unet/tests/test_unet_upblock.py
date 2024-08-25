@@ -69,7 +69,5 @@ def test_unet_upblock(
 
     ttnn_input, ttnn_residual = ttnn_input.to(device), ttnn_residual.to(device)
 
-    # @ttnn_input = ttnn.to_memory_config(ttnn_input, ttnn_model.bnc_sharded_memory_config)
-
     ttnn_output = getattr(ttnn_model, block_name)(ttnn_input, ttnn_residual, factor)
     check_pcc_conv(torch_output, ttnn_output)

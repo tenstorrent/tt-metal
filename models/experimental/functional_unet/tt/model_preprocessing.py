@@ -31,7 +31,7 @@ def create_unet_model_parameters(model: unet_shallow_torch.UNet, input_tensor: t
     }
     parameters.p4["parallel_config_override"] = {
         "grid_size": (8, 7),
-        "num_cores_nhw": 5,
+        "num_cores_nhw": 55,
     }
 
     parameters.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 5 * 32}
