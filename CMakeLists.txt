@@ -153,7 +153,7 @@ target_link_libraries(metal_common_libs INTERFACE
 add_library(linker_flags INTERFACE)
 
 add_library(compiler_warnings INTERFACE)
-target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter -Wno-vla-cxx-extension)
+target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter)
 
 # add additional compile warning flags depending on the compiler
 ADJUST_COMPILER_WARNINGS()
