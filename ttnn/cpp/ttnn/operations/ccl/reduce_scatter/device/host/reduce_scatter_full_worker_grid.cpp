@@ -802,7 +802,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
     // Configure the EDM builders
     std::function<bool(uint32_t)> is_worker_in_clockwise_direction_fn = [enable_bidirectional, num_edm_channels](uint32_t x) {
-                return enable_bidirectional ? (x % num_edm_channels == 0) : true;
+                static constexpr bool bidirectional_directions = 2;
+                return enable_bidirectional ? (x % bidirectional_directions == 0) : true;
             };
     EdmInterfaceAddresses edm_interface_addresses;
     for (std::size_t link = 0; link < num_links; link++) {
