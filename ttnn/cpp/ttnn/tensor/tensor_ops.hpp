@@ -16,11 +16,8 @@ class DeviceMesh;
 }
 
 namespace tt::tt_metal::tensor_ops {
-Tensor tensor_to(const Tensor& input_tensor, CommandQueue& queue, const MemoryConfig& mem_config);
 
 Tensor tensor_to(const Tensor& input_tensor, Device* target_device, const MemoryConfig& mem_config);
-
-Tensor tensor_to(const Tensor& input_tensor, DeviceMesh* device_mesh, const MemoryConfig& mem_config);
 
 Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers, const MemoryConfig& mem_config);
 

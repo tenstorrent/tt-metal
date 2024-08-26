@@ -13,12 +13,13 @@
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 using namespace tt::constants;
 
 namespace{
@@ -379,14 +380,16 @@ const Storage& Tensor::get_storage() const {
 }
 
 Tensor Tensor::to(CommandQueue& queue, const MemoryConfig& mem_config) const {
-    return tensor_ops::tensor_to(*this, queue, mem_config);
+    return tensor_ops::tensor_to(*this, queue.device(), mem_config);
 }
 
 Tensor Tensor::to(Device* target_device, const MemoryConfig& mem_config) const {
     return tensor_ops::tensor_to(*this, target_device, mem_config);
+}
 
 Tensor Tensor::to(DeviceMesh* device_mesh, const MemoryConfig& mem_config) const {
-    return tensor_ops::tensor_to(*this, device_mesh, mem_config);
+    std::vector<Device*> workers_to_use = distribute_tensor_to_mesh(*this, *device_mesh);
+    return tensor_ops::tensor_to(*this, workers_to_use, mem_config);
 }
 
 Tensor Tensor::to(const std::vector<Device*>& workers, const MemoryConfig& mem_config) const {
@@ -413,7 +416,7 @@ Tensor Tensor::extract_shard(const uint32_t& core_id) const {
 }
 
 Tensor Tensor::to(Layout target_layout, Device* worker) const {
-    return tensor_ops::tensor_to(*this, target_layout, device);
+    return tensor_ops::tensor_to(*this, target_layout, worker);
 }
 
 Tensor Tensor::to(Layout target_layout, DeviceMesh* device_mesh) const {
@@ -439,7 +442,7 @@ Tensor Tensor::pad_to_tile(float pad_value) const {
 }
 
 Tensor Tensor::unpad_from_tile(const Shape& output_tensor_shape) const {
-    return tensor_ops::unpad_from_tile(*this, output_tensor_shape);
+    return tensor_ops::tensor_unpad_from_tile(*this, output_tensor_shape);
 }
 
 const bool Tensor::is_sharded() const {
@@ -450,6 +453,7 @@ uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(t
 
 Tensor Tensor::reshape(int N, int C, int H, int W) const {
     return tensor_ops::tensor_reshape(*this, N, C, H, W);
+}
 
 Tensor Tensor::reshape(const Shape& new_shape) const {
     return tensor_ops::tensor_reshape(*this, new_shape);
@@ -584,6 +588,7 @@ Tensor create_device_tensor(
         return output;
     }
 }
+
 
 namespace detail {
 template <typename DataType>

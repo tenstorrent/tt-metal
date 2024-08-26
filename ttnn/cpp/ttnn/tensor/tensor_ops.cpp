@@ -4,58 +4,27 @@
 
 #include "tensor_ops.hpp"
 
+#include "ttnn/tensor/tensor.hpp"
+
+#include <cstdint>
+#include <memory>
+
 #include "common/bfloat16.hpp"
-#include "common/bfloat4.hpp"
-#include "common/bfloat8.hpp"
-#include "common/test_tiles.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "ttnn/common/constants.hpp"
+#include "tensor_ops.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/device_mesh.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+#include "tt_metal/common/constants.hpp"
+#include "tt_metal/common/math.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/graph/graph_tracking.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 
 namespace tt::tt_metal::tensor_ops {
-
-Tensor tensor_to(const Tensor& input_tensor, CommandQueue& queue, const MemoryConfig& mem_config) {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to", input_tensor, queue, mem_config);
-    auto target_device = queue.device();
-    // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
-    Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(target_device, input_tensor);
-    // Populate device storage outside of thread, so that downstream
-    // functions running in main can get storage type without blocking
-    Tensor device_tensor({target_device});
-    // Record main thread ref count for tensors before pushing to queue.
-    uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    uint32_t original_tensor_ref_count = async_safe_tensor.tensor_attributes->record_main_thread_ref_count();
-    queue.device()->push_work([async_safe_tensor, device_tensor, mem_config, target_device]() mutable {
-        if (async_safe_tensor.storage_type() == StorageType::DEVICE) {
-            TT_ASSERT(async_safe_tensor.device() == target_device && "Currently do not support moving between devices");
-            device_tensor.populate_buffers_and_metadata(async_safe_tensor);
-        } else {
-            tensor_impl::validate_on_device_dtype_and_layout(
-                target_device,
-                async_safe_tensor.get_legacy_shape(),
-                async_safe_tensor.get_dtype(),
-                async_safe_tensor.get_layout());
-            auto local_tensor =
-                tensor_impl::to_device_wrapper(async_safe_tensor, target_device, mem_config, std::nullopt);
-            // Populate device tensor
-            device_tensor.populate_buffers_and_metadata(local_tensor);
-        }
-    });
-    // Update main thread ref count for tensors after pushing to queue (update original tensor and returned tensor,
-    // since both can be on device).
-    device_tensor.tensor_attributes->update_main_thread_ref_count(device_tensor.workers.at(0), device_tensor_ref_count);
-    async_safe_tensor.tensor_attributes->update_main_thread_ref_count(
-        device_tensor.workers.at(0), original_tensor_ref_count);
-    device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
-    GraphTracker::instance().track_function_end(device_tensor);
-    return device_tensor;
-}
 
 Tensor tensor_to(const Tensor& input_tensor, Device* target_device, const MemoryConfig& mem_config) {
     ZoneScoped;
@@ -92,16 +61,6 @@ Tensor tensor_to(const Tensor& input_tensor, Device* target_device, const Memory
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
-}
-
-Tensor tensor_to(const Tensor& input_tensor, DeviceMesh* device_mesh, const MemoryConfig& mem_config) {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to", input_tensor, device_mesh, mem_config);
-    std::vector<Device*> workers_to_use = distribute_tensor_to_mesh(input_tensor, *device_mesh);
-    auto output = input_tensor.to(workers_to_use, mem_config);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
 }
 
 Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers, const MemoryConfig& mem_config) {
@@ -318,8 +277,8 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value)  {
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
     uint32_t height = input_tensor.get_legacy_shape()[-2];
     uint32_t width = input_tensor.get_legacy_shape()[-1];
-    uint32_t padded_height = round_up(height, TILE_HEIGHT);
-    uint32_t padded_width = round_up(width, TILE_WIDTH);
+    uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
+    uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
 
     std::vector<uint32_t> shape;
     std::vector<uint32_t> padded_shape;
@@ -354,11 +313,11 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const Shape& output_te
             "Input shape must match output shape apart from last 2 dims");
     }
     TT_ASSERT(
-        input_tensor.get_legacy_shape()[-2] % TILE_HEIGHT == 0 && input_tensor.get_legacy_shape()[-1] % TILE_WIDTH == 0,
+        input_tensor.get_legacy_shape()[-2] % constants::TILE_HEIGHT == 0 && input_tensor.get_legacy_shape()[-1] % constants::TILE_WIDTH == 0,
         "Last 2 dims of input shape must be multiples of 32");
     TT_ASSERT(
-        input_tensor.get_legacy_shape()[-2] - TILE_HEIGHT < output_tensor_shape[-2] &&
-            input_tensor.get_legacy_shape()[-1] - TILE_WIDTH < output_tensor_shape[-1],
+        input_tensor.get_legacy_shape()[-2] - constants::TILE_HEIGHT < output_tensor_shape[-2] &&
+            input_tensor.get_legacy_shape()[-1] - constants::TILE_WIDTH < output_tensor_shape[-1],
         "Last 2 dims of output must be within range to have been padded to input");
     std::vector<uint32_t> output_tensor_start{};
     std::vector<uint32_t> output_tensor_end{};
@@ -392,11 +351,11 @@ Tensor tensor_reshape(const Tensor& input_tensor, const Shape& new_shape) {
         tt::tt_metal::compute_volume(new_shape));
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_ASSERT(
-            new_shape[-2] % TILE_HEIGHT == 0 && new_shape[-1] % TILE_WIDTH == 0 &&
+            new_shape[-2] % constants::TILE_HEIGHT == 0 && new_shape[-1] % constants::TILE_WIDTH == 0 &&
             "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
     auto output = std::visit(
-        [this, &new_shape](auto&& storage) -> Tensor {
+        [&input_tensor, &new_shape](auto&& storage) -> Tensor {
             using T = std::decay_t<decltype(storage)>;
             const auto& tensor = input_tensor;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
