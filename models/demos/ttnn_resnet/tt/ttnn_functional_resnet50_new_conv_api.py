@@ -645,8 +645,8 @@ class resnet50:
         w += kernel_size * 2
         C = _nearest_y(c, 4)
         self.fold_pad_c = C - c
-        self.fold_pad_h = 0
-        self.fold_pad_w = 0
+        self.fold_pad_h = kernel_size
+        self.fold_pad_w = kernel_size
         self.fold_output_shape = (
             n,
             h // self.fold_stride_h,
@@ -737,7 +737,6 @@ class resnet50:
             self.fold_stride_h,
             self.fold_stride_w,
             use_transpose_as_fold=True,
-            output_shape=self.fold_output_shape,
             pad_c=self.fold_pad_c,
             pad_h=self.fold_pad_h,
             pad_w=self.fold_pad_w,

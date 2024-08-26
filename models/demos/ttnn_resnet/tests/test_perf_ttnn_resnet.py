@@ -377,7 +377,7 @@ def run_perf_resnet(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0070, 25),),
+    ((16, 0.0070, 26),),
 )
 def test_perf_bare_metal(
     device,
@@ -437,7 +437,7 @@ def test_perf_trace_bare_metal(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0070, 25),),
+    ((16, 0.0070, 26),),
 )
 def test_perf_2cqs_bare_metal(
     device,

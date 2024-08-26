@@ -246,18 +246,11 @@ class ResNet50TestInfra:
         num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
         # torch tensor
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-        print(torch_input_tensor.shape)
-        pad_h = self.resnet50_first_conv_kernel_size
-        pad_w = self.resnet50_first_conv_kernel_size
-        w = torch_input_tensor.shape[-1]
-        pad_w_right = (w + 2 * pad_w + 31) // 32 * 32 - (w + pad_w)
-        # pad h w
-        torch_input_tensor_padded = torch.nn.functional.pad(torch_input_tensor, (pad_w, pad_w_right, pad_h, pad_h))
         if num_devices > 1:
-            n, c, h, w = torch_input_tensor_padded.shape
+            n, c, h, w = torch_input_tensor.shape
             n = n // num_devices
         else:
-            n, c, h, w = torch_input_tensor_padded.shape
+            n, c, h, w = torch_input_tensor.shape
         # sharded mem config for fold input
         num_cores = core_grid.x * core_grid.y
         shard_h = (n * c * h + num_cores - 1) // num_cores
@@ -269,7 +262,7 @@ class ResNet50TestInfra:
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
         tt_inputs_host = ttnn.from_torch(
-            torch_input_tensor_padded, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mesh_mapper
+            torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mesh_mapper
         )
         return tt_inputs_host, input_mem_config
 
