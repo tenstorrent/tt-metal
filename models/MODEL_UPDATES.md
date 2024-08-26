@@ -4,6 +4,18 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## August 26, 2024
+
+### [Falcon7B](demos/falcon7b_common)
+- Added data parallel demo for a single Galaxy (32 chips)
+- Refactored all modules and tests to use ttnn multi-device tensors
+
+### [Llama 3.1 - 8B](demos/wormhole/llama31_8b)
+- Added multi-batching support to the demo for running multiple batches of users consecutively
+
+### [Mixtral7Bx8](demos/t3000/mixtral8x7b)
+- Improved end-to-end performance through optimizations to the attention mask in flash decoding
+
 ## August 12, 2024
 
 ### [Llama 3.1 - 8B](demos/wormhole/llama31_8b)
