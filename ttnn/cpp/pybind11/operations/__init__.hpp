@@ -7,39 +7,38 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/line_all_gather/line_all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
-
-#include "ttnn/operations/pool/avgpool/avg_pool_pybind.hpp"
-#include "ttnn/operations/pool/downsample/downsample_pybind.hpp"
-#include "ttnn/operations/pool/maxpool/maxpool_pybind.hpp"
-#include "ttnn/operations/pool/maxpool/max_pool2d_pybind.hpp"
-#include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
-#include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
-#include "ttnn/operations/eltwise/ternary/ternary_pybind.hpp"
-#include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
+#include "ttnn/operations/ccl/line_all_gather/line_all_gather_pybind.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
-#include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
-#include "ttnn/operations/examples/examples_pybind.hpp"
-#include "ttnn/operations/normalization/normalization_pybind.hpp"
-#include "ttnn/operations/reduction/reduction_pybind.hpp"
-#include "ttnn/operations/eltwise/ternary_backward/ternary_backward_pybind.hpp"
-#include "ttnn/operations/eltwise/unary_backward/unary_backward_pybind.hpp"
-#include "ttnn/operations/eltwise/complex_unary/complex_unary_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
+#include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
+#include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
+#include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
+#include "ttnn/operations/eltwise/complex_unary/complex_unary_pybind.hpp"
+#include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary_pybind.hpp"
+#include "ttnn/operations/eltwise/ternary_backward/ternary_backward_pybind.hpp"
+#include "ttnn/operations/eltwise/unary/unary_pybind.hpp"
+#include "ttnn/operations/eltwise/unary_backward/unary_backward_pybind.hpp"
 #include "ttnn/operations/embedding/embedding_pybind.hpp"
 #include "ttnn/operations/embedding_backward/embedding_backward_pybind.hpp"
-#include "ttnn/operations/matmul/matmul_pybind.hpp"
-#include "ttnn/operations/transformer/transformer_pybind.hpp"
+#include "ttnn/operations/examples/examples_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
-#include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
-#include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
-#include "ttnn/operations/loss/loss_pybind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_pybind.hpp"
+#include "ttnn/operations/loss/loss_pybind.hpp"
+#include "ttnn/operations/matmul/matmul_pybind.hpp"
+#include "ttnn/operations/normalization/normalization_pybind.hpp"
+#include "ttnn/operations/pool/avgpool/avg_pool_pybind.hpp"
+#include "ttnn/operations/pool/downsample/downsample_pybind.hpp"
+#include "ttnn/operations/pool/maxpool/max_pool2d_pybind.hpp"
+#include "ttnn/operations/pool/maxpool/maxpool_pybind.hpp"
+#include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
+#include "ttnn/operations/reduction/reduction_pybind.hpp"
+#include "ttnn/operations/transformer/transformer_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -48,6 +47,9 @@ namespace ttnn {
 namespace operations {
 
 void py_module(py::module& module) {
+    auto m_core = module.def_submodule("core", "core operations");
+    core::py_module(m_core);
+
     auto m_examples = module.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
 
@@ -82,9 +84,6 @@ void py_module(py::module& module) {
 
     auto m_ternary = module.def_submodule("ternary", "ternary operations");
     ternary::py_module(m_ternary);
-
-    auto m_core = module.def_submodule("core", "core operations");
-    core::py_module(m_core);
 
     auto m_creation = module.def_submodule("creation", "creation operations");
     creation::py_module(m_creation);
