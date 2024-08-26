@@ -1460,11 +1460,6 @@ void py_module(py::module& module) {
 
     detail::bind_unary_backward_float(
         module,
-        ttnn::remainder_bw,
-        R"doc(Performs backward operations for remainder on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor`.)doc");
-
-    detail::bind_unary_backward_float(
-        module,
         ttnn::div_no_nan_bw,
         R"doc(Performs backward operations for div_no_nan on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor`.)doc");
 

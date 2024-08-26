@@ -32,6 +32,7 @@ enum class BinaryBackwardOpType {
     MAX_BW,
     DIV_BW,
     MUL_BW,
+    REMAINDER_BW,
 };
 
 std::vector<Tensor> _atan2_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
