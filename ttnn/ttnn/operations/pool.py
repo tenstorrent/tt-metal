@@ -23,7 +23,7 @@ from ttnn.operations.conv.sliding_window_op_utils import (
     calculate_memory_config,
 )
 
-from typing import Union, Tuple, Dict, Optional
+from typing import Union, Tuple, Dict
 
 from tt_lib.utils import _nearest_32
 import tt_lib as ttl
@@ -92,17 +92,17 @@ class MaxPool2d:
         stride: Union[int, Tuple[int, int]] = 1,
         padding: Union[int, Tuple[int, int]] = 0,
         dilation: Union[int, Tuple[int, int]] = 1,
-        dtype: Optional[ttnn.DataType] = None,
+        dtype: ttnn.DataType = None,
         *,
         device: ttnn.Device,
         batch_size: int,
         input_height: int,
         input_width: int,
         reader_patterns_cache: Dict,
-        parallel_config_override: Optional[Dict] = None,
+        parallel_config_override: Dict = None,
         deallocate_activation: bool = False,
-        channels: Optional[int] = None,
-        mesh_mapper: Optional[ttnn.TensorToMesh] = None,
+        channels: int = None,
+        mesh_mapper: ttnn.TensorToMesh = None,
     ):
         if isinstance(kernel_size, int):
             window_h = kernel_size
