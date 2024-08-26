@@ -1,4 +1,4 @@
-name: "Model perf regressions and output report"
+name: "(Single-card) Model perf tests"
 
 on:
   workflow_dispatch:
