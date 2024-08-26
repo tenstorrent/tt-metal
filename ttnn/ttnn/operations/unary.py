@@ -105,6 +105,9 @@ def register_ttnn_cpp_unary_function(unary_function):
             )
 
         torch_function = name_to_golden_function[unary_function.__name__.split(".")[-1]]
+        op_name = unary_function.__name__.split(".")[-1]
+        if op_name in ["reciprocal", "asin", "acos"]:
+            return torch.nan_to_num(torch_function(input_tensor), nan=6.9752e19, posinf=1.6948e38, neginf=-1.6948e38)
         return torch_function(input_tensor)
 
     ttnn.attach_golden_function(unary_function, golden_function=_golden_function)

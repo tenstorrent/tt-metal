@@ -395,7 +395,14 @@ def test_remainder(device, h, w, scalar):
 def test_fmod(device, h, w, scalar):
     run_unary_test_with_float(device, h, w, scalar, ttnn.fmod)
 
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_asin_fixed(device, h, w):
     run_unary_test_fixed(device, h, w, 90, ttnn.asin, pcc=0.999)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_acos_fixed(device, h, w):
+    run_unary_test_fixed(device, h, w, 90, ttnn.acos, pcc=0.999)
