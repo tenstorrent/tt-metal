@@ -320,11 +320,8 @@ class UNetUpblock:
         x = self.upsample(x)
 
         residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
-
         x = unet_concat([x, residual], dim=-1, perf_mode=True)
         ttnn.deallocate(residual)
-
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         if self.should_reshard:
             x = ttnn.to_memory_config(x, self.sharded_memory_config)

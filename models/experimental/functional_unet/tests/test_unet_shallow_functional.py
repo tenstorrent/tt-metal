@@ -20,7 +20,7 @@ from models.experimental.functional_unet.unet_utils import create_unet_models, c
 @pytest.mark.parametrize("perf_mode", [True])
 @pytest.mark.parametrize("batch", [2])
 @pytest.mark.parametrize("groups", [1])
-def test_unet_pcc(device, perf_mode, batch, groups, reset_seeds):
+def test_unet_pcc(device, perf_mode, batch, groups, reset_seeds, use_program_cache):
     logger.info(f"Running UNet test with batch_size={batch}, groups={groups}")
     with torch.no_grad():
         torch_input_tensor, ttnn_input_tensor = create_unet_input_tensors(device, batch, groups)
