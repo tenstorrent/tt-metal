@@ -105,7 +105,7 @@ ttnn/setup.py @ayerofieiev-tt @dmakoviichuk-tt @tt-rkim
 ttnn/**/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @yan-zaretskiy
 ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu
 ttnn/cpp/ttnn/operations/pool/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
-ttnn/cpp/ttnn/operations/conv2d/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
+ttnn/cpp/ttnn/operations/conv2d/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic @bbradelTT
 ttnn/cpp/ttnn/operations/data_movement/ @tarafdarTT @sjameelTT @yan-zaretskiy
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
 ttnn/cpp/ttnn/operations/eltwise/ @arakhmati @patrickroberts @yan-zaretskiy @eyonland

@@ -266,8 +266,8 @@ class TtLlamaModel_galaxy:
 
     def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
         # Run distributed rmsnorm part 1
-        tt_stats = ttnn.experimental.operations.primary.rmsnorm_pre_allgather(
-            inp, compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG, output_dtype=ttnn.bfloat16
+        tt_stats = ttnn.rms_norm_pre_all_gather(
+            inp, compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG, dtype=ttnn.bfloat16
         )
 
         tt_stats = ttnn.reshape(
@@ -283,8 +283,8 @@ class TtLlamaModel_galaxy:
         )
 
         # Run distributed rmsnorm part 2
-        tt_out = ttnn.experimental.operations.primary.rmsnorm_post_allgather(
-            inp, tt_stats, epsilon, gamma, compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG
+        tt_out = ttnn.rms_norm_post_all_gather(
+            inp, tt_stats, epsilon=epsilon, weight=gamma, compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG
         )
 
         tt_stats.deallocate(True)

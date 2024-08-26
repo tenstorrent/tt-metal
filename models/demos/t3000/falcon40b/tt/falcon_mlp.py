@@ -117,9 +117,7 @@ class TtFalconMLP:
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
         )
 
-        hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-            hidden_states, output_mem_config=self.model_config["DEFAULT_MEMCFG"]
-        )
+        hidden_states = ttnn.sharded_to_interleaved(hidden_states, memory_config=self.model_config["DEFAULT_MEMCFG"])
 
         hidden_states = ttnn.get_device_tensors(
             hidden_states
@@ -137,8 +135,8 @@ class TtFalconMLP:
 
         hidden_states = ttnn.aggregate_as_tensor(hidden_states)  # Workaround reverse
 
-        hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
-            hidden_states, sharded_mem_config=self.model_config["MLP_REDUCE_SCATTER_OUTPUT_MEMCFG"]
+        hidden_states = ttnn.interleaved_to_sharded(
+            hidden_states, self.model_config["MLP_REDUCE_SCATTER_OUTPUT_MEMCFG"]
         )
 
         # return TT Tensor

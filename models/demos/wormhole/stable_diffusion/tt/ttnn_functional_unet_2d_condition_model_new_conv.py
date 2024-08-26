@@ -645,7 +645,7 @@ class UNet2DConditionModel:
         )
 
         sample = ttnn.silu(sample, memory_config=ttnn.get_memory_config(sample))
-        sample = ttnn.experimental.tensor.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG, sample.dtype)
+        sample = ttnn.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG, sample.dtype)
 
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat8_b,

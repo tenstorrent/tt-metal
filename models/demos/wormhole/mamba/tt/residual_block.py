@@ -40,7 +40,7 @@ class TtResidualBlock(torch.nn.Module):
         residual = ttnn.to_memory_config(residual, ttnn.DRAM_MEMORY_CONFIG)
 
         rms_norm_weights = ttnn.to_memory_config(self.rms_norm_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x_sharded = ttnn.experimental.tensor.interleaved_to_sharded(x, sharded_mem_config=self.configs["sharded_h"])
+        x_sharded = ttnn.interleaved_to_sharded(x, self.configs["sharded_h"])
         ttnn.deallocate(x)
         mamba_x = ttnn.rms_norm(
             x_sharded,

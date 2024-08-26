@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -101,11 +101,6 @@ ALWI void tilize_init_unpack(uint32_t icb, uint32_t block)
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 
-ALWI void tilizeA_B_init_unpack(uint32_t icb0, uint32_t icb1, uint32_t block)
-{
-    UNPACK(( llk_unpack_tilizeA_B_init(icb0, icb1, block) ));
-}
-
 /**
  * Re-initialize for the tilize operation. This also reconfigure the unpacker with CB data type.
  */
@@ -149,9 +144,9 @@ ALWI void unpack_tilize_block(uint32_t icb, uint32_t block)
     UNPACK(( llk_unpack_tilize_block(icb, block) ));
 }
 
-ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b, uint32_t num_faces = 4)
+ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b, uint32_t num_faces = 4, uint32_t srca_face_r_dim = 16)
 {
-    UNPACK(( llk_unpack_tilizeA_B_block(icb0, icb1, block, tile_idx_b, num_faces) ));
+    UNPACK(( llk_unpack_tilizeA_B_block<true, true>(icb0, icb1, block, tile_idx_b, num_faces, srca_face_r_dim) ));
 }
 
 /**
@@ -179,7 +174,7 @@ ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, u
 
 ALWI void unpack_tilizeA_B_dot_product_block(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t tile_idx_b, uint32_t num_faces = 4)
 {
-    UNPACK(( llk_unpack_tilizeA_B_block<true>(icb0, icb1, block, tile_idx_b, num_faces) ));
+    UNPACK(( llk_unpack_tilizeA_B_block<false, false, true>(icb0, icb1, block, tile_idx_b, num_faces) ));
 }
 
 /**

@@ -7,7 +7,6 @@ import pytest
 import torch
 from diffusers import StableDiffusionPipeline
 import ttnn
-import tt_lib as ttl
 
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_basic_transformer_block import basic_transformer_block
@@ -100,12 +99,12 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
     )
 
     grid_size = grid_sizes[hidden_states.shape[-2]]
-    hidden_states = ttl.tensor.interleaved_to_sharded(
+    hidden_states = ttnn.interleaved_to_sharded(
         hidden_states,
         grid_size,
         [hidden_states.volume() // hidden_states.shape[-1] // grid_size[1], hidden_states.shape[-1] // grid_size[0]],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ttl.tensor.ShardOrientation.ROW_MAJOR,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
     )
     ttnn_output = model(
         hidden_states=hidden_states,
