@@ -36,7 +36,7 @@ def run_argmax_tests(
         x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
 
         tt_result = ttnn.argmax(x, dim=dim, memory_config=output_mem_config)
-        tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result)
+        tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
 
         if dim:
             tt_result = tt_result.squeeze(dim=dim)
@@ -57,22 +57,22 @@ def run_argmax_tests(
 
 test_sweep_args = [
     (
-        [(1, 1, 32, 32)],
+        [(1, 3, 19, 98)],
         [ttnn.bfloat16],
         [ttnn.ROW_MAJOR_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
         ttnn.DRAM_MEMORY_CONFIG,
-        11079580,
-        {},
+        3313947,
+        {"dim": 3},
     ),
     (
-        [(1, 1, 32, 32)],
+        [(2, 6, 107, 102)],
         [ttnn.bfloat16],
         [ttnn.ROW_MAJOR_LAYOUT],
-        [ttnn.DRAM_MEMORY_CONFIG],
-        ttnn.DRAM_MEMORY_CONFIG,
-        11079580,
-        {"dim": -1},
+        [ttnn.L1_MEMORY_CONFIG],
+        ttnn.L1_MEMORY_CONFIG,
+        19042500,
+        {"dim": 3},
     ),
 ]
 
