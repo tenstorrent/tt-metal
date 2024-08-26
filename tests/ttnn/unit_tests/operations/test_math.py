@@ -256,9 +256,7 @@ def run_math_unary_test_fixed_val(device, h, w, fill_value, ttnn_function, pcc=0
     torch.manual_seed(0)
     torch_input_tensor = torch.full((h, w), fill_value, dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = torch.nan_to_num(
-        golden_function(torch_input_tensor), nan=6.9752e19, posinf=1.6948e38, neginf=-1.6948e38
-    )
+    torch_output_tensor = golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
