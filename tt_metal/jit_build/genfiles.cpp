@@ -358,6 +358,7 @@ static void generate_math_fidelity_descriptor(JitBuildOptions& options) {
 
     file_stream.open(math_fidelity_descriptor);
     file_stream << "constexpr std::int32_t MATH_FIDELITY = " << (int)desc.get_hlk_math_fidelity() << ";" << endl;
+    // file_stream << "constexpr std::int32_t MATH_FIDELITY = " << "1" << ";" << endl;
     file_stream.close();
 }
 
