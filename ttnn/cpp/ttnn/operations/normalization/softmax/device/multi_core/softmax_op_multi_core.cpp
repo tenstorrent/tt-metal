@@ -380,9 +380,6 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 reader_kernel_args[3] = 0;
                 softmax_kernel_args[0] = 0;
                 writer_kernel_args[1] = 0;
-                // SetRuntimeArgs(program, reader_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }); // [8]=1.0f is scaler
-                // SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0, 0, 0 });
-                // SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0});
                 continue;
             }
 
@@ -410,7 +407,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             reader_kernel_args[7] = mask_buffer_address;
             reader_kernel_args[8] = curr_ht;
             reader_kernel_args[9] = mask_id;
-            reader_kernel_args[10] = 0x3f803f80;
+            // reader_kernel_args[10] = 0x3f803f80; // Hardcoded value doesn't need to be updated
 
             if (causal_mask) {
                 reader_kernel_args[11] = mask_curr_ht;
@@ -430,7 +427,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             writer_kernel_args[3] = block_size;
             writer_kernel_args[4] = mask_padded_data;
             writer_kernel_args[5] = num_datum_padded;
-            writer_kernel_args[6] = 0xFF00FF00;
+            // writer_kernel_args[6] = 0xFF00FF00; // Hardcoded value doesn't need to be updated
 
             curr_row += num_tile_rows_per_core;
         }
