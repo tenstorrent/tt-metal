@@ -11,7 +11,7 @@ ResNet50 is a deep convolutional neural network architecture with 50 layers, des
 + The model picks up certain configs and weights from TorchVision pretrained model. We have used `torchvision.models.ResNet50_Weights.IMAGENET1K_V1` version from TorchVision as our reference.
 + Our ImageProcessor on the other hand is based on `microsoft/resnet-50` from huggingface.
 
-##Demo
+## Demo
 
 + To run the demo use:
 `pytest --disable-warnings models/demos/ttnn_resnet/demo/demo.py::test_demo_sample[16-models/demos/resnet/demo/images/-device_params0]`
