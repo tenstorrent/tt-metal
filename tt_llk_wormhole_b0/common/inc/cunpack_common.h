@@ -231,10 +231,8 @@ namespace ckernel::unpacker
       alu_config_u alu_payload = {.val = 0};
 
       uint32_t fp32_dest_acc_en = (is_fp32_dest_acc_en) ? (1) : (0);
-      uint32_t int8_math_enabled = ((uint)unpA_dst_format == (uint)DataFormat::Int8) ||
-                                   ((uint)unpB_dst_format == (uint)DataFormat::Int8) ||
-                                   ((uint)unpA_dst_format == (uint)DataFormat::UInt8) ||
-                                   ((uint)unpB_dst_format == (uint)DataFormat::UInt8) ||
+      uint32_t int8_math_enabled = ((uint)(unpA_dst_format & 0xF) == (uint)DataFormat::Int8) ||
+                                   ((uint)(unpB_dst_format & 0xF) == (uint)DataFormat::Int8) ||
                                    ((uint)unpA_dst_format == (uint)DataFormat::Int32) ||
                                    ((uint)unpB_dst_format == (uint)DataFormat::Int32);
 

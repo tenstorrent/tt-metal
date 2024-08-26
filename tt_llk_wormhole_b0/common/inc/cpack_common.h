@@ -179,8 +179,7 @@ namespace ckernel::packer
       }
 
       config.f.exp_section_size = ((pack_dst_format == (uint)DataFormat::Lf8) || 
-                                   (pack_dst_format == (uint)DataFormat::UInt8) || 
-                                   (pack_dst_format == (uint)DataFormat::Int8)) ? 0 : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
+                                   ((pack_dst_format & 0xF) == (uint)DataFormat::Int8)) ? 0 : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
 
       config.f.uncompress   = 1;
       config.f.out_data_format   = pack_dst_format;
@@ -235,8 +234,7 @@ namespace ckernel::packer
 
       dest_rd_ctrl_u dest_rd_ctrl;
       dest_rd_ctrl.val = 0;
-      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = (pack_src_format == (uint)DataFormat::Int8) | 
-                                                      (pack_src_format == (uint)DataFormat::UInt8) |
+      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = ((pack_src_format & 0xF) == (uint)DataFormat::Int8) | 
                                                       (pack_src_format == (uint)DataFormat::Int32) |
                                                       (pack_src_format == (uint)DataFormat::Float32) |
                                                       (is_fp32_dest_acc_en ? 1 : 0);
@@ -345,8 +343,7 @@ namespace ckernel::packer
 
       dest_rd_ctrl_u dest_rd_ctrl;
       dest_rd_ctrl.val = 0;
-      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = (pack_src_format == (uint)DataFormat::Int8) | 
-                                                      (pack_src_format == (uint)DataFormat::UInt8) |
+      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = ((pack_src_format & 0xF) == (uint)DataFormat::Int8) | 
                                                       (pack_src_format == (uint)DataFormat::Int32) |
                                                       (pack_src_format == (uint)DataFormat::Float32) |
                                                       (is_fp32_dest_acc_en ? 1 : 0);
@@ -382,8 +379,7 @@ namespace ckernel::packer
             FWASSERT("Other data formats not supported", false);
          }
       } else if ((pack_dst_format == (uint)DataFormat::Lf8) || 
-                 (pack_dst_format == (uint)DataFormat::Int8) || 
-                 (pack_dst_format == (uint)DataFormat::UInt8)) {
+                 ((pack_dst_format & 0xF) == (uint)DataFormat::Int8)) {
          TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
          TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
          TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);

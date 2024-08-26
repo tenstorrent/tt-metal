@@ -87,8 +87,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(const std::uint32_t unpa
     if ((uint)unpack_src_format == (uint)DataFormat::UInt8) {
         alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcAUnsigned = 1;
     }
-    alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = ((uint)unpack_dst_format == (uint)DataFormat::Int8) ||
-                                                   ((uint)unpack_dst_format == (uint)DataFormat::UInt8) ||
+    alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = ((uint)(unpack_dst_format & 0xF) == (uint)DataFormat::Int8) ||
                                                    ((uint)unpack_dst_format == (uint)DataFormat::Int32);
     constexpr uint alu_mask =  ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
