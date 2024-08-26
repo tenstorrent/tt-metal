@@ -2,17 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 import ttnn
-from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from models.experimental.functional_unet.unet_utils import create_unet_input_tensors
+from models.experimental.functional_unet.tt.model_preprocessing import (
+    create_unet_input_tensors,
+    create_unet_model_parameters,
+)
 from models.experimental.functional_unet.tt import unet_shallow_torch
-from models.experimental.functional_unet.tt import unet_shallow_ttnn2
-from models.experimental.functional_unet.tt import model_preprocessing
+from models.experimental.functional_unet.tt import unet_shallow_ttnn
 
 
 @pytest.mark.parametrize("batch, groups", [(2, 1)])
@@ -21,8 +21,8 @@ def test_unet_output_layer(batch, groups, device):
     torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups, pad_input=False)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
-    parameters = model_preprocessing.create_unet_model_parameters(model, torch_input, groups=groups, device=device)
-    ttnn_model = unet_shallow_ttnn2.UNet(parameters, device)
+    parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
+    ttnn_model = unet_shallow_ttnn.UNet(parameters, device)
 
     torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups, pad_input=True, input_channels=16)
     torch_output = model.output_layer(torch_input)
