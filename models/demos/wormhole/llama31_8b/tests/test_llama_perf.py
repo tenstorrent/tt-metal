@@ -33,7 +33,7 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
     (
         (32, 6, 0.185),
         (128, 6, 0.185),
-        (1024, 6, 0.185),
+        (1024, 11, 0.185),
     ),
 )
 def test_llama_model_perf(
