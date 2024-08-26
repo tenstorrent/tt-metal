@@ -2466,6 +2466,4 @@ def topk(x, largest, k, *args, **kwargs):
 
 def argmax(x, *args, **kwargs):
     dim = kwargs.pop("dim")
-
     return torch.argmax(x, dim=dim)
-
