@@ -61,9 +61,9 @@ test_sweep_args = [
         [(8, 224, 160)],
         [ttnn.bfloat16, ttnn.bfloat8_b],
         [ttnn.TILE_LAYOUT],
-        [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
+        [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
         ttnn.DRAM_MEMORY_CONFIG,
-        18411293,
+        38346,
     ),
     (
         [(6, 11, 64, 224)],
