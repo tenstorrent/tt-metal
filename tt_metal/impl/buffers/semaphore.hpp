@@ -13,7 +13,8 @@ namespace tt {
 
 namespace tt_metal {
 
-// Semaphores are statically allocated withing range [SEMAPHORE_BASE, SEMAPHORE_BASE + SEMAPHORE_SIZE]
+constexpr std::uint32_t NUM_SEMAPHORES = 8;
+
 class Semaphore {
    public:
     Semaphore(const CoreRangeSet &core_range_set, uint32_t id, uint32_t initial_value);
@@ -28,12 +29,9 @@ class Semaphore {
 
     Semaphore& operator=(Semaphore &&other);
 
-    constexpr uint32_t size() const { return SEMAPHORE_SIZE / NUM_SEMAPHORES; }
-
     uint32_t id() const { return id_; }
 
-    // TODO: will be removed, calculated in program compile instead
-    uint32_t address() const;
+    uint32_t offset() const;
 
     CoreRangeSet core_range_set() const { return core_range_set_; }
 

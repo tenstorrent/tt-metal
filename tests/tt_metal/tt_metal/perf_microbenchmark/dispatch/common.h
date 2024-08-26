@@ -495,6 +495,7 @@ void configure_kernel_variant(
         {"UPSTREAM_NOC_Y", std::to_string(NOC_0_Y(upstream_noc_index, grid_size.y, phys_upstream_core.y))},
         {"DOWNSTREAM_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, phys_downstream_core.x))},
         {"DOWNSTREAM_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, phys_downstream_core.y))},
+        {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
     };
     compile_args.push_back(is_dram_variant);
     compile_args.push_back(is_host_variant);

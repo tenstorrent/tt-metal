@@ -8,6 +8,7 @@ import torch
 from itertools import product
 from functools import partial
 import functools
+import math
 import operator
 from collections import deque
 from loguru import logger
@@ -716,6 +717,25 @@ def shapes_and_datagen(
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
                 start_shape, end_shape, interval, _gen_concat_bw_shapes
+            ):
+                yield shapes, datagen_funcs, test_args
+
+        elif method == "topk":
+            # at the moment, topk only works on last dim
+            # last dim must be a multiple of 64 and a pow of 2
+            def _gen_topk_shapes(shape):
+                num_dims = len(shape)
+                last_dim = shape[num_dims - 1]
+                if not (last_dim & (last_dim - 1) == 0) and last_dim != 0:
+                    last_dim = 2 ** math.ceil(math.log2(last_dim))
+                    last_dim = last_dim + last_dim % 64
+
+                shape[num_dims - 1] = last_dim
+
+                return [shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(
+                start_shape, end_shape, interval, _gen_topk_shapes
             ):
                 yield shapes, datagen_funcs, test_args
 

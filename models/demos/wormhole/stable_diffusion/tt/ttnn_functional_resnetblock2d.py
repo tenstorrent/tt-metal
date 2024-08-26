@@ -361,12 +361,12 @@ class resnetBlock2D:
             output_shard_spec,
         )
         if tensor.is_sharded():
-            tensor = ttnn.experimental.tensor.reshard(
+            tensor = ttnn.reshard(
                 tensor,
                 output_mem_config,
             )
         else:
-            tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+            tensor = ttnn.interleaved_to_sharded(
                 tensor,
                 grid_size,
                 shard_spec,
@@ -433,10 +433,8 @@ class resnetBlock2D:
         conv1_split_chunks = len(self.conv1s)
         if conv1_split_chunks == 1:
             # Once https://github.com/tenstorrent/tt-metal/issues/7071 is in convert to reshard
-            hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-                hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
-            )
-            hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
+            hidden_states = ttnn.interleaved_to_sharded(
                 hidden_states, self.conv1s[0].conv.input_sharded_memory_config, hidden_states.dtype
             )
 
@@ -449,9 +447,7 @@ class resnetBlock2D:
             split_input_channels = in_channels // conv1_split_chunks
 
             # unpad sharded causes output mismatch
-            hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-                hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
-            )
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
             output_tensor_end_width_dim = split_input_channels
             for i in range(conv1_split_chunks):
                 # TODO: Can we replace this with interleaved_to_sharded_partial
@@ -471,7 +467,7 @@ class resnetBlock2D:
                 output_tensor_start_width_dim += split_input_channels
                 output_tensor_end_width_dim += split_input_channels
 
-                split_hidden_states[i] = ttnn.experimental.tensor.interleaved_to_sharded(
+                split_hidden_states[i] = ttnn.interleaved_to_sharded(
                     split_hidden_states[i],
                     self.conv1s[i].conv.input_sharded_memory_config,
                     split_hidden_states[i].dtype,
@@ -534,12 +530,12 @@ class resnetBlock2D:
                 )
 
         if temb is not None and time_embedding_norm == "default":
-            hidden_states = ttnn.experimental.tensor.bcast(
+            hidden_states = ttnn.bcast(
                 hidden_states,
                 temb,
-                ttnn.experimental.tensor.BcastOpMath.ADD,
-                ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=hidden_states.memory_config(),
+                ttnn.BcastOpMath.ADD,
+                ttnn.BcastOpDim.H,
+                memory_config=hidden_states.memory_config(),
             )
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -561,10 +557,8 @@ class resnetBlock2D:
             (1, 1, self.conv2.batch_size * self.conv2.input_height * self.conv2.input_width, out_channels),
         )
 
-        hidden_states = ttnn.experimental.tensor.sharded_to_interleaved(
-            hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
-        )
-        hidden_states = ttnn.experimental.tensor.interleaved_to_sharded(
+        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
+        hidden_states = ttnn.interleaved_to_sharded(
             hidden_states, self.conv2.conv.input_sharded_memory_config, hidden_states.dtype
         )
 
@@ -577,10 +571,8 @@ class resnetBlock2D:
             if ttnn.get_memory_config(input_tensor) != self.conv_shortcut.conv.input_sharded_memory_config:
                 # TODO: Once reshard fix is in, store input tensor in sharded
                 if input_tensor.memory_config().is_sharded():
-                    input_tensor = ttnn.experimental.tensor.sharded_to_interleaved(
-                        input_tensor, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype
-                    )
-                input_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+                    input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
+                input_tensor = ttnn.interleaved_to_sharded(
                     input_tensor, self.conv_shortcut.conv.input_sharded_memory_config, hidden_states.dtype
                 )
 

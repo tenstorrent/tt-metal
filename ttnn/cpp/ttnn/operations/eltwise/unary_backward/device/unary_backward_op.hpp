@@ -80,7 +80,6 @@ enum class UnaryBackwardOpType {
     LOG2_BW,
     SIGN_BW,
     FMOD_BW,
-    REMAINDER_BW,
     DIV_NO_NAN_BW,
     EXP2_BW,
     EXPM1_BW,
@@ -141,7 +140,6 @@ std::vector<Tensor> _rpow_bw( const Tensor& grad, const Tensor& input, float exp
 std::vector<Tensor> _div_no_nan_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _polygamma_bw( const Tensor& grad, const Tensor& input, int n, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _lt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _remainder_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _fmod_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other, const std::optional<MemoryConfig>& output_mem_config);
@@ -554,13 +552,6 @@ template <>
 struct OpHandler<UnaryBackwardOpType::LOGITEPS_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config ) {
         return _logiteps_bw(grad, input, eps, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<UnaryBackwardOpType::REMAINDER_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _remainder_bw(grad, input, scalar, output_mem_config);
     }
 };
 

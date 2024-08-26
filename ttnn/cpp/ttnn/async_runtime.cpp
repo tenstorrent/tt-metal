@@ -115,12 +115,7 @@ void queue_synchronize(CommandQueue& cq) {
     Finish(cq);
 }
 
-void event_synchronize(Device* device, std::shared_ptr<Event> event) {
-    device->push_work([event] () {
-        EventSynchronize(event);
-    });
-    device->synchronize();
-}
+void event_synchronize(std::shared_ptr<Event> event) { EventSynchronize(event); }
 
 bool event_query(std::shared_ptr<Event> event) { return EventQuery(event); }
 

@@ -171,6 +171,28 @@ class TtLlamaAttention_galaxy:
             self.SDPA_HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec
             )
+        elif self.model_config["LLM_MODE"] == "prefill":
+            self.COMPUTE_KERNEL_QKV = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            self.COMPUTE_KERNEL_SELFOUT = self.COMPUTE_KERNEL_QKV
+
+            self.COMPUTE_KERNEL_ROTARY = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+
+            self.COMPUTE_KERNEL_SDPA = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
 
     def init_kv_cache(self):
         """
@@ -294,6 +316,8 @@ class TtLlamaAttention_galaxy:
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         if self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
+        elif self.model_config["LLM_MODE"] == "prefill":
+            return self.prefill_forward(xs, rot_mats, attn_masks, user_id)
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
@@ -464,6 +488,178 @@ class TtLlamaAttention_galaxy:
             cluster_axis=0,
             num_links=2,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+
+        return attn_output
+
+    def prefill_forward(
+        self,
+        xs,
+        rot_mats,
+        attn_masks,
+        user_id: int = 0,
+    ):
+        query_layer, key_layer, value_layer = self.prefill_attn_qkv(xs, rot_mats)
+        attn_outputs = self.prefill_attn_mqa(query_layer, key_layer, value_layer, attn_masks, user_id)
+        return self.prefill_attn_selfout(attn_outputs)
+
+    def prefill_attn_qkv(
+        self,
+        xs,
+        rot_mats,
+    ):
+        assert xs.shape[1] == 1, "batch must be 1"
+        assert xs.shape[2] % 128 == 0 and xs.shape[2] > 0, "Seqlen must be divisible by 128"
+        _, _, seq_len, _ = xs.shape
+
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+
+        xs = ttnn.reshape(xs, (1, batch_dim, seq_len // batch_dim, -1))
+
+        # Fused QKV
+        fused_query_key_value = ttnn.matmul(
+            xs,
+            self.qkv,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.COMPUTE_KERNEL_QKV,
+        )
+
+        fused_query_key_value = tt_all_reduce(
+            fused_query_key_value, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        fused_query_key_value = ttnn.reshape(fused_query_key_value, (1, 1, seq_len, -1))
+
+        xs.deallocate(True)
+
+        (
+            query_layer,  # [bsz, n_local_heads, seq_len, head_dim]
+            key_layer,  # [bsz, n_local_kv_heads, seq_len, head_dim]
+            value_layer,  # [bsz, n_local_kv_heads, seq_len, head_dim]
+        ) = ttnn.experimental.nlp_create_qkv_heads(
+            fused_query_key_value,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_kv_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        fused_query_key_value.deallocate(True)
+
+        # ROTARY EMBEDDINGS
+        # Q Rotary Embeddings
+        # query_layer: ttnn.Shape([1, 8, seq_len, 128]) -> [bsz, n_local_heads, seq_len, head_dim]
+        query_layer_ret = ttnn.experimental.rotary_embedding_llama(
+            query_layer, rot_mats[0], rot_mats[1], self.transformation_mats
+        )
+        query_layer.deallocate(True)
+
+        # K Rotary Embeddings
+        # key_layer: ttnn.Shape([1, 1, seq_len, 128]) -> [bsz, n_local_kv_heads, seq_len, head_dim]
+        key_layer_ret = ttnn.experimental.rotary_embedding_llama(
+            key_layer, rot_mats[0], rot_mats[1], self.transformation_mats
+        )
+        key_layer.deallocate(True)
+
+        return query_layer_ret, key_layer_ret, value_layer
+
+    def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
+        tensor_copy = ttnn.clone(key_or_value_layer)
+        # Get all tensors from multi-device tensor
+        tensors = ttnn.get_device_tensors(tensor_copy)
+        # Get only tensors from specific column chips
+        # Get every 4th tensor starting from user_id // 8
+        single_column_tensors = tensors[user_id // self.batch_size_per_device_group :: self.cluster_shape[0]]
+        # Create multi-device tensor
+        multi_device_tensor = ttnn.aggregate_as_tensor(single_column_tensors)
+
+        return multi_device_tensor
+
+    def prefill_attn_mqa(
+        self,
+        query_layer,
+        key_layer,
+        value_layer,
+        attn_masks,
+        user_id: int = 0,
+    ):
+        # FILL K CACHE
+        keys = self.layer_past[0]
+        # Fill cache expects batch in dim0
+        keys_reshaped = ttnn.reshape(keys, [self.batch_size_per_device_group, self.n_local_kv_heads, -1, self.head_dim])
+
+        single_user_key_layer = self.prefill_prepare_tensor_for_kv_cache(key_layer, user_id)
+
+        # Fill cache with multi-device tensor
+        ttnn.experimental.tensor.fill_cache(
+            keys_reshaped,
+            ttnn.experimental.typecast(single_user_key_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            user_id % self.batch_size_per_device_group,
+        )
+
+        # FILL V CACHE
+        values = self.layer_past[1]
+        # Fill cache expects batch in dim0
+        values_reshaped = ttnn.reshape(
+            values, [self.batch_size_per_device_group, self.n_local_kv_heads, -1, self.head_dim]
+        )
+
+        single_user_value_layer = self.prefill_prepare_tensor_for_kv_cache(value_layer, user_id)
+
+        ttnn.experimental.tensor.fill_cache(
+            values_reshaped,
+            ttnn.experimental.typecast(single_user_value_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            user_id % self.batch_size_per_device_group,
+        )
+
+        # SDPA
+        attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+            query_layer,
+            key_layer,
+            value_layer,
+            attn_masks,
+            is_causal=True,
+            scale=self.scale,
+        )
+
+        # deallocate keys and values
+        query_layer.deallocate(True)
+        key_layer.deallocate(True)
+        value_layer.deallocate(True)
+
+        return attn_output
+
+    def prefill_attn_selfout(self, attn_output):
+        # ATTENTION SELFOUT
+        attn_output = ttnn.experimental.nlp_concat_heads(
+            attn_output,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # bsz, 1, seqlen, hidden_size
+
+        _, _, seq_len, _ = attn_output.shape
+
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+        attn_output = ttnn.reshape(attn_output, (1, batch_dim, seq_len // batch_dim, -1))
+
+        attn_output = ttnn.matmul(
+            attn_output,
+            self.wo,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+        )  # bsz, 1, seqlen, hidden_size
+
+        attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, -1))
+
+        # Call all reduce here
+        attn_output = tt_all_reduce(
+            attn_output,
+            self.device_mesh,
+            cluster_axis=0,
+            num_links=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         return attn_output

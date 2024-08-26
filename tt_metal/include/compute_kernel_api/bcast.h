@@ -107,19 +107,16 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb = 16)
     else
         MATH(( llk_math_eltwise_binary_init<tBcastOp, tBcastDim>() ));
 
-    UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1) ));
     UNPACK(( llk_unpack_AB_init<tBcastDim>(icb0, icb1) ));
     // TODO(AP): running this specific init after common AB init causes a hang
 
     // clone of general init for AB TODO(AP): commonize
-    //UNPACK(( llk_setup_operands() ));
     //UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>() ));
     //UNPACK(( llk_unpack_AB_hw_configure_disaggregated<BroadcastType::NONE>(icb0, icb1) ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_init(ocb) ));
-    PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>() ));
 
     MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));

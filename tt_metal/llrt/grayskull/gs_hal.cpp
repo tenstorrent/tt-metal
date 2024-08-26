@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "core_config.h"
 #include "llrt/hal.hpp"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 
@@ -26,6 +27,9 @@ static inline int hv (enum HalMemAddrType v) {
 
 void Hal::initialize_gs() {
 #if defined (ARCH_GRAYSKULL)
+
+    static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
+
     constexpr uint32_t num_proc_per_tensix_core = 5;
     std::vector<DeviceAddr> mem_map_bases;
     mem_map_bases.resize(hv(HalMemAddrType::COUNT));

@@ -68,6 +68,7 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
@@ -383,19 +384,17 @@ int main() {
 
             noc_index = mailboxes->launch.kernel_config.brisc_noc_id;
 
-            setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
+            uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
+            uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+                mailboxes->launch.kernel_config.cb_offset);
+            setup_cb_read_write_interfaces(cb_l1_base, 0, num_cbs_to_early_init, true, true, false);
+
             finish_ncrisc_copy_and_run(enables);
 
             // Run the BRISC kernel
             DEBUG_STATUS("R");
-            uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base;
-            rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-                mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_DM0].rta_offset);
-            crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-                mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_DM0].crta_offset);
-
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
-                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true);
+                setup_cb_read_write_interfaces(cb_l1_base, num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
                 kernel_init();
                 RECORD_STACK_USAGE();
             } else {

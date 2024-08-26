@@ -6,7 +6,6 @@
 
 #include "tt_metal/common/bfloat16.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/reshape/reshape.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "ttnn/deprecated/tt_numpy/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -17,6 +16,7 @@
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::unary {
@@ -37,7 +37,7 @@ Tensor _variance_impl(
     return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& memory_config) {
-    Tensor y_minus_mean_y = bcast(y, mean_y, BcastOpMath::SUB, BcastOpDim::HW);
+    Tensor y_minus_mean_y = ttnn::bcast(0, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     return _variance_impl(y, mean_y, y_minus_mean_y, memory_config);
 }
 
@@ -467,7 +467,7 @@ Tensor StdHwOperation::invoke(const Tensor& y, const std::optional<MemoryConfig>
 Tensor NormalizeHwOperation::invoke(const Tensor& y, const std::optional<MemoryConfig>& memory_config) {
     std::vector<int> dims = { 2, 3 };
     Tensor mean_y = ttnn::mean(y, dims, true);
-    Tensor y_minus_mean_y = bcast(y, mean_y, BcastOpMath::SUB, BcastOpDim::HW);
+    Tensor y_minus_mean_y = ttnn::bcast(0, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     Tensor std_y = _std(y, mean_y, y_minus_mean_y, memory_config);
     Tensor recip_std_y = ttnn::reciprocal(std_y, memory_config);
     Tensor z = ttnn::multiply(y_minus_mean_y, recip_std_y, std::nullopt, memory_config);

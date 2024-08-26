@@ -215,17 +215,13 @@ struct ExecuteUnaryBackwardAbs {
 
 };
 
+
 }  // operations::unary
 
 constexpr auto threshold_bw = ttnn::register_operation<
     "ttnn::threshold_bw",
     operations::unary_backward::ExecuteUnaryBackwardTwoFloat<
         operations::unary_backward::UnaryBackwardOpType::THRESHOLD_BW>>();
-
-constexpr auto remainder_bw = ttnn::register_operation<
-    "ttnn::remainder_bw",
-    operations::unary_backward::ExecuteUnaryBackwardFloat<
-        operations::unary_backward::UnaryBackwardOpType::REMAINDER_BW>>();
 
 constexpr auto fmod_bw = ttnn::register_operation<
     "ttnn::fmod_bw",

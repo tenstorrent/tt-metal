@@ -11,9 +11,8 @@ import torch
 import torch.nn.functional as F
 import ttnn
 from loguru import logger
-from models.demos.falcon7b_common.reference.hf_modeling_falcon import FalconConfig
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
-from models.demos.falcon7b_common.tt.model_config import get_model_config, model_config_entries
+from models.demos.falcon7b_common.tt.model_config import get_model_config
 from models.demos.falcon7b_common.tests.test_utils import (
     initialize_kv_cache,
     load_hf_model,
@@ -110,6 +109,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     top_k_values, top_k_indices = torch.topk(logits, k=k)
     top_p_values = top_k_top_p_filtering(top_k_values, top_p=p)
     probs = F.softmax(top_p_values / temperature, dim=-1)
+    probs = torch.nan_to_num(probs)  # convert nan to num to prevent error in multinomial
     top_k_id = torch.multinomial(probs, num_samples=1).squeeze(-1)
     token = top_k_indices.gather(-1, top_k_id.unsqueeze(-1)).squeeze(-1)
     if return_probs:
@@ -165,8 +165,6 @@ def run_falcon_demo_kv(
     if perf_mode:
         logger.info("Running in performance measurement mode (invalid outputs)!")
 
-    configuration = FalconConfig(**model_config_entries)
-
     profiler.start(f"loading_inputs")
     if num_devices > 1:
         assert len(user_input) == global_batch, "Number of users must be equal to batch size * number of devices!"
@@ -194,7 +192,8 @@ def run_falcon_demo_kv(
     # State dict is needed for embeddings
     logger.info("Loading huggingface weights...")
     profiler.start(f"loading_weights")
-    _, state_dict = load_hf_model(model_location_generator, model_version)
+    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
+    configuration = hugging_face_reference_model.config
     logger.info("Loading weights finished!")
     profiler.end(f"loading_weights")
 

@@ -11,6 +11,7 @@
 #include "ethernet/dataflow_api.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 
+constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
 constexpr uint32_t NUM_WR_CMD_BUFS = 4;
 
@@ -334,7 +335,7 @@ public:
             return 0;
         }
         volatile tt_l1_ptr uint32_t* local_sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(this->cb_mode_local_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(this->cb_mode_local_sem_id));
         // semaphore underflow is currently used to signal path teardown with minimal prefetcher changes
         uint32_t val = *local_sem_addr;
         if (val & 0x80000000) {
@@ -349,7 +350,7 @@ public:
             return false;
         }
         volatile tt_l1_ptr uint32_t* local_sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(this->cb_mode_local_sem_id));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(this->cb_mode_local_sem_id));
         // semaphore underflow is currently used to signal path teardown with minimal prefetcher changes
         uint32_t val = *local_sem_addr;
         return (val & 0x80000000);
@@ -357,7 +358,7 @@ public:
 
     inline void cb_mode_inc_local_sem_val(uint32_t val) {
         if (this->cb_mode) {
-            uint32_t sem_l1_addr = get_semaphore(this->cb_mode_local_sem_id);
+            uint32_t sem_l1_addr = get_semaphore<fd_core_type>(this->cb_mode_local_sem_id);
             uint64_t sem_noc_addr = get_noc_addr(sem_l1_addr);
             noc_semaphore_inc(sem_noc_addr, val);
             noc_async_atomic_barrier();
@@ -365,7 +366,7 @@ public:
     }
 
     inline void cb_mode_inc_remote_sem_val(uint32_t val) {
-        uint32_t sem_l1_addr = get_semaphore(this->cb_mode_remote_sem_id);
+        uint32_t sem_l1_addr = get_semaphore<fd_core_type>(this->cb_mode_remote_sem_id);
         uint64_t sem_noc_addr = get_noc_addr(remote_x, remote_y, sem_l1_addr);
         if (this->cb_mode && (val > 0)) {
             noc_semaphore_inc(sem_noc_addr, val);

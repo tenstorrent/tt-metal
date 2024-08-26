@@ -867,7 +867,7 @@ Matmul create_matmul_struct(
     TT_FATAL(
         !(has_user_grid && has_program_config),
         "Cannot use both user core grid/coordinates and a program config");
-    
+
     return Matmul{
         parameters.program_config,
         broadcast_batch,
@@ -904,7 +904,7 @@ Tensor matmul(
             const std::vector<std::optional<Tensor>> &optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto &input_tensor_a = input_tensors.at(0);
             const auto &input_tensor_b = input_tensors.at(1);
-            
+
             return operation::run(
                 create_matmul_struct(input_tensor_a, input_tensor_b, parameters),
                 {input_tensor_a, input_tensor_b},
@@ -973,7 +973,7 @@ void Matmul::validate(
         TT_FATAL(
             bias_shape[-2] == TILE_HEIGHT, "Unsupported bias shape: second last dimension not equal to tile height");
         TT_FATAL(
-            bias_shape[-1] == b_shape[-1],
+            bias_shape.without_padding()[-1] == b_shape[-1],
             "Unsupported bias shape: last dimension not equal to second input's last dimension.");
     }
 
