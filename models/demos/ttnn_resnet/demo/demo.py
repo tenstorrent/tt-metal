@@ -171,10 +171,18 @@ def run_resnet_inference(
 
     profiler.disable()
     # Use force enable to only record this profiler call while others are disabled
-    profiler.start("first_model_run_with_compile", force_enable=True)
+    profiler.start("first_model_run", force_enable=True)
     tt_out = tt_resnet50(tt_inputs, device, ops_parallel_config)
     ttnn.synchronize_device(device)
-    profiler.end("first_model_run_with_compile", force_enable=True)
+    profiler.end("first_model_run", force_enable=True)
+    tt_out.deallocate()
+    del tt_out
+
+    # Use force enable to only record this profiler call while others are disabled
+    profiler.start("second_model_run_with_compile", force_enable=True)
+    tt_out = tt_resnet50(tt_inputs, device, ops_parallel_config)
+    ttnn.synchronize_device(device)
+    profiler.end("second_model_run_with_compile", force_enable=True)
     tt_out.deallocate()
     del tt_out
 
@@ -203,9 +211,9 @@ def run_resnet_inference(
     measurements = {
         "preprocessing": profiler.get("preprocessing"),
         "moving_weights_to_device": profiler.get("move_weights"),
-        "compile": profiler.get("first_model_run_with_compile")
+        "compile": profiler.get("second_model_run_with_compile")
         - (profiler.get("model_run_for_inference") / SINGLE_RUN),
-        f"inference_for_single_run_batch_{batch_size}_without_cache": profiler.get("first_model_run_with_compile"),
+        f"inference_for_single_run_batch_{batch_size}_without_cache": profiler.get("second_model_run_with_compile"),
         f"inference_for_{SINGLE_RUN}_run_batch_{batch_size}_without_cache": profiler.get("model_run_for_inference"),
         "inference_throughput": (SINGLE_RUN * batch_size) / profiler.get("model_run_for_inference"),
         "post_processing": profiler.get("post_processing"),
