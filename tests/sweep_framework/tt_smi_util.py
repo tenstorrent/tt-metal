@@ -2,14 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import shutil
 import subprocess
 
 GRAYSKULL_ARGS = ["-tr", "all"]
 WORMHOLE_ARGS = ["-wr", "all"]
 
+RESET_OVERRIDE = os.getenv("TT_SMI_RESET_COMMAND")
+
 
 def run_tt_smi(arch: str):
+    if RESET_OVERRIDE is not None:
+        subprocess.run(RESET_OVERRIDE, shell=True)
+        return
+
     if arch not in ["grayskull", "wormhole_b0"]:
         raise Exception(f"SWEEPS: Unsupported Architecture for TT-SMI Reset: {arch}")
 
