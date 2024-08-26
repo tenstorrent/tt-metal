@@ -24,6 +24,21 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 
+namespace{
+    inline void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
+        // Push empty work to threads and ensure its been picked up
+        static auto empty_work = std::make_shared<std::function<void()>>([](){});
+        for (auto target_device : workers) {
+            target_device->work_executor.push_work(empty_work);
+        }
+        // Block until work has been picked up, to flush the queue
+        for (auto target_device : workers) {
+            while(not target_device->work_executor.worker_queue.empty());
+        }
+    }
+}
+
+
 namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to(const Tensor& input_tensor, Device* target_device, const MemoryConfig& mem_config) {
@@ -232,9 +247,9 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, DeviceMesh* d
     return output;
 }
 
-void tensor_print(const Tensor& input_tensor) const {
+void tensor_print(const Tensor& input_tensor) {
     GraphTracker::instance().track_function_start("Tensor::print", input_tensor);
-    std::cout << write_to_string() << std::endl;
+    std::cout << input_tensor.write_to_string() << std::endl;
     GraphTracker::instance().track_function_end();
 }
 
