@@ -89,3 +89,16 @@ jobs:
           path: |
             generated/test_reports/
           prefix: "test_reports_"
+      - uses: qoomon/actions--context@v2.0.2
+        if: ${{ !cancelled() }}
+        id: job-context
+      - name: Output qooman outputs
+        if: ${{ !cancelled() }}
+        run: |
+          echo "Current Environment: ${{ steps.job-context.outputs.environment }}"
+          echo "Current Job ID: ${{ steps.job-context.outputs.job_id }}"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: "test_reports_jobid_${{ steps.job-context.outputs.job_id }}"
+          path: generated/test_reports/
