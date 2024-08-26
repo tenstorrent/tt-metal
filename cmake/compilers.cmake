@@ -36,7 +36,6 @@ function(ADJUST_COMPILER_WARNINGS)
             -Wsometimes-uninitialized -Wno-c++11-narrowing -Wno-error=local-type-template-args
             -Wno-delete-non-abstract-non-virtual-dtor -Wno-c99-designator -Wno-shift-op-parentheses -Wno-non-c-typedef-for-linkage
             -Wno-deprecated-this-capture -Wno-deprecated-volatile -Wno-deprecated-builtins -Wno-deprecated-declarations
-            -Wno-vla-cxx-extension
         )
     else() # GCC-12 or higher
         target_compile_options(compiler_warnings INTERFACE
