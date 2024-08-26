@@ -340,7 +340,7 @@ template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 consteval void assert_operation_in_correct_namespace() {
     if constexpr (PrimitiveOperationConcept<operation_t>) {
         if constexpr(cpp_fully_qualified_name.size() > sizeof(prim_namespace)) {
-            constexpr auto namespace_substring = tt::stl::reflection::fixed_string_substring<0, sizeof(prim_namespace)>(cpp_fully_qualified_name);
+            constexpr auto namespace_substring = tt::stl::reflection::fixed_string_substring<0, prim_namespace.size()>(cpp_fully_qualified_name);
             static_assert(tt::stl::reflection::fixed_string_equals(namespace_substring, prim_namespace), "Primitive operations must be in the `ttnn::prim` namespace.");
         } else {
             #ifndef DISABLE_NAMESPACE_STATIC_ASSERT
@@ -349,7 +349,7 @@ consteval void assert_operation_in_correct_namespace() {
         }
     } else {
         if constexpr (cpp_fully_qualified_name.size() > sizeof(prim_namespace)) {
-            constexpr auto namespace_substring = tt::stl::reflection::fixed_string_substring<0, sizeof(prim_namespace)>(cpp_fully_qualified_name);
+            constexpr auto namespace_substring = tt::stl::reflection::fixed_string_substring<0, prim_namespace.size()>(cpp_fully_qualified_name);
             static_assert(not tt::stl::reflection::fixed_string_equals(namespace_substring, prim_namespace), "Composite operations must not be in the `ttnn::prim` namespace.");
         }
     }
