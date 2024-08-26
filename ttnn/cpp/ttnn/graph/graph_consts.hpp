@@ -26,7 +26,7 @@ namespace ttnn::graph {
     constexpr auto kNodeBufferDeallocate = "buffer_deallocate";
     constexpr auto kNodeTensor = "tensor";
     constexpr auto kNodeCBAllocate = "circular_buffer_allocate";
-    constexpr auto kNodeCBDeallocateAll = "circular_buffer_deallocate_all";\
+    constexpr auto kNodeCBDeallocateAll = "circular_buffer_deallocate_all";
     constexpr auto kNodeFunctionStart = "function_start";
     constexpr auto kNodeFunctionEnd = "function_end";
     constexpr auto kNodeCaptureStart = "capture_start";
