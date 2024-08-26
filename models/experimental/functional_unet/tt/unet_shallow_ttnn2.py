@@ -77,7 +77,16 @@ def unet_concat(ttnn_tensors, dim=-1, use_reshard=True, perf_mode=False):
 
 
 class UNetConv2D:
-    def __init__(self, conv, bn=None, device=None, cache={}, activation="relu"):
+    def __init__(
+        self,
+        conv,
+        bn=None,
+        device=None,
+        cache={},
+        activation="relu",
+        activation_dtype=ttnn.bfloat8_b,
+        weights_dtype=ttnn.bfloat8_b,
+    ):
         self.device = device
         self.batch_size = conv.batch_size
         self.input_height = conv.input_height
@@ -93,8 +102,8 @@ class UNetConv2D:
         self.cache = cache
 
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
-            weights_dtype=ttnn.bfloat8_b,
+            dtype=activation_dtype,
+            weights_dtype=weights_dtype,
             math_fidelity=ttnn.MathFidelity.LoFi,
             height_sharding=self.use_1d_systolic_array,
             deallocate_activation=self.deallocate_activation,
@@ -247,7 +256,9 @@ class UNetDownblock:
             )
         x = self.conv1(x)
         x = self.conv2(x)
-        residual = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # pool deletes its activation
+        residual = ttnn.sharded_to_interleaved(
+            x, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16
+        )  # pool deletes its activation - spill to DRAM
         x = self.pool1(x)
         return x, residual
 
@@ -276,7 +287,7 @@ class UNetUpblock:
                     1,
                     1,
                     self.conv1.input_width * self.conv1.input_height * self.conv1.batch_size,
-                    self.conv1.in_channels,
+                    nearest_32(self.conv1.in_channels),
                 ],
                 parallel_config=parallel_config,
                 tile_size=32 if conv1.dtype == ttnn.bfloat8_b else 1,
@@ -431,7 +442,6 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             should_reshard=True,
-            hacked_shard_shape=True,  # TODO: Don't use this hack
         )
         self.upblock4 = UNetUpblock(
             parameters.c8,
@@ -446,7 +456,13 @@ class UNet:
         )
 
         self.output_layer = UNetConv2D(
-            parameters.output_layer, bn=None, device=device, cache=self.conv_cache, activation=""
+            parameters.output_layer,
+            bn=None,
+            device=device,
+            cache=self.conv_cache,
+            activation="",
+            activation_dtype=ttnn.bfloat16,
+            weights_dtype=ttnn.bfloat8_b,
         )
 
     def bottleneck(self, x):
