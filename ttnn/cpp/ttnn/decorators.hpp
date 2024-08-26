@@ -376,17 +376,6 @@ constexpr auto register_operation_with_auto_launch_op() {
     return register_operation_impl<cpp_fully_qualified_name, operation_t, true>();
 }
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename ReturnType, typename... Args>
-constexpr auto register_operation_from_function(ReturnType(*func)(Args...)) {
-    // Create a structure with a static invoke method that calls the function
-    struct FunctionWrapper {
-        static ReturnType invoke(Args... args) {
-            return func(std::forward<Args>(args)...);
-        }
-    };
-    return register_operation_with_auto_launch_op<cpp_fully_qualified_name, FunctionWrapper, false>();
-}
-
 namespace detail {
 template <auto lambda_t>
 struct lambda_operation_t {

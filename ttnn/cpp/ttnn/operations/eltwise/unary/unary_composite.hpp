@@ -135,7 +135,6 @@ constexpr auto pow = ttnn::register_operation_with_auto_launch_op<"ttnn::pow", o
 constexpr auto rdiv = ttnn::register_operation_with_auto_launch_op<"ttnn::rdiv", operations::unary::RdivOperation>();
 
 // Single Tensor arg
-//constexpr auto tanhshrink = ttnn::register_operation_from_function<"ttnn::tanhshrink", _tahnshring>();
 constexpr auto tanhshrink = ttnn::register_operation_with_auto_launch_op<"ttnn::tanhshrink", operations::unary::TanhshrinkOperation>();
 constexpr auto deg2rad = ttnn::register_operation_with_auto_launch_op<"ttnn::deg2rad", operations::unary::Deg2radOperation>();
 constexpr auto rad2deg = ttnn::register_operation_with_auto_launch_op<"ttnn::rad2deg", operations::unary::Rad2degOperation>();
