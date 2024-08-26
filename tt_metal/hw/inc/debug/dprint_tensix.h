@@ -25,6 +25,7 @@
 #define READ_THREAD_2_CFG_REG_FIELD(reg_field_name) READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::THREAD_2_CFG, reg_field_name)
 
 // Print the contents of tile with index tile_id within the destination register
+template<bool print_by_face=false>
 void dprint_tensix_dest_reg(int tile_id = 0) {
     dbg_halt();
     MATH({
@@ -41,26 +42,39 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         // Print the contents
         DPRINT << FIXED() << SETPRECISION(2);
         uint32_t rd_data[8+1]; // data + array_type
+        DPRINT << "Tile ID = " << tile_id << ENDL();
 
         // print faces 0 & 1
         int face_r_dim = 16;
         for (int row = 0; row < face_r_dim; row++) {
             // face 0
             dbg_read_dest_acc_row(row + 64 * tile_id, rd_data);
-            DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8);
-            // face 1
-            dbg_read_dest_acc_row(row + face_r_dim + 64 * tile_id, rd_data);
-            DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8) << ENDL();
+            DPRINT << SETW(6) << " " << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8);
+        }
+        if constexpr (print_by_face) {
+            DPRINT << ENDL();
         }
 
-        // print faces 2 & 3
+        for (int row = 0; row < face_r_dim; row++) {
+            // face 1
+            dbg_read_dest_acc_row(row + face_r_dim + 64 * tile_id, rd_data);
+            DPRINT << SETW(6) << " " << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8) << ENDL();
+        }
+
         for (int row = 0; row < face_r_dim; row++) {
             // face 2
             dbg_read_dest_acc_row(row + 2*face_r_dim + 64 * tile_id, rd_data);
-            DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8);
+            DPRINT << SETW(6) << " " << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8);
+        }
+
+        if constexpr (print_by_face) {
+            DPRINT << ENDL();
+        }
+
+        for (int row = 0; row < face_r_dim; row++) {
             // face 3
             dbg_read_dest_acc_row(row + 3*face_r_dim + 64 * tile_id, rd_data);
-            DPRINT << SETW(6) << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8) << ENDL();
+            DPRINT << SETW(6) << " " << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format_reg_field_value, rd_data, 8) << ENDL();
         }
     })
     dbg_unhalt();
