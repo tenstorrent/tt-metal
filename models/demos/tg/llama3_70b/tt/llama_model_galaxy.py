@@ -261,18 +261,18 @@ class TtLlamaModel_galaxy:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 # cache_file_name=cache_name(f"cos_gathered_prefill_galaxy_{start_pos}"),
-                device=self.device_mesh,
+                device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
             sin_gathereds = ttnn.as_tensor(
                 sin_gathered,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 # cache_file_name=cache_name(f"sin_gathered_prefill_galaxy_{start_pos}"),
-                device=self.device_mesh,
+                device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
             rot_mats = [cos_gathereds, sin_gathereds]
@@ -285,9 +285,9 @@ class TtLlamaModel_galaxy:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                device=self.device_mesh,
+                device=self.mesh_device,
             )
 
         return (
@@ -421,7 +421,7 @@ class TtLlamaModel_galaxy:
 
         lm_head_out = tt_all_reduce(
             lm_head_out,
-            device_mesh=self.device_mesh,
+            mesh_device=self.mesh_device,
             cluster_axis=1,
             dim=0,
             num_links=2,

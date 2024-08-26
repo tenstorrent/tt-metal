@@ -169,10 +169,10 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             x,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=llama_decoder_model.device_mesh,
+            device=llama_decoder_model.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ShardTensor2dMesh(
-                llama_decoder_model.device_mesh, dims=(3, None), cluster_shape=llama_decoder_model.cluster_shape
+                llama_decoder_model.mesh_device, dims=(3, None), cluster_shape=llama_decoder_model.cluster_shape
             ),
         )
 
@@ -193,8 +193,8 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             layout=ttnn.TILE_LAYOUT,
             # cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=llama_decoder_model.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            device=llama_decoder_model.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
         )
         sin_gathereds = ttnn.as_tensor(
             sin_gathered,
@@ -202,8 +202,8 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             layout=ttnn.TILE_LAYOUT,
             # cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=llama_decoder_model.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            device=llama_decoder_model.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
         )
 
         rot_mats = [cos_gathereds, sin_gathereds]
@@ -216,11 +216,10 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
-            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=llama_decoder_model.device_mesh,
+            device=llama_decoder_model.mesh_device,
         )
-        attn_masks = ttnn.to_device(attn_masks, llama_decoder_model.device_mesh)
 
     return (
         xs,
