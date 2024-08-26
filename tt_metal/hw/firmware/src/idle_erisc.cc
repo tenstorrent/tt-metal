@@ -91,6 +91,7 @@ void flush_icache() {
 }
 
 int main() {
+    conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
     DEBUG_STATUS("I");
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;

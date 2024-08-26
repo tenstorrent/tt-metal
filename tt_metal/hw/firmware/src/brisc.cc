@@ -335,6 +335,7 @@ inline void wait_ncrisc_trisc() {
 }
 
 int main() {
+    conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
     DEBUG_STATUS("I");
 
