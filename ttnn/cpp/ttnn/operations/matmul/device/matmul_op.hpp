@@ -12,7 +12,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
 
-#include "ttnn/operations/experimental/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn {
 

@@ -20,7 +20,7 @@
 #include <sstream>
 #include <type_traits>
 
-#include "ttnn/operations/experimental/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 
 using namespace tt::constants;
