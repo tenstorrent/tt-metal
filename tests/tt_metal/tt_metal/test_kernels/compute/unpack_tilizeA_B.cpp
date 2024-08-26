@@ -14,7 +14,7 @@ inline void tilizeA_B_binary_init(uint32_t icb0, uint32_t icb1, uint32_t block, 
     UNPACK(( llk_unpack_tilizeA_B_init<true, true>(icb0, icb1, block, num_faces, face_r_dim, face_r_dim) ));
 
     MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
-    MATH(( llk_math_hw_configure_disaggregated<false>() ));
+    MATH(( llk_math_hw_configure_disaggregated() ));
     MATH(( llk_math_eltwise_binary_init<ELWADD, NONE>(0/*transpose*/, 0/*acc_to_dest*/) ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));

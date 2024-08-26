@@ -244,8 +244,12 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
     auto packed_input0 = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(input0);
     auto packed_input1 = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(input1);
     auto packed_golden = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(golden);
-    auto tilized_input0 = unit_tests::compute::gold_standard_tilize(packed_input0, {tile_width, tile_height});
-    auto tilized_input1 = unit_tests::compute::gold_standard_tilize(packed_input1, {tile_width, tile_height});
+    unit_tests::compute::GoldenConfig config = {
+        .num_tiles_r_dim = tile_width/32,
+        .num_tiles_c_dim = tile_height/32
+    };
+    auto tilized_input0 = unit_tests::compute::gold_standard_tilize(packed_input0, config);
+    auto tilized_input1 = unit_tests::compute::gold_standard_tilize(packed_input1, config);
 
     tt_metal::detail::WriteToBuffer(src_a_dram_buffer, tilized_input0);
     tt_metal::detail::WriteToBuffer(src_b_dram_buffer, tilized_input1);
@@ -254,7 +258,7 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, dest_buffer_data);
-    auto dest_buffer_data_untilized = unit_tests::compute::gold_standard_untilize(dest_buffer_data, {tile_width, tile_height});
+    auto dest_buffer_data_untilized = unit_tests::compute::gold_standard_untilize(dest_buffer_data, config);
 
     bool result = is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
         dest_buffer_data_untilized,
