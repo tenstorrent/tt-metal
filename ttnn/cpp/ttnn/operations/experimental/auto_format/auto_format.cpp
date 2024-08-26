@@ -231,4 +231,4 @@ Tensor AutoFormat::format_output_tensor(
     return formatted_output;
 }
 
-}  // ttnn::operations::auto_format namespace
+}  //namespace ttnn::operations::auto_format

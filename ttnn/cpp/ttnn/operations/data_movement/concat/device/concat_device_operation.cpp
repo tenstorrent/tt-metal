@@ -11,7 +11,6 @@
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::constants;
-using ttnn::operations::experimental::auto_format::FormatParams;
 namespace ttnn::operations::data_movement {
 
 
@@ -132,18 +131,18 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
                         }
                     }
                 }
-                std::vector<FormatParams> input_format_params;
+                std::vector<ttnn::operations::experimental::auto_format::FormatParams> input_format_params;
                 input_format_params.reserve(input_tensors.size());
                 for (const auto &input_tensor : input_tensors) {
                     if (target_layout == Layout::ROW_MAJOR) {
-                        input_format_params.push_back(FormatParams{
+                        input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
                             .pad_shape = input_tensor.get_legacy_shape(),
                             .pad_value = 0.0,
                             .target_layout = target_layout});
                     } else {
                         tt::tt_metal::Shape pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
                         input_format_params.push_back(
-                            FormatParams{.pad_shape = pad_shape, .pad_value = 0.0, .target_layout = target_layout});
+                            ttnn::operations::experimental::auto_format::FormatParams{.pad_shape = pad_shape, .pad_value = 0.0, .target_layout = target_layout});
                     }
                 }
 

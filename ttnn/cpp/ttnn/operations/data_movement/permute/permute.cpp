@@ -15,7 +15,6 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 
-using ttnn::operations::experimental::auto_format::AutoFormat;
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -35,6 +34,7 @@ inline bool has_tile_padding(const Tensor& t) {
 }
 
 ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& dims, const MemoryConfig& output_mem_config) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     Device * device;
 
     // Get the device
@@ -127,7 +127,7 @@ ttnn::Tensor permute_launch(const ttnn::Tensor &a, const std::vector<std::int64_
             std::vector<uint32_t> seq_dims(dims.size());
             std::iota(seq_dims.begin(), seq_dims.end(), 0);
             if (normalized_dims == seq_dims) {
-                return {AutoFormat::move_tensor_to_mem_config(a, output_mem_config)};
+                return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(a, output_mem_config)};
             }
             return {permute_impl(a, normalized_dims, output_mem_config)};
         }, {a}, output_tensors);

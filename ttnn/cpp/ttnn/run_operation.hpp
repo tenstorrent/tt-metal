@@ -12,11 +12,11 @@
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/type_name.hpp"
 
-using ttnn::operations::experimental::auto_format::FormatParams;
 namespace tt::tt_metal {
 
 namespace operation {
 
+using ttnn::operations::experimental::auto_format::FormatParams;
 template <typename ConcreteOperation>
 auto generic_create_output_tensors(
     const ConcreteOperation& operation,

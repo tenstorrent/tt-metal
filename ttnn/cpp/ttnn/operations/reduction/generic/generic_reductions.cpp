@@ -8,8 +8,6 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/core.hpp"
-
-using ttnn::operations::experimental::auto_format::AutoFormat;
 namespace ttnn {
 namespace operations::reduction {
 
@@ -22,6 +20,7 @@ static Tensor reduce_impl(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool reshape) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     if (not keepdim) {
         TT_THROW("keepdim=False is not supported");
     }

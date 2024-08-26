@@ -100,4 +100,4 @@ def test_LlamaMLP_inference(model_version, tokenizer_version, batch, seq_len, on
     ttnn.SetDefaultDevice(device)
 
     run_test_LlamaMLP_inference(device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc)
-    ttnn.CloseDevice(device)
+    ttnn.close_device(device)
