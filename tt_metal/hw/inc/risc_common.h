@@ -169,14 +169,16 @@ inline void riscv_wait(uint32_t cycles) {
 //  Writing an address on one core and reading it from another core only requires the reader to invalidate.
 //  Need to invalidate any address written by noc that may have been previously read
 inline __attribute__((always_inline)) void invalidate_l1_cache() {
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
     asm("fence");
 #endif
 }
 
 // Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
-inline __attribute__((always_inline)) void disable_lowcache() {
-#ifdef ARCH_BLACKHOLE
+// L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
+// export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
+inline __attribute__((always_inline)) void conditionally_disable_l1_cache() {
+#if defined(ARCH_BLACKHOLE) && defined(DISABLE_L1_DATA_CACHE)
     // asm(R"ASM(
     //         csrrsi zero, 0x7c0, 0x8
     //       )ASM");

@@ -76,6 +76,7 @@ constexpr bool cb_init_write = false;
 using namespace ckernel;
 
 int main(int argc, char *argv[]) {
+    conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
     DEBUG_STATUS("I");
 

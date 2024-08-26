@@ -198,7 +198,7 @@ private:
 static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
     // Since MATH RISCV doesn't have access to CBs, we can't print tiles from it. If the user still
     // tries to do this print a relevant message.
-    if ((1 << hart_id) == DPRINT_RISCV_TR1) {
+    if ((1 << hart_id) == tt::llrt::RISCV_TR1) {
         stream << "Warning: MATH core does not support TileSlice printing, omitting print..."
             << endl << std::flush;
         return;
