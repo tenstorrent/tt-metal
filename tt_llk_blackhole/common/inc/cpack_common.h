@@ -291,8 +291,7 @@ namespace ckernel::packer
 
       dest_rd_ctrl_u dest_rd_ctrl;
       dest_rd_ctrl.val = 0;
-      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = (pack_src_format == (uint)DataFormat::Int8) | 
-                                                      (pack_src_format == (uint)DataFormat::UInt8) |
+      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = (pack_output_src_format == (uint)DataFormat::Int8) |
                                                       (pack_src_format == (uint)DataFormat::Int32) |
                                                       (pack_src_format == (uint)DataFormat::Float32) |
                                                       (is_fp32_dest_acc_en ? 1 : 0);
