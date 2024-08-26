@@ -89,7 +89,9 @@ class TtLlamaModel_galaxy:
         logger.info("Done creating layers")
 
         # Rotary Embedding
-        self.cos, self.sin = precompute_freqs(self.head_dim, self.max_seq_len * 2, self.rope_theta)  # for prefill
+        self.cos, self.sin = precompute_freqs(
+            self.head_dim, self.max_seq_len * 2, self.rope_theta, use_scaled=True
+        )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
         # Embedding
         self.tt_embd = TtLlamaEmbedding_galaxy(
@@ -168,16 +170,6 @@ class TtLlamaModel_galaxy:
             cache_file_name=self.cache_path / norm_sharded_cache_str,
         )
 
-        # self.norm = ttnn.as_tensor(
-        #     pt_norm_weight,
-        #     dtype=ttnn.bfloat16,
-        #     layout=ttnn.ROW_MAJOR_LAYOUT,
-        #     device=self.mesh_device,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
-        #     cache_file_name=self.cache_path / norm_str,
-        # )
-
     def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None):
         assert inp_ids.dim() == 2
         batch, seq_len = inp_ids.shape
@@ -243,6 +235,10 @@ class TtLlamaModel_galaxy:
             )
 
             attn_masks = None
+        elif self.model_config["LLM_MODE"] == "prefill":
+            assert xs.shape == (batch, 1, seq_len, self.hidden_size // self.cluster_shape[0])
+
+            rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch)
 
         return (
             xs,
