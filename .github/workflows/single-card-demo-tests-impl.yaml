@@ -16,10 +16,16 @@ jobs:
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n150 --dispatch-mode ""'
           },
           {
-            name: "N300",
+            name: "N300_functionality",
             arch: wormhole_b0,
             runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n300 --dispatch-mode ""'
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n300_func --dispatch-mode ""'
+          },
+          {
+            name: "N300_performance",
+            arch: wormhole_b0,
+            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n300_perf --dispatch-mode ""'
           }
         ]
     name: ${{ matrix.test-group.name }}
@@ -31,6 +37,10 @@ jobs:
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Enable Performance mode
+        if: ${{ matrix.test-group.name == 'N300_performance' }}
+        run: |
+          sudo cpupower frequency-set -g performance
       - name: Ensure weka mount is active
         run: |
           sudo systemctl restart mnt-MLPerf.mount
@@ -67,3 +77,7 @@ jobs:
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      - name: Disable Performance mode
+        if: ${{ matrix.test-group.name == 'N300_performance' }}
+        run: |
+          sudo cpupower frequency-set -g ondemand
