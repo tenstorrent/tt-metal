@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -576,6 +576,8 @@ class resnet50:
         )  # num_classes = 1000
 
         self.transpose_shards = True
+        act_block_h_override = 1568
+
         if is_wormhole_b0():
             self.transpose_shards = False
             if batch_size == 16:

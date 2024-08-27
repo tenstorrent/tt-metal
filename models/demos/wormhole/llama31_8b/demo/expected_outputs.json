@@ -3,6 +3,6 @@
         "output_general" : ""
     },
     {
-        "output_instruct": "<|begin_of_text|><|start_header_id|>user<|end_header_id|>What is your favourite condiment?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nI don't have personal preferences or taste buds, but I can tell you about popular condiments or help you find a condiment that suits your taste! What type of condiment are you looking for (e.g. hot sauce, ketchup, mustard, etc.)?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nI can provide information on various condiments. Some popular ones include:\n\n* Hot sauce: for those who like a little heat in their meals\n* Ketchup: a classic condiment for burgers and fries\n* Must"
+        "output_instruct": "<|begin_of_text|><|start_header_id|>user<|end_header_id|>What is your favourite condiment?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nI don't have personal preferences or taste buds, but I can tell you about popular condiments or help you explore different options if you're looking for a new favorite! What type of condiment are you interested in (e.g. hot sauce, ketchup, mustard, etc.)?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\nI can provide information on various condiments. Some popular ones include:\n\n* Hot sauce: for those who like a little heat in their lives, hot sauce can add a spicy kick to dishes.\n* K"
     }
 ]

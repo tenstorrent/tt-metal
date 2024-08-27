@@ -235,7 +235,7 @@ TEST_F(WatcherFixture, TestWatcherAssertErisc) {
 
 TEST_F(WatcherFixture, TestWatcherAssertIErisc) {
     if (!this->IsSlowDispatch()) {
-        log_info(tt::LogTest, "Skip due to #7771");
+        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
     if (this->slow_dispatch_)
