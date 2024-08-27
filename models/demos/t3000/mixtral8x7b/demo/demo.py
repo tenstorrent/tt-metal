@@ -136,8 +136,6 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         model_args,
         current_rot_mat,
         rot_matrix,
-        generation_start_pos,
-        max_generated_tokens,
         dtype,
     )
 
