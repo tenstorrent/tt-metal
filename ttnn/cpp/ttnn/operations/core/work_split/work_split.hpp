@@ -15,6 +15,7 @@
 
 namespace ttnn {
 
+namespace operations::core::work_split {
 inline uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_size_bytes, uint32_t max_read_size) {
     uint32_t total_bytes = num_sticks_to_read * stick_size_bytes;
     uint32_t new_num_sticks_to_read = num_sticks_to_read;
@@ -238,3 +239,7 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
 }
 
 }
+
+using namespace operations::core::work_split;
+
+}  // namespace ttnn
