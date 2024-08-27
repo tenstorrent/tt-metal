@@ -11,14 +11,14 @@ from models.experimental.functional_unet.tt import unet_shallow_torch
 
 
 def create_unet_input_tensors(
-    device, batch, groups, pad_input=True, input_channels=4, input_height=1056, input_width=160
+    device, batch, groups, pad_input=True, input_channels=4, input_height=1056, input_width=160, mesh_mapper=None
 ):
     torch_input_tensor = torch.randn(batch, input_channels * groups, input_height, input_width)
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn_input_tensor.reshape(
+        ttnn_input_tensor.shape[0],
         1,
-        1,
-        ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
+        ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
         ttnn_input_tensor.shape[3],
     )
     if pad_input:
@@ -30,8 +30,13 @@ def create_unet_input_tensors(
                 ttnn_input_tensor,
                 (0, max(0, pad - ttnn_input_tensor.shape[-1]), 0, max(0, hpad - ttnn_input_tensor.shape[-2])),
             )
-    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16)
-
+    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+    ttnn_input_tensor = ttnn_input_tensor.reshape(
+        1,
+        1,
+        ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
+        ttnn_input_tensor.shape[3],
+    )
     return torch_input_tensor, ttnn_input_tensor
 
 
@@ -60,11 +65,11 @@ def create_unet_model_parameters(model: unet_shallow_torch.UNet, input_tensor: t
         "num_cores_nhw": 55,
     }
 
-    parameters.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 5 * 32}
-    parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 5 * 32}
+    parameters.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
+    parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
 
-    parameters.c2["conv_blocking_and_parallelization_config_override"] = None
-    parameters.c2_2["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 5 * 32}
+    parameters.c2_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 5 * 32}
     parameters.c3["conv_blocking_and_parallelization_config_override"] = None
     parameters.c3_2["conv_blocking_and_parallelization_config_override"] = None
     parameters.c4["conv_blocking_and_parallelization_config_override"] = None
