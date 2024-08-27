@@ -148,139 +148,18 @@ void MAIN {
     #endif // RMSNORM
     #endif // FUSE_PRE_ADD
 
-    #ifndef RMSNORM
-    // E[x],
-    unpack_reconfig_data_format(cb_in, cb_scaler);
-    index_h_offset = 0;
-    reduce_init_delta<false>();
-    cb_wait_front(cb_scaler, 1);
-    cb_reserve_back(cb_ex_partial, block_h);
-    for (uint32_t i = 0; i < block_h; i++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile(cb_in, cb_scaler, w+index_h_offset, scaler0, dst0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial);
-        tile_regs_release();
-        index_h_offset += block_w;
-    }
-    reduce_revert_delta();
-    cb_push_back(cb_ex_partial, block_h);
-
-    unpack_reconfig_data_format_srca(cb_in, cb_ex_external);
-
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr(is_allgather_worker) {
-        reduce_init_delta<false>();
-        cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
-
-        for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-            cb_wait_front(cb_scaler_global, 1);
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < num_blocks_reduce; w++) {
-                cb_wait_front(cb_ex_external, 1);
-                reduce_tile(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external, 1);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex);
-            tile_regs_release();
-        }
-        reduce_revert_delta();
-        cb_push_back(cb_ex, num_tiles_per_allgather_worker);
-    }
-    #endif // not RMSNORM
-
-    unpack_reconfig_data_format(cb_ex_external, cb_in, cb_scaler, cb_in);
-
-    // (x)^2, cb_x2 <-- cb_in
-    mul_tiles_init();
-    index_h_offset = 0;
-    cb_reserve_back(cb_x2, num_tiles_per_block);
-    for (uint32_t i = 0; i < block_h; i++) {
-        index_subblock_w_offset = 0;
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles(cb_in, cb_in, index, index, w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, cb_x2);
-            }
-            tile_regs_release();
-            index_subblock_w_offset += subblock_w;
-        }
-        index_h_offset += block_w;
-    }
-    cb_push_back(cb_x2, num_tiles_per_block);
-
-    #if defined RMSNORM and not defined FUSED_PRE_ADD
-    unpack_reconfig_data_format(cb_in, cb_x2, cb_in, cb_scaler);
-    #else
-    unpack_reconfig_data_format(cb_in, cb_x2, cb_in, cb_scaler);
-    #endif
-
-    cb_wait_front(cb_x2, num_tiles_per_block);
-
-    // E(x^2)
-    #ifdef RMSNORM
-    cb_wait_front(cb_scaler, 1);
-    #endif
-    cb_reserve_back(cb_ex_partial2, block_h);
-    reduce_init_delta<false>();
-    index_h_offset = 0;
-    for (uint32_t i = 0; i < block_h; i++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile(cb_x2, cb_scaler, w+index_h_offset, scaler0, dst0);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex_partial2);
-        tile_regs_release();
-        index_h_offset += block_w;
-    }
-    reduce_revert_delta();
-    cb_pop_front(cb_x2, num_tiles_per_block);
-    cb_push_back(cb_ex_partial2, block_h);
-
-    //cb_x2 is free now, now using for cb_ex_sqr
-
-    // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
-    if constexpr(is_allgather_worker) {
-        reduce_init_delta<false>();
-        cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
-
-        for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-            cb_wait_front(cb_scaler_global, 1);
-
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < num_blocks_reduce; w++) {
-                cb_wait_front(cb_ex_external2, 1);
-                reduce_tile(cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external2, 1);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2);
-            tile_regs_release();
-        }
-        reduce_revert_delta();
-        cb_push_back(cb_ex2, num_tiles_per_allgather_worker);
 
         if (enable_sqrt) {
             #ifndef RMSNORM
             // calculate var = E(x^2) - E(x)^2
+            UNPACK(DPRINT << "Before sqrt" << ENDL());
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // E(x)^2
                 unpack_reconfig_data_format(cb_ex_global, cb_ex_global);
                 cb_wait_front(cb_ex_global, 1);
+                UNPACK(DPRINT << "waited for cb_ex_global" << ENDL());
                 cb_reserve_back(cb_ex_sqr, 1);
                 tile_regs_acquire();
                 mul_tiles_init();
@@ -294,7 +173,7 @@ void MAIN {
 
                 // E(x^2) - E(x)^2
                 unpack_reconfig_data_format(cb_ex_global, cb_ex2, cb_ex_global, cb_ex_sqr);
-                cb_wait_front(cb_ex2, 1);
+                // cb_wait_front(cb_ex2, 1);
                 cb_wait_front(cb_ex_sqr, 1);
                 cb_reserve_back(cb_var, 1);
                 tile_regs_acquire();
@@ -306,11 +185,13 @@ void MAIN {
                 cb_push_back(cb_var, 1);
                 tile_regs_release();
 
+                UNPACK(DPRINT << "got here 2" << ENDL());
+
             }
-            cb_pop_front(cb_ex2, num_tiles_per_allgather_worker);
+            // cb_pop_front(cb_ex2, num_tiles_per_allgather_worker);
             cb_pop_front(cb_ex_sqr, num_tiles_per_allgather_worker);
             #endif
-
+            UNPACK(DPRINT<< "enable_sqrt" << ENDL());
             unpack_reconfig_data_format(cb_var, cb_eps);
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // 1/[sqrt(Var + eps)],
@@ -331,12 +212,15 @@ void MAIN {
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex2pe);
                 cb_push_back(cb_ex2pe, 1);
+                UNPACK(DPRINT << "After ex2pe pushback" << ENDL());
                 tile_regs_release();
             }
+            UNPACK(DPRINT << "After reciprocral" << ENDL());
         }
     }
 
     #ifndef RMSNORM
+    UNPACK(DPRINT << "Here 3" << ENDL());
     // x - E[x]
     unpack_reconfig_data_format(cb_in, cb_ex_global);
     index_h_offset = 0;
@@ -364,6 +248,7 @@ void MAIN {
     }
     cb_push_back(cb_xmm, num_tiles_per_block);
     #endif
+    UNPACK(DPRINT << "Here 4" << ENDL());
 
     if constexpr(do_gamma == 0 && do_beta == 0) {
         pack_reconfig_data_format(cb_out);
@@ -398,6 +283,7 @@ void MAIN {
     }
     cb_push_back(cb_im, num_tiles_per_block);
 
+    UNPACK(DPRINT << "Here 5" << ENDL());
     cb_pop_front(cb_xmm, num_tiles_per_block);
     cb_wait_front(cb_im, num_tiles_per_block);
 
@@ -432,11 +318,13 @@ void MAIN {
         cb_pop_front(cb_im, num_tiles_per_block);
         cb_wait_front(cb_outgamma, num_tiles_per_block);
     }
+    UNPACK(DPRINT << "here 6" << ENDL());
 
     if constexpr(do_beta) {
         unpack_reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
         add_bcast_rows_init_short();
+        UNPACK(DPRINT << "here 7" << ENDL());
         cb_wait_front(cb_beta, block_w);
         index_h_offset = 0;
         cb_reserve_back(cb_out, num_tiles_per_block);
@@ -462,6 +350,8 @@ void MAIN {
         cb_pop_front(cb_fusion, num_tiles_per_block);
         cb_wait_front(cb_out, num_tiles_per_block);
     }
+
+    UNPACK(DPRINT << "compute done" << ENDL());
 
 }
 
