@@ -438,17 +438,21 @@ void py_module(py::module& m_primary) {
         "moreh_cumsum",
         &moreh_cumsum,
         py::arg("input").noconvert(),
-        py::arg("output").noconvert(),
-        py::kw_only(),
         py::arg("dim").noconvert(),
+        py::kw_only(),
+        py::arg("output").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs cumsum operation. Returns an output tensor.");
     m_primary.def(
         "moreh_cumsum_backward",
         &moreh_cumsum_backward,
         py::arg("output_grad").noconvert(),
-        py::arg("input_grad").noconvert(),
-        py::kw_only(),
         py::arg("dim").noconvert(),
+        py::kw_only(),
+        py::arg("input_grad").noconvert() = std::nullopt,
+        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs cumsum backward operation. Returns an input_grad tensor.");
 
     m_primary.def(

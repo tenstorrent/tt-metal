@@ -7,19 +7,24 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+    get_compute_kernel_options,
+    compute_kernel_options,
+    compute_kernel_ids,
+)
 from models.utility_functions import comp_allclose_and_pcc
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
-def get_tensors(input_shape, output_shape, device):
+def get_tensors(input_shape, device):
     torch.manual_seed(2023)
     npu_dtype = ttnn.bfloat16
     cpu_dtype = torch.bfloat16
     npu_layout = ttnn.TILE_LAYOUT
 
-    torch_input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype, requires_grad=True)
-    torch_output = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
+    torch_input = torch.rand(input_shape, dtype=cpu_dtype, requires_grad=True)
+    torch_output = torch.zeros(input_shape, dtype=cpu_dtype)
 
     tt_input = ttnn.Tensor(torch_input, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     tt_output = ttnn.Tensor(torch_output, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
@@ -27,14 +32,14 @@ def get_tensors(input_shape, output_shape, device):
     return tt_input, tt_output, torch_input
 
 
-def get_backward_tensors(output_grad_shape, input_grad_shape, device):
+def get_backward_tensors(input_shape, device):
     torch.manual_seed(2023)
     npu_dtype = ttnn.bfloat16
     cpu_dtype = torch.bfloat16
     npu_layout = ttnn.TILE_LAYOUT
 
-    torch_output_grad = torch.randint(-2, 3, output_grad_shape, dtype=cpu_dtype, requires_grad=True)
-    torch_input_grad = torch.randint(-2, 3, input_grad_shape, dtype=cpu_dtype)
+    torch_output_grad = torch.rand(input_shape, dtype=cpu_dtype)
+    torch_input_grad = torch.zeros(input_shape, dtype=cpu_dtype)
 
     tt_output_grad = ttnn.Tensor(torch_output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     tt_input_grad = ttnn.Tensor(torch_input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
@@ -45,16 +50,14 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
 @pytest.mark.parametrize(
     "input_shape",
     (
-        ([1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
-        ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1]),
-        ([4, 4, TILE_HEIGHT * 30 - 1, TILE_WIDTH * 12 - 1]),
-        ([8, 8, TILE_HEIGHT * 4 - 1, TILE_WIDTH * 4 - 1]),
+        ([TILE_HEIGHT, TILE_WIDTH]),
+        ([TILE_HEIGHT // 2, TILE_WIDTH // 2]),
+        ([2, 3, 4, TILE_HEIGHT * 5 + TILE_HEIGHT // 2, TILE_WIDTH * 5 + TILE_WIDTH // 2]),
     ),
     ids=[
-        "1, 1, TILE_HEIGHT-1,TILE_WIDTH - 1",
-        "4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1",
-        "4, 4, TILE_HEIGHT * 30 - 1, TILE_WIDTH * 12 - 1",
-        "8, 8, TILE_HEIGHT * 4 - 1, TILE_WIDTH * 4 - 1",
+        "0",
+        "1",
+        "2",
     ],
 )
 @pytest.mark.parametrize(
@@ -62,22 +65,43 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
     (
         0,
         1,
+        2,
+        3,
+        4,
     ),
-    ids=["0", "1"],
+    ids=[
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+    ],
 )
-def test_moreh_cumsum_dim(input_shape, dim, device):
-    output_shape = input_shape.copy()
+@pytest.mark.parametrize("use_provide_output", (True, False), ids=["True", "False"])
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_cumsum(input_shape, dim, use_provide_output, compute_kernel_options, device):
+    input_rank = len(input_shape)
+    if dim >= input_rank:
+        pytest.skip(f"input dim {dim} exceeds the dims of input tensor {input_rank}")
+    # TODO: remove this condition
+    if dim >= input_rank - 2:
+        pytest.skip("last two dimensions are not supported")
 
-    (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device)
+    (tt_input, tt_output, torch_input) = get_tensors(input_shape, device)
+    if not use_provide_output:
+        tt_output = None
 
     torch_output = torch.cumsum(torch_input, dim)
 
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_output_cpu = (
-        ttnn.experimental.operations.primary.moreh_cumsum(tt_input, tt_output, dim=dim)
+        ttnn.experimental.operations.primary.moreh_cumsum(
+            tt_input, dim=dim, output=tt_output, compute_kernel_config=compute_kernel_config
+        )
         .cpu()
         .to(cpu_layout)
-        .unpad_from_tile(output_shape)
+        .unpad_from_tile(input_shape)
         .to_torch()
     )
 
@@ -94,16 +118,14 @@ def test_moreh_cumsum_dim(input_shape, dim, device):
 @pytest.mark.parametrize(
     "input_shape",
     (
-        ([1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 1]),
-        ([4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1]),
-        ([4, 4, TILE_HEIGHT * 30 - 1, TILE_WIDTH * 12 - 1]),
-        ([8, 8, TILE_HEIGHT * 20 - 1, TILE_WIDTH * 20 - 1]),
+        ([TILE_HEIGHT, TILE_WIDTH]),
+        ([TILE_HEIGHT // 2, TILE_WIDTH // 2]),
+        ([2, 3, 4, TILE_HEIGHT * 5 + TILE_HEIGHT // 2, TILE_WIDTH * 5 + TILE_WIDTH // 2]),
     ),
     ids=[
-        "1, 1, TILE_HEIGHT-1,TILE_WIDTH - 1",
-        "4, 4, TILE_HEIGHT * 12 - 1, TILE_WIDTH * 30 - 1",
-        "4, 4, TILE_HEIGHT * 30 - 1, TILE_WIDTH * 12 - 1",
-        "8, 8, TILE_HEIGHT * 20 - 1, TILE_WIDTH * 20 - 1",
+        "0",
+        "1",
+        "2",
     ],
 )
 @pytest.mark.parametrize(
@@ -111,21 +133,42 @@ def test_moreh_cumsum_dim(input_shape, dim, device):
     (
         0,
         1,
+        2,
+        3,
+        4,
     ),
-    ids=["0", "1"],
+    ids=[
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+    ],
 )
-def test_moreh_cumsumsum_backward(input_shape, dim, device):
-    output_shape = input_shape.copy()
+@pytest.mark.parametrize("use_provide_output", (True, False), ids=["True", "False"])
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_cumsum_backward(input_shape, dim, use_provide_output, compute_kernel_options, device):
+    input_rank = len(input_shape)
+    if dim >= input_rank:
+        pytest.skip(f"input dim {dim} exceeds the dims of input tensor {input_rank}")
+    # TODO: remove this condition
+    if dim >= input_rank - 2:
+        pytest.skip("last two dimensions are not supported")
 
-    (_, _, torch_input) = get_tensors(input_shape, output_shape, device)
-    (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(output_shape, input_shape, device)
+    (_, _, torch_input) = get_tensors(input_shape, device)
+    (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(input_shape, device)
+    if not use_provide_output:
+        tt_input_grad = None
 
     torch_output = torch.cumsum(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_input_grad_cpu = (
-        ttnn.experimental.operations.primary.moreh_cumsum_backward(tt_output_grad, tt_input_grad, dim=dim)
+        ttnn.experimental.operations.primary.moreh_cumsum_backward(
+            tt_output_grad, dim=dim, input_grad=tt_input_grad, compute_kernel_config=compute_kernel_config
+        )
         .cpu()
         .to(cpu_layout)
         .unpad_from_tile(input_shape)
