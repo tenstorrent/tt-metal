@@ -6,7 +6,6 @@
 #include "debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_helpers.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen.hpp"
 
 packet_input_queue_state_t input_queue;
 packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
