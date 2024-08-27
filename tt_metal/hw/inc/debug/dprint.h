@@ -33,7 +33,7 @@
 #include "hostdevcommon/dprint_common.h"
 
 #include "dprint_buffer.h"
-#include "status.h"
+#include "waypoint.h"
 
 #if defined(DEBUG_PRINT_ENABLED)
 #define DPRINT DebugPrinter()
@@ -209,7 +209,7 @@ void debug_print(DebugPrinter &dp, DebugPrintData data) {
     auto sum_sz = payload_sz + code_sz + sz_sz;
     if (dp.data() + wpos + sum_sz >= dp.bufend()) {
         // buffer is full - wait for the host reader to flush+update rpos
-        DEBUG_STATUS("DPW");
+        WAYPOINT("DPW");
         while (*dp.rpos() < *dp.wpos()) {
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
@@ -219,7 +219,7 @@ void debug_print(DebugPrinter &dp, DebugPrintData data) {
                 return;
             ; // wait for host to catch up to wpos with it's rpos
         }
-        DEBUG_STATUS("DPD");
+        WAYPOINT("DPD");
         *dp.wpos() = 0;
         // TODO(AP): are these writes guaranteed to be ordered?
         *dp.rpos() = 0;

@@ -150,7 +150,7 @@ void RunTimeOptions::ParseWatcherEnv() {
 
     // Any watcher features to disabled based on env var.
     std::set all_features = {
-        watcher_status_str,
+        watcher_waypoint_str,
         watcher_noc_sanitize_str,
         watcher_assert_str,
         watcher_pause_str,

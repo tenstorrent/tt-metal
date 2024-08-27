@@ -77,10 +77,10 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
 
     std::uint32_t base_address = cb_interface[operand_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
-    DEBUG_STATUS("UPTW");
+    WAYPOINT("UPTW");
     _llk_unpack_tilize_(
         base_address, tile_index, unpack_src_format[operand_id], block_ct_dim, face_r_dim, num_faces, narrow_tile);
-    DEBUG_STATUS("UPTD");
+    WAYPOINT("UPTD");
 }
 
 inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles) {
@@ -233,7 +233,7 @@ inline void llk_unpack_tilizeA_B(
     // Clear z/w start counters for SrcA/B
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111);
 
-    DEBUG_STATUS("UPTW");
+    WAYPOINT("UPTW");
 
     for (std::uint32_t n = 0; n < num_faces; n++) {
 
@@ -287,7 +287,7 @@ inline void llk_unpack_tilizeA_B(
         switch_config_context(unp_cfg_context);
     }
 
-    DEBUG_STATUS("UPTD");
+    WAYPOINT("UPTD");
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
