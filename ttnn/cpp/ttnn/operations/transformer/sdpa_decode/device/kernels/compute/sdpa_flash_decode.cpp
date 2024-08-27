@@ -487,12 +487,14 @@ void MAIN {
     // const uin32_t idle_core = get_arg_val<uint32_t>(4);
 
     // idle core
+    // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates an idle_core
     if (get_arg_val<uint32_t>(0)==65){
         return;
     }
 
     // Get cur_pos
     uint32_t cur_pos = 0;
+    // using 4294967295 (end of uint32 range) as a flag to indicate that cur_pos is not provided as a list
     if (cur_pos_arg!=4294967295){
         cur_pos = cur_pos_arg;
     }
