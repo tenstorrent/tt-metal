@@ -24,7 +24,7 @@ void log_external_operation(
     const std::vector<Tensor>& input_tensors) {
     tt::log_debug(
         tt::LogOp,
-        "Launching External Operation: \"{}\" ({})", operation.get_type_name());
+        "Launching External Operation: \"{}\"", operation.get_type_name());
 
     auto attributes = operation.attributes();
     if (not attributes.empty()) {

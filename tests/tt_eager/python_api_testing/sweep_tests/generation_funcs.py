@@ -2268,5 +2268,15 @@ def gen_topk_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=T
             input_info.update({"dim": -1})
             input_info.update({"k": 32})
             input_info.update({"largest": True})
+            yield input_info
 
+
+def gen_argmax_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
+        if input_info is not None:
+            max_dim = len(input_shapes[0]) - 1
+            dim = random.choice([max_dim, None])
+            input_info.update({"dim": dim})
             yield input_info

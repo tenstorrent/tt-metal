@@ -49,12 +49,8 @@ def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_se
         t3k_device_mesh.get_device(device).enable_async(True)
 
     n_layers = 32
-    if (
-        seq_len == 1024 * 32
-    ):  # FIXME: Test with 32k seqlen has lower PCC. either increase MLP weights to bfloat8 or make sure the demo_with_prefill gives good outputs for 32k seqlens.
-        pcc = 0.90
-    else:
-        pcc = 0.93
+
+    pcc = 0.92
     dtype = ttnn.bfloat8_b
 
     # Validate that the prompt file and reference output files exist
