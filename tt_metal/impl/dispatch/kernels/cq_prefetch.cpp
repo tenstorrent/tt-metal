@@ -90,7 +90,6 @@ typedef struct PrefetchExecBufState {
 static uint32_t pcie_read_ptr = pcie_base;
 static uint32_t downstream_data_ptr = downstream_cb_base;
 static uint32_t block_next_start_addr[cmddat_q_blocks];
-static uint32_t block_noc_writes_to_clear[cmddat_q_blocks];
 static uint32_t rd_block_idx = 0;
 static uint32_t upstream_total_acquired_page_count = 0;
 // Feature to stall the prefetcher, mainly for ExecBuf impl which reuses CmdDataQ
@@ -1098,7 +1097,7 @@ bool process_cmd(uint32_t& cmd_ptr,
                  uint32_t& stride,
                  uint32_t* l1_cache,
                  PrefetchExecBufState& exec_buf_state) {
-    DeviceZoneScopedND("PROCESS-CMD", block_noc_writes_to_clear, rd_block_idx );
+    DeviceZoneScopedND("PROCESS-CMD");
     volatile CQPrefetchCmd tt_l1_ptr *cmd = (volatile CQPrefetchCmd tt_l1_ptr *)cmd_ptr;
     bool done = false;
 
@@ -1269,10 +1268,8 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
             cmddat_q_base,
             cmddat_q_blocks,
             cmddat_q_log_page_size,
-            my_noc_xy,
             my_upstream_cb_sem_id>(data_ptr,
                                    fence,
-                                   block_noc_writes_to_clear,
                                    block_next_start_addr,
                                    rd_block_idx,
                                    upstream_total_acquired_page_count);
@@ -1296,10 +1293,8 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr) {
             cmddat_q_base,
             cmddat_q_blocks,
             cmddat_q_log_page_size,
-            my_noc_xy,
             my_upstream_cb_sem_id>(dummy_data_ptr,
                                    fence,
-                                   block_noc_writes_to_clear,
                                    block_next_start_addr,
                                    rd_block_idx,
                                    upstream_total_acquired_page_count);
@@ -1350,8 +1345,6 @@ void kernel_main_d() {
         uint32_t offset = next_block * cmddat_q_pages_per_block * cmddat_q_page_size;
         block_next_start_addr[i] = cmddat_q_base + offset;
     }
-
-    block_noc_writes_to_clear[0] = noc_nonposted_writes_num_issued[noc_index] + 1;
 
     uint32_t cmd_ptr = cmddat_q_base;
     uint32_t fence = cmddat_q_base;
@@ -1411,7 +1404,7 @@ void kernel_main_hd() {
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
     while (!done) {
-        DeviceZoneScopedND("KERNEL-MAIN-HD", block_noc_writes_to_clear, rd_block_idx );
+        DeviceZoneScopedND("KERNEL-MAIN-HD");
         constexpr uint32_t preamble_size = 0;
         fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
 
