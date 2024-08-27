@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-
+#include "debug/dprint.h"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -89,29 +89,50 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* reduce_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sender_semaphore_addr);
     volatile tt_l1_ptr uint32_t* reduce_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
     volatile tt_l1_ptr uint32_t* reduce_second_stage_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_second_stage_semaphore_addr);
+     const auto& global_semaphore_set = [&]() __attribute__((always_inline))
+    {
+        *reduce_sender_semaphore_addr_ptr = VALID;
+
+        noc_semaphore_set_multicast_loopback_src(
+                            reduce_sender_semaphore_addr,
+                            reduce_sender_semaphore_noc_addr,
+                            num_blocks,
+                            false,
+                            false);
+    };
 
     const auto& global_reduce_sender = [&](const uint32_t cb_ex, const uint32_t cb_ex_global) __attribute__((always_inline))
     {
         // global reduce
 
+
         uint32_t l1_read_addr_ex = get_read_ptr(cb_ex);
         uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
+        // noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks);
+        // noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
         noc_async_write_multicast_loopback_src(
                             l1_read_addr_ex,
                             multicast_data_noc | l1_read_addr_ex_global,
-                            in0_mcast_num_cores,
-                            num_tiles_bytes,
+                            num_tiles_per_worker_bytes,
+                            num_blocks,
                             false,
                             false);
-        noc_semaphore_set_multicast_loopback_src(
-                            reduce_sender_semaphore_addr,
-                            reduce_sender_semaphore_noc_addr,
-                            in0_mcast_num_cores,
-                            false,
-                            false);
+        noc_async_write_barrier();
+
     };
     #ifndef RMSNORM
+    DPRINT << " Before Ex global mcast" << ENDL();
+    cb_reserve_back(cb_ex_global, block_h);
     global_reduce_sender(cb_ex, cb_ex_global);
+    cb_push_back(cb_ex_global, block_h);
     #endif
+    DPRINT << " Before Ex2 global mcast" << ENDL();
+    cb_wait_front(cb_ex2pe, block_h);
+    DPRINT << " Before Ex2pe  global mcast" << ENDL();
+    cb_reserve_back(cb_ex2_global, block_h);
     global_reduce_sender(cb_ex2pe, cb_ex2_global);
+    cb_push_back(cb_ex2_global, block_h);
+    global_semaphore_set();
+    DPRINT << "Sender core 0,0 done" << ENDL();
+
 }

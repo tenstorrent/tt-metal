@@ -119,8 +119,21 @@ void kernel_main() {
     const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(in0_remote_noc_x[0], in0_remote_noc_y[0], reduce_receiver_semaphore_addr);
 
     // inc mcast sender
+    DPRINT << "Receiver set sem invalid" << ENDL();
     noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-    noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+    // inc remote sem
+    #ifndef RMSNORM
+    DPRINT << "Receiver reserve cb_ex_global" << ENDL();
+    cb_reserve_back(cb_ex_global, block_h);
+    #endif
+    DPRINT << "Receiver reserve cb_ex2_global" << ENDL();
+    cb_reserve_back(cb_ex2_global, block_h);
+    DPRINT << "Receiver wait sem" << ENDL();
     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+    #ifndef RMSNORM
+    cb_push_back(cb_ex_global, block_h);
+    #endif
+    cb_push_back(cb_ex2_global, block_h);
+    DPRINT << "Receiver done" << ENDL();
 
 }
