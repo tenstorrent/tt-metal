@@ -10,18 +10,15 @@
 #include <memory>
 
 #include "common/bfloat16.hpp"
-#include "tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 
 
 namespace{

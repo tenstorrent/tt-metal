@@ -3,14 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
-#include <vector>
 #include "types.hpp"
 
 namespace tt::tt_metal {
 struct Tensor;
 class CommandQueue;
-class MemoryConfig;
+struct MemoryConfig;
 class Device;
 class DeviceMesh;
 }
