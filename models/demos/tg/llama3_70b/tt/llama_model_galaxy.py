@@ -398,13 +398,11 @@ class TtLlamaModel_galaxy:
             logger.info(f"Start layer: {id}")
             xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)
 
-        # self.saved_tensors[f"model.xs"] = xs
         norm_out = self.tt_distributed_rmsnorm(
             xs,
             epsilon=self.norm_eps,
             gamma=self.norm_sharded,
         )
-        # self.saved_tensors[f"model.norm_out"] = norm_out
 
         ### Each device does an LM head fracture
         lm_head_out = ttnn.matmul(
@@ -415,18 +413,16 @@ class TtLlamaModel_galaxy:
             compute_kernel_config=self.COMPUTE_KERNEL_CONFIG,
             # program_config=self.LM_HEAD_PROGCFG,
         )
-        # self.saved_tensors[f"model.lm_head_out"] = lm_head_out
 
-        # norm_out.deallocate(True)
+        norm_out.deallocate(True)
 
         lm_head_out = tt_all_reduce(
             lm_head_out,
-            mesh_device=self.mesh_device,
+            device_mesh=self.device_mesh,
             cluster_axis=1,
             dim=0,
             num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # self.saved_tensors[f"model.lm_head_out_all_reduce"] = lm_head_out
 
         return lm_head_out
