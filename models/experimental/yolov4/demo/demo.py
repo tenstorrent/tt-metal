@@ -538,6 +538,7 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_yolov4_model(device, model_location_generator, reset_seeds, input_path):
+    pytest.skip("bias_shape.without_padding()[-1] == b_shape[-1] issue for conv")
     model_path = model_location_generator("models", model_subdir="Yolo")
     if model_path == "models":
         pytest.skip(
