@@ -12,13 +12,13 @@ jobs:
           {
             name: "N150",
             arch: wormhole_b0,
-            runs-on: ["cloud-virtual-machine", "N150", "in-service", "mount-cloud-weka"],
+            runs-on: ["cloud-virtual-machine", "N150", "in-service"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n150 --dispatch-mode ""'
           },
           {
             name: "N300",
             arch: wormhole_b0,
-            runs-on: ["cloud-virtual-machine", "N300", "in-service", "mount-cloud-weka"],
+            runs-on: ["cloud-virtual-machine", "N300", "in-service"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n300 --dispatch-mode ""'
           }
         ]
