@@ -19,7 +19,7 @@ def register_ttnn_cpp_unary_function(unary_function):
         result += 3.434189657547
         return result
 
-    def _golden_function(input_tensor: ttnn.Tensor, **_):
+    def _golden_function(input_tensor: ttnn.Tensor, *args, device, **kwargs):
         name_to_golden_function = {
             "abs": torch.abs,
             "acos": torch.acos,
@@ -107,7 +107,9 @@ def register_ttnn_cpp_unary_function(unary_function):
         torch_function = name_to_golden_function[unary_function.__name__.split(".")[-1]]
         op_name = unary_function.__name__.split(".")[-1]
         if op_name in ["reciprocal", "asin", "acos"]:
-            return torch.nan_to_num(torch_function(input_tensor), nan=6.9752e19, posinf=1.6948e38, neginf=-1.6948e38)
+            return torch.nan_to_num(
+                torch_function(input_tensor), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+            )
         return torch_function(input_tensor)
 
     ttnn.attach_golden_function(unary_function, golden_function=_golden_function)

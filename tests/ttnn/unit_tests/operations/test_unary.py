@@ -18,7 +18,7 @@ def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
@@ -35,7 +35,7 @@ def run_unary_test_fixed(device, h, w, fill_value, ttnn_function, pcc=0.9999):
     torch_input_tensor = torch.full((h, w), fill_value, dtype=torch.bfloat16)
 
     golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
@@ -57,7 +57,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
         # run torch
         torch_input_tensor = torch_input_tensor + bias
         golden_function = ttnn.get_golden_function(ttnn_function)
-        torch_output_tensor = golden_function(torch_input_tensor)
+        torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
         # run tt
         input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
@@ -74,7 +74,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
         # run torch
         torch_input_tensor = torch_input_tensor + bias
         golden_function = ttnn.get_golden_function(ttnn_function)
-        torch_output_tensor = golden_function(torch_input_tensor)
+        torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
         # run tt
         input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
@@ -92,7 +92,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
         # run torch
         torch_input_tensor = torch_input_tensor + bias
         golden_function = ttnn.get_golden_function(ttnn_function)
-        torch_output_tensor = golden_function(torch_input_tensor)
+        torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
         # run tt
         input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
@@ -110,7 +110,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
         # run torch
         torch_input_tensor = torch_input_tensor + bias
         golden_function = ttnn.get_golden_function(ttnn_function)
-        torch_output_tensor = golden_function(torch_input_tensor)
+        torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
         # run tt
         input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
@@ -127,7 +127,7 @@ def run_identity_test(device, h, w, data_type, pcc=0.9999):
         # run torch
         torch_input_tensor = torch_input_tensor
         golden_function = ttnn.get_golden_function(ttnn_function)
-        torch_output_tensor = golden_function(torch_input_tensor)
+        torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
         # run tt
         input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
@@ -269,7 +269,7 @@ def run_unary_test_range(device, h, w, ttnn_function, pcc=0.9999):
     torch_input_tensor = torch_random((h, w), low, high, dtype=torch.bfloat16)
 
     golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)

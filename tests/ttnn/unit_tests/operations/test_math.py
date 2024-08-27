@@ -22,7 +22,7 @@ def run_math_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     if "digamma" in str(ttnn_function):
         torch_input_tensor += 100.0
     golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
@@ -256,7 +256,7 @@ def run_math_unary_test_fixed_val(device, h, w, fill_value, ttnn_function, pcc=0
     torch.manual_seed(0)
     torch_input_tensor = torch.full((h, w), fill_value, dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
@@ -277,7 +277,7 @@ def run_math_unary_test_range(device, h, w, ttnn_function, pcc=0.9999):
 
     torch_input_tensor = torch_random((h, w), low, high, dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
@@ -289,7 +289,6 @@ def run_math_unary_test_range(device, h, w, ttnn_function, pcc=0.9999):
 @pytest.mark.parametrize("h", [5])
 @pytest.mark.parametrize("w", [5])
 def test_multigammaln(device, h, w):
-    torch_multigammaln = ttnn.get_golden_function(ttnn.multigammaln)
     run_math_unary_test_range(device, h, w, ttnn.multigammaln, pcc=0.999)
 
 
