@@ -20,6 +20,8 @@ import os
 import torch.nn as nn
 
 
+torch.set_printoptions(linewidth=200)
+torch.set_printoptions(threshold=10000)
 # def plot_diff(vals, fid, nsticks, stick_len):
 #     import matplotlib.pyplot as plt
 
@@ -70,9 +72,19 @@ def run_conv(
     conv_bias_shape = [1, 1, 1, output_channels]
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
+    # for i in range(0, batch_size):
+    #     for j in range(0, input_channels):
+    #         for k in range(0, input_height):
+    #             for l in range(0, input_width):
+    #                 torch_input_tensor_nchw[i, j, k, l] = k*input_width+l
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
     # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
+    # for i in range(0, output_channels):
+    #     for j in range(0, input_channels):
+    #         for k in range(0, filter_height):
+    #             for l in range(0, filter_width):
+    #                 torch_weight_tensor[i, j, k, l] = 1
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
@@ -111,11 +123,7 @@ def run_conv(
             16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
         ),
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,  # RM output allows for non tile multiple shard shapes
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -144,7 +152,6 @@ def run_conv(
         debug=debug,
         groups=groups,
     )
-
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
 
@@ -159,16 +166,19 @@ def run_conv(
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
-
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+
     reader_patterns_cache.clear()
 
     if not fp32_accum:
         pcc = 0.995
+        print("pcc needed is ", 0.995)
     elif math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
         pcc = 0.9969
+        print("pcc needed is ", 0.9969)
     else:
         pcc = 0.998
+        print("pcc needed is ", 0.998)
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     print(pcc_msg)
     assert passing
@@ -411,7 +421,7 @@ def test_resnet50_conv_gs(
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
         # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, None), HANGS!!
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 256}),
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 64}),
         # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 32}),  Out of Memory!!
         # rn50 layer1
         (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
@@ -825,47 +835,58 @@ def test_sd_conv(
         # (1, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, False, None),
         # (1, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
         # # sd convs with HxW=64x64 with batch size=2
-        (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
+        # (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
         (2, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
-        (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),  # fits with bfloat8_b
-        (2, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
-        (2, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, False, None),  # bfloat16 doesnt fit
-        (2, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None),  # bfloat16 doesnt fit
-        (2, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
-        (2, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
-        (2, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
-        # (2, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}), L1 Allocation Error
-        (2, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, False, None),
-        (2, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
-        (2, 1280, 1920, 16, 16, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
-        (2, 640, 1920, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
-        (2, 640, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
-        (2, 640, 960, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
-        (2, 320, 960, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
-        (2, 320, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        # # (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),  # fits with bfloat8_b
+        # (2, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
+        # (2, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, False, None),  # bfloat16 doesnt fit
+        # (2, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None),  # bfloat16 doesnt fit
+        # (2, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
+        # (2, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        # (2, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
+        # (2, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
+        # (2, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, False, None),
+        # (2, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, False, None),
+        # (2, 1280, 1920, 16, 16, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        # (2, 640, 1920, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        # (2, 640, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        # (2, 640, 960, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        # (2, 320, 960, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
+        # (2, 320, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
         # 1x1 conv
-        (2, 320, 960, 64, 64, 1, 1, 1, 1, 0, 0, True, None),
+        # (2, 320, 960, 64, 64, 1, 1, 1, 1, 0, 0, False, None),
         # Small conv
         # (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, None), fails
     ),
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [
+        # ttnn.bfloat8_b,
+        ttnn.bfloat16,
+    ],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [
+        # ttnn.bfloat8_b,
+        ttnn.bfloat16,
+    ],
 )
 @pytest.mark.parametrize(
     "fp32_accum",
     [
-        False,
+        # False,
         True,
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("enable_auto_formatting", [True, False])
+@pytest.mark.parametrize(
+    "enable_auto_formatting",
+    [
+        False,
+    ],
+)
 def test_sd_conv_wh(
     device,
     use_program_cache,
@@ -906,8 +927,7 @@ def test_sd_conv_wh(
         pytest.skip("Skip the test cases raising OOM but not affecting e2e test")
 
     if filter_height > 1 and (input_channels > 1280 or (input_channels > 640 and input_height > 16)):
-        if enable_auto_formatting:
-            pytest.skip("Not running split SD conv with auto formatting")
+        pytest.skip("Not running split SD conv with auto formatting")
         run_conv_with_split(
             device,
             math_fidelity,

@@ -212,8 +212,8 @@ def determine_parallel_config(
     return ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
         num_cores_nhw=num_cores_nhw,
-        per_core_out_matrix_height_ntiles=per_core_out_matrix_height_ntiles,
-        per_core_out_matrix_width_ntiles=per_core_out_matrix_width_ntiles,
+        per_core_out_matrix_height=per_core_out_matrix_height_ntiles * ttnn.TILE_SIZE,
+        per_core_out_matrix_width=per_core_out_matrix_width_ntiles * ttnn.TILE_SIZE,
     )
 
 

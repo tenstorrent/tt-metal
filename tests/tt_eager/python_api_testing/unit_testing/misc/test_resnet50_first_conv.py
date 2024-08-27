@@ -209,8 +209,8 @@ def test_resnet50_first_conv(
             ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
                 grid_size=grid_size,
                 num_cores_nhw=grid_size[0],
-                per_core_out_matrix_height_ntiles=per_core_out_h_ntiles,
-                per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+                per_core_out_matrix_height=per_core_out_h_ntiles * ttnn.TILE_SIZE,
+                per_core_out_matrix_width=per_core_weight_matrix_w_ntiles * ttnn.TILE_SIZE,
             ),
             ttnn.operations.conv2d.OptimizedConvBlockConfig(
                 act_block_h_ntiles=act_block_h,

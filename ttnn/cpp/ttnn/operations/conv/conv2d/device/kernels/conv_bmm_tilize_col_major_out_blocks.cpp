@@ -101,6 +101,7 @@ void MAIN {
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13); // out_subblock_h * out_subblock_w;
     constexpr bool tilize_in0                 = get_compile_time_arg_val(14);
     constexpr bool untilize_out               = get_compile_time_arg_val(15);
+    constexpr uint32_t out_cb_id               = get_compile_time_arg_val(17);
 
     constexpr uint32_t out_block_num_tiles    = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -114,7 +115,7 @@ void MAIN {
     constexpr uint32_t matmul_partials_cb                       = tt::CB::c_intermed0;
     constexpr uint32_t tilized_in0_cb_id                        = tt::CB::c_intermed1;
     //constexpr uint32_t untilize_mode_reblock_cb                 = tt::CB::c_intermed2;
-    constexpr uint32_t out_cb_id                                = tt::CB::c_out0;
+    /*constexpr uint32_t out_cb_id                                = tt::CB::c_out0;*/
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 

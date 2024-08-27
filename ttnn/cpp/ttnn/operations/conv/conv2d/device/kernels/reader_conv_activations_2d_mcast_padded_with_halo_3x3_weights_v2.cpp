@@ -5,10 +5,13 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
+
+#define DUMP(a) \
+    do { DPRINT << "Activations: "<< #a " = " << a << ENDL(); } while(false)
 
 inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
@@ -46,6 +49,7 @@ void kernel_main() {
     constexpr uint32_t window_inner = get_compile_time_arg_val(7);
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(10);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(15);
     constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(16);
@@ -88,7 +92,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_valid_addr_ptr = &l1_array[0];
     act_mcast_sender_semaphore_valid_addr_ptr[0] = 1; // Load const 1 to be used as semaphore valid value sent from sender to receivers
     uint32_t act_mcast_sender_semaphore_valid_addr = reinterpret_cast<uint32_t>(&l1_array[0]);
-
     // Set up remote VALID value
     volatile tt_l1_ptr uint32_t* act_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_semaphore_addr);
     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, VALID);
@@ -129,13 +132,18 @@ void kernel_main() {
         for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
             read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+            l1_write_addr_act += act_block_w_extra_align_bytes;
             read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+            l1_write_addr_act += act_block_w_extra_align_bytes;
 
             reader_idx++;
         }
         // incrementing num issued in one shot is actually slower
         // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
         noc_async_read_barrier();
+        /*DPRINT << "Read activations " << ENDL();*/
+        /*print_pages(get_write_ptr(cb_id_act_row_major_bfloat16), 32*9, act_mcast_sender_size_bytes/2/32/9);*/
+        /*print_pages(get_read_ptr(cb_id_sharded_act), 16, 64);*/
         cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
         // Round robin self-mcast and receive tilized act matrix in cb_id_act

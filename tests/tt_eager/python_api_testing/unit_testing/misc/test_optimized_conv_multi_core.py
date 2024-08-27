@@ -165,8 +165,8 @@ def test_run_optimized_conv(
             parallelization_config=ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
                 grid_size=(num_cores_x, num_cores_y),
                 num_cores_nhw=num_cores_y,
-                per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
-                per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+                per_core_out_matrix_height=per_core_out_matrix_h_ntiles * ttnn.TILE_SIZE,
+                per_core_out_matrix_width=per_core_weight_matrix_w_ntiles * ttnn.TILE_SIZE,
             ),
             block_config=ttnn.operations.conv2d.OptimizedConvBlockConfig(
                 act_block_h_ntiles=act_block_h,

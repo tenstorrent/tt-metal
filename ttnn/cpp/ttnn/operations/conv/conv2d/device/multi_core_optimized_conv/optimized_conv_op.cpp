@@ -147,8 +147,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     TT_ASSERT(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
-    uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntiles;
-    uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
+    uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width / TILE_WIDTH;
+    uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height / TILE_HEIGHT;
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
     //assert(out_block_h_ntiles == act_block_h_ntiles); // TODO: fix output block sizing
@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
                         weight_size_h == 7 && weight_size_w == 8 &&
                         stride_h == 2 && stride_w == 2);
     // Compute the 2d matrix shape
-    auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(ashape.value, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
+    auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(ashape.value, conv_params, out_block_h_ntiles * TILE_HEIGHT, extra_padding_for_32B_alignment);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
@@ -389,8 +389,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
     uint32_t total_num_cores = num_cores_x * num_cores_y;
     assert(num_cores_x < 13);
     assert(num_cores_y < 10);
-    uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
-    uint32_t per_core_out_matrix_width_ntiles = p_config.per_core_out_matrix_width_ntiles;
+    uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height / TILE_HEIGHT;
+    uint32_t per_core_out_matrix_width_ntiles = p_config.per_core_out_matrix_width / TILE_WIDTH;
     //cout << "per_core_weight_matrix_width_ntiles=" << per_core_weight_matrix_width_ntiles << endl;
     // cout << "total_num_cores=" << total_num_cores << endl;
     // cout << "per_core_out_matrix_height_ntiles=" << per_core_out_matrix_height_ntiles << endl;
@@ -719,7 +719,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
         true,
         untilize_out,
 
-        bias_ntiles_per_core
+        bias_ntiles_per_core,
+        out0_cb
     };
 
     auto writer_mcast_noc = tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());

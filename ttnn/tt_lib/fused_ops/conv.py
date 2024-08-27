@@ -239,8 +239,8 @@ def resnet50_optimized_conv(
     opt_conv_parall_conf = ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
         num_cores_nhw=grid_size[0],
-        per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
-        per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+        per_core_out_matrix_height=per_core_out_matrix_h_ntiles * ttnn.TILE_SIZE,
+        per_core_out_matrix_width=per_core_weight_matrix_w_ntiles * ttnn.TILE_SIZE,
     )
     opt_conv_block_conf = ttnn.operations.conv2d.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h,
@@ -358,8 +358,8 @@ def resnet50_first_conv(
     opt_conv_parall_conf = ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
         grid_size=grid_size,
         num_cores_nhw=grid_size[0],
-        per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
-        per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+        per_core_out_matrix_height=per_core_out_matrix_h_ntiles * ttnn.TILE_SIZE,
+        per_core_out_matrix_width=per_core_weight_matrix_w_ntiles * ttnn.TILE_SIZE,
     )
     opt_conv_block_conf = ttnn.operations.conv2d.OptimizedConvBlockConfig(
         act_block_h_ntiles=act_block_h,

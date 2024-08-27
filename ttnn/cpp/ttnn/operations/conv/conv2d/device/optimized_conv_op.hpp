@@ -21,8 +21,8 @@ enum class OptimizedConvOpParallelizationStrategy {
 struct OptimizedConvParallelizationConfig {
     CoreCoord grid_size; // (x,y)
     uint32_t num_cores_nhw;
-    uint32_t per_core_out_matrix_height_ntiles;
-    uint32_t per_core_out_matrix_width_ntiles;
+    uint32_t per_core_out_matrix_height;
+    uint32_t per_core_out_matrix_width;
     // std::size_t in0_block_w;
     // std::size_t out_subblock_h;
     // std::size_t out_subblock_w;
@@ -276,6 +276,6 @@ using namespace tt::tt_metal;
 
 pair<uint32_t, uint32_t> compute_opt_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t padding_for_32B_alignment=0);
 
-pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const Shape& conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment);
+pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const Shape& conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_datums, uint32_t padding_for_32B_alignment);
 
 } // optimized_conv_op_utils
