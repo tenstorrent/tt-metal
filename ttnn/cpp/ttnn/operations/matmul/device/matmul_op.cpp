@@ -300,7 +300,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const bool mcast_in0,
     const bool out_sharded,
     const std::optional<const CoreCoord> compute_with_storage_grid_size,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = input_tensor_a.device();
     auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());
     uint32_t M = fuse_batch ? input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1]
@@ -343,7 +343,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
 inline MatmulProgramConfig create_simple_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const CoreCoord& compute_with_storage_grid_size) {
     const auto &ashape = input_tensor_a.get_legacy_shape(), bshape = input_tensor_b.get_legacy_shape();
     uint32_t batch_size_a = get_batch_size(ashape);

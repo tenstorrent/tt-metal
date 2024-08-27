@@ -22,6 +22,9 @@ void py_module_types(py::module& module) {
     py::class_<ttnn::CoreGrid>(module, "CoreGrid");
     py::class_<ttnn::Shape>(module, "Shape");
 
+    export_enum<ttnn::BcastOpMath>(module, "BcastOpMath");
+    export_enum<ttnn::BcastOpDim>(module, "BcastOpDim");
+
     module.attr("DRAM_MEMORY_CONFIG") = py::cast(DRAM_MEMORY_CONFIG);
     module.attr("L1_MEMORY_CONFIG") = py::cast(L1_MEMORY_CONFIG);
 }

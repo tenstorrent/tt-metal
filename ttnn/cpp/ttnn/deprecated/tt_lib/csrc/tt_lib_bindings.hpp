@@ -10,8 +10,6 @@ namespace tt {
 
 namespace tt_metal {
 
-void DeviceModuleTypes(py::module& m_device);
-void DeviceModule(py::module& m_device);
 void ProfilerModule(py::module &m_profiler);
 
 }  // namespace tt_metal

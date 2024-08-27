@@ -32,7 +32,6 @@ PYBIND11_MODULE(_ttnn, module) {
     // MODULES
     auto m_deprecated = module.def_submodule("deprecated", "Deprecated tt_lib bindings for tensor, device, profiler");
     auto m_depr_tensor = m_deprecated.def_submodule("tensor", "Submodule defining an tt_metal tensor");
-    auto m_depr_device = m_deprecated.def_submodule("device", "Submodule defining a host or device");
 
     auto m_depr_operations = m_deprecated.def_submodule("operations", "Submodule for experimental operations");
     auto m_primary_ops = m_depr_operations.def_submodule("primary", "Primary operations");
@@ -53,12 +52,12 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::graph::py_graph_module_types(m_graph);
 
     tt::tt_metal::TensorModuleTypes(m_depr_tensor);
-    tt::tt_metal::DeviceModuleTypes(m_depr_device);
     tt::operations::primary::py_module_types(m_primary_ops);
 
     ttnn::types::py_module_types(m_types);
     ttnn::activation::py_module_types(m_activation);
     ttnn::core::py_module_types(m_core);
+    ttnn::device::py_device_module_types(m_device);
     ttnn::multi_device::py_module_types(m_multi_device);
     ttnn::events::py_module_types(m_events);
     ttnn::reports::py_module_types(m_reports);
@@ -68,20 +67,19 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::graph::py_graph_module(m_graph);
 
     tt::tt_metal::TensorModule(m_depr_tensor);
-    tt::tt_metal::DeviceModule(m_depr_device);
     tt::tt_metal::ProfilerModule(m_profiler);
 
 #if defined(TRACY_ENABLE)
     py::function tracy_decorator = py::module::import("tracy.ttnn_profiler_wrapper").attr("callable_decorator");
 
-    tracy_decorator(m_depr_device);
+    tracy_decorator(m_device);
     tracy_decorator(m_depr_tensor);
     tracy_decorator(m_depr_operations);
 #endif
 
     ttnn::types::py_module(m_types);
     ttnn::activation::py_module(m_activation);
-    ttnn::device::py_module(m_device);
+    ttnn::device::py_device_module(m_device);
     ttnn::multi_device::py_module(m_multi_device);
     ttnn::events::py_module(m_events);
     ttnn::reports::py_module(m_reports);
