@@ -34,12 +34,6 @@ namespace kernel_profiler{
     extern uint32_t sums[SUM_COUNT];
     extern uint32_t sumIDs[SUM_COUNT];
 
-#if (defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_NCRISC) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
-    extern uint32_t nocWriteSize;
-    extern uint32_t *nocWriteBuffer;
-    extern uint32_t *nocWriteIndex;
-#endif
-
     constexpr uint32_t QUICK_PUSH_MARKER_COUNT = 2;
     constexpr int WALL_CLOCK_HIGH_INDEX = 1;
     constexpr int WALL_CLOCK_LOW_INDEX = 0;
@@ -95,10 +89,6 @@ namespace kernel_profiler{
             sumIDs[i] = 0;
             sums[i] = 0;
         }
-
-#if (defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_NCRISC) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
-    nocWriteSize = 0;
-#endif
 
 #if defined(COMPILE_FOR_ERISC) ||  defined(COMPILE_FOR_BRISC)
         uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
@@ -411,8 +401,6 @@ namespace kernel_profiler{
                     dram_bank_dst_noc_addr,
                     wIndex * sizeof(uint32_t));
 
-            nocWriteSize += (wIndex * sizeof(uint32_t));
-
             profiler_control_buffer[HOST_BUFFER_END_INDEX_NC] = currEndIndex;
 
         }
@@ -423,8 +411,6 @@ namespace kernel_profiler{
 
         wIndex = CUSTOM_MARKERS;
 
-        nocWriteBuffer[(*nocWriteIndex)] = nocWriteBuffer[(*nocWriteIndex)] + (( nocWriteSize + NOC_MAX_BURST_SIZE -1 )/NOC_MAX_BURST_SIZE);
-        nocWriteSize = 0;
 #endif
     }
 
@@ -525,11 +511,11 @@ namespace kernel_profiler{
 
 #if (defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_NCRISC) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
 
-#define DeviceZoneScopedND( name , nocBuffer, nocIndex ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScope<hash,true> zone = kernel_profiler::profileScope<hash,true>(); kernel_profiler::nocWriteBuffer = nocBuffer; kernel_profiler::nocWriteIndex = &nocIndex;
+#define DeviceZoneScopedND( name ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScope<hash,true> zone = kernel_profiler::profileScope<hash,true>();
 
 #else
 
-#define DeviceZoneScopedND( name , nocBuffer, nocIndex )
+#define DeviceZoneScopedND( name )
 
 #endif
 
@@ -555,7 +541,7 @@ namespace kernel_profiler{
 
 #define DeviceZoneScopedSumN2( name )
 
-#define DeviceZoneScopedND( name , nocBuffer, nocIndex )
+#define DeviceZoneScopedND( name )
 
 #define DeviceZoneSetCounter( counter )
 
