@@ -156,13 +156,14 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
 
 
 def sanitize_inputs(test_vectors):
-    info_field_names = ["sweep_name", "suite_name", "vector_id"]
+    info_field_names = ["sweep_name", "suite_name", "vector_id", "input_hash"]
     header_info = []
     for vector in test_vectors:
         header = dict()
         for field in info_field_names:
             header[field] = vector.pop(field)
         vector.pop("timestamp")
+        vector.pop("tag")
         header_info.append(header)
     return header_info, test_vectors
 
@@ -172,7 +173,11 @@ def get_suite_vectors(client, vector_index, suite):
         index=vector_index,
         query={
             "bool": {
-                "must": [{"match": {"status": str(VectorStatus.CURRENT)}}, {"match": {"suite_name.keyword": suite}}]
+                "must": [
+                    {"match": {"status": str(VectorStatus.CURRENT)}},
+                    {"match": {"suite_name.keyword": suite}},
+                    {"match": {"tag.keyword": SWEEPS_TAG}},
+                ]
             }
         },
         size=10000,
@@ -200,10 +205,14 @@ def run_sweeps(module_name, suite_name, vector_id):
             try:
                 response = client.search(
                     index=vector_index,
+                    query={"match": {"tag.keyword": SWEEPS_TAG}},
                     aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
                 )
                 suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
                 if len(suites) == 0:
+                    print(
+                        f"SWEEPS: No suites found for module {module_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again. Continuing..."
+                    )
                     continue
 
                 module_pbar = pbar_manager.counter(total=len(suites), desc=f"Module: {sweep_name}", leave=False)
@@ -242,11 +251,15 @@ def run_sweeps(module_name, suite_name, vector_id):
                 if not suite_name:
                     response = client.search(
                         index=vector_index,
+                        query={"match": {"tag.keyword": SWEEPS_TAG}},
                         aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
                         size=10000,
                     )
                     suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
                     if len(suites) == 0:
+                        print(
+                            f"SWEEPS: No suites found for module {module_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again."
+                        )
                         return
 
                     for suite in suites:
@@ -335,6 +348,12 @@ if __name__ == "__main__":
         required=False,
         help="Add this flag to perform a dry run.",
     )
+    parser.add_argument(
+        "--tag",
+        required=False,
+        default=os.getenv("USER"),
+        help="Custom tag for the vectors you are running. This is to keep copies seperate from other people's test vectors. By default, this will be your username. You are able to specify a tag when generating tests using the generator.",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -355,6 +374,11 @@ if __name__ == "__main__":
 
     global DRY_RUN
     DRY_RUN = args.dry_run
+
+    global SWEEPS_TAG
+    SWEEPS_TAG = args.tag
+
+    print(f"SWEEPS: Running current sweeps with tag: {SWEEPS_TAG}.")
 
     if args.watcher:
         enable_watcher()

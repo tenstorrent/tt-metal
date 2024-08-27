@@ -307,6 +307,8 @@ Options:
 
 `--clean` OPTIONAL: This setting is used to recover from mistakes in parameter generation, or if you have removed some test suites. If set, this flag will mark ALL vectors in the sweep as "archived", and regenerate all suites based on the current parameters in the sweep file.
 
+`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be assigned to your test vectors. This is to keep copies of vectors seperate from other developers / CI. By default, this will be your username. You are able to specify a tag when running tests using the runner.
+
 ## Test Runner
 
 The test runner reads in test vectors from the test vector database and executes the tests sequentially by calling the op test's run function with the specified vectors.
@@ -350,6 +352,8 @@ Options:
 `--perf` OPTIONAL: This will enable e2e perf testing on the op tests that are written to support it. Each test will be run twice and the second result will be kept to avoid measuring compile time.
 
 `--dry-run` EXPERIMENTAL: This flag will print all the test vectors that would be run without the flag. This is best used piping stdout to a text file to avoid flooding the terminal.
+
+`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be used to search for test vectors. This is to keep copies of vectors seperate from other developers / CI. By default, this will be your username. You are able to specify a tag when generating tests using the generator. To run the CI suites of tests locally, use the `ci-main` tag.
 
 ## Query Tool
 
