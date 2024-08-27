@@ -1,22 +1,29 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#pragma once
+
+#include "unary_sharded_program_factory.hpp"
 
 #include <algorithm>
 
-#include "ttnn/operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
-namespace ttnn::operations::unary::detail {
+namespace ttnn::operations::unary::program {
 
 using namespace tt::constants;
 
-operation::ProgramWithCallbacks unary_sharded(const Tensor &input, Tensor &output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en, bool preserve_fp32_precision){
+UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+
+    using namespace tt;
+    using namespace tt::tt_metal;
+
+    const auto& input = tensor_args.input;
 
     tt::tt_metal::Program program = CreateProgram();
     tt::tt_metal::Device *device = input.device();
@@ -108,16 +115,16 @@ operation::ProgramWithCallbacks unary_sharded(const Tensor &input, Tensor &outpu
     };
 
     bool math_approx_mode = std::all_of(
-        op_chain.begin(), op_chain.end(), [](const auto &u) { return utils::get_op_approx_mode(u.op_type); });
-    std::map<string, string> unary_defines = utils::get_block_defines(op_chain);
+        args.op_chain.begin(), args.op_chain.end(), [](const auto &u) { return utils::get_op_approx_mode(u.op_type); });
+    std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .preserve_fp32_precision = preserve_fp32_precision,
+            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .preserve_fp32_precision = args.preserve_fp32_precision,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
             .defines = unary_defines});
@@ -130,19 +137,23 @@ operation::ProgramWithCallbacks unary_sharded(const Tensor &input, Tensor &outpu
             (uint32_t)(num_tile_per_core),
         });
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, cb_src0, out_cb](
-                                              const void *operation,
-                                              Program &program,
-                                              const std::vector<Tensor> &input_tensors,
-                                              const std::vector<std::optional<const Tensor>> &,
-                                              const std::vector<Tensor> &output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
-    };
+    return cached_program_t{std::move(program), {cb_src0, out_cb}};
+}
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+void UnaryShardedProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+
+    auto& program = cached_program.program;
+    const auto& cb_src0 = cached_program.shared_variables.cb_src0;
+    const auto& out_cb = cached_program.shared_variables.out_cb;
+
+    auto src_buffer = tensor_args.input.buffer();
+    auto dst_buffer = output.buffer();
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 }
 
 }  // namespace ttnn::operations::unary

@@ -1,34 +1,42 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#pragma once
 
 #include <algorithm>
 
-#include "ttnn/operation.hpp"
+#include "unary_program_factory.hpp"
+
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "unary_op.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
-namespace ttnn::operations::unary::detail {
+namespace ttnn::operations::unary::program {
 
 using namespace tt::constants;
 
-operation::ProgramWithCallbacks unary_multi_core(const Tensor &a, Tensor &output, const std::vector<UnaryWithParam> op_chain, bool fp32_dest_acc_en, bool preserve_fp32_precision) {
+UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+
+    using namespace tt;
+    using namespace tt::tt_metal;
+
+    const auto& input = tensor_args.input;
+    const auto& ops_chain = args.op_chain;
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
 
-    uint32_t num_tiles = a.volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
 
-    tt::tt_metal::Device *device = a.device();
+    tt::tt_metal::Device *device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -51,7 +59,7 @@ operation::ProgramWithCallbacks unary_multi_core(const Tensor &a, Tensor &output
             .set_page_size(output_cb_index, single_tile_size_output);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    auto src_buffer = a.buffer();
+    auto src_buffer = input.buffer();
 
     auto dst_buffer = output.buffer();
 
@@ -78,16 +86,16 @@ operation::ProgramWithCallbacks unary_multi_core(const Tensor &a, Tensor &output
     };
 
     bool math_approx_mode = std::all_of(
-        op_chain.begin(), op_chain.end(), [](const auto &u) { return utils::get_op_approx_mode(u.op_type); });
-    std::map<string, string> unary_defines = utils::get_block_defines(op_chain);
+        args.op_chain.begin(), args.op_chain.end(), [](const auto &u) { return utils::get_op_approx_mode(u.op_type); });
+    std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         core_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .preserve_fp32_precision = preserve_fp32_precision,
+            .fp32_dest_acc_en = args.fp32_dest_acc_en,
+            .preserve_fp32_precision = args.preserve_fp32_precision,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
             .defines = unary_defines});
@@ -104,8 +112,8 @@ operation::ProgramWithCallbacks unary_multi_core(const Tensor &a, Tensor &output
             core_group_2,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .preserve_fp32_precision = preserve_fp32_precision,
+                .fp32_dest_acc_en = args.fp32_dest_acc_en,
+                .preserve_fp32_precision = args.preserve_fp32_precision,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args_group_2,
                 .defines = unary_defines});
@@ -130,33 +138,39 @@ operation::ProgramWithCallbacks unary_multi_core(const Tensor &a, Tensor &output
         num_tiles_written += num_tiles_per_core;
     }
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id = std::move(unary_reader_kernel_id),
-                                           unary_writer_kernel_id = std::move(unary_writer_kernel_id),
-                                           num_cores,
-                                           num_cores_y](
-                                              const tt::tt_metal::Program &program,
-                                              const std::vector<tt::tt_metal::Buffer *> &input_buffers,
-                                              const std::vector<tt::tt_metal::Buffer *> &output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-
-        auto dst_buffer = output_buffers.at(0);
-
-        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
-            }
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
+    return cached_program_t{std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y}};
 }
 
-}  // namespace ttnn::operations::unary
+void UnaryProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+
+    auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    const uint32_t num_cores = cached_program.shared_variables.num_cores;
+    const uint32_t num_cores_y = cached_program.shared_variables.num_cores_y;
+
+    auto& program = cached_program.program;
+
+    const auto& input = tensor_args.input;
+    auto src_buffer = input.buffer();
+    auto dst_buffer = output.buffer();
+
+    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        {
+            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            runtime_args[0] = src_buffer->address();
+        }
+
+        {
+            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            runtime_args[0] = dst_buffer->address();
+        }
+    }
+}
+
+}  // namespace ttnn::operations::unary::program
