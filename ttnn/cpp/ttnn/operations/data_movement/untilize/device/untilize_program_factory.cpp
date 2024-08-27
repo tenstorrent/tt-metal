@@ -10,7 +10,7 @@
 #include "tt_dnn/op_library/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
-#include "tt_dnn/op_library/work_split_tilize.hpp"
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -40,7 +40,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        split_blocks_for_tilize(grid_size, nblocks);
+        ttnn::split_blocks_for_tilize(grid_size, nblocks);
     uint32_t ncores_x = grid_size.x;
     uint32_t ncores_y = std::ceil(static_cast<float>(ncores) / ncores_x);
 
