@@ -57,6 +57,9 @@ model_config = {
     "ACTIVATIONS_DTYPE": ttnn.bfloat8_b,
 }
 
+# TODO: Create ttnn apis for this
+ttnn.buffer_address = buffer_address
+
 
 def run_model(
     device, tt_inputs, test_infra, mesh_mapper, mesh_composer, num_warmup_iterations, num_measurement_iterations
