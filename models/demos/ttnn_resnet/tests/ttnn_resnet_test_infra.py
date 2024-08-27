@@ -238,6 +238,8 @@ class ResNet50TestInfra:
         output_tensor = ttnn.to_torch(output_tensor, device=self.device, mesh_composer=self.output_mesh_composer)
         output_tensor = torch.reshape(output_tensor, (output_tensor.shape[0], 1000))
 
+        batch_size = output_tensor.shape[0]
+
         valid_pcc = 1.0
         if self.batch_size >= 8:
             valid_pcc = golden_pcc[self.device.arch()][self.batch_size][
@@ -257,7 +259,7 @@ class ResNet50TestInfra:
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
 
         logger.info(
-            f"ResNet50 batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, math_fidelity={self.math_fidelity}, PCC={self.pcc_message}"
+            f"ResNet50 batch_size={batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, math_fidelity={self.math_fidelity}, PCC={self.pcc_message}"
         )
 
 
