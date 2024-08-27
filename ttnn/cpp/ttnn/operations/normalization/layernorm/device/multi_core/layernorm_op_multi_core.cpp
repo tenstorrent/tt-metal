@@ -415,6 +415,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     const std::optional<const Tensor> b,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
+    const std::optional<const Tensor> E_x,
+    const std::optional<const Tensor> E_x2,
     Tensor& output,
     LayerNormType norm_type,
     float eps,
@@ -833,9 +835,16 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
 
     // reader kernel
+    std::string sender_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp";
+    std::string reciever_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp";
+
+    if(E_x.has_value() or E_x2.has_value()) {
+        sender_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
+        reciever_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
+    }
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp",
+        sender_reader_kernel_file,
         sender_cores,
         tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = reader_noc, .compile_args = reader_mcast_sender_compile_time_args, .defines = reader_mcast_sender_defines}
     );
@@ -844,7 +853,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (use_mcast) {
         reader_mcast_receiver_kernels_id_all_to_all = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
+            reciever_reader_kernel_file,
             all_to_all_workers_except_sender,
             tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = reader_noc, .compile_args = reader_mcast_receiver_all_to_all_compile_time_args, .defines = reader_mcast_receiver_defines}
         );
@@ -852,7 +861,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (num_none_all_to_all_workers > 0) {
         reader_mcast_receiver_kernels_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
+            reciever_reader_kernel_file,
             not_all_to_all_workers,
             tt::tt_metal::DataMovementConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = reader_noc, .compile_args = reader_mcast_receiver_compile_time_args, .defines = reader_mcast_receiver_defines}
         );
@@ -976,17 +985,24 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         num_blocks_second_stage
     };
     // compute kernel
+    std::string compute_kernel_file;
+    if (E_x.has_value() or E_x2.has_value()) {
+        compute_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp";
+    } else {
+        compute_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
+    }
+
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp",
+        compute_kernel_file,
         all_to_all_cores,
         tt::tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = all_to_all_except_top_compute_compile_time_args, .defines = compute_defines}
     );
     if (num_none_all_to_all_workers > 0) {
         compute_kernels_id = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp",
+            compute_kernel_file,
             not_all_to_all_workers,
             tt::tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = not_all_to_all_compute_compile_time_args, .defines = compute_defines}
         );
@@ -1054,9 +1070,16 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         auto cb_ex_partial = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial_config);
         // ex
         uint32_t ex_cb_index = tt::CB::dataflow1;
-        tt::tt_metal::CircularBufferConfig ex_cb_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex_cb_index, cb_data_format}})
+        CBHandle cb_ex = 0;
+        if(E_x.has_value()) {
+            tt::tt_metal::CircularBufferConfig ex_cb_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex_cb_index, cb_data_format}})
+            .set_page_size(ex_cb_index, single_tile_size).set_globally_allocated_address(*E_x.value().buffer());
+            cb_ex = tt::tt_metal::CreateCircularBuffer(program, sender_cores, ex_cb_config);
+        } else {
+            tt::tt_metal::CircularBufferConfig ex_cb_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex_cb_index, cb_data_format}})
             .set_page_size(ex_cb_index, single_tile_size);
-        auto cb_ex = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_config);
+            cb_ex = tt::tt_metal::CreateCircularBuffer(program, all_to_all_cores, ex_cb_config);
+        }
         // ex_external
         uint32_t ex_cb_external_index = tt::CB::dataflow2;
         tt::tt_metal::CircularBufferConfig ex_cb_external_config = tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external_index, cb_data_format}})
@@ -1070,9 +1093,18 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto cb_ex_partial2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial2_config);
     // ex2
     uint32_t ex2_cb_index = tt::CB::dataflow4;
-    tt::tt_metal::CircularBufferConfig ex2_cb_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
-		.set_page_size(ex2_cb_index, single_tile_size);
-    auto cb_ex2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_config);
+    CBHandle cb_ex2 = 0;
+    if(E_x2.has_value()) {
+        tt::tt_metal::CircularBufferConfig ex2_cb_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
+            .set_page_size(ex2_cb_index, single_tile_size).set_globally_allocated_address(*E_x2.value().buffer());
+        cb_ex2 = tt::tt_metal::CreateCircularBuffer(program, sender_cores, ex2_cb_config);
+    } else {
+        tt::
+        tt_metal::CircularBufferConfig ex2_cb_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
+            .set_page_size(ex2_cb_index, single_tile_size);
+        cb_ex2 = tt::tt_metal::CreateCircularBuffer(program, all_to_all_cores, ex2_cb_config);
+    }
+
     // ex_external2
     uint32_t ex_cb_external2_index = tt::CB::dataflow5;
     tt::tt_metal::CircularBufferConfig ex_cb_external2_config = tt::tt_metal::CircularBufferConfig(ex_external_CB_size, {{ex_cb_external2_index, cb_data_format}})
@@ -1092,13 +1124,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t cb_var_index = tt::CB::c_intermed2;
     tt::tt_metal::CircularBufferConfig cb_var_config = tt::tt_metal::CircularBufferConfig(ex_global_CB_size, {{cb_var_index, cb_data_format}})
 		.set_page_size(cb_var_index, single_tile_size);
-    auto cb_var_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_var_config);
+    auto cb_var_global = tt::tt_metal::CreateCircularBuffer(program, sender_cores, cb_var_config);
     // ex2pe
     uint32_t cb_ex2pe_index;
     cb_ex2pe_index = tt::CB::c_intermed3;
     tt::tt_metal::CircularBufferConfig ex2pe_cb_config = tt::tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
         .set_page_size(cb_ex2pe_index, single_tile_size);
-    auto cb_ex2pe = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2pe_cb_config);
+    auto cb_ex2pe = tt::tt_metal::CreateCircularBuffer(program, sender_cores, ex2pe_cb_config);
     // out
     uint32_t output_cb_index = tt::CB::c_out0; // output operands start at index 16
     tt::tt_metal::CircularBufferConfig output_cb_config = tt::tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_data_format}})

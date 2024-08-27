@@ -16,11 +16,13 @@ using namespace tt::constants;
 namespace ttnn::operations::normalization {
 
 void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 3, "Must have between 1 to 4 input tensors");
+    TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 5, "Must have between 1 to 4 input tensors");
     auto& a = input_tensors.at(0);
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
+    const auto& E_x = optional_input_tensors.at(3);
+    const auto& E_x2 = optional_input_tensors.at(4);
     TT_FATAL(a.get_layout() == Layout::TILE);
     TT_FATAL(a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or a.get_dtype() == DataType::BFLOAT8_B);
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
@@ -64,6 +66,18 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
             TT_FATAL(a.device() == beta.value().device());
             TT_FATAL(beta.value().get_dtype() == DataType::FLOAT32 or beta.value().get_dtype() == DataType::BFLOAT16);
         }
+    }
+    if (E_x.has_value()) {
+        TT_FATAL(E_x.value().get_layout() == Layout::TILE);
+        TT_FATAL(E_x.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_FATAL(a.device() == E_x.value().device());
+        TT_FATAL(E_x.value().is_sharded(), "E_x must be sharded");
+    }
+    if (E_x2.has_value()) {
+        TT_FATAL(E_x2.value().get_layout() == Layout::TILE);
+        TT_FATAL(E_x2.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_FATAL(a.device() == E_x2.value().device());
+        TT_FATAL(E_x2.value().is_sharded(), "E_x2 must be sharded");
     }
     if (a.is_sharded()) {
         // TODO: Add support for this (should be similar to interleaved)
@@ -164,6 +178,8 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
+    const auto& E_x = optional_input_tensors.at(3);
+    const auto& E_x2 = optional_input_tensors.at(4);
     auto& output_tensor = output_tensors.at(0);
 
     return std::visit(
@@ -177,7 +193,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
                 return layernorm_multi_core_sharded(
-                                            a, b, gamma, beta, output_tensor, this->norm_type, this->eps,
+                                            a, b, gamma, beta, E_x, E_x2, output_tensor, this->norm_type, this->eps,
                                             program_config.compute_with_storage_grid_size,
                                             program_config.subblock_w,
                                             program_config.block_h,
