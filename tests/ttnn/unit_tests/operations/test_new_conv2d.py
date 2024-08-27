@@ -18,6 +18,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_
 import ttnn
 
 
+def _nearest_32(x):
+    return math.ceil(x / 32) * 32
+
+
 # def plot_diff(vals, fid, nsticks, stick_len):
 #     import matplotlib.pyplot as plt
 
@@ -155,7 +159,12 @@ def run_conv(
 
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
-    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
+    # if output_channels%32!=0 and groups == 1:
+    #     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, _nearest_32(output_channels))
+    #     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
+    # else:
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
+    torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
     reader_patterns_cache.clear()
@@ -296,6 +305,85 @@ def run_conv_with_split(
     else:
         pcc = 0.998
     assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    (
+        # mlp sub_module
+        (1, 3, 32, 512, 512, 7, 7, 4, 4, 3, 3, 1, True, {"act_block_h": 64}, False),  # ncrisc build failed
+        # efficient selfattention sub_module
+        (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, True, None, False),  # ncrisc build failed, Two times called in model
+        (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, True, None, False),  # ncrisc build failed, Two times called in model
+        # # (1, 160, 160, 32, 32, 2, 2,2, 2, 0, 0, 1, True, None, False), #pass , Two times called in model
+        # # dwconv sub_module
+        # # (1,128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 128, True, None, False),#pass , Two times called in model
+        # # (1,256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 256, True, None, False),#pass , Two times called in model
+        # # (1,640, 640, 32, 32, 3, 3, 1, 1, 1,  1, 640, False, {"act_block_h":32}, False),  #pass , Two times called in model
+        # # (1,1024, 1024, 16, 16, 3, 3, 1, 1, 1, 1, 1024, False, None, False),#pass , Two times called in model
+        # # decode_head sub_module
+        # # (1,1024, 256, 128, 128, 1, 1, 1, 1, 0, 0, 1, True,None, False), #pass for activation_dtype=bf8 but fails for bf16
+        (1, 256, 150, 128, 128, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@skip_for_grayskull()
+def test_conv_for_segformer_512x512(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    use_shallow_conv_variant,
+    groups,
+    output_layout,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
+        output_layout=output_layout,
+        has_bias=False,
+    )
 
 
 @skip_for_wormhole_b0("This is test is for Grayskull only. Skipping")
