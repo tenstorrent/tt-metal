@@ -145,7 +145,6 @@ void cq_noc_async_write_with_state(uint32_t src_addr, uint64_t dst_addr, uint32_
 // More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config (dst_noc,
 // VC..) have been specified.
 template<bool write_last_packet = true>
-FORCE_INLINE
 uint32_t cq_noc_async_write_with_state_any_len(uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     if (size > NOC_MAX_BURST_SIZE) {
         cq_noc_async_write_with_state<CQ_NOC_SnDL>(src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
@@ -263,14 +262,15 @@ void cb_wait_all_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
     DEBUG_STATUS("TAPW");
-    while ((*sem_addr) != n);
+    do {
+        invalidate_l1_cache();
+    } while ((*sem_addr) != n);
     DEBUG_STATUS("TAPD");
 }
 
 template<uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE
 void cb_acquire_pages(uint32_t n) {
-
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
 
@@ -281,9 +281,10 @@ void cb_acquire_pages(uint32_t n) {
     // Use a wrapping compare here to compare distance
     // Required for trace which steals downstream credits and may make the value negative
     uint32_t heartbeat = 0;
-    while (wrap_gt(n, *sem_addr)) {
+    do {
+        invalidate_l1_cache();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-    }
+    } while (wrap_gt(n, *sem_addr));
     DEBUG_STATUS("DAPD");
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
 }
@@ -302,7 +303,6 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
                           uint32_t block_next_start_addr[],
                           uint32_t rd_block_idx,
                           uint32_t& local_count) {
-
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
 
@@ -311,9 +311,10 @@ uint32_t cb_acquire_pages(uint32_t cb_fence,
     if (local_count == upstream_count) {
         DEBUG_STATUS("UAPW");
         uint32_t heartbeat = 0;
-        while ((upstream_count = *sem_addr) == local_count) {
+        do {
+            invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
-        }
+        } while ((upstream_count = *sem_addr) == local_count);
         DEBUG_STATUS("UAPD");
     }
 

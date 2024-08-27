@@ -335,10 +335,9 @@ inline void wait_ncrisc_trisc() {
 }
 
 int main() {
+    conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
     DEBUG_STATUS("I");
-
-    disable_lowcache();
 
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     l1_to_local_mem_copy((uint*)__ldm_data_start, (uint tt_l1_ptr*)MEM_BRISC_INIT_LOCAL_L1_BASE, num_words);

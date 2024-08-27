@@ -10,14 +10,6 @@
 
 namespace tt {
 
-enum DebugPrintHartFlags : unsigned int {
-    DPRINT_RISCV_NC  = 1,
-    DPRINT_RISCV_TR0 = 2,
-    DPRINT_RISCV_TR1 = 4,
-    DPRINT_RISCV_TR2 = 8,
-    DPRINT_RISCV_BR  = 16,
-};
-
 constexpr int DPRINT_NRISCVS = 5;
 constexpr int DPRINT_NRISCVS_ETH = 1;
 
