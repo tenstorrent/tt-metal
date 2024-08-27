@@ -159,10 +159,6 @@ def run_conv(
 
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
-    # if output_channels%32!=0 and groups == 1:
-    #     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, _nearest_32(output_channels))
-    #     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
-    # else:
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
 
@@ -316,14 +312,46 @@ def run_conv_with_split(
         # efficient selfattention sub_module
         (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, True, None, False),  # ncrisc build failed, Two times called in model
         (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, True, None, False),  # ncrisc build failed, Two times called in model
-        # # (1, 160, 160, 32, 32, 2, 2,2, 2, 0, 0, 1, True, None, False), #pass , Two times called in model
-        # # dwconv sub_module
-        # # (1,128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 128, True, None, False),#pass , Two times called in model
-        # # (1,256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 256, True, None, False),#pass , Two times called in model
-        # # (1,640, 640, 32, 32, 3, 3, 1, 1, 1,  1, 640, False, {"act_block_h":32}, False),  #pass , Two times called in model
-        # # (1,1024, 1024, 16, 16, 3, 3, 1, 1, 1, 1, 1024, False, None, False),#pass , Two times called in model
-        # # decode_head sub_module
-        # # (1,1024, 256, 128, 128, 1, 1, 1, 1, 0, 0, 1, True,None, False), #pass for activation_dtype=bf8 but fails for bf16
+        (1, 160, 160, 32, 32, 2, 2, 2, 2, 0, 0, 1, True, None, False),  # pass , Two times called in model
+        # dwconv sub_module
+        (
+            1,
+            128,
+            128,
+            128,
+            128,
+            3,
+            3,
+            1,
+            1,
+            1,
+            1,
+            128,
+            True,
+            {"act_block_h": 64},
+            False,
+        ),  # pass , Two times called in model
+        (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 256, True, None, False),  # pass , Two times called in model
+        (
+            1,
+            640,
+            640,
+            32,
+            32,
+            3,
+            3,
+            1,
+            1,
+            1,
+            1,
+            640,
+            False,
+            {"act_block_h": 32},
+            False,
+        ),  # pass , Two times called in model
+        # (1,1024, 1024, 16, 16, 3, 3, 1, 1, 1, 1, 1024, False, None, False), #Switch to Width Sharding
+        # decode_head sub_module
+        # (1,1024, 256, 128, 128, 1, 1, 1, 1, 0, 0, 1, False, {"act_block_h": 32}, False), #pass for activation_dtype=bf8 but fails for bf16
         (1, 256, 150, 128, 128, 1, 1, 1, 1, 0, 0, 1, True, None, False),
     ),
 )
