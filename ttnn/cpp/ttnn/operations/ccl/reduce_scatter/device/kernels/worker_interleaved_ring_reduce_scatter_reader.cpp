@@ -364,7 +364,7 @@ void kernel_main() {
     }
 
     ASSERT(args.total_eltwise_kernel_num_pages >= total_cb_pages_pushed_to_math);
-    DEBUG_STATUS("DRN1");
+    WAYPOINT("DRN1");
     // The host code currently doesn't know how to accuractly count the exact number of pages pushed through the
     // math reduce op so it instead provides a known safe lower bound which may be more than actually required by the
     // op. It passes this number to sender and receiver, who will push/pop junk pages to/from the math op to ensure
@@ -375,5 +375,5 @@ void kernel_main() {
     }
 
     reader.close();
-    DEBUG_STATUS("DONE");
+    WAYPOINT("DONE");
 }

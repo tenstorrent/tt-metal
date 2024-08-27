@@ -63,7 +63,7 @@ inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::u
                                                                                                                  : 1;
     std::uint32_t unpA_ch1_y_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
 
-    DEBUG_STATUS("UPUW");
+    WAYPOINT("UPUW");
     // Check that unpacker is done (all contexts freed up) before starting hw configuration
     wait_for_idle();
 
@@ -84,7 +84,7 @@ inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::u
         UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(unpA_ch1_y_stride);
     TTI_NOP;
     TTI_NOP;  // Do we need this for WH?
-    DEBUG_STATUS("UPUD");
+    WAYPOINT("UPUD");
 }
 
 template <bool first_pass = true>
@@ -96,8 +96,8 @@ inline void llk_unpack_untilize_pass(std::uint32_t operand, std::uint32_t block_
 }
 
 inline void llk_unpack_untilize(std::uint32_t operand, std::uint32_t block_c_tiles) {
-    DEBUG_STATUS("UPUW");
+    WAYPOINT("UPUW");
     llk_unpack_untilize_pass<true>(operand, block_c_tiles);
     llk_unpack_untilize_pass<false>(operand, block_c_tiles);
-    DEBUG_STATUS("UPUD");
+    WAYPOINT("UPUD");
 }

@@ -50,7 +50,7 @@ uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
-    DEBUG_STATUS("I");
+    WAYPOINT("I");
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     // Not using firmware_kernel_common_init since it is copying to registers
@@ -65,7 +65,7 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
         noc_local_state_init(n);
     }
     ncrisc_noc_full_sync();
-    DEBUG_STATUS("REW");
+    WAYPOINT("REW");
     uint32_t count = 0;
     while (routing_info->routing_enabled != 1) {
         volatile uint32_t *ptr = (volatile uint32_t *)0xffb2010c;
@@ -73,7 +73,7 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
         *ptr = 0xAABB0000 | (count & 0xFFFF);
         internal_::risc_context_switch();
     }
-    DEBUG_STATUS("RED");
+    WAYPOINT("RED");
 
 
     while (routing_info->routing_enabled) {
@@ -84,7 +84,7 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
 
             firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
 
-            DEBUG_STATUS("R");
+            WAYPOINT("R");
             kernel_init();
         } else {
             internal_::risc_context_switch();
