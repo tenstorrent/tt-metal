@@ -43,6 +43,16 @@ static inline const char *get_core_type_name(CoreType ct) {
     }
 }
 
+// TODO: This should come from the HAL
+enum DebugHartFlags : unsigned int {
+    RISCV_NC  = 1,
+    RISCV_TR0 = 2,
+    RISCV_TR1 = 4,
+    RISCV_TR2 = 8,
+    RISCV_BR  = 16,
+    RISCV_ER  = 32
+};
+
 // Enumerates the debug features that can be enabled at runtime. These features allow for
 // fine-grained control over targeted cores, chips, harts, etc.
 enum RunTimeDebugFeatures {
@@ -50,6 +60,7 @@ enum RunTimeDebugFeatures {
     RunTimeDebugFeatureReadDebugDelay,
     RunTimeDebugFeatureWriteDebugDelay,
     RunTimeDebugFeatureAtomicDebugDelay,
+    RunTimeDebugFeatureDisableL1DataCache,
     // NOTE: Update RunTimeDebugFeatureNames if adding new features
     RunTimeDebugFeatureCount
 };
@@ -218,6 +229,7 @@ class RunTimeOptions {
                 } else {
                     return "false";
                 }
+            case RunTimeDebugFeatureDisableL1DataCache: return std::to_string(get_feature_enabled(feature));
             default: return "";
         }
     }

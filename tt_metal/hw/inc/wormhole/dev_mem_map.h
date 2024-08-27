@@ -93,7 +93,7 @@
 // Stack info
 // Increasing the stack size comes at the expense of less local memory for globals
 #define MEM_BRISC_STACK_SIZE 768
-#define MEM_NCRISC_STACK_SIZE 768
+#define MEM_NCRISC_STACK_SIZE 1040
 #define MEM_IERISC_STACK_SIZE 1024
 #define MEM_TRISC0_STACK_SIZE 320
 #define MEM_TRISC1_STACK_SIZE 256
