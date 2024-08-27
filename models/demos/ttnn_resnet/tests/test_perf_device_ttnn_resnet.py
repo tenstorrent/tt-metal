@@ -17,7 +17,7 @@ from models.utility_functions import run_for_wormhole_b0
 )
 def test_perf_device_bare_metal(batch_size, test, expected_perf):
     subdir = "resnet50"
-    num_iterations = 1
+    num_iterations = 4
     margin = 0.03
     command = (
         f"pytest models/demos/ttnn_resnet/tests/test_ttnn_resnet50_performant.py::test_run_resnet50_inference[{test}]"

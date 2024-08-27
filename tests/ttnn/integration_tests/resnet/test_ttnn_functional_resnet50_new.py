@@ -22,20 +22,18 @@ from models.utility_functions import (
             ttnn.bfloat8_b,
             ttnn.MathFidelity.LoFi,
         ),  ## memory config issue due to l4m1 downsample reshard
-        # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
-        # (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-        # (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
+        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
+        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
         (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
     ),
 )
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [
-        True,
-    ],
+    [True, False],
     ids=[
         "pretrained_weight_true",
-        # "pretrained_weight_false",
+        "pretrained_weight_false",
     ],
 )
 def test_resnet_50(

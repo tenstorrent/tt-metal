@@ -21,10 +21,6 @@ from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import create_test_in
 
 from models.perf.perf_utils import prep_perf_report
 
-from models.demos.ttnn_resnet.tests.multi_device.test_ttnn_resnet50_performant import (
-    setup_l1_sharded_input,
-    setup_dram_sharded_input,
-)
 from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import load_resnet50_model
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
@@ -369,7 +365,7 @@ def run_perf_resnet(
         model_config["WEIGHTS_DTYPE"],
         model_config["MATH_FIDELITY"],
         dealloc_input=True,
-        final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        final_output_mem_config=ttnn.DRAM_MEMORY_CONFIG if "trace" in model_version else ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
     ttnn.synchronize_devices(device)
