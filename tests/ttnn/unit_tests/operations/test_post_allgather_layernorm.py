@@ -186,10 +186,9 @@ def test_post_allgather_layernorm(
     )
 
     # create E[x] and E[x^2] tensors
-    E_x_tensor = torch.tensor([mean], dtype=torch.bfloat16).unsqueeze(0).unsqueeze(0).unsqueeze(0).repeat(1, 1, 32, 1)
-    E_x2_tensor = (
-        torch.tensor([2 * (mean**2)], dtype=torch.bfloat16).unsqueeze(0).unsqueeze(0).unsqueeze(0).repeat(1, 1, 32, 1)
-    )
+    E_x_tensor = torch.sum(torch_input_tensor, dim=-1, keepdim=True).to(torch.bfloat16) / input_width
+
+    E_x2_tensor = torch.sum(torch_input_tensor**2, dim=-1, keepdim=True).to(torch.bfloat16) / input_width
 
     tt_E_x_tensor = ttnn.from_torch(
         E_x_tensor,
@@ -234,8 +233,8 @@ def test_post_allgather_layernorm(
             weight=tt_weights,
             program_config=SHARDED_NORM_PRGM_CFG,
             memory_config=tt_sharded_config,
-            E_x=tt_E_x_tensor,
-            E_x2=tt_E_x2_tensor,
+            # E_x=tt_E_x_tensor,
+            # E_x2=tt_E_x2_tensor,
         )
     tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
 
@@ -244,6 +243,6 @@ def test_post_allgather_layernorm(
     atol_delta = torch.max(torch.abs(torch_output_tensor - tt_output_torch)).item()
     print(f"PCC: {pcc_out}")
     print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
-
+    breakpoint()
     assert pcc_out >= min_pcc, f"PCC test failed: {pcc_out} (threshold: {min_pcc})"
     # assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"

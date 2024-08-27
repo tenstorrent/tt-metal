@@ -154,10 +154,12 @@ void MAIN {
         if (enable_sqrt) {
             #ifndef RMSNORM
             // calculate var = E(x^2) - E(x)^2
+            UNPACK(DPRINT << "Before sqrt" << ENDL());
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // E(x)^2
                 unpack_reconfig_data_format(cb_ex_global, cb_ex_global);
                 cb_wait_front(cb_ex_global, 1);
+                UNPACK(DPRINT << "waited for cb_ex_global" << ENDL());
                 cb_reserve_back(cb_ex_sqr, 1);
                 tile_regs_acquire();
                 mul_tiles_init();
@@ -171,7 +173,7 @@ void MAIN {
 
                 // E(x^2) - E(x)^2
                 unpack_reconfig_data_format(cb_ex_global, cb_ex2, cb_ex_global, cb_ex_sqr);
-                cb_wait_front(cb_ex2, 1);
+                // cb_wait_front(cb_ex2, 1);
                 cb_wait_front(cb_ex_sqr, 1);
                 cb_reserve_back(cb_var, 1);
                 tile_regs_acquire();
@@ -183,11 +185,13 @@ void MAIN {
                 cb_push_back(cb_var, 1);
                 tile_regs_release();
 
+                UNPACK(DPRINT << "got here 2" << ENDL());
+
             }
-            cb_pop_front(cb_ex2, num_tiles_per_allgather_worker);
+            // cb_pop_front(cb_ex2, num_tiles_per_allgather_worker);
             cb_pop_front(cb_ex_sqr, num_tiles_per_allgather_worker);
             #endif
-
+            UNPACK(DPRINT<< "enable_sqrt" << ENDL());
             unpack_reconfig_data_format(cb_var, cb_eps);
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // 1/[sqrt(Var + eps)],
@@ -208,12 +212,15 @@ void MAIN {
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex2pe);
                 cb_push_back(cb_ex2pe, 1);
+                UNPACK(DPRINT << "After ex2pe pushback" << ENDL());
                 tile_regs_release();
             }
+            UNPACK(DPRINT << "After reciprocral" << ENDL());
         }
     }
 
     #ifndef RMSNORM
+    UNPACK(DPRINT << "Here 3" << ENDL());
     // x - E[x]
     unpack_reconfig_data_format(cb_in, cb_ex_global);
     index_h_offset = 0;
@@ -241,6 +248,7 @@ void MAIN {
     }
     cb_push_back(cb_xmm, num_tiles_per_block);
     #endif
+    UNPACK(DPRINT << "Here 4" << ENDL());
 
     if constexpr(do_gamma == 0 && do_beta == 0) {
         pack_reconfig_data_format(cb_out);
@@ -275,6 +283,7 @@ void MAIN {
     }
     cb_push_back(cb_im, num_tiles_per_block);
 
+    UNPACK(DPRINT << "Here 5" << ENDL());
     cb_pop_front(cb_xmm, num_tiles_per_block);
     cb_wait_front(cb_im, num_tiles_per_block);
 
@@ -309,11 +318,13 @@ void MAIN {
         cb_pop_front(cb_im, num_tiles_per_block);
         cb_wait_front(cb_outgamma, num_tiles_per_block);
     }
+    UNPACK(DPRINT << "here 6" << ENDL());
 
     if constexpr(do_beta) {
         unpack_reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
         add_bcast_rows_init_short();
+        UNPACK(DPRINT << "here 7" << ENDL());
         cb_wait_front(cb_beta, block_w);
         index_h_offset = 0;
         cb_reserve_back(cb_out, num_tiles_per_block);
@@ -339,6 +350,8 @@ void MAIN {
         cb_pop_front(cb_fusion, num_tiles_per_block);
         cb_wait_front(cb_out, num_tiles_per_block);
     }
+
+    UNPACK(DPRINT << "compute done" << ENDL());
 
 }
 
