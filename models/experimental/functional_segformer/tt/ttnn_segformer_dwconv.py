@@ -6,20 +6,6 @@ import ttnn
 from models.experimental.functional_segformer.tt.common import Conv
 
 
-def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, layout)
-    input = ttnn.to_device(input, device)
-    return input
-
-
-def ttnn_to_torch(input):
-    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
-
-
 class TtSegformerDWConv:
     def __init__(self, parameters, dim):
         super().__init__()

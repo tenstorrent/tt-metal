@@ -34,7 +34,6 @@ class TtSegformerEncoder:
         self,
         config,
         parameters,
-        model,
     ):
         super().__init__()
         self.config = config
@@ -45,7 +44,6 @@ class TtSegformerEncoder:
             embeddings.append(
                 TtSegformerOverlapPatchEmbeddings(
                     parameters=parameters["patch_embeddings"][i],
-                    model=model.patch_embeddings[i],
                     stride=config.strides[i],
                     patch_size=config.patch_sizes[i],
                 )
@@ -67,7 +65,6 @@ class TtSegformerEncoder:
                         num_attention_heads=config.num_attention_heads[i],
                         sequence_reduction_ratio=config.sr_ratios[i],
                         parameters=parameters["block"][i][j],
-                        model=model.block[i][j],
                         mlp_ratio=config.mlp_ratios[i],
                     )
                 )
@@ -82,7 +79,6 @@ class TtSegformerEncoder:
         output_hidden_states: Optional[bool] = False,
         return_dict: Optional[bool] = True,
         parameters=None,
-        model=None,
     ) -> Union[Tuple, TtBaseModelOutput]:
         device = pixel_values.device()
         all_hidden_states = () if output_hidden_states else None

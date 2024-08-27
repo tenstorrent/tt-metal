@@ -49,7 +49,7 @@ def create_custom_preprocessor(device):
 @pytest.mark.parametrize(
     "patch_size, stride, num_channels, hidden_size, batch_size, height, width, patch_emb_i",
     [
-        (7, 4, 3, 32, 1, 512, 512, 0),  # Torch conv
+        (7, 4, 3, 32, 1, 512, 512, 0),
         (3, 2, 32, 64, 1, 128, 128, 1),
         (3, 2, 64, 160, 1, 64, 64, 2),
         (3, 2, 160, 256, 1, 32, 32, 3),
@@ -87,7 +87,6 @@ def test_segformer_overlap_patch_embeddings(
 
     ttnn_model = TtSegformerOverlapPatchEmbeddings(
         parameters,
-        reference_model,
         patch_size=patch_size,
         stride=stride,
     )

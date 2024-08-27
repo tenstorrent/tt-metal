@@ -105,7 +105,6 @@ def test_segformer_attention(
         num_attention_heads=num_attention_heads,
         parameters=parameters,
         sequence_reduction_ratio=sequence_reduction_ratio,
-        model=reference_model,
     )
 
     ttnn_output = ttnn_model(ttnn_input_tensor, height, width, parameters=parameters)

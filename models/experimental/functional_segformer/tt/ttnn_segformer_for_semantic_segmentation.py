@@ -18,9 +18,9 @@ class TtSemanticSegmenterOutput:
 
 
 class TtSegformerForSemanticSegmentation:
-    def __init__(self, config, parameters, model):
+    def __init__(self, config, parameters):
         super().__init__()
-        self.segformer = TtSegformerModel(config, parameters=parameters.segformer, model=model.segformer)
+        self.segformer = TtSegformerModel(config, parameters=parameters.segformer)
         self.decode_head = TtSegformerDecodeHead(config, parameters=parameters.decode_head)
         self.config = config
 
@@ -32,7 +32,6 @@ class TtSegformerForSemanticSegmentation:
         output_hidden_states=None,
         return_dict: Optional[bool] = None,
         parameters=None,
-        model=None,
     ) -> Union[Tuple, TtSemanticSegmenterOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         output_hidden_states = (
@@ -48,7 +47,6 @@ class TtSegformerForSemanticSegmentation:
             output_hidden_states=True,  # we need the intermediate hidden states
             return_dict=return_dict,
             parameters=parameters.segformer,
-            model=model.segformer,
         )
 
         encoder_hidden_states = outputs.hidden_states if return_dict else outputs[1]

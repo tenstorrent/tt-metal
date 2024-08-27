@@ -107,7 +107,7 @@ def test_segformer_for_semantic_segmentation(device):
             parameters["decode_head"]["linear_c"][i]["proj"]["bias"], device=device
         )
 
-    ttnn_model = TtSegformerForSemanticSegmentation(config, parameters, reference_model)
+    ttnn_model = TtSegformerForSemanticSegmentation(config, parameters)
 
     ttnn_output = ttnn_model(
         ttnn_input_tensor,
@@ -115,7 +115,6 @@ def test_segformer_for_semantic_segmentation(device):
         output_hidden_states=None,
         return_dict=None,
         parameters=parameters,
-        model=reference_model,
     )
     ttnn_final_output = ttnn.to_torch(ttnn_output.logits)
 

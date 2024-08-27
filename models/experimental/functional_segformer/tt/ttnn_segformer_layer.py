@@ -8,14 +8,13 @@ from models.experimental.functional_segformer.tt.ttnn_segformer_mix_ffn import T
 
 
 class TtSegformerLayer:
-    def __init__(self, hidden_size, num_attention_heads, sequence_reduction_ratio, parameters, model, mlp_ratio):
+    def __init__(self, hidden_size, num_attention_heads, sequence_reduction_ratio, parameters, mlp_ratio):
         super().__init__()
         self.attention = TtSegformerAttention(
             hidden_size=hidden_size,
             num_attention_heads=num_attention_heads,
             parameters=parameters["attention"],
             sequence_reduction_ratio=sequence_reduction_ratio,
-            model=model.attention,
         )
         mlp_hidden_size = int(hidden_size * mlp_ratio)
         self.mlp = TtSegformerMixFFN(parameters["mlp"], mlp_hidden_size)

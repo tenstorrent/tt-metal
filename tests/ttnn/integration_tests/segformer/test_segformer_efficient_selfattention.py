@@ -27,16 +27,16 @@ def create_custom_preprocessor(device):
         parameters = {}
         if isinstance(model, SegformerEfficientSelfAttention):
             parameters["query"] = {}
-            parameters["query"]["weight"] = preprocess_linear_weight(model.query.weight, dtype=ttnn.bfloat16)
-            parameters["query"]["bias"] = preprocess_linear_bias(model.query.bias, dtype=ttnn.bfloat16)
+            parameters["query"]["weight"] = preprocess_linear_weight(model.query.weight, dtype=ttnn.bfloat8_b)
+            parameters["query"]["bias"] = preprocess_linear_bias(model.query.bias, dtype=ttnn.bfloat8_b)
 
             parameters["key"] = {}
-            parameters["key"]["weight"] = preprocess_linear_weight(model.key.weight, dtype=ttnn.bfloat16)
-            parameters["key"]["bias"] = preprocess_linear_bias(model.key.bias, dtype=ttnn.bfloat16)
+            parameters["key"]["weight"] = preprocess_linear_weight(model.key.weight, dtype=ttnn.bfloat8_b)
+            parameters["key"]["bias"] = preprocess_linear_bias(model.key.bias, dtype=ttnn.bfloat8_b)
 
             parameters["value"] = {}
-            parameters["value"]["weight"] = preprocess_linear_weight(model.value.weight, dtype=ttnn.bfloat16)
-            parameters["value"]["bias"] = preprocess_linear_bias(model.value.bias, dtype=ttnn.bfloat16)
+            parameters["value"]["weight"] = preprocess_linear_weight(model.value.weight, dtype=ttnn.bfloat8_b)
+            parameters["value"]["bias"] = preprocess_linear_bias(model.value.bias, dtype=ttnn.bfloat8_b)
 
             if model.sr_ratio > 1:
                 parameters["sr"] = {}
@@ -63,10 +63,10 @@ def create_custom_preprocessor(device):
 @pytest.mark.parametrize(
     "batch_size, seq_len, hidden_size, height, width, num_attention_heads, sequence_reduction_ratio, block_i, efficient_self_attention_i",
     [
-        (1, 16384, 32, 128, 128, 1, 8, 0, 0),  # Torch conv
-        (1, 16384, 32, 128, 128, 1, 8, 0, 1),  # Torch conv
-        (1, 4096, 64, 64, 64, 2, 4, 1, 0),  # Torch conv
-        (1, 4096, 64, 64, 64, 2, 4, 1, 1),  # Torch conv
+        (1, 16384, 32, 128, 128, 1, 8, 0, 0),
+        (1, 16384, 32, 128, 128, 1, 8, 0, 1),
+        (1, 4096, 64, 64, 64, 2, 4, 1, 0),
+        (1, 4096, 64, 64, 64, 2, 4, 1, 1),
         (1, 1024, 160, 32, 32, 5, 2, 2, 0),
         (1, 1024, 160, 32, 32, 5, 2, 2, 1),
         (1, 256, 256, 16, 16, 8, 1, 3, 0),
@@ -124,7 +124,6 @@ def test_segformer_efficient_selfattention(
         num_attention_heads=num_attention_heads,
         parameters=parameters,
         sequence_reduction_ratio=reference_model.sr_ratio,
-        model=reference_model,
     )
 
     ttnn_output = ttnn_model(ttnn_input_tensor, height, width, parameters=parameters)

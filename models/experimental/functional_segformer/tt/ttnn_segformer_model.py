@@ -26,12 +26,12 @@ class TtBaseModelOutput:
 
 
 class TtSegformerModel:
-    def __init__(self, config, parameters, model):
+    def __init__(self, config, parameters):
         super().__init__()
         self.config = config
 
         # hierarchical Transformer encoder
-        self.encoder = TtSegformerEncoder(config, parameters.encoder, model.encoder)
+        self.encoder = TtSegformerEncoder(config, parameters.encoder)
 
     def __call__(
         self,
@@ -40,7 +40,6 @@ class TtSegformerModel:
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         parameters=None,
-        model=None,
     ) -> Union[Tuple, TtBaseModelOutput]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -54,7 +53,6 @@ class TtSegformerModel:
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             parameters=parameters.encoder,
-            model=model.encoder,
         )
         sequence_output = encoder_outputs[0]
 

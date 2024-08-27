@@ -10,14 +10,13 @@ import ttnn
 
 
 class TtSegformerAttention:
-    def __init__(self, hidden_size, num_attention_heads, parameters, sequence_reduction_ratio, model):
+    def __init__(self, hidden_size, num_attention_heads, parameters, sequence_reduction_ratio):
         super().__init__()
         self.self = TtSegformerEfficientSelfAttention(
             hidden_size=hidden_size,
             num_attention_heads=num_attention_heads,
             parameters=parameters.self,
             sequence_reduction_ratio=sequence_reduction_ratio,
-            model=model.self,
         )
         self.output = TtSegformerSelfOutput()
 

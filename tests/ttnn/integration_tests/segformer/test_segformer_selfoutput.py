@@ -22,8 +22,8 @@ def create_custom_preprocessor(device):
         parameters = {}
         if isinstance(model, SegformerSelfOutput):
             parameters["dense"] = {}
-            parameters["dense"]["weight"] = preprocess_linear_weight(model.dense.weight, dtype=ttnn.bfloat16)
-            parameters["dense"]["bias"] = preprocess_linear_bias(model.dense.bias, dtype=ttnn.bfloat16)
+            parameters["dense"]["weight"] = preprocess_linear_weight(model.dense.weight, dtype=ttnn.bfloat8_b)
+            parameters["dense"]["bias"] = preprocess_linear_bias(model.dense.bias, dtype=ttnn.bfloat8_b)
 
         return parameters
 

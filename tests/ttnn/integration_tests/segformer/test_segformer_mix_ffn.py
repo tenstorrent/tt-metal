@@ -26,16 +26,16 @@ def create_custom_preprocessor(device):
         parameters = {}
         if isinstance(model, SegformerMixFFN):
             parameters["dense1"] = {}
-            parameters["dense1"]["weight"] = preprocess_linear_weight(model.dense1.weight, dtype=ttnn.bfloat16)
-            parameters["dense1"]["bias"] = preprocess_linear_bias(model.dense1.bias, dtype=ttnn.bfloat16)
+            parameters["dense1"]["weight"] = preprocess_linear_weight(model.dense1.weight, dtype=ttnn.bfloat8_b)
+            parameters["dense1"]["bias"] = preprocess_linear_bias(model.dense1.bias, dtype=ttnn.bfloat8_b)
 
             parameters["dwconv"] = {}
             dwconv_preprocessor = create_custom_preprocessor_dwconv(device)
             parameters["dwconv"] = dwconv_preprocessor(model.dwconv, None, None)
 
             parameters["dense2"] = {}
-            parameters["dense2"]["weight"] = preprocess_linear_weight(model.dense2.weight, dtype=ttnn.bfloat16)
-            parameters["dense2"]["bias"] = preprocess_linear_bias(model.dense2.bias, dtype=ttnn.bfloat16)
+            parameters["dense2"]["weight"] = preprocess_linear_weight(model.dense2.weight, dtype=ttnn.bfloat8_b)
+            parameters["dense2"]["bias"] = preprocess_linear_bias(model.dense2.bias, dtype=ttnn.bfloat8_b)
 
         return parameters
 
@@ -107,4 +107,4 @@ def test_segformer_mix_ffn(
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
+    assert_with_pcc(torch_output, ttnn_output, pcc=0.96)

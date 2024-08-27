@@ -23,8 +23,8 @@ def create_custom_preprocessor(device):
         parameters = {}
         if isinstance(model, SegformerMLP):
             parameters["proj"] = {}
-            parameters["proj"]["weight"] = preprocess_linear_weight(model.proj.weight, dtype=ttnn.bfloat16)
-            parameters["proj"]["bias"] = preprocess_linear_bias(model.proj.bias, dtype=ttnn.bfloat16)
+            parameters["proj"]["weight"] = preprocess_linear_weight(model.proj.weight, dtype=ttnn.bfloat8_b)
+            parameters["proj"]["bias"] = preprocess_linear_bias(model.proj.bias, dtype=ttnn.bfloat8_b)
 
         return parameters
 

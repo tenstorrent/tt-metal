@@ -28,11 +28,13 @@ class Conv:
         self.out_channels = self.weights.shape[0]
         self.act_block_h = act_block_h
         self.reshard = reshard
-        self.height_sharding = height_sharding
         self.deallocate = deallocate
         self.activation = activation
         self.groups = groups
         self.dtype = dtype
+        self.shard_layout = (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
@@ -40,7 +42,7 @@ class Conv:
             weights_dtype=ttnn.bfloat16,
             math_fidelity=ttnn.MathFidelity.LoFi,
             activation=self.activation,
-            height_sharding=self.height_sharding,
+            shard_layout=self.shard_layout,
             math_approx_mode_enabled=True,
             fp32_dest_acc_enabled=False,
             packer_l1_accum_enabled=False,
