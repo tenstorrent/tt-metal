@@ -8,7 +8,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
