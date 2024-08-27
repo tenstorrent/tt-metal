@@ -419,6 +419,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     const std::optional<const Tensor> E_x2,
     Tensor& output,
     LayerNormType norm_type,
+    LayerNormDistributedType distributed_type
     float eps,
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
@@ -427,6 +428,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     DeviceComputeKernelConfig compute_kernel_config
 ) {
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
+    bool is_pre_all_gather_norm = distributed_type == LayerNormDistributedType::PRE_ALL_GATHER;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
