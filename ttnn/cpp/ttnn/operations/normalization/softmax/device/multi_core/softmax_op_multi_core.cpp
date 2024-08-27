@@ -234,9 +234,13 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     for (uint32_t i = 0; i < grid_size.x * grid_size.y; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         if (i >= num_cores) {
-            SetRuntimeArgs(program, reader_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }); // [8]=1.0f is scaler
+            if (causal_mask)
+                SetRuntimeArgs(program, reader_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0, 0 });
+            else
+                SetRuntimeArgs(program, reader_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80 });
+
             SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0, 0, 0 });
-            SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0 });
+            SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0xFF00FF00 });
             continue;
         }
         uint32_t num_tile_rows_per_core = 0;
