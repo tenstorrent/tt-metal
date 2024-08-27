@@ -314,41 +314,9 @@ def run_conv_with_split(
         (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, True, None, False),  # ncrisc build failed, Two times called in model
         (1, 160, 160, 32, 32, 2, 2, 2, 2, 0, 0, 1, True, None, False),  # pass , Two times called in model
         # dwconv sub_module
-        (
-            1,
-            128,
-            128,
-            128,
-            128,
-            3,
-            3,
-            1,
-            1,
-            1,
-            1,
-            128,
-            True,
-            {"act_block_h": 64},
-            False,
-        ),  # pass , Two times called in model
+        (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 128, True, {"act_block_h": 64}, False),
         (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 256, True, None, False),  # pass , Two times called in model
-        (
-            1,
-            640,
-            640,
-            32,
-            32,
-            3,
-            3,
-            1,
-            1,
-            1,
-            1,
-            640,
-            False,
-            {"act_block_h": 32},
-            False,
-        ),  # pass , Two times called in model
+        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, 640, False, {"act_block_h": 32}, False),
         # (1,1024, 1024, 16, 16, 3, 3, 1, 1, 1, 1, 1024, False, None, False), #Switch to Width Sharding
         # decode_head sub_module
         # (1,1024, 256, 128, 128, 1, 1, 1, 1, 0, 0, 1, False, {"act_block_h": 32}, False), #pass for activation_dtype=bf8 but fails for bf16
