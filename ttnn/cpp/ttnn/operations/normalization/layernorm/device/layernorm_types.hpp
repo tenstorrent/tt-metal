@@ -14,6 +14,10 @@ enum class LayerNormType {
     LAYERNORM, RMSNORM
 };
 
+enum class LayerNormDistributedType {
+    NOT_DISTRIBUTED, PRE_ALL_GATHER, POST_ALL_GATHER
+};
+
 struct LayerNormDefaultProgramConfig{
 };
 struct LayerNormShardedMultiCoreProgramConfig {
