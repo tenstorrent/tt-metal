@@ -624,7 +624,8 @@ def conv(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttnn.experimental.tensor.conv(t0, t1, conv_params, 0, 0, 0, 0, 0, conv_params[0])
+    # t2 = ttnn.experimental.tensor.conv(t0, t1, conv_params, 0, 0, 0, 0, 0, conv_params[0])
+    t2 = ttnn.conv2d(t0, t1, conv_params, 0, 0, 0, 0, 0, conv_params[0])
 
     return tt2torch_tensor(t2)
 
