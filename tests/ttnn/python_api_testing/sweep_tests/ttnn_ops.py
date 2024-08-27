@@ -4832,6 +4832,27 @@ def eltwise_remainder(
     return ttnn_tensor_to_torch(t2)
 
 
+def argmax(
+    x,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    dim = kwargs.pop("dim")
+
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttnn.argmax(t0, dim=dim, memory_config=output_mem_config)
+
+    if dim:
+        return ttnn_tensor_to_torch(t1).squeeze(dim=dim)
+    else:
+        return ttnn_tensor_to_torch(t1).squeeze()
+
+
 def unary_remainder_bw(
     x,  # grad_tensor
     y,  # input_tensor
