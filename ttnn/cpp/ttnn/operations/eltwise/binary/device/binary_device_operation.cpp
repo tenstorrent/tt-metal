@@ -285,32 +285,4 @@ operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model
     return result;
 }
 
-
-
-std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t> BinaryDeviceOperation::invoke(
-    const Tensor &input_tensor_a_arg,
-    const Tensor &input_tensor_b_arg,
-    BinaryOpType binary_op_type,
-    const std::optional<const DataType> &output_dtype,
-    const std::optional<MemoryConfig> &memory_config,
-    std::optional<Tensor> optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-    if (output_dtype.has_value() && optional_output_tensor.has_value()) {
-        TT_FATAL(
-            output_dtype.value() == optional_output_tensor.value().get_dtype(),
-            "If both output dtype and output tensor provided dtype should match");
-    }
-
-    return {
-        operation_attributes_t{
-            binary_op_type,
-            activations,
-            input_tensor_a_activation,
-            memory_config.value_or(input_tensor_a_arg.memory_config()),
-            output_dtype.value_or(input_tensor_a_arg.get_dtype()),
-            std::nullopt},
-        tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor}};
-    }
-
 }  // namespace ttnn::operations::binary

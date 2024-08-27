@@ -151,14 +151,14 @@ Tensor BinaryOperation<binary_op_type>::invoke(
 
     return ttnn::prim::binary(
         queue_id,
-        input_tensor_a,
-        input_tensor_b,
-        binary_op_type,
-        output_dtype,
-        memory_config,
-        optional_output_tensor,
-        activations,
-        input_tensor_a_activation);
+        {input_tensor_a, input_tensor_b, optional_output_tensor},
+        {
+            binary_op_type,
+            activations,
+            input_tensor_a_activation,
+            memory_config.value_or(input_tensor_a_arg.memory_config()),
+            output_dtype.value_or(input_tensor_a_arg.get_dtype()),
+            std::nullopt});
 }
 
 template <BinaryOpType binary_op_type>
@@ -251,7 +251,6 @@ Tensor RelationalBinary<binary_op_type>::invoke(
 
     auto [input_tensor_a, input_tensor_b] = detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg);
 
-    auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
     DataType dtype = output_dtype.value_or(input_tensor_a.get_dtype());
     if (optional_output_tensor.has_value()) {
         dtype = optional_output_tensor.value().get_dtype();
@@ -259,14 +258,14 @@ Tensor RelationalBinary<binary_op_type>::invoke(
 
     return ttnn::prim::binary(
         queue_id,
-        input_tensor_a,
-        input_tensor_b,
-        binary_op_type,
-        dtype,
-        output_memory_config,
-        optional_output_tensor,
-        activations,
-        input_tensor_a_activation);
+        {input_tensor_a, input_tensor_b, optional_output_tensor},
+        {
+            binary_op_type,
+            activations,
+            input_tensor_a_activation,
+             memory_config.value_or(input_tensor_a.memory_config()),
+            dtype,
+            std::nullopt});
 }
 
 template <BinaryOpType binary_op_type>

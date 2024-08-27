@@ -100,10 +100,11 @@ Tensor MaxPoolNewOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32
 
     return ttnn::prim::max_pool_new(
         queue_id,
-        haloed_tensor,
-        sliding_window_config,
-        DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
-        memory_config);
+        {haloed_tensor},
+        {
+            sliding_window_config,
+            DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
+            memory_config});
 }
 
 // device template specializations

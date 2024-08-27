@@ -199,18 +199,6 @@ struct OldInfraDeviceOperation {
     static std::string get_type_name(const operation_attributes_t& attributes) {
         return attributes.get_type_name();
     }
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        operation_attributes_t&& operation_attributes,
-        const operation::Tensors& input_tensors,
-        const operation::OptionalConstTensors& optional_input_tensors,
-        const operation::OptionalTensors& optional_output_tensors
-    ) {
-        return std::make_tuple(
-            std::move(operation_attributes),
-            tensor_args_t{input_tensors, optional_input_tensors, optional_output_tensors}
-        );
-    }
 };
 
 
@@ -236,9 +224,15 @@ OutputTensors run(
     uint8_t cq_id) {
 
     if constexpr (std::is_same_v<OutputTensors, Tensors>) {
-        return ttnn::prim::old_infra_device_operation(cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
+        return ttnn::prim::old_infra_device_operation(
+            cq_id,
+            {input_tensors, optional_input_tensors, optional_output_tensors},
+            {std::move(operation)});
     } else {
-        return ttnn::prim::old_infra_device_operation_with_optional_output_tensors(cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
+        return ttnn::prim::old_infra_device_operation_with_optional_output_tensors(
+            cq_id,
+             {input_tensors, optional_input_tensors, optional_output_tensors},
+             {std::move(operation)});
     }
 }
 

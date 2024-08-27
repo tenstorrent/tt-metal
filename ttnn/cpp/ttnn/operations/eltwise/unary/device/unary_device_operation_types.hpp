@@ -21,7 +21,7 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const Tensor& input;
+    const Tensor input{};
     std::optional<Tensor> preallocated_output;
 };
 

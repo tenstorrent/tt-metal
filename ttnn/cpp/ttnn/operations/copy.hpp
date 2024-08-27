@@ -34,7 +34,7 @@ inline Tensor copy_impl(
                                                                           // DST directly, fp32 is converted to fp16b
 
     auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
-    return prim::unary(queue_id, input_tensor, op_chain, output_dtype, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, optional_output_tensor);
+    return prim::unary(queue_id, {input_tensor, optional_output_tensor}, {op_chain, output_dtype, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision});
 }
 }  // namespace detail
 

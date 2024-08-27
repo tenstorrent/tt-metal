@@ -259,8 +259,19 @@ def test_prim_add(device, shape):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn.prim.binary(input_tensor_a, input_tensor_b, ttnn.BinaryOpType.ADD, output_tensor=input_tensor_a)
-    output_tensor = ttnn.to_torch(input_tensor_a)
+    output_tensor = ttnn.prim.binary(
+        input_tensor_a,
+        input_tensor_b,
+        output_tensor=None,
+        binary_op_type=ttnn.BinaryOpType.ADD,
+        activations=None,
+        input_tensor_a_activation=None,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=None,
+        queue_id=0,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.99988)
     assert output_tensor.shape == shape

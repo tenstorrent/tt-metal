@@ -38,18 +38,6 @@ struct function_traits<ReturnType(ClassType::*)(args_t...) const>
     using arg_tuple = arg_traits<args_t...>;
 };
 
-
-template <typename F>
-constexpr auto resolve_primitive_operation_call_method(F) {
-    using traits = function_traits<F>;
-
-    return []<typename TSelf, typename... TArgs>(arg_traits<TSelf, TArgs...>) {
-        return [](TSelf self, TArgs... args, std::uint8_t queue_id) -> typename traits::return_t {
-            return self(queue_id, static_cast<decltype(args) &&>(args)...);
-        };
-    }(typename traits::arg_tuple{});
-}
-
 template <typename... py_args_t>
 struct pybind_arguments_t {
     std::tuple<py_args_t...> value;
@@ -70,10 +58,7 @@ template <typename registered_operation_t, typename operation_t, typename py_ope
 void def_call_operator(py_operation_t& py_operation, const pybind_arguments_t<py_args_t...>& overload) {
     std::apply(
         [&py_operation](auto... args) {
-            py_operation.def(
-                "__call__",
-                resolve_call_method<registered_operation_t>(&operation_t::invoke),
-                args...);
+            py_operation.def("__call__", resolve_call_method<registered_operation_t>(&operation_t::invoke), args...);
         },
         overload.value);
 }
@@ -84,48 +69,9 @@ template <
     typename py_operation_t,
     typename function_t,
     typename... py_args_t>
-requires PrimitiveOperationConcept<operation_t>
 void def_call_operator(py_operation_t& py_operation, const pybind_overload_t<function_t, py_args_t...>& overload) {
     std::apply(
-        [&py_operation, &overload](auto... args) {
-            py_operation.def(
-                "__call__",
-                resolve_primitive_operation_call_method(overload.function),
-                args...,
-                py::arg("queue_id") = 0);
-        },
-        overload.args.value);
-}
-
-template <
-    typename registered_operation_t,
-    typename operation_t,
-    typename py_operation_t,
-    typename function_t,
-    typename... py_args_t>
-requires CompositeOperationConcept<operation_t>
-void def_call_operator(py_operation_t& py_operation, const pybind_overload_t<function_t, py_args_t...>& overload) {
-    std::apply(
-        [&py_operation, &overload](auto... args) {
-            py_operation.def(
-                "__call__",
-                overload.function,
-                args...); },
-        overload.args.value);
-}
-
-template <
-    typename py_operation_t,
-    typename function_t,
-    typename... py_args_t>
-void def_primitive_operation_method(py_operation_t& py_operation, const pybind_overload_t<function_t, py_args_t...>& overload, auto name, auto method) {
-    std::apply(
-        [&py_operation, &overload, &name, &method](auto... args) {
-            py_operation.def(
-                name,
-                resolve_primitive_operation_method(overload.function, method),
-                args...);
-        },
+        [&py_operation, &overload](auto... args) { py_operation.def("__call__", overload.function, args...); },
         overload.args.value);
 }
 
@@ -134,7 +80,7 @@ template <
     typename operation_t,
     bool auto_launch_op,
     typename... overload_t>
-auto bind_registered_operation(
+auto bind_registered_operation_impl(
     py::module& module,
     const registered_operation_t<cpp_fully_qualified_name, operation_t, auto_launch_op>& operation,
     const std::string& doc,
@@ -177,8 +123,80 @@ auto bind_registered_operation(
     return py_operation;
 }
 
+template <
+    reflect::fixed_string cpp_fully_qualified_name,
+    typename operation_t,
+    bool auto_launch_op,
+    typename... overload_t>
+auto bind_registered_operation(
+    py::module& module,
+    const registered_operation_t<cpp_fully_qualified_name, operation_t, auto_launch_op>& operation,
+    const std::string& doc,
+    overload_t&&... overloads) {
+    static_assert(
+        CompositeOperationConcept<operation_t>,
+        "Operation must be a composite operation. Use bind_primitive_registered_operation for primitive operations");
+    return bind_registered_operation_impl(module, operation, doc, std::forward<overload_t>(overloads)...);
+}
+
+template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
+auto bind_primitive_registered_operation(
+    py::module& module,
+    const registered_operation_t<cpp_fully_qualified_name, operation_t, auto_launch_op>& operation) {
+    using registered_operation_t = std::decay_t<decltype(operation)>;
+    static_assert(
+        PrimitiveOperationConcept<operation_t>,
+        "Operation must be a primitive operation. Use bind_registered_operation for composite operations");
+
+    using tensor_args_t = typename operation_t::tensor_args_t;
+    using operation_attributes_t = typename operation_t::operation_attributes_t;
+
+    using tensor_args_tuple_t = decltype(reflect::to<std::tuple>(std::declval<tensor_args_t>()));
+    using operation_attributes_tuple_t = decltype(reflect::to<std::tuple>(std::declval<operation_attributes_t>()));
+
+    auto invoke_lambda = []<class... TensorArgsT, class... OperationAttributesT>(
+                             std::type_identity<std::tuple<TensorArgsT...>>,
+                             std::type_identity<std::tuple<OperationAttributesT...>>) {
+        return [](const registered_operation_t& self,
+                  TensorArgsT... tensor_args,
+                  OperationAttributesT... operation_attributes,
+                  std::uint8_t queue_id = DefaultQueueId) {
+            return self(
+                queue_id,
+                tensor_args_t{std::forward<TensorArgsT>(tensor_args)...},
+                operation_attributes_t{std::forward<OperationAttributesT>(operation_attributes)...});
+        };
+    }(std::type_identity<tensor_args_tuple_t>{}, std::type_identity<operation_attributes_tuple_t>{});
+
+    auto overload =
+        [&]<auto... Is, auto... Js>(std::index_sequence<Is...>, std::index_sequence<Js...>) {
+            constexpr std::array<std::string_view, sizeof...(Is)> tensor_arg_member_names{
+                reflect::member_name<Is, tensor_args_t>()...};
+            constexpr std::array<std::string_view, sizeof...(Js)> operation_attribute_member_names{
+                reflect::member_name<Is, operation_attributes_t>()...};
+
+            return pybind_overload_t{
+                invoke_lambda,
+                py::arg(std::string{tensor_arg_member_names[Is].data(), tensor_arg_member_names[Is].size()}.c_str())...,
+                py::arg(std::string{
+                    operation_attribute_member_names[Js].data(), operation_attribute_member_names[Js].size()}
+                            .c_str())...,
+                py::kw_only(),
+                py::arg("queue_id") = 0};
+        }(std::make_index_sequence<reflect::size<tensor_args_t>()>{},
+          std::make_index_sequence<reflect::size<operation_attributes_t>()>{});
+
+    auto doc_string = fmt::format(
+        "{}(tensor_args_tuple, operation_attributes_tuple, queue_id = {}) -> ...",
+        operation.base_name(),
+        DefaultQueueId);
+
+    return bind_registered_operation_impl(module, operation, doc_string, overload);
+}
+
 }  // namespace decorators
 
+using decorators::bind_primitive_registered_operation;
 using decorators::bind_registered_operation;
 using decorators::pybind_arguments_t;
 using decorators::pybind_overload_t;

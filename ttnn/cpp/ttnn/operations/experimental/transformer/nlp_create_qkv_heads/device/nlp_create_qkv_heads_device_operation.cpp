@@ -136,26 +136,4 @@ NlpCreateHeadsDeviceOperation::program_factory_t NlpCreateHeadsDeviceOperation::
     }
 }
 
-
-std::tuple<NlpCreateHeadsDeviceOperation::operation_attributes_t, NlpCreateHeadsDeviceOperation::tensor_args_t>
-NlpCreateHeadsDeviceOperation::invoke(
-        const Tensor& input_tensor_q,
-        const std::optional<Tensor>& input_tensor_kv,
-        const uint32_t num_q_heads,
-        const std::optional<uint32_t> num_kv_heads,
-        uint32_t head_dim,
-        const bool transpose_k_heads,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors) {
-
-    return {operation_attributes_t{.num_q_heads = num_q_heads,
-                                   .num_kv_heads = num_kv_heads.value_or(num_q_heads),
-                                   .head_dim = head_dim,
-                                   .transpose_k_heads = transpose_k_heads,
-                                   .output_mem_config = memory_config.value_or(input_tensor_q.memory_config())},
-            tensor_args_t{.input_tensor_q = input_tensor_q,
-                          .input_tensor_kv = input_tensor_kv,
-                          .optional_output_tensors = optional_output_tensors.value_or(std::vector<std::optional<Tensor>>{})}};
-}
-
 }  // namespace ttnn::operations::experimental::transformer

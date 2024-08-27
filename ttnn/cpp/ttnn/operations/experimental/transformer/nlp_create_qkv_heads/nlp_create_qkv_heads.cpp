@@ -27,7 +27,10 @@ namespace ttnn::operations::experimental::transformer {
                 head_dim = input_tensor_q.get_legacy_shape()[3] / (num_q_heads + 2 * num_kv_heads_val);
             }
 
-            return ttnn::prim::nlp_create_qkv_heads(queue_id, input_tensor_q, input_tensor_kv, num_q_heads, num_kv_heads, head_dim, transpose_k_heads, memory_config, optional_output_tensors);
+            return ttnn::prim::nlp_create_qkv_heads(
+                queue_id,
+                {input_tensor_q, input_tensor_kv, optional_output_tensors.value_or(std::vector<std::optional<Tensor>>{})},
+                {num_q_heads, num_kv_heads.value_or(num_q_heads), head_dim, transpose_k_heads, memory_config.value_or(input_tensor_q.memory_config())});
     };
 
     std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsOperation::invoke (

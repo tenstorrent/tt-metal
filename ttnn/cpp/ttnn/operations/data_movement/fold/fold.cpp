@@ -299,7 +299,7 @@ Tensor FoldOperation::invoke(uint8_t queue_id,
             return fold_with_transpose_(queue_id, input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w).at(0);
         }
     }
-    return ttnn::prim::fold(queue_id, input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
+    return ttnn::prim::fold(queue_id, {input_tensor}, {stride_h, stride_w, input_tensor.is_sharded()});
 }
 
 Tensor FoldOperation::invoke(const ttnn::Tensor &input_tensor,
