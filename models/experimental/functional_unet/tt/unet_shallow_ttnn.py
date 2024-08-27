@@ -75,6 +75,40 @@ def unet_concat(ttnn_tensors, dim=-1, use_reshard=True, perf_mode=False):
     return ttnn.concat(ttlib_tensors, dim=dim, memory_config=output_mem_config)
 
 
+class UNetPointwiseConv2D:
+    def __init__(
+        self,
+        conv,
+        device=None,
+        activation_dtype=ttnn.bfloat16,
+        mesh_mapper=None,
+    ):
+        self.device = device
+        self.in_channels = conv.in_channels
+        self.mesh_mapper = mesh_mapper
+        self.activation_dtype = activation_dtype
+
+        weight, bias = conv.module.weight, conv.module.bias
+
+        assert conv.kernel_size == (1, 1)
+        assert conv.stride == (1, 1)
+        assert conv.padding == (0, 0)
+
+        weight = weight.reshape(1, 1, self.in_channels, 1)
+        bias = torch.reshape(bias, (1, 1, 1, -1))
+
+        # Do this in two steps because tensors are padded differently in multi-device vs. single device
+        self.weight = ttnn.from_torch(weight, device=None, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+        self.bias = ttnn.from_torch(bias, device=None, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+        self.weight = ttnn.to_layout(self.weight, ttnn.TILE_LAYOUT).to(device)
+        self.bias = ttnn.to_layout(self.bias, ttnn.TILE_LAYOUT).to(device)
+
+    def __call__(self, x):
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.linear(x, self.weight, bias=self.bias, dtype=self.activation_dtype)
+        return x
+
+
 class UNetConv2D:
     def __init__(
         self,
@@ -85,6 +119,7 @@ class UNetConv2D:
         activation="relu",
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
+        mesh_mapper=None,
     ):
         self.device = device
         self.batch_size = conv.batch_size
@@ -99,12 +134,17 @@ class UNetConv2D:
         self.use_1d_systolic_array = conv.use_1d_systolic_array
         self.deallocate_activation = True
         self.cache = cache
+        self.mesh_mapper = mesh_mapper
 
         self.conv_config = ttnn.Conv2dConfig(
             dtype=activation_dtype,
             weights_dtype=weights_dtype,
             math_fidelity=ttnn.MathFidelity.LoFi,
-            height_sharding=self.use_1d_systolic_array,
+            shard_layout=(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                if self.use_1d_systolic_array
+                else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            ),
             deallocate_activation=self.deallocate_activation,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
@@ -125,15 +165,11 @@ class UNetConv2D:
         weight = weight
         bias = torch.reshape(bias, (1, 1, 1, -1))
 
-        # Required for pointwise convolutions (output layer)
-        if bias.shape[-1] == 1:
-            bias = bias.repeat((1, 1, 32, 32))
-
-        self.weight = ttnn.from_torch(weight, dtype=ttnn.float32)
-        self.bias = ttnn.from_torch(bias, dtype=ttnn.float32)
+        self.weight = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
+        self.bias = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
 
     def __call__(self, x):
-        x, output_height, output_width, self.weight, self.bias = ttnn.conv2d(
+        x, _, _, self.weight, self.bias = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -153,39 +189,51 @@ class UNetConv2D:
 
 
 class UNetMaxPool2D:
-    def __init__(self, pool, device=None, reader_patterns_cache={}):
+    def __init__(self, pool, channels, device=None, reader_patterns_cache={}):
         self.pool = pool
-        self.max_pool = ttnn.MaxPool2d(
-            kernel_size=pool.kernel_size,
-            stride=pool.stride,
-            padding=pool.padding,
-            dilation=pool.dilation,
-            dtype=pool.dtype,
-            batch_size=pool.batch_size,
-            input_height=pool.input_height,
-            input_width=pool.input_width,
-            reader_patterns_cache=reader_patterns_cache,
-            parallel_config_override=pool.parallel_config_override,
-            deallocate_activation=True,
-            device=device,
-        )
+        self.channels = channels
+        self.device = device
 
     def __call__(self, x):
         # For some reason the shard widths don't always match - so don't assert on it
-        assert (
-            x.memory_config().shard_spec.num_cores()
-            == self.max_pool.max_pool.input_sharded_memory_config.shard_spec.num_cores()
-            and x.memory_config().shard_spec.shape[0]
-            == self.max_pool.max_pool.input_sharded_memory_config.shard_spec.shape[0]
-        ), "Expected same input shard to match max pool's shard configuration"
-        return self.max_pool(x)
+        # assert (
+        # x.memory_config().shard_spec.num_cores()
+        # == self.max_pool.max_pool.input_sharded_memory_config.shard_spec.num_cores()
+        # and x.memory_config().shard_spec.shape[0]
+        # == self.max_pool.max_pool.input_sharded_memory_config.shard_spec.shape[0]
+        # ), "Expected same input shard to match max pool's shard configuration"
+        x = ttnn.max_pool2d_new(
+            input_tensor=x,
+            batch_size=self.pool.batch_size,
+            input_h=self.pool.input_height,
+            input_w=self.pool.input_width,
+            channels=self.channels,
+            kernel_size=[self.pool.kernel_size, self.pool.kernel_size],
+            stride=[self.pool.stride, self.pool.stride],
+            padding=[self.pool.padding, self.pool.padding],
+            dilation=[self.pool.dilation, self.pool.dilation],
+            device=self.device,
+        )
+        return x
 
 
 class UNetDownblock:
-    def __init__(self, conv1, bn1, conv2, bn2, pool, device, conv_cache={}, max_pool_cache={}, should_reshard=False):
-        self.conv1 = UNetConv2D(conv1, bn=bn1, device=device, cache=conv_cache)
-        self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, cache=conv_cache)
-        self.pool1 = UNetMaxPool2D(pool, device=device, reader_patterns_cache=max_pool_cache)
+    def __init__(
+        self,
+        conv1,
+        bn1,
+        conv2,
+        bn2,
+        pool,
+        device,
+        conv_cache={},
+        max_pool_cache={},
+        should_reshard=False,
+        mesh_mapper=None,
+    ):
+        self.conv1 = UNetConv2D(conv1, bn=bn1, device=device, cache=conv_cache, mesh_mapper=mesh_mapper)
+        self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, cache=conv_cache, mesh_mapper=mesh_mapper)
+        self.pool1 = UNetMaxPool2D(pool, conv2.out_channels, device=device, reader_patterns_cache=max_pool_cache)
 
         self.should_reshard = should_reshard
         if self.should_reshard:
@@ -232,11 +280,13 @@ class UNetDownblock:
 
 
 class UNetUpblock:
-    def __init__(self, conv1, bn1, conv2, bn2, conv3, bn3, device, conv_cache={}, should_reshard=False):
+    def __init__(
+        self, conv1, bn1, conv2, bn2, conv3, bn3, device, conv_cache={}, should_reshard=False, mesh_mapper=None
+    ):
         self.device = device
-        self.conv1 = UNetConv2D(conv1, bn1, device, conv_cache)
-        self.conv2 = UNetConv2D(conv2, bn2, device, conv_cache)
-        self.conv3 = UNetConv2D(conv3, bn3, device, conv_cache)
+        self.conv1 = UNetConv2D(conv1, bn1, device, conv_cache, mesh_mapper=mesh_mapper)
+        self.conv2 = UNetConv2D(conv2, bn2, device, conv_cache, mesh_mapper=mesh_mapper)
+        self.conv3 = UNetConv2D(conv3, bn3, device, conv_cache, mesh_mapper=mesh_mapper)
 
         self.should_reshard = should_reshard
         if self.should_reshard:
@@ -298,7 +348,7 @@ class UNetUpblock:
 
 
 class UNet:
-    def __init__(self, parameters: ParameterDict, device) -> None:
+    def __init__(self, parameters: ParameterDict, device, mesh_mapper=None) -> None:
         self.device = device
         self.conv_cache = {}
         self.max_pool_cache = {}
@@ -312,6 +362,7 @@ class UNet:
             conv_cache=self.conv_cache,
             max_pool_cache=self.max_pool_cache,
             should_reshard=True,
+            mesh_mapper=mesh_mapper,
         )
         self.downblock2 = UNetDownblock(
             parameters.c2,
@@ -323,6 +374,7 @@ class UNet:
             conv_cache=self.conv_cache,
             max_pool_cache=self.max_pool_cache,
             should_reshard=True,
+            mesh_mapper=mesh_mapper,
         )
         self.downblock3 = UNetDownblock(
             parameters.c3,
@@ -334,6 +386,7 @@ class UNet:
             conv_cache=self.conv_cache,
             max_pool_cache=self.max_pool_cache,
             should_reshard=True,
+            mesh_mapper=mesh_mapper,
         )
         self.downblock4 = UNetDownblock(
             parameters.c4,
@@ -345,10 +398,13 @@ class UNet:
             conv_cache=self.conv_cache,
             max_pool_cache=self.max_pool_cache,
             should_reshard=True,
+            mesh_mapper=mesh_mapper,
         )
 
-        self.bnc = UNetConv2D(parameters.bnc, parameters.bnb, device, cache=self.conv_cache)
-        self.bnc2 = UNetConv2D(parameters.bnc_2, parameters.bnb_2, device, cache=self.conv_cache)
+        self.bnc = UNetConv2D(parameters.bnc, parameters.bnb, device, cache=self.conv_cache, mesh_mapper=mesh_mapper)
+        self.bnc2 = UNetConv2D(
+            parameters.bnc_2, parameters.bnb_2, device, cache=self.conv_cache, mesh_mapper=mesh_mapper
+        )
         bnc_parallel_config = determine_parallel_config(
             is_1d_systolic=True,
             batch_size=self.bnc.batch_size,
@@ -380,6 +436,7 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             should_reshard=False,
+            mesh_mapper=mesh_mapper,
         )
         self.upblock2 = UNetUpblock(
             parameters.c6,
@@ -391,6 +448,7 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             should_reshard=True,
+            mesh_mapper=mesh_mapper,
         )
         self.upblock3 = UNetUpblock(
             parameters.c7,
@@ -402,6 +460,7 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             should_reshard=True,
+            mesh_mapper=mesh_mapper,
         )
         self.upblock4 = UNetUpblock(
             parameters.c8,
@@ -413,22 +472,21 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             should_reshard=True,
+            mesh_mapper=mesh_mapper,
         )
 
-        self.output_layer = UNetConv2D(
+        self.output_layer = UNetPointwiseConv2D(
             parameters.output_layer,
-            bn=None,
             device=device,
-            cache=self.conv_cache,
-            activation="",
-            activation_dtype=ttnn.bfloat16,
-            weights_dtype=ttnn.bfloat8_b,
+            mesh_mapper=mesh_mapper,
         )
 
     def bottleneck(self, x):
-        x = ttnn.to_memory_config(
+        if x.is_sharded():
+            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.interleaved_to_sharded(
             x,
-            memory_config=self.bnc_sharded_memory_config,
+            self.bnc_sharded_memory_config,
         )
         x = self.bnc(x)
         return self.bnc2(x)
@@ -450,8 +508,6 @@ class UNet:
         x = self.upblock3(x, c2_residual)
         x = self.upblock4(x, c1_residual)
 
-        # Pointwise convolutions currently don't handle padded inputs
-        x = x.cpu().pad_to_tile(0)
         x = self.output_layer(x)
 
         x = ttnn.from_device(x)
