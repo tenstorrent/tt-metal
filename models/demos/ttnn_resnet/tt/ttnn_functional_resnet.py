@@ -53,13 +53,13 @@ def resnet_basic_block(x, *, parameters):
 
 
 def create_sharded_mem_config(x, is_1d, core_grid, strategy, orientation, halo, use_height_and_width_as_shard_shape):
-    mem_layout = ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED if is_1d else ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+    mem_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED if is_1d else ttnn.TensorMemoryLayout.BLOCK_SHARDED
     core_grid = ttnn.CoreGrid(x=12, y=9)
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+    shard_grid = ttnn.CoreRangeSet(
         {
-            ttnn.experimental.tensor.CoreRange(
-                ttnn.experimental.tensor.CoreCoord(0, 0),
-                ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, core_grid.y - 1),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1),
             )
         }
     )
@@ -68,33 +68,31 @@ def create_sharded_mem_config(x, is_1d, core_grid, strategy, orientation, halo, 
         shard_shape = x.shape[0] * x.shape[1] * x.shape[2] // num_cores_nhw
     else:
         shard_shape = x.shape[1] * x.shape[1] * x.shape[2] // core_grid.y, x.shape[3] // core_grid.x
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
-        shard_grid, shard_shape, ttnn.experimental.tensor.ShardOrientation.COL_MAJOR, False
-    )
-    return ttnn.types.MemoryConfig(mem_layout, ttnn.types.BufferType.L1, shard_spec)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR, False)
+    return ttnn.MemoryConfig(mem_layout, ttnn.BufferType.L1, shard_spec)
 
 
 def create_core_range_set_from_ncores(ncores: int, bb_ncores_w: int, bb_ncores_h: int):
     bb_ncores = bb_ncores_w * bb_ncores_h  ## total cores in the bounding box grid
     if ncores == bb_ncores:  ## no last partial core row
-        return ttnn.experimental.tensor.CoreRangeSet(
+        return ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(bb_ncores_w - 1, bb_ncores_h - 1),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(bb_ncores_w - 1, bb_ncores_h - 1),
                 )
             }
         )
     elif ncores < bb_ncores:  ## with last partial core row
-        return ttnn.experimental.tensor.CoreRangeSet(
+        return ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(bb_ncores_w - 1, bb_ncores_h - 2),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(bb_ncores_w - 1, bb_ncores_h - 2),
                 ),
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, bb_ncores_h - 1),
-                    ttnn.experimental.tensor.CoreCoord(ncores % bb_ncores_w - 1, bb_ncores_h - 1),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, bb_ncores_h - 1),
+                    ttnn.CoreCoord(ncores % bb_ncores_w - 1, bb_ncores_h - 1),
                 ),
             }
         )
@@ -187,18 +185,18 @@ def create_sharded_mem_config_resnet(
     logger.debug(f"(bb_ncores_w, bb_ncores_h): {ncores_w}, {ncores_h}")
 
     if shard_strategy == ttnn.ShardStrategy.BLOCK:
-        tensor_memory_layout = ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED
+        tensor_memory_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
     elif shard_strategy == ttnn.ShardStrategy.WIDTH:
-        tensor_memory_layout = ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED
+        tensor_memory_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
     elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
-        tensor_memory_layout = ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+        tensor_memory_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     else:
         raise RuntimeError("Invalid sharding strategy")
 
     if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
-        tensor_shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
+        tensor_shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
     elif shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
-        tensor_shard_orientation = ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
+        tensor_shard_orientation = ttnn.ShardOrientation.COL_MAJOR
     else:
         raise RuntimeError("Invalid shard orientation")
 
@@ -225,15 +223,13 @@ def create_sharded_mem_config_resnet(
     logger.debug(f"shard_height: {shard_height}")
     logger.debug(f"shard_width: {shard_width}")
 
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
+    shard_spec = ttnn.ShardSpec(
         shard_grid,
         [shard_height, shard_width],
         tensor_shard_orientation,
         False,
     )
-    return ttnn.experimental.tensor.MemoryConfig(
-        tensor_memory_layout, ttnn.experimental.tensor.BufferType.L1, shard_spec
-    )
+    return ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
 
 
 class ResNet50:

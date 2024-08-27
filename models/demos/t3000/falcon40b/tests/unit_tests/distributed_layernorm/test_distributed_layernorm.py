@@ -119,7 +119,7 @@ class TtDistributedLayernorm:
 
                 self.ln_gamma.append(ln_gamma_host.to(devices[i], dram_memcfg))
 
-                ttnn.experimental.tensor.dump_tensor(
+                ttnn.dump_tensor(
                     str(ln_weights_path),
                     ln_gamma_host,
                 )
@@ -138,7 +138,7 @@ class TtDistributedLayernorm:
                 )
                 self.ln_beta.append(ln_beta_host.to(devices[i], dram_memcfg))
 
-                ttnn.experimental.tensor.dump_tensor(
+                ttnn.dump_tensor(
                     str(ln_bias_path),
                     ln_beta_host,
                 )

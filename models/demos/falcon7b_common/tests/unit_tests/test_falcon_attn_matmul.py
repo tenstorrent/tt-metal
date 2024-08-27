@@ -37,7 +37,7 @@ def run_falcon_attn_matmul_test(
         expected_output_shape = [1, q_heads, batch, seq_len]
 
         B = torch.randn(b_shape) - 0.95
-        b_t = ttnn.Tensor(B, in1_dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in1_mem_config)
+        b_t = ttnn.Tensor(B, in1_dtype).to(ttnn.TILE_LAYOUT).to(device, in1_mem_config)
 
     elif falcon_op == ttnn.experimental.attn_matmul_from_cache:
         q_len = 1
@@ -60,14 +60,14 @@ def run_falcon_attn_matmul_test(
             B = kv_cache[:, :, :seq_len, :]
             expected_output_shape = [1, q_heads, batch, K]
 
-        b_t = ttnn.Tensor(kv_cache, in1_dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in1_mem_config)
+        b_t = ttnn.Tensor(kv_cache, in1_dtype).to(ttnn.TILE_LAYOUT).to(device, in1_mem_config)
 
     else:
         raise NotImplementedError(f"falcon matmul op is undefined!")
 
     A = torch.randn(a_shape)
 
-    a_t = ttnn.Tensor(A, in0_dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in0_mem_config)
+    a_t = ttnn.Tensor(A, in0_dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)
 
     compute_grid_size = device.compute_with_storage_grid_size()
 
@@ -75,7 +75,7 @@ def run_falcon_attn_matmul_test(
         out = falcon_op(
             a_t,
             b_t,
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(compute_grid_size.x, compute_grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
             memory_config=out_mem_config,
             dtype=out_dtype,
         )
@@ -86,7 +86,7 @@ def run_falcon_attn_matmul_test(
             b_t,
             num_tokens=seq_len,
             transpose_hw=transpose_hw,
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(compute_grid_size.x, compute_grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
             memory_config=out_mem_config,
             dtype=out_dtype,
         )
@@ -119,32 +119,26 @@ def run_falcon_attn_matmul_test(
     "in0_mem_config, in1_mem_config, out_mem_config",
     (
         (
-            ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            ),
-            ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            ),
-            ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            ),
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
         ),
     ),
     ids=["DRAM"],
 )
 @pytest.mark.parametrize(
     "out_dtype",
-    (ttnn.experimental.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
     ids=["out_BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "in1_dtype",
-    (ttnn.experimental.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
     ids=["in1_BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "in0_dtype",
-    (ttnn.experimental.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
     ids=["in0_BFLOAT16"],
 )
 @pytest.mark.parametrize(

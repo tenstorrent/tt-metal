@@ -161,9 +161,7 @@ class TtFalconAttention:
                 attn_weights = ttnn.experimental.attn_matmul(
                     query_layer,
                     key_layer_transposed,
-                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(
-                        self.core_grid.x, self.core_grid.y
-                    ),
+                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
                     memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -171,9 +169,7 @@ class TtFalconAttention:
                 attn_weights = ttnn.experimental.group_attn_matmul(
                     query_layer,
                     key_layer_transposed,
-                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(
-                        self.core_grid.x, self.core_grid.y
-                    ),
+                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
                     memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -228,9 +224,7 @@ class TtFalconAttention:
                 attn_output = ttnn.experimental.attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(
-                        self.core_grid.x, self.core_grid.y
-                    ),
+                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
                     memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -238,9 +232,7 @@ class TtFalconAttention:
                 attn_output = ttnn.experimental.group_attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(
-                        self.core_grid.x, self.core_grid.y
-                    ),
+                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
                     memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )

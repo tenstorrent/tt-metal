@@ -140,7 +140,7 @@ class TtLlamaAttention(nn.Module):
             self.layer_past_list.append(layer_past)
 
         self.q_heads_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=4,
             out_subblock_w=1,
@@ -150,7 +150,7 @@ class TtLlamaAttention(nn.Module):
             fused_activation=None,
         )
         self.k_heads_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -161,7 +161,7 @@ class TtLlamaAttention(nn.Module):
         )
 
         self.expand_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=2,
             out_subblock_w=2,
@@ -172,7 +172,7 @@ class TtLlamaAttention(nn.Module):
         )
 
         self.reduce_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(self.grid_size.x, self.grid_size.y),
+            compute_with_storage_grid_size=ttnn.CoreCoord(self.grid_size.x, self.grid_size.y),
             in0_block_w=4,
             out_subblock_h=4,
             out_subblock_w=1,
@@ -183,7 +183,7 @@ class TtLlamaAttention(nn.Module):
         )
 
         self.attn_program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=ttnn.experimental.tensor.CoreCoord(8, 4),
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=4,
@@ -195,7 +195,7 @@ class TtLlamaAttention(nn.Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.attention_grid = ttnn.experimental.tensor.CoreCoord(8, 4)
+        self.attention_grid = ttnn.CoreCoord(8, 4)
         self.scale = self.head_dim**-0.5
 
     def forward_decode(

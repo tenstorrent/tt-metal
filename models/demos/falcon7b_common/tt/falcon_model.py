@@ -55,7 +55,7 @@ class TtFalconModelShared(torch.nn.Module):
             embedding_weights_str,
             weight_config_str="WORD_EMBEDDING_WEIGHTS",
             weights_to_cache=(state_dict[embedding_weights_str] if state_dict else None),
-            tt_layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
         # stack all decoders
@@ -130,9 +130,9 @@ class TtFalconModelShared(torch.nn.Module):
                 attn_masks_unordered = [
                     tt_from_torch(
                         attention_mask_slice,
-                        dtype=ttnn.experimental.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
+                        dtype=ttnn.bfloat16,  # subsequent tilize op excepts bfloat16 inputs
                         device=self.device_mesh,
-                        layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
                         memory_config=self.model_config["ATTN_MASK_MEMCFG"],
                         mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
                     )
@@ -152,9 +152,9 @@ class TtFalconModelShared(torch.nn.Module):
                 # Send attn masks to device
                 tt_attention_mask = tt_from_torch(
                     attention_mask_,
-                    dtype=ttnn.experimental.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
+                    dtype=ttnn.bfloat16,  # subsequent tilize op excepts bfloat16 inputs
                     device=self.device_mesh,
-                    layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=self.model_config["ATTN_MASK_MEMCFG"],
                     mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
                 )
@@ -206,9 +206,9 @@ class TtFalconModelShared(torch.nn.Module):
             # Send attn masks to device
             tt_attention_mask = tt_from_torch(
                 attention_mask,
-                dtype=ttnn.experimental.tensor.DataType.BFLOAT16,  # subsequent tilize op excepts bfloat16 inputs
+                dtype=ttnn.bfloat16,  # subsequent tilize op excepts bfloat16 inputs
                 device=self.device_mesh,
-                layout=ttnn.experimental.tensor.Layout.ROW_MAJOR,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=self.model_config["ATTN_MASK_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             )
@@ -252,7 +252,7 @@ class TtFalconModelShared(torch.nn.Module):
             memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"],
         )
         input_embeddings = ttnn.unsqueeze_to_4D(input_embeddings)
-        input_embeddings = ttnn.to_layout(input_embeddings, ttnn.experimental.tensor.Layout.TILE)
+        input_embeddings = ttnn.to_layout(input_embeddings, ttnn.TILE_LAYOUT)
 
         layer_output = input_embeddings
         presents = ()

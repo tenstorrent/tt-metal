@@ -593,7 +593,7 @@ class TtLlamaAttention_galaxy:
         single_user_key_layer = self.prefill_prepare_tensor_for_kv_cache(key_layer, user_id)
 
         # Fill cache with multi-device tensor
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             keys_reshaped,
             ttnn.experimental.typecast(single_user_key_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             user_id % self.batch_size_per_device_group,
@@ -608,14 +608,14 @@ class TtLlamaAttention_galaxy:
 
         single_user_value_layer = self.prefill_prepare_tensor_for_kv_cache(value_layer, user_id)
 
-        ttnn.experimental.tensor.fill_cache(
+        ttnn.fill_cache(
             values_reshaped,
             ttnn.experimental.typecast(single_user_value_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             user_id % self.batch_size_per_device_group,
         )
 
         # SDPA
-        attn_output = ttnn.experimental.operations.primary.transformers.scaled_dot_product_attention(
+        attn_output = ttnn.transformers.scaled_dot_product_attention(
             query_layer,
             key_layer,
             value_layer,
