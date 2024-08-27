@@ -6,13 +6,13 @@ import ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
-from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat, get_single_rot_mat_torch
+from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat_multi_pos, get_single_rot_mat_torch
 from ttnn import ReplicateTensorToMesh
 import torch
 
 
 class TtTransformer(LightweightModule):
-    def __init__(self, device_mesh, state_dict, args, dtype, layers, start_pos=0, rotary_on_host=False):
+    def __init__(self, device_mesh, state_dict, args, dtype, layers, start_pos_ids, rotary_on_host=False):
         super().__init__()
         self.args = args
         self.vocab_size = args.vocab_size
@@ -63,13 +63,14 @@ class TtTransformer(LightweightModule):
         if self.rotary_on_host:
             self.current_rot_mat, self.rot_matrix = get_single_rot_mat_torch(self.args.head_dim, start_pos)
         else:
-            self.current_rot_mat, self.rot_matrix = get_single_rot_mat(self.args.head_dim, device_mesh, start_pos)
+            self.current_rot_mat, self.rot_matrix = get_single_rot_mat_multi_pos(
+                self.args.head_dim, device_mesh, start_pos_ids
+            )
 
     def forward(
         self,
         x,
-        start_pos,
-        current_pos,
+        start_pos_ids,
         attn_masks=None,
         rot_mats=None,
         transformation_mats=None,
@@ -89,12 +90,14 @@ class TtTransformer(LightweightModule):
                 else:
                     rot_mats = self.current_rot_mat
 
-            x = layer(x, start_pos, current_pos, attn_masks, rot_mats, transformation_mats, user_id, mode)
+            x = layer(x, start_pos_ids, attn_masks, rot_mats, transformation_mats, user_id, mode)
         if attn_masks is not None:
             attn_masks.deallocate(True)
 
+        # slicing to only get the last token
         if mode == "prefill":
             return x
+            x = x[:, :, :1, :]
 
         x_norm = self.norm(x)
         outputs = ttnn.matmul(
@@ -110,10 +113,10 @@ class TtTransformer(LightweightModule):
             prev_rot_mat = self.current_rot_mat
             self.current_rot_mat = torch.matmul(self.rot_matrix, prev_rot_mat)
         else:
-            if (start_pos + 1) % 32 == 0:
+            if (start_pos_ids[0] + 1) % 32 == 0:
                 # generate new rotmat to avoid numerical instability every 32 tokens
-                self.current_rot_mat, self.rot_matrix = get_single_rot_mat(
-                    self.args.head_dim, self.device_mesh, start_pos + 1
+                self.current_rot_mat, self.rot_matrix = get_single_rot_mat_multi_pos(
+                    self.args.head_dim, self.device_mesh, [pos + 1 for pos in start_pos_ids]
                 )
             else:
                 # assigning to a new variable to explictly deallocate since matmul creates a new buffer for the output
