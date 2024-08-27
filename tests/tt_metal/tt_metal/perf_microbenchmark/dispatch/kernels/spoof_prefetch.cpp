@@ -44,7 +44,7 @@ void kernel_main() {
     cb_release_pages<my_noc_index, dispatch_noc_xy, dispatch_cb_sem>(dispatch_cb_pages * iterations);
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dispatch_cb_sem));
-    DEBUG_STATUS("ZZZ");
+    WAYPOINT("ZZZ");
     while (*sem_addr != dispatch_cb_pages * iterations - 96);
     // Send finish, last cmd in the chain
     noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_cb_base), dispatch_cb_page_size);

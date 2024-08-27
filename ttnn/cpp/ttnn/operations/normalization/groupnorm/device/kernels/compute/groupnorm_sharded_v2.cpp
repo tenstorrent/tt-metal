@@ -20,7 +20,7 @@
 #include "compute_kernel_api/matmul.h"
 
 // #include "debug/dprint.h"
-// #include "debug/status.h"
+// #include "debug/waypoint.h"
 
 
 // SPLIT REDUCE across Cores

@@ -583,13 +583,13 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreCoord core, const mailboxes_t *m
 
 void WatcherDeviceReader::DumpWaypoints(CoreCoord core, const mailboxes_t *mbox_data, bool to_stdout) {
     const launch_msg_t *launch_msg = &mbox_data->launch;
-    const debug_status_msg_t *debug_status = mbox_data->watcher.debug_status;
+    const debug_waypoint_msg_t *debug_waypoint = mbox_data->watcher.debug_waypoint;
     string out;
 
     for (int cpu = 0; cpu < MAX_RISCV_PER_CORE; cpu++) {
         string risc_status;
-        for (int byte = 0; byte < num_status_bytes_per_riscv; byte++) {
-            char v = ((char *)&debug_status[cpu])[byte];
+        for (int byte = 0; byte < num_waypoint_bytes_per_riscv; byte++) {
+            char v = ((char *)&debug_waypoint[cpu])[byte];
             if (v == 0)
                 break;
             if (isprint(v)) {

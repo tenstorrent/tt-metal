@@ -14,7 +14,7 @@
 #include "llk_operands.h"
 #include "llk_param_structs.h"
 #include "llk_unpack_common.h"
-#include "debug/status.h"
+#include "debug/waypoint.h"
 
 /*************************************************************************
  * LLK UNPACK COMMON

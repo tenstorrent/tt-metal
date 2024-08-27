@@ -215,7 +215,7 @@ void watcher_init(Device *device) {
 
     // Initialize debug status values to "unknown"
     for (int idx = 0; idx < MAX_RISCV_PER_CORE; idx++)
-        data->debug_status[idx].status[0] = 'X';
+        data->debug_waypoint[idx].waypoint[0] = 'X';
 
     // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
     for (int i = 0; i < NUM_NOCS; i++) {

@@ -90,10 +90,10 @@ inline void llk_unpack_A(
     std::uint32_t offset_address = cb_interface[operand_id].fifo_page_size * tile_index;
     std::uint32_t address = base_address + offset_address;
 
-    DEBUG_STATUS("UPAW");
+    WAYPOINT("UPAW");
     _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         address, transpose_of_faces > 0, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
-    DEBUG_STATUS("UPAD");
+    WAYPOINT("UPAD");
 }
 
 
@@ -110,10 +110,10 @@ inline void llk_unpack_A_block(
     std::uint32_t address = base_address;
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
-        DEBUG_STATUS("UPAW");
+        WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
             address, transpose_of_faces > 0, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
         address += offset_address;
-        DEBUG_STATUS("UPAD");
+        WAYPOINT("UPAD");
     }
 }

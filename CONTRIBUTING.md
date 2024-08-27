@@ -415,10 +415,10 @@ k_id[15]: tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp
 ```
 TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 ./your_program
 ```
-  - If you still cannot reproduce the hang, try disabling the debug status and assert features. This will reduce visiblity into the hang, but is better than nothing:
+  - If you still cannot reproduce the hang, try disabling the waypoint and assert features. This will reduce visiblity into the hang, but is better than nothing:
 ```
-TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_DEBUG_STATUS=1 ./your_program
-TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_DEBUG_STATUS=1 TT_METAL_WATCHER_DISABLE_ASSERT=1 ./your_program
+TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_WAYPOINT=1 ./your_program
+TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_WAYPOINT=1 TT_METAL_WATCHER_DISABLE_ASSERT=1 ./your_program
 ```
 
 #### Using watcher hang dump tool

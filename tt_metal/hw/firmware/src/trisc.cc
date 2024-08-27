@@ -12,7 +12,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 #include "debug/fw_debug.h"
-#include "debug/status.h"
+#include "debug/waypoint.h"
 #include "debug/dprint.h"
 #include "debug/stack_usage.h"
 #include "circular_buffer.h"
@@ -78,7 +78,7 @@ using namespace ckernel;
 int main(int argc, char *argv[]) {
     conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
-    DEBUG_STATUS("I");
+    WAYPOINT("I");
 
     uint tt_l1_ptr *local_l1_start_addr =
         (uint tt_l1_ptr *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
@@ -103,7 +103,7 @@ int main(int argc, char *argv[]) {
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
-        DEBUG_STATUS("W");
+        WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO);
         DeviceZoneScopedMainN("TRISC-FW");
 
@@ -120,10 +120,10 @@ int main(int argc, char *argv[]) {
         crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
             mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
 
-        DEBUG_STATUS("R");
+        WAYPOINT("R");
         kernel_init();
         RECORD_STACK_USAGE();
-        DEBUG_STATUS("D");
+        WAYPOINT("D");
 
         // Signal completion
         tensix_sync();

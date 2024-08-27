@@ -148,7 +148,7 @@ class RunTimeOptions {
     inline int get_watcher_noinline() { return watcher_noinline; }
     inline void set_watcher_noinline(bool noinline) { watcher_noinline = noinline; }
     inline std::set<std::string> &get_watcher_disabled_features() { return watcher_disabled_features; }
-    inline bool watcher_status_disabled() { return watcher_feature_disabled(watcher_status_str); }
+    inline bool watcher_status_disabled() { return watcher_feature_disabled(watcher_waypoint_str); }
     inline bool watcher_noc_sanitize_disabled() { return watcher_feature_disabled(watcher_noc_sanitize_str); }
     inline bool watcher_assert_disabled() { return watcher_feature_disabled(watcher_assert_str); }
     inline bool watcher_pause_disabled() { return watcher_feature_disabled(watcher_pause_str); }
@@ -282,7 +282,7 @@ class RunTimeOptions {
 
     // Watcher feature name strings (used in env vars + defines in the device code), as well as a
     // set to track disabled features.
-    const std::string watcher_status_str = "STATUS";
+    const std::string watcher_waypoint_str = "WAYPOINT";
     const std::string watcher_noc_sanitize_str = "NOC_SANITIZE";
     const std::string watcher_assert_str = "ASSERT";
     const std::string watcher_pause_str = "PAUSE";

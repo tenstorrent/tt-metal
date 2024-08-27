@@ -118,9 +118,9 @@ struct slave_sync_msg_t {
     };
 };
 
-constexpr int num_status_bytes_per_riscv = 4;
-struct debug_status_msg_t {
-    volatile uint8_t status[num_status_bytes_per_riscv];
+constexpr int num_waypoint_bytes_per_riscv = 4;
+struct debug_waypoint_msg_t {
+    volatile uint8_t waypoint[num_waypoint_bytes_per_riscv];
 };
 
 // TODO: Clean up this struct with #6738
@@ -225,7 +225,7 @@ enum watcher_enable_msg_t {
 
 struct watcher_msg_t {
     volatile uint32_t enable;
-    struct debug_status_msg_t debug_status[MAX_RISCV_PER_CORE];
+    struct debug_waypoint_msg_t debug_waypoint[MAX_RISCV_PER_CORE];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[NUM_NOCS];
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;

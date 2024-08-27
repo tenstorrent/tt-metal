@@ -44,7 +44,7 @@ Watcher features can be disabled individually using the following environment va
    export TT_METAL_WATCHER_DISABLE_PAUSE=1
    export TT_METAL_WATCHER_DISABLE_RING_BUFFER=1
    export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
-   export TT_METAL_WATCHER_DISABLE_STATUS=1
+   export TT_METAL_WATCHER_DISABLE_WAYPOINT=1
    export TT_METAL_WATCHER_DISABLE_STACK_USAGE=1
 
    # In certain cases enabling watcher can cause the binary to be too large. In this case, disable inlining.
@@ -61,13 +61,13 @@ below:
 
 .. code-block::
 
-    #include "debug/status.h"
+    #include "debug/waypoint.h"
 
     void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
-        DEBUG_STATUS("NSW");
+        WAYPOINT("NSW");
         while ((*sem_addr) != val)
             ;
-        DEBUG_STATUS("NSD");
+        WAYPOINT("NSD");
     }
 
 Waypoints have no overhead when the watcher is disabled and can be used inside user written kernels.  They indicate
@@ -108,7 +108,7 @@ The log file will contain lines such as the following:
 - The hang above originated on core (1,1) in physical coords (i.e., the top left core)
 - BRISC last hit waypoint ``CWFW`` (CB Wait Front Wait), NCRISC hit ``CRBW`` (NOC CB Reserve Back Wait) and each TRISC
   is in the Run ``R`` state (running a kernel). Look in the source (dataflow_api.h primarily) to decode the obscure names,
-  search for ``DEBUG_STATUS``
+  search for ``WAYPOINT``
 - The run message ``rmsg`` sent from the host to the device, says the kernel was Device ``D`` dispatched, BRISC is
   using NOC ``0`` (NCRISC is using the other NOC, NOC 1), the host run state is Go ``G`` and each of BRISC, NCRISC and
   TRISC kernels are running (capital ``BNT``; lowercase would signify no kernel running)
@@ -125,13 +125,13 @@ assert was tripped. An example of an assert and the resulting message is shown b
 .. code-block:: c++
 
     #include "debug/assert.h"  // Required in all kernels using watcher asserts
-    #include "debug/status.h"  // Pair the assert with a status to see which assert is tripped
+    #include "debug/waypoint.h"  // Pair the assert with a status to see which assert is tripped
 
     void kernel_main() {
         uint32_t a = get_arg_val<uint32_t>(0);
         uint32_t b = get_arg_val<uint32_t>(1);
 
-        DEBUG_STATUS("AST1");
+        WAYPOINT("AST1");
         ASSERT(a != b);
     }
 

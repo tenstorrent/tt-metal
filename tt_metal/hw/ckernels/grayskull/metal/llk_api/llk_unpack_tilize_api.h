@@ -63,14 +63,14 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
     std::uint32_t base_address = cb_interface[operand_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
     std::uint32_t src_format = (uint)unpack_src_format[operand_id];
 
-    DEBUG_STATUS("UPTW");
+    WAYPOINT("UPTW");
     _llk_unpack_tilize_(
         base_address,
         tile_index,
         src_format,
         block_ct_dim
     );
-    DEBUG_STATUS("UPTD");
+    WAYPOINT("UPTD");
 }
 
 inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles) {
@@ -191,7 +191,7 @@ inline void llk_unpack_tilizeA_B(
     // Program srcA and srcB base addresses
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
-    DEBUG_STATUS("UPTW");
+    WAYPOINT("UPTW");
     const std::uint32_t num_loops = (num_faces>1) ? num_faces/2 : 1;
     for (std::uint32_t n = 0; n < num_loops; n++) {
         std::uint32_t address_a = base_address_a + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
@@ -226,7 +226,7 @@ inline void llk_unpack_tilizeA_B(
         // Switch unpacker config context
         switch_config_context(unp_cfg_context);
     }
-    DEBUG_STATUS("UPTD");
+    WAYPOINT("UPTD");
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool reuse_srcB = false>

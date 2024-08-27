@@ -8,7 +8,7 @@
 #include "ckernel_globals.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
-#include "debug/status.h"
+#include "debug/waypoint.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_math_common.h"
@@ -27,9 +27,9 @@ inline void llk_math_hw_configure_disaggregated() {
 }
 
 inline void llk_math_wait_for_dest_available() {
-    DEBUG_STATUS("MWDW");
+    WAYPOINT("MWDW");
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-    DEBUG_STATUS("MWDD");
+    WAYPOINT("MWDD");
 }
 
 template <bool is_fp32_dest_acc_en = false>

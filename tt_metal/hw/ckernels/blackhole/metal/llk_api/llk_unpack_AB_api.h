@@ -80,9 +80,9 @@ inline void llk_unpack_AB(
     std::uint32_t offset_address_b = cb_interface[operandB_id].fifo_page_size * tile_index_b;
     std::uint32_t address_b = base_address_b + offset_address_b;
 
-    DEBUG_STATUS("UABW");
+    WAYPOINT("UABW");
     _llk_unpack_AB_<BType>(address_a, address_b, transpose_of_faces > 0);
-    DEBUG_STATUS("UABD");
+    WAYPOINT("UABD");
 }
 
 template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE>
