@@ -110,6 +110,14 @@ void device_module(py::module &m_device) {
     m_device.attr("EPS_WHB0") = EPS_WHB0;
     m_device.attr("EPS_BH") = EPS_BH;
 
+    m_device.attr("NAN_GS") = NAN_GS;
+    m_device.attr("NAN_WHB0") = NAN_WHB0;
+    m_device.attr("NAN_BH") = NAN_BH;
+
+    m_device.attr("INF_GS") = INF_GS;
+    m_device.attr("INF_WHB0") = INF_WHB0;
+    m_device.attr("INF_BH") = INF_BH
+
     pyDevice.def("sfpu_eps", &Device::sfpu_eps, R"doc(
         Machine epsilon value for current device.
 
@@ -119,6 +127,27 @@ void device_module(py::module &m_device) {
         | device           | return machine epsilon | tt_lib.device.Device  |     NA      | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
         )doc");
+
+    pyDevice.def("sfpu_nan", &Device::sfpu_nan, R"doc(
+        NaN value for current device.
+
+        +------------------+------------------------+-----------------------+-------------+----------+
+        | Argument         | Description            | Data type             | Valid range | Required |
+        +==================+========================+=======================+=============+==========+
+        | device           | return machine NaN     | ttnn.device.Device    |     NA      | Yes      |
+        +------------------+------------------------+-----------------------+-------------+----------+
+        )doc");
+
+    pyDevice.def("sfpu_inf", &Device::sfpu_inf, R"doc(
+        Infinity value for current device.
+
+        +------------------+------------------------+-----------------------+-------------+----------+
+        | Argument         | Description            | Data type             | Valid range | Required |
+        +==================+========================+=======================+=============+==========+
+        | device           | return machine Inf     | ttnn.device.Device    |     NA      | Yes      |
+        +------------------+------------------------+-----------------------+-------------+----------+
+        )doc");
+
     m_device.def(
         "CreateDevice",
         [](int device_id, uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) { return tt::tt_metal::CreateDevice(device_id, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type); },
