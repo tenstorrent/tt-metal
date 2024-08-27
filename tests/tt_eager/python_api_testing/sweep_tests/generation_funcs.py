@@ -2251,19 +2251,24 @@ def gen_div_no_nan_args(
 
 
 def gen_topk_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
-    # max_dim = len(input_shapes[0]) - 1
-    # dim = random.randint(0, max_dim)
-    # max_k = input_shapes[0][dim]
-    # k = random.randint(1, max_k-1)
-    # largest = random.choice([True, False])
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
+        if input_info is not None:
+            # max_dim = len(input_shapes[0]) - 1
+            # dim = random.randint(0, max_dim)
+            # max_k = input_shapes[0][dim]
+            # k = random.randint(1, max_k-1)
+            # largest = random.choice([True, False])
 
-    # input_info.update({"dim": dim})
-    # input_info.update({"k": k})
-    # input_info.update({"largest": largest})
+            # input_info.update({"dim": dim})
+            # input_info.update({"k": k})
+            # input_info.update({"largest": largest})
 
-    input_info.update({"dim": -1})
-    input_info.update({"k": 32})
-    input_info.update({"largest": True})
+            input_info.update({"dim": -1})
+            input_info.update({"k": 32})
+            input_info.update({"largest": True})
+            yield input_info
 
 
 def gen_argmax_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
