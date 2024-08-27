@@ -660,16 +660,30 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     bool input_is_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
     DeviceComputeKernelConfig compute_kernel_config;
-    if (device->arch() == tt::ARCH::WORMHOLE_B0) {
-        compute_kernel_config = WormholeComputeKernelConfig(
-            {.math_fidelity = conv_config.math_fidelity,
-             .math_approx_mode = conv_config.math_approx_mode_enabled,
-             .fp32_dest_acc_en = conv_config.fp32_dest_acc_enabled,
-             .packer_l1_acc = conv_config.packer_l1_accum_enabled});
-    } else {
-        TT_ASSERT(device->arch() == tt::ARCH::GRAYSKULL);
-        compute_kernel_config = GrayskullComputeKernelConfig(
-            {.math_fidelity = conv_config.math_fidelity, .math_approx_mode = conv_config.math_approx_mode_enabled});
+    switch (device->arch()) {
+        case tt::ARCH::WORMHOLE_B0:
+            compute_kernel_config = WormholeComputeKernelConfig(
+                {.math_fidelity = conv_config.math_fidelity,
+                .math_approx_mode = conv_config.math_approx_mode_enabled,
+                .fp32_dest_acc_en = conv_config.fp32_dest_acc_enabled,
+                .packer_l1_acc = conv_config.packer_l1_accum_enabled});
+            break;
+
+        case tt::ARCH::GRAYSKULL:
+            compute_kernel_config = GrayskullComputeKernelConfig(
+                {.math_fidelity = conv_config.math_fidelity, .math_approx_mode = conv_config.math_approx_mode_enabled});
+            break;
+
+        case tt::ARCH::BLACKHOLE:
+            compute_kernel_config = BlackholeComputeKernelConfig(
+                {.math_fidelity = conv_config.math_fidelity,
+                .math_approx_mode = conv_config.math_approx_mode_enabled,
+                .fp32_dest_acc_en = conv_config.fp32_dest_acc_enabled,
+                .packer_l1_acc = conv_config.packer_l1_accum_enabled});
+            break;
+
+        default:
+            TT_ASSERT(false);
     }
     if (!use_matmul_for_1x1_conv) {
         // call halo op
