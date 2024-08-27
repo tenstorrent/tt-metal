@@ -26,26 +26,34 @@ ttnn::Tensor ExecuteAttentionSoftmax<in_place>::invoke(
     } else {
         if (not attention_mask.has_value()) {
             auto output_tensor = ttnn::multiply(input_tensor, head_size);
-            return ttnn::operations::normalization::softmax(output_tensor, memory_config.value_or(input_tensor.memory_config()));
+            return ttnn::prim::softmax(
+                ttnn::operations::normalization::SoftmaxDeviceOperation::operation_attributes_t{
+                    .memory_config = memory_config.value_or(output_tensor.memory_config()),
+                },
+                ttnn::operations::normalization::SoftmaxDeviceOperation::tensor_args_t{
+                    .input_tensor = output_tensor,
+                }
+            );
         }
     }
 
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    auto output_tensor = operation::run(
-                            ttnn::operations::normalization::Softmax{
-                                    head_size,
-                                    in_place,
-                                    memory_config.value_or(input_tensor.memory_config()),
-                                    program_config,
-                                    causal_mask.value(),
-                                    kernel_config_val,
-                                    false},
-                                {input_tensor},
-                                {attention_mask})
-                                .at(0);
-    return output_tensor;
+    return ttnn::prim::softmax(
+        ttnn::operations::normalization::SoftmaxDeviceOperation::operation_attributes_t{
+            .scale = head_size,
+            .inplace = in_place,
+            .memory_config = memory_config.value_or(input_tensor.memory_config()),
+            .program_config = program_config,
+            .is_causal_mask = causal_mask.value(),
+            .compute_kernel_config = kernel_config_val
+        },
+        ttnn::operations::normalization::SoftmaxDeviceOperation::tensor_args_t{
+            .input_tensor = input_tensor,
+            .mask = attention_mask
+        }
+    );
 }
 
 

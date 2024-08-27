@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 
-#include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
+#include "ttnn/operations/normalization/softmax/device/softmax_device_operation.hpp"
 
 namespace ttnn {
 namespace operations::transformer {

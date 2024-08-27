@@ -207,7 +207,7 @@ struct registered_operation_t {
     requires PrimitiveOperationConcept<operation_t>
     auto invoke(uint8_t queue_id, args_t&&... args) const {
         static_assert(requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
-                      "Primitive Operation must implement operator() method to be invoked.");
+                      "Primitive Operation must implement invoke() method to be invoked.");
         ZoneScopedN("Run primitive ttnn operation");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
