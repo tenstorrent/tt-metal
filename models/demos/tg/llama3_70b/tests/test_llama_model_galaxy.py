@@ -206,32 +206,34 @@ def run_test_LlamaModel_inference(
     logger.info(f"Average Top-5 over {len(all_top5)} tokens: {sum(all_top5) / len(all_top5)}")
     # Check kv cache
     # PyTorch output --------------------------------------------------------------------
-    pytorch_layer_present = [
-        pytorch_model.model.layers[0]
-        .attention.cache_k.clone()
-        .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
-        pytorch_model.model.layers[0]
-        .attention.cache_v.clone()
-        .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
-    ]
+    for layer_id in range(n_layers):
+        print(f"Checking KV cache for layer {layer_id}")
+        pytorch_layer_present = [
+            pytorch_model.model.layers[layer_id]
+            .attention.cache_k.clone()
+            .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
+            pytorch_model.model.layers[layer_id]
+            .attention.cache_v.clone()
+            .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
+        ]
 
-    tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
-    tt_layer_present_all = [
-        ttnn.to_torch(
-            lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 0), cluster_shape=cluster_shape)
-        ).transpose(0, 1)[:batch, ...]
-        for lp in tt_layer_present_all
-    ]
+        tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[layer_id].attention.layer_past]
+        tt_layer_present_all = [
+            ttnn.to_torch(
+                lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 0), cluster_shape=cluster_shape)
+            ).transpose(0, 1)[:batch, ...]
+            for lp in tt_layer_present_all
+        ]
 
-    cache_test_pass = check_kv_cache(
-        pytorch_layer_present,
-        tt_layer_present_all,
-        generation_start_pos,
-        generation_length,
-        seq_len,
-        model_config["LLM_MODE"] == "prefill",
-        pcc,
-    )
+        cache_test_pass = check_kv_cache(
+            pytorch_layer_present,
+            tt_layer_present_all,
+            generation_start_pos,
+            generation_length,
+            seq_len,
+            model_config["LLM_MODE"] == "prefill",
+            pcc,
+        )
     all_tests_pass = all_tests_pass and cache_test_pass
     if all_tests_pass:
         logger.info(f"{llama_version} output Passed!")
@@ -254,14 +256,15 @@ def run_test_LlamaModel_inference(
     [
         (0.995, 1),
         (0.993, 2),
+        (0.993, 8),
         (0.99, 80),
     ],
-    ids=("1L", "2L", "80L"),
+    ids=("1L", "2L", "8L", "80L"),
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    [(32, 1)],
-    ids=["decode"],
+    [(32, 1), (1, 256)],
+    ids=["decode", "prefill"],
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",

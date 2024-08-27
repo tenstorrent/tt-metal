@@ -18,12 +18,16 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     precompute_freqs,
     get_rot_transformation_mat,
     num_to_corerange,
+    gather_cos_sin,
     ShardTensor2dMesh,
     ConcatMesh2DToTensor,
 )
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
     tt_all_gather,
+)
+from models.demos.t3000.falcon40b.tt.model_utils import (
+    matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
 )
 
 
@@ -116,7 +120,7 @@ class TtLlamaModel_galaxy:
             packer_l1_acc=False,
         )
         self.COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -128,6 +132,13 @@ class TtLlamaModel_galaxy:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+        if self.model_config["LLM_MODE"] == "prefill":
+            self.LM_HEAD_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
+                (1, 1, 256, 2048),
+                (1, 1, 2048, 16 * 1024),
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
 
     def load_weights(self):
         norm_str = "norm.weight"
@@ -236,9 +247,47 @@ class TtLlamaModel_galaxy:
 
             attn_masks = None
         elif self.model_config["LLM_MODE"] == "prefill":
+            assert seq_len % 128 == 0 and seq_len > 0, "Prefill mode only supports seq_len > 0 and seq_len % 128"
+
             assert xs.shape == (batch, 1, seq_len, self.hidden_size // self.cluster_shape[0])
 
-            rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch)
+            cos_gathered, sin_gathered = gather_cos_sin(
+                torch.arange(start_pos, start_pos + seq_len), self.cos, self.sin
+            )
+
+            cos_gathereds = ttnn.as_tensor(
+                cos_gathered,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"cos_gathered_prefill_galaxy_{start_pos}"),
+                device=self.device_mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            )
+            sin_gathereds = ttnn.as_tensor(
+                sin_gathered,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"sin_gathered_prefill_galaxy_{start_pos}"),
+                device=self.device_mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            )
+
+            rot_mats = [cos_gathereds, sin_gathereds]
+
+            attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
+            attn_mask = torch.triu(attn_mask, diagonal=1)
+            attn_mask = attn_mask.expand(1, batch, -1, -1)
+            attn_masks = ttnn.as_tensor(
+                attn_mask,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
+                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=self.device_mesh,
+            )
 
         return (
             xs,
@@ -257,6 +306,8 @@ class TtLlamaModel_galaxy:
     ) -> ttnn.Tensor:
         if self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
+        elif self.model_config["LLM_MODE"] == "prefill":
+            return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
@@ -266,9 +317,8 @@ class TtLlamaModel_galaxy:
             inp, compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG, dtype=ttnn.bfloat16
         )
 
-        tt_stats = ttnn.reshape(
-            tt_stats, ttnn.Shape((1, 1, 32, 32), (1, 1, 32, 32))
-        )  # TODO: Figure out why we need this
+        padded_shape = (1, 1, inp.shape[-2], 32)
+        tt_stats = ttnn.reshape(tt_stats, ttnn.Shape(padded_shape, padded_shape))  # TODO: Figure out why we need this
         tt_stats = tt_all_gather(
             tt_stats,
             mesh_device=self.mesh_device,
@@ -330,6 +380,48 @@ class TtLlamaModel_galaxy:
             dim=0,
             num_links=2,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+
+        return lm_head_out
+
+    def prefill_forward(
+        self,
+        xs: List[ttnn.Tensor],
+        rot_mats: List[ttnn.Tensor],
+        start_pos: int,
+        attn_masks: List[ttnn.Tensor],
+        user_id: int,
+    ) -> ttnn.Tensor:
+        ### Run all layers
+        for id, layer in enumerate(self.layers):
+            logger.info(f"Start layer: {id}")
+            xs = layer(xs, rot_mats, start_pos, attn_masks, user_id)
+
+        norm_out = self.tt_distributed_rmsnorm(
+            xs,
+            epsilon=self.norm_eps,
+            gamma=self.norm_sharded,
+        )
+
+        ### Each device does an LM head fracture
+        lm_head_out = ttnn.matmul(
+            norm_out,
+            self.lm_head,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.COMPUTE_KERNEL_CONFIG,
+            # program_config=self.LM_HEAD_PROGCFG,
+        )
+
+        norm_out.deallocate(True)
+
+        lm_head_out = tt_all_reduce(
+            lm_head_out,
+            device_mesh=self.device_mesh,
+            cluster_axis=1,
+            dim=0,
+            num_links=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         return lm_head_out

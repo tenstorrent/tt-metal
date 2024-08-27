@@ -288,16 +288,16 @@ class TtLlamaDecoder_galaxy:
         user_id: int,
     ) -> List[ttnn.Tensor]:
         xs_interleaved = ttnn.to_memory_config(xs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
+        logger.info("rms_norm start")
         attn_norm_out = self.tt_distributed_rmsnorm(
             xs_interleaved,
             epsilon=self.norm_eps,
             gamma=self.attn_norm_sharded,
         )
-
+        logger.info("attention start")
         attn_outs = self.attention(attn_norm_out, rot_mats, 0, attn_masks, user_id)
         attn_outs = ttnn.to_memory_config(attn_outs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
+        logger.info("add start")
         output = xs
         output = ttnn.add(
             output,
@@ -308,14 +308,15 @@ class TtLlamaDecoder_galaxy:
         attn_outs.deallocate(True)
 
         output_interleaved = ttnn.to_memory_config(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logger.info("rms_norm start")
         ffn_norm_out = self.tt_distributed_rmsnorm(
             output_interleaved,
             epsilon=self.norm_eps,
             gamma=self.ffn_norm_sharded,
         )
-
+        logger.info("mlp start")
         ffn_out = self.mlp(ffn_norm_out)
-
+        logger.info("add start")
         # residual add
         output = ttnn.add(
             output,
@@ -323,5 +324,5 @@ class TtLlamaDecoder_galaxy:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ffn_out.deallocate(True)
-
+        logger.info("decoder done")
         return output

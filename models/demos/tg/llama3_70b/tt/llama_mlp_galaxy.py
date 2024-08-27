@@ -10,6 +10,9 @@ from ttnn import ReplicateTensorToMesh
 from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh, ConcatMesh2DToTensor
 from models.utility_functions import nearest_32
 from models.demos.tg.llama3_70b.tt.llama_common import tt_all_reduce
+from models.demos.t3000.falcon40b.tt.model_utils import (
+    matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
+)
 
 
 class TtLlamaMLP_galaxy:
@@ -136,6 +139,19 @@ class TtLlamaMLP_galaxy:
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
+            )
+        elif self.model_config["LLM_MODE"] == "prefill":
+            self.FF1_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
+                (1, 1, 256, 2048),
+                (1, 1, 2048, 3584),  # 3.5 *1024 = 3584
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
+            self.FF2_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
+                (1, 1, 256, 3584),
+                (1, 1, 3584, 2048),
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
             )
 
     def load_weights(self):
@@ -279,11 +295,15 @@ class TtLlamaMLP_galaxy:
             x,
             self.w1,
             dtype=ttnn.bfloat16,
+            program_config=self.FF1_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         w3_out = ttnn.matmul(
             x,
             self.w3,
             dtype=ttnn.bfloat16,
+            program_config=self.FF1_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x.deallocate(True)
 
@@ -317,11 +337,9 @@ class TtLlamaMLP_galaxy:
         hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
-            # program_config=self.FF2_DRAM_SHARDED_PROGCFG,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
-            # core_grid=ttnn.CoreGrid(y=1, x=8),
-            # compute_kernel_config=self.COMPUTE_KERNEL_LOFI,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            program_config=self.FF2_PROGCFG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         hidden_states = tt_all_reduce(
@@ -329,7 +347,6 @@ class TtLlamaMLP_galaxy:
             self.mesh_device,
             cluster_axis=0,
             num_links=2,
-            # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
 
         # hidden_states = ttnn.to_memory_config(hidden_states, self.FF1_ACT_MEMCFG)

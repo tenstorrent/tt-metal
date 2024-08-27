@@ -18,6 +18,9 @@ from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
     tt_all_gather,
 )
+from models.demos.t3000.falcon40b.tt.model_utils import (
+    matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
+)
 
 
 class TtLlamaAttention_galaxy:
@@ -192,6 +195,20 @@ class TtLlamaAttention_galaxy:
                 math_approx_mode=False,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
+            )
+
+            self.FUSED_QKV_MM_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
+                (1, 1, 256, 2048),
+                (1, 1, 2048, 1280),
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
+
+            self.SELFOUT_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
+                (1, 1, 256, 1024),
+                (1, 1, 1024, 2048),
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
             )
 
     def init_kv_cache(self):
@@ -524,6 +541,7 @@ class TtLlamaAttention_galaxy:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.COMPUTE_KERNEL_QKV,
+            program_config=self.FUSED_QKV_MM_PROGCFG,
         )
 
         fused_query_key_value = tt_all_reduce(
@@ -649,6 +667,7 @@ class TtLlamaAttention_galaxy:
             self.wo,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
+            program_config=self.SELFOUT_PROGCFG,
         )  # bsz, 1, seqlen, hidden_size
 
         attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, -1))
