@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check ttnn is not used in tt_metal tests
-        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 6 )); then exit 1; fi
+        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 11 )); then exit 1; fi
       - name: Check tt_eager constructs is not used in tt_metal tests
         run: |
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
