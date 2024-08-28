@@ -202,7 +202,7 @@ def test_mixtral_model_with_prefill_perf(
         input_mask_pt,
         prefill_seq_len,
         encoded_prompts,
-    ) = preprocess_inputs_prefill(prompts, tokenizer, model_args, dtype, False, t3k_device_mesh)
+    ) = preprocess_inputs_prefill(prompts, tokenizer, model_args, dtype, 1, False, t3k_device_mesh)
     profiler.end("preprocessing_inputs")
 
     assert (
