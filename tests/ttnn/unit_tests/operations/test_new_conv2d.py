@@ -371,36 +371,12 @@ def test_conv_ws(
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
     conv_bias_shape = [1, 1, 1, output_channels]
+
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
-    # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
-    # torch_input_tensor_nchw =  torch.tensor(range(0, batch_size * input_height * input_width, 1)).reshape([batch_size, 1, input_height, input_width])
-    # torch_input_tensor_nchw = torch.tensor(range(input_channels)).reshape([1, input_channels, 1, 1])
-    # torch_input_tensor_nchw = torch.tensor([-1,0,1,0]*(input_channels//4)).reshape([1, input_channels, 1, 1])
-    # torch_input_tensor_nchw =  torch.tensor([-1,0,1,0]*((batch_size * input_height * input_width)//4)).reshape([batch_size, 1, input_height, input_width])
-
     torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
-
-    # torch_input_tensor_nchw += (
-    #     torch.tensor(range(0, batch_size * input_height * input_width))
-    #     .reshape([batch_size, 1, input_height, input_width])
-    #     .broadcast_to(conv_input_shape)
-    #     .float()
-    # )
-    # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()/128
-    # torch_weight_tensor = (
-    #     torch.tensor(range(input_channels), dtype=torch.bfloat16).reshape(1, input_channels, 1, 1).float()
-    # )
-    # torch_weight_tensor = torch_weight_tensor.broadcast_to(conv_weight_shape).clone()
-    # torch_weight_tensor += (
-    #     torch.tensor(range(0, output_channels, 1), dtype=torch.bfloat16)
-    #     .reshape([output_channels, 1, 1, 1])
-    #     .broadcast_to(conv_weight_shape)
-    #     .float()
-    # )
 
     tt_bias_tensor = None
     torch_bias_tensor = None
