@@ -260,7 +260,6 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
     finished_generation = [False] * batch_size
 
     num_tokens_generated_decode = max_generated_tokens
-    log_total_iterations = max_generated_tokens  # In case all users finish early, for logging purposes
     profiler.start("inference_decode")
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     for iteration in range(max_generated_tokens):
@@ -270,7 +269,8 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
         # Check if all users have finished generating (reached EoS token). If so, stop decoding.
         if all(finished_generation):
             logger.info("All users have finished generating tokens")
-            log_total_iterations = iteration
+            # In case all users finish early, update the real number of generated tokens
+            num_tokens_generated_decode = iteration
             break
 
         iteration_time_start = time()
@@ -388,7 +388,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
     compile_decode_time = profiler.get_duration("compile_decode")
     inference_prefill_time = profiler.get_duration("inference_prefill")
     inference_decode_time = profiler.get_duration("inference_decode")
-    log_printing_time = sum(profiler.get_duration(f"log_printing_{i}") for i in range(log_total_iterations))
+    log_printing_time = sum(profiler.get_duration(f"log_printing_{i}") for i in range(num_tokens_generated_decode))
 
     # Correct the inference decode time to remove the time spent on compile (1st iteration) and log_printing (at the end of every iteration)
     inference_decode_time = inference_decode_time - compile_decode_time - log_printing_time
