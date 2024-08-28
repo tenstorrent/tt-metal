@@ -11,25 +11,37 @@ namespace tt {
 namespace operations {
 namespace primary {
 
+namespace {
 inline void moreh_bmm_validate(const Tensor& input, const Tensor& mat2) {
-    const auto& a_shape = input.get_legacy_shape();
-    const auto& b_shape = mat2.get_legacy_shape();
+    const auto& input_shape = input.get_legacy_shape();
+    const auto& mat2_shape = mat2.get_legacy_shape();
 
-    TT_ASSERT(a_shape[0] == 1, "input must be a 3D tensor");
-    TT_ASSERT(b_shape[0] == 1, "mat2 must be a 3D tensor");
-}
-
-Tensor moreh_bmm_(const Tensor& input, const Tensor& mat2, const MemoryConfig& mem_config) {
-    moreh_bmm_validate(input, mat2);
-    return moreh_matmul(input, mat2, false, false, std::nullopt, std::nullopt, mem_config);
-}
-
-Tensor moreh_bmm(const Tensor& input, const Tensor& mat2, const MemoryConfig& output_mem_config) {
     TT_ASSERT(
         input.storage_type() == StorageType::DEVICE && mat2.storage_type() == StorageType::DEVICE,
         "input tensors need to be on device");
+    TT_ASSERT(input_shape.rank() == 3, "input must be a 3D tensor");
+    TT_ASSERT(mat2_shape.rank() == 3, "mat2 must be a 3D tensor");
+}
 
-    return moreh_bmm_(input, mat2, output_mem_config);
+Tensor moreh_bmm_(
+    const Tensor& input,
+    const Tensor& mat2,
+    const std::optional<const Tensor>& output,
+    const MemoryConfig& mem_config,
+    const std::optional<const DeviceComputeKernelConfig> &compute_kernel_config) {
+    moreh_bmm_validate(input, mat2);
+    return moreh_matmul(input, mat2, false, false, output, std::nullopt, mem_config, compute_kernel_config);
+}
+}  // namespace
+
+Tensor moreh_bmm(
+    const Tensor& input,
+    const Tensor& mat2,
+    const std::optional<const Tensor> output,
+    const MemoryConfig& output_mem_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+
+    return moreh_bmm_(input, mat2, output, output_mem_config, compute_kernel_config);
 }
 
 }  // namespace primary
