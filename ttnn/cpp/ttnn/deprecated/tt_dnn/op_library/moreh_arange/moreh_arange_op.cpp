@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks moreh_arange_(
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(core_range, units_to_divide);
+        split_work_to_cores(core_range, units_to_divide);
 
     auto element_size = output.element_size();
 

@@ -227,15 +227,6 @@ void TensorModule(py::module& m_tensor) {
             "Returns a CoreRange i.e. bounding box covering all the core ranges in the CoreRangeSet")
         .def("num_cores", &CoreRangeSet::num_cores, "Returns total number of cores in the CoreRangeSet");
 
-    m_tensor.def(
-        "num_cores_to_core_range_set",
-        &ttnn::operations::core::work_split::num_cores_to_core_range_set,
-        py::arg().noconvert(),
-        py::arg().noconvert(),
-        py::arg("row_wise").noconvert() = false,
-        R"doc(
-            Returns a CoreRangeSet from number of cores
-        )doc");
 
     auto pyShardSpec = static_cast<py::class_<ShardSpec>>(m_tensor.attr("ShardSpec"));
     pyShardSpec

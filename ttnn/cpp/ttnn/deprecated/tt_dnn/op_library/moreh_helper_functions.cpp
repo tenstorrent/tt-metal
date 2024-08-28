@@ -50,7 +50,7 @@ std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     return std::make_tuple(new_all_cores, new_core_group_1, new_core_group_2);
 }
 
-std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> tt::tt_metal::split_work_to_cores(
+std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     CoreRange core_range, uint32_t units_to_divide) {
     uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
@@ -61,7 +61,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
          core_group_1_t,
          core_group_2_t,
          num_tiles_per_core_group_1,
-         num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, units_to_divide);
+         num_tiles_per_core_group_2] = split_work_to_cores(grid_size, units_to_divide);
 
     auto core_x_offset = core_range.start_coord.x;
     auto core_y_offset = core_range.start_coord.y;
