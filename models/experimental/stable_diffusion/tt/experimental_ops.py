@@ -99,7 +99,7 @@ def parse_conv2d_interface(conv_weight=None, conv_bias=None, in_channels=-1, out
 def Conv2d(*args, **kwargs):
     if UseDeviceConv.READY:
         conv1_weight, conv1_bias, conv1_params = parse_conv2d_interface(*args, **kwargs)
-        device = ttnn.experimental.device.GetDefaultDevice()
+        device = ttnn.GetDefaultDevice()
         return run_conv_on_device_wrapper(
             conv1_weight.reshape(-1).tolist(),
             conv1_params,
@@ -112,7 +112,7 @@ def Conv2d(*args, **kwargs):
 
 
 def concat(tensors, dim=0):
-    device = ttnn.experimental.device.GetDefaultDevice()
+    device = ttnn.GetDefaultDevice()
     new_tensors = []
     for t in tensors:
         if torch.is_tensor(t):

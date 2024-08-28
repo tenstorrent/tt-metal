@@ -75,7 +75,7 @@ def device_mesh_fixture():
 
     print("ALL GATHER: Closing device mesh")
     for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)
     ttnn.close_device_mesh(device_mesh)
     del device_mesh
 

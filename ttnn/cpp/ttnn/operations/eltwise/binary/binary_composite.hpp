@@ -93,7 +93,7 @@ struct ExecuteBinaryCompositeOpsDiv
     }
 };
 
-template <BinaryOpType binary_op_type, bool in_place>
+template <BinaryOpType binary_op_type>
 struct ExecuteBiasGelu {
     static Tensor invoke(
         uint8_t queue_id,
@@ -105,7 +105,7 @@ struct ExecuteBiasGelu {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
 
-            return BinaryOperation<binary_op_type, in_place>::invoke(
+            return BinaryOperation<binary_op_type>::invoke(
                 queue_id, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
     }
 
@@ -118,7 +118,7 @@ struct ExecuteBiasGelu {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
 
-            return BinaryOperation<binary_op_type, in_place>::invoke(
+            return BinaryOperation<binary_op_type>::invoke(
                 DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
     }
 
@@ -238,7 +238,7 @@ constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR_>>();
 constexpr auto bias_gelu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::bias_gelu",
-    operations::binary::ExecuteBiasGelu<operations::binary::BinaryOpType::BIAS_GELU, false>>();
+    operations::binary::ExecuteBiasGelu<operations::binary::BinaryOpType::BIAS_GELU>>();
 constexpr auto scatter = ttnn::register_operation_with_auto_launch_op<
     "ttnn::scatter",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::SCATTER>>();
