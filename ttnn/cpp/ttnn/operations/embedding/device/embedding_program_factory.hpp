@@ -72,7 +72,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, problem_size);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, problem_size);
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
 
@@ -327,7 +327,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, problem_size);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, problem_size);
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
 
