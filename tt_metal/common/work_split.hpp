@@ -13,9 +13,7 @@
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/host_api.hpp"
 
-namespace ttnn {
-
-namespace operations::core::work_split {
+namespace tt::tt_metal{
 inline uint32_t merge_num_sticks_to_read(uint32_t num_sticks_to_read, uint32_t stick_size_bytes, uint32_t max_read_size) {
     uint32_t total_bytes = num_sticks_to_read * stick_size_bytes;
     uint32_t new_num_sticks_to_read = num_sticks_to_read;
@@ -238,8 +236,4 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
         target_num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2);
 }
 
-}
-
-using namespace operations::core::work_split;
-
-}  // namespace ttnn
+} // namespace tt::tt_metal
