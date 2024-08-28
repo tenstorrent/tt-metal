@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-
+import tt_lib
 import ttnn
 from loguru import logger
 from models.utility_functions import nearest_32, pad_by_zero
