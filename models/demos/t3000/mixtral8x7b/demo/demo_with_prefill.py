@@ -498,10 +498,10 @@ def test_mixtral8x7b_demo(
     t3k_device_mesh, use_program_cache, input_prompts, instruct_weights, max_prefill_len, is_ci_env
 ):
     if is_ci_env and instruct_weights == False:
-        pytest.skip("CI demo test only runs instruct weights with max prefill length of 16k to reduce CI pipeline load")
+        pytest.skip("CI demo test only runs instruct weights with max prefill length of 32k to reduce CI pipeline load")
 
-    if is_ci_env and max_prefill_len != 16 * 1024 and max_prefill_len != 128:
-        pytest.skip("CI demo test only runs instruct weights with max prefill length of 16k to reduce CI pipeline load")
+    if is_ci_env and max_prefill_len != 32 * 1024 and max_prefill_len != 128:
+        pytest.skip("CI demo test only runs instruct weights with max prefill length of 32k to reduce CI pipeline load")
 
     # Adjust the batch size based on the max prefill length
     if max_prefill_len >= 16 * 1024:
