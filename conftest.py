@@ -47,10 +47,10 @@ def is_ci_env():
 
 @pytest.fixture(scope="function")
 def is_single_card_n300(device):
-    import tt_lib as ttl
+    import ttnn
 
-    num_pcie = ttl.device.GetNumPCIeDevices()
-    num_devices = ttl.device.GetNumAvailableDevices()
+    num_pcie = ttnn.GetNumPCIeDevices()
+    num_devices = ttnn.GetNumAvailableDevices()
     # N150 has 1 chip; N300 has 2 chips (1 pcie); T3000 has 8 chips (4 pcie)
     return num_pcie == 1 and num_devices == 2 and device.arch().name == "WORMHOLE_B0"
 
@@ -94,12 +94,12 @@ def get_tt_cache_path():
 
 
 def get_dispatch_core_type():
-    import tt_lib as ttl
+    import ttnn
 
     # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
-    dispatch_core_type = ttl.device.DispatchCoreType.WORKER
+    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
     if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
-        dispatch_core_type = ttl.device.DispatchCoreType.ETH
+        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
     return dispatch_core_type
 
 
@@ -110,60 +110,60 @@ def device_params(request):
 
 @pytest.fixture(scope="function")
 def device(request, device_params):
-    import tt_lib as ttl
+    import ttnn
 
     device_id = request.config.getoption("device_id")
-    request.node.pci_ids = [ttl.device.GetPCIeDeviceID(device_id)]
+    request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
 
-    num_devices = ttl.device.GetNumPCIeDevices()
+    num_devices = ttnn.GetNumPCIeDevices()
     assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
-    device = ttl.device.CreateDevice(device_id=device_id, dispatch_core_type=get_dispatch_core_type(), **device_params)
-    ttl.device.SetDefaultDevice(device)
+    device = ttnn.CreateDevice(device_id=device_id, dispatch_core_type=get_dispatch_core_type(), **device_params)
+    ttnn.SetDefaultDevice(device)
 
     yield device
 
-    ttl.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
-    ttl.device.Synchronize(device)
-    ttl.device.CloseDevice(device)
+    ttnn.synchronize_device(device)
+    ttnn.close_device(device)
 
 
 @pytest.fixture(scope="function")
 def pcie_devices(request, device_params):
-    import tt_lib as ttl
+    import ttnn
 
-    num_devices = ttl.device.GetNumPCIeDevices()
+    num_devices = ttnn.GetNumPCIeDevices()
     device_ids = [i for i in range(num_devices)]
     request.node.pci_ids = device_ids
 
     # Get only physical devices
-    devices = ttl.device.CreateDevices(device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params)
+    devices = ttnn.CreateDevices(device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params)
 
     yield [devices[i] for i in range(num_devices)]
 
     for device in devices.values():
-        ttl.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
-    ttl.device.CloseDevices(devices)
+    ttnn.CloseDevices(devices)
 
 
 @pytest.fixture(scope="function")
 def all_devices(request, device_params):
-    import tt_lib as ttl
+    import ttnn
 
-    num_devices = ttl.device.GetNumAvailableDevices()
+    num_devices = ttnn.GetNumAvailableDevices()
     device_ids = [i for i in range(num_devices)]
-    request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids]
+    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
 
     # Get only physical devices
-    devices = ttl.device.CreateDevices(device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params)
+    devices = ttnn.CreateDevices(device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params)
 
     yield [devices[i] for i in range(num_devices)]
 
     for device in devices.values():
-        ttl.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
-    ttl.device.CloseDevices(devices)
+    ttnn.CloseDevices(devices)
 
 
 @pytest.fixture(scope="function")
@@ -185,7 +185,6 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
         device_mesh: Initialized device mesh object.
     """
     import ttnn
-    import tt_lib as ttl
 
     device_ids = ttnn.get_device_ids()
 
@@ -206,7 +205,7 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
         num_devices_requested = min(param, len(device_ids))
         device_grid = ttnn.DeviceGrid(1, num_devices_requested)
 
-    request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
+    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
     device_mesh = ttnn.open_device_mesh(
         device_grid, device_ids[:num_devices_requested], dispatch_core_type=get_dispatch_core_type(), **device_params
@@ -216,7 +215,7 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     yield device_mesh
 
     for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_device_mesh(device_mesh)
     del device_mesh
@@ -225,7 +224,6 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
 @pytest.fixture(scope="function")
 def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
-    import tt_lib as ttl
 
     device_ids = ttnn.get_pcie_device_ids()
     try:
@@ -246,7 +244,7 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     yield device_mesh
 
     for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_device_mesh(device_mesh)
     del device_mesh
@@ -255,7 +253,6 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 @pytest.fixture(scope="function")
 def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
-    import tt_lib as ttl
 
     if ttnn.get_num_devices() < 8:
         pytest.skip()
@@ -265,7 +262,7 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     except (ValueError, AttributeError):
         num_devices_requested = len(device_ids)
 
-    request.node.pci_ids = [ttl.device.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
+    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
     device_mesh = ttnn.open_device_mesh(
         ttnn.DeviceGrid(1, num_devices_requested),
@@ -278,7 +275,7 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     yield device_mesh
 
     for device in device_mesh.get_devices():
-        ttl.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_device_mesh(device_mesh)
     del device_mesh
@@ -287,18 +284,18 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 @pytest.fixture()
 def clear_compile_cache():
     yield
-    import tt_lib as ttl
+    import ttnn
 
-    ttl.device.DisablePersistentKernelCache()
+    ttnn.device.DisablePersistentKernelCache()
 
 
 @pytest.fixture(autouse=True)
 def reset_default_device():
-    import tt_lib as ttl
+    import ttnn
 
-    device = ttl.device.GetDefaultDevice()
+    device = ttnn.GetDefaultDevice()
     yield
-    ttl.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
 
 
 def get_devices(request):

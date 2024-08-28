@@ -6,6 +6,7 @@
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"

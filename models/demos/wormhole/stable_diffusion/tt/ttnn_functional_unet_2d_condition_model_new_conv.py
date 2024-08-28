@@ -429,7 +429,7 @@ class UNet2DConditionModel:
         down_block_res_samples = (sample_copied_to_dram,)
         output_channel = block_out_channels[0]
         for i, (down_block_type, down_block) in enumerate(zip(self.down_block_types, self.down_blocks)):
-            ttnn.experimental.device.DumpDeviceProfiler(self.device)
+            ttnn.DumpDeviceProfiler(self.device)
             logger.info(f"Down block {i}")
             input_channel = output_channel
             output_channel = block_out_channels[i]
@@ -514,7 +514,7 @@ class UNet2DConditionModel:
         only_cross_attention = list(reversed(only_cross_attention))
         output_channel = reversed_block_out_channels[0]
         for i, (up_block_type, up_block) in enumerate(zip(self.up_block_types, self.up_blocks)):
-            ttnn.experimental.device.DumpDeviceProfiler(self.device)
+            ttnn.DumpDeviceProfiler(self.device)
             logger.info(f"Up block {i}")
             is_final_block = i == len(block_out_channels) - 1
 

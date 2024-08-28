@@ -153,6 +153,16 @@ from ttnn.device import (
     manage_device,
     synchronize_device,
     dump_device_memory_state,
+    GetPCIeDeviceID,
+    GetNumPCIeDevices,
+    GetNumAvailableDevices,
+    CreateDevice,
+    CreateDevices,
+    CloseDevice,
+    CloseDevices,
+    SetDefaultDevice,
+    GetDefaultDevice,
+    DumpDeviceProfiler,
 )
 
 from ttnn.multi_device import (
@@ -202,15 +212,16 @@ release_trace = ttnn._ttnn.operations.core.release_trace
 
 
 from ttnn.decorators import (
-    register_python_operation,
-    register_cpp_operation,
     attach_golden_function,
-    query_registered_operations,
+    create_module_if_not_exists,
     dump_operations,
-    register_pre_operation_hook,
-    register_post_operation_hook,
     get_golden_function,
     get_fallback_function,
+    query_registered_operations,
+    register_cpp_operation,
+    register_post_operation_hook,
+    register_pre_operation_hook,
+    register_python_operation,
 )
 
 
@@ -218,7 +229,10 @@ def auto_register_ttnn_cpp_operations(module):
     for attribute_name in dir(module):
         attribute = getattr(module, attribute_name)
         if hasattr(attribute, "__ttnn_operation__") and attribute.__ttnn_operation__ is None:
-            setattr(module, attribute_name, ttnn.register_cpp_operation()(attribute))
+            full_name = attribute.python_fully_qualified_name
+            module_path, _, func_name = full_name.rpartition(".")
+            target_module = create_module_if_not_exists(module_path)
+            register_cpp_operation(target_module, func_name, attribute)
         elif isinstance(attribute, ModuleType):
             auto_register_ttnn_cpp_operations(attribute)
 
@@ -285,7 +299,7 @@ from ttnn.operations.reduction import (
 )
 
 from ttnn.operations.conv2d import Conv2d, Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config
-from ttnn.operations.pool import TTPyMaxPool, max_pool2d, max_pool2d_legacy, MaxPool2d, global_avg_pool2d, avg_pool2d
+from ttnn.operations.pool import TTPyMaxPool, max_pool2d, max_pool2d_legacy, MaxPool2d, avg_pool2d
 from ttnn.operations.conv1d import Conv1d, Conv1dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig

@@ -5,7 +5,6 @@
 from typing import Union
 import time
 import ttnn
-from ttnn import ConcatMeshToTensor
 import torch
 import numpy as np
 from loguru import logger
@@ -132,42 +131,42 @@ def enable_persistent_kernel_cache():
     logger.warning(
         "Persistent kernel cache is enabled. Cache invalidation may fail after a rebase and may require deleting the built directory."
     )
-    ttnn.experimental.device.EnablePersistentKernelCache()
+    ttnn.device.EnablePersistentKernelCache()
 
 
 def disable_persistent_kernel_cache():
     """
     Disables persistent compiled kernel caching. This is the default state.
     """
-    ttnn.experimental.device.DisablePersistentKernelCache()
+    ttnn.device.DisablePersistentKernelCache()
 
 
 def enable_compilation_reports():
     """
     Enables generating reports of compilation statistics in .reports/tt_metal dir
     """
-    return ttnn.experimental.device.EnableCompilationReports()
+    return ttnn.device.EnableCompilationReports()
 
 
 def disable_compilation_reports():
     """
     Disables generating reports of compilation statistics
     """
-    return ttnn.experimental.device.DisableCompilationReports()
+    return ttnn.device.DisableCompilationReports()
 
 
 def enable_memory_reports():
     """
     Enables generating reports of memory allocation statistics in .reports/tt_metal dir
     """
-    return ttnn.experimental.device.EnableMemoryReports()
+    return ttnn.device.EnableMemoryReports()
 
 
 def disable_memory_reports():
     """
     Disables generating reports of memory allocation statistics
     """
-    return ttnn.experimental.device.DisableMemoryReports()
+    return ttnn.device.DisableMemoryReports()
 
 
 ### Tensor conversion ###
@@ -205,12 +204,14 @@ def tt_tensors_to_torch_tensors(
     if tt_tensors_device.layout == ttnn.TILE_LAYOUT:
         # Convert to bfloat16 to ensure untilize works
         if tt_tensors_device.dtype != ttnn.bfloat16:
-            tt_tensors_device = ttnn.clone(tt_tensors_device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            tt_tensors_device = ttnn.clone(
+                tt_tensors_device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         # Untilize using singlecore since multicore version runs out of l1 memory (Issue #9022)
         tt_tensors_device = ttnn.untilize(tt_tensors_device, use_multicore=False)
 
     tt_tensors_device = ttnn.to_torch(
-        tt_tensors_device, mesh_composer=ConcatMeshToTensor(device_mesh, dim=concat_dim), device=device_mesh
+        tt_tensors_device, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=concat_dim), device=device_mesh
     )
 
     return tt_tensors_device

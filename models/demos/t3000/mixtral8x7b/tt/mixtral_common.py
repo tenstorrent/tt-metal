@@ -294,6 +294,7 @@ def get_single_rot_mat_torch(dhead, start_pos=0, theta: float = 1000000.0):
     current_rot_mat[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
 
     return current_rot_mat.unsqueeze(0).unsqueeze(0).transpose(-1, -2), rot_matrix.unsqueeze(0).unsqueeze(0)
+    return current_rot_mat.unsqueeze(0).unsqueeze(0).transpose(-1, -2), rot_matrix.unsqueeze(0).unsqueeze(0)
 
 
 def get_single_rot_mat(dhead, device_mesh, start_pos=0, theta: float = 1000000.0):

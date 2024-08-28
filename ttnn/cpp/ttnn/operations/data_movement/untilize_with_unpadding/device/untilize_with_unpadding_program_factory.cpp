@@ -8,7 +8,7 @@
 
 #include "tt_dnn/op_library/cb_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
-#include "tt_dnn/op_library/work_split_tilize.hpp"
+#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -222,7 +222,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t num_tiles_per_row = a.get_legacy_shape()[-1] / TILE_WIDTH;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        split_blocks_for_tilize(grid_size, num_blocks);
+        ttnn::split_blocks_for_tilize(grid_size, num_blocks);
 
     bool has_cliff = core_range_cliff.size() > 0;
 
@@ -302,7 +302,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         {{0, input_w - output_w}, {0, input_z - output_z}, {0, input_y - output_y}, {0, input_x - output_x}},
         Padding::PadValue::Any);
     auto core_assignments =
-        distribute_work(output_shape, padding, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff);
+        ttnn::distribute_work(output_shape, padding, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff);
 
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;

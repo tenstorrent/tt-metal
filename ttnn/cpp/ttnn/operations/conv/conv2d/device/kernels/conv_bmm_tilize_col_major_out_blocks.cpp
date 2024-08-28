@@ -173,8 +173,8 @@ void MAIN {
                     }
                     #endif
                     #ifdef PACKER_L1_ACC
-                        pack_reconfig_l1_acc(0);
                         pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
+                        pack_reconfig_l1_acc(0);
                     #endif
 
                     unpack_reconfig_data_format_srca(in1_cb_id, in0_cb_id);
@@ -335,10 +335,10 @@ void MAIN {
             // if last block we pack the final result with relu enabled
             PACK(( llk_pack_relu_config(ReluType::ZERO_RELU) ));
             #endif
+            pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
             #ifdef PACKER_L1_ACC
             pack_reconfig_l1_acc(0);
             #endif
-            pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
             unpack_reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
             add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
 
@@ -381,8 +381,8 @@ void MAIN {
             #endif
             if constexpr(untilize_out) {
                 #if defined PACKER_L1_ACC and not defined FUSE_BIAS
-                pack_reconfig_l1_acc(0);
                 pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
+                pack_reconfig_l1_acc(0);
                 #endif
                 #ifdef PACK_RELU
                 PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));

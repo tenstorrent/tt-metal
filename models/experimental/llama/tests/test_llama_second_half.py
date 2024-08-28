@@ -34,7 +34,7 @@ def tt_llama_second_half_decoders(
     position_ids_padded = gen_position_ids(inputs)
 
     device = ttnn.open_device(0)
-    ttnn.experimental.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
     tt_inputs = torch_to_tt_tensor_rm(inputs, device)
 
     logger.debug(f"The call of the second half started")

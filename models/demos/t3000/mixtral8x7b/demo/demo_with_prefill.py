@@ -430,7 +430,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
     logger.info(f"Decode compile time: {round(measurements['compile_decode'], 4)}s")
     logger.info(f"Prefill inference time per user: {round(measurements['inference_prefill']/(batch_size-1), 4)}s")
     logger.info(
-        f"Total Decode inference time ({max_generated_tokens-1} iterations): {round(measurements['inference_decode'], 4)}s"
+        f"Total Decode inference time ({num_tokens_generated_decode-1} iterations): {round(measurements['inference_decode'], 4)}s"
     )
     logger.info("---")
     logger.info(f"Time to first token: {round(measurements['prefill_time_to_token'], 4) * 1000}ms")

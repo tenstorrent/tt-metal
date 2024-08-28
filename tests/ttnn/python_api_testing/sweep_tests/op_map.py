@@ -1038,4 +1038,8 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_ceil,
         "pytorch_op": pytorch_ops.ceil,
     },
+    "argmax": {
+        "tt_op": ttnn_ops.argmax,
+        "pytorch_op": pytorch_ops.argmax,
+    },
 }

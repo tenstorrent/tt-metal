@@ -76,10 +76,9 @@ constexpr bool cb_init_write = false;
 using namespace ckernel;
 
 int main(int argc, char *argv[]) {
+    conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
     DEBUG_STATUS("I");
-
-    disable_lowcache();
 
     uint tt_l1_ptr *local_l1_start_addr =
         (uint tt_l1_ptr *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
@@ -114,10 +113,6 @@ int main(int argc, char *argv[]) {
         uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
             mailboxes->launch.kernel_config.cb_offset);
         setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch.kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
-#if defined(UCK_CHLKC_UNPACK)
-        // Hack workaround for issue #11591
-        for (volatile uint32_t xxx = 0; xxx < 100; xxx++);
-#endif
 #endif
 
         rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +

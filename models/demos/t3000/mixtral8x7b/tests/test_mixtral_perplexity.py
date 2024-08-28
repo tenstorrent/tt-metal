@@ -142,8 +142,6 @@ def run_test_perplexity(
         model_args,
         current_rot_mat,
         rot_matrix,
-        generation_start_pos,
-        max_seq_len,
         dtype,
     )
 
