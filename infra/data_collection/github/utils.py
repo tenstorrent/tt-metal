@@ -59,6 +59,7 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
 
     jobs = github_jobs_json["jobs"]
     jobs_start_times = list(map(lambda job_: get_datetime_from_github_datetime(job_["started_at"]), jobs))
+    # We filter out jobs that started before because that means they're from a previous attempt for that pipeline
     eligible_jobs_start_times = list(
         filter(
             lambda job_start_time_: job_start_time_ >= get_datetime_from_github_datetime(pipeline_submission_ts),
