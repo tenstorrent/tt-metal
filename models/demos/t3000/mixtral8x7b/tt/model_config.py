@@ -23,7 +23,7 @@ class TtModelArgs:
     vocab_size = 32000
 
     max_batch_size = 32  # default
-    max_seq_len = 8192 * 2  # default
+    max_seq_len = 16384  # default
     moe = True
     num_experts = 8
     num_experts_per_tok = 2

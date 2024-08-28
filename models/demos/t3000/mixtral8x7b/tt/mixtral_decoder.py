@@ -43,9 +43,9 @@ class TtTransformerBlock(LightweightModule):
                 args=args,
                 layer_num=layer_num,
                 dtypes={
-                    "w1": ttnn.bfloat4_b,
+                    "w1": ttnn.bfloat8_b,
                     "w2": ttnn.bfloat8_b,
-                    "w3": ttnn.bfloat4_b,
+                    "w3": ttnn.bfloat8_b,
                 },
             ),
             args=args,

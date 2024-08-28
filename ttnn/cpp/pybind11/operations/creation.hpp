@@ -161,7 +161,7 @@ void bind_full_like_operation_with_hard_coded_value(py::module& module, const cr
 template <typename creation_operation_t>
 void bind_arange_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(start: int = 0, stop: int, step: int = 1, dtype: ttnn.DataType = ttnn.bfloat16, device: ttnn.Device = None, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG)doc",
+        R"doc({0}(start: int = 0, end: int, step: int = 1, dtype: ttnn.DataType = ttnn.bfloat16, device: ttnn.Device = None, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG)doc",
         operation.base_name());
 
     bind_registered_operation(
@@ -170,27 +170,16 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
         doc,
         ttnn::pybind_overload_t{
             [](const creation_operation_t& self,
-               const int64_t stop,
-               const DataType dtype,
-               const std::optional<std::reference_wrapper<Device>>& device,
-               const MemoryConfig& memory_config) -> ttnn::Tensor { return self(stop, dtype, device, memory_config); },
-            py::arg("stop"),
-            py::arg("dtype") = ttnn::bfloat16,
-            py::arg("device") = std::nullopt,
-            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG}  // namespace detail
-        ,
-        ttnn::pybind_overload_t{
-            [](const creation_operation_t& self,
                const int64_t start,
-               const int64_t stop,
+               const int64_t end,
                const int64_t step,
                const DataType dtype,
                const std::optional<std::reference_wrapper<Device>>& device,
                const MemoryConfig& memory_config) -> ttnn::Tensor {
-                return self(start, stop, step, dtype, device, memory_config);
+                return self(start, end, step, dtype, device, memory_config);
             },
-            py::arg("start"),
-            py::arg("stop"),
+            py::arg("start") = 0,
+            py::arg("end"),
             py::arg("step") = 1,
             py::arg("dtype") = ttnn::bfloat16,
             py::arg("device") = std::nullopt,

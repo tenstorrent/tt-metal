@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -11,7 +10,6 @@
 
 #include "tt_stl/reflection.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 

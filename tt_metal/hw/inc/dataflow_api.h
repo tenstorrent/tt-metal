@@ -408,6 +408,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
     int32_t free_space_pages;
     DEBUG_STATUS("CRBW");
     do {
+        invalidate_l1_cache();
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
         uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
@@ -455,6 +456,7 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 
     DEBUG_STATUS("CWFW");
     do {
+        invalidate_l1_cache();
         pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     } while (pages_received < num_pages);
     DEBUG_STATUS("CWFD");
@@ -1375,8 +1377,10 @@ void noc_async_write_multicast_loopback_src(
 FORCE_INLINE
 void noc_async_read_barrier() {
     DEBUG_STATUS("NRBW");
-    while (!ncrisc_noc_reads_flushed(noc_index))
-        ;
+    // BH cache is write-through so reader must invalidate if reading any address that was previously read
+    do {
+        invalidate_l1_cache();
+    } while (!ncrisc_noc_reads_flushed(noc_index));
     DEBUG_STATUS("NRBD");
 }
 
@@ -1441,8 +1445,9 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
 FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     DEBUG_STATUS("NSW");
-    while ((*sem_addr) != val)
-        ;
+    do {
+        invalidate_l1_cache();
+    } while ((*sem_addr) != val);
     DEBUG_STATUS("NSD");
 }
 
@@ -1462,8 +1467,9 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 FORCE_INLINE
 void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     DEBUG_STATUS("NSMW");
-    while ((*sem_addr) < val)
-        ;
+    do {
+        invalidate_l1_cache();
+    } while ((*sem_addr) < val);
     DEBUG_STATUS("NSMD");
 }
 
@@ -1554,6 +1560,7 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index)
 }
 
 inline void RISC_POST_HEARTBEAT(uint32_t &heartbeat) {
+  invalidate_l1_cache();
   volatile uint32_t* ptr = (volatile uint32_t*)(0x1C);
   heartbeat++;
   ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
@@ -1624,8 +1631,9 @@ FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid) {
     DEBUG_STATUS("NBTW");
     #ifndef ARCH_GRAYSKULL
-    while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid))
-        ;
+    do {
+        invalidate_l1_cache();
+    } while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid));
     #endif
     DEBUG_STATUS("NBTD");
 }

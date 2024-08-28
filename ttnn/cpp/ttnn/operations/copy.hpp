@@ -8,7 +8,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -33,9 +33,7 @@ inline Tensor copy_impl(
                                                                           // DST directly, fp32 is converted to fp16b
 
     auto output_memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config.value_or(input_tensor.memory_config());
-    return operation::run(
-               ttnn::operations::unary::Unary{op_chain, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, output_dtype},
-               {input_tensor}, {}, {optional_output_tensor}, queue_id).at(0);
+    return prim::unary(queue_id, input_tensor, op_chain, output_dtype, output_memory_config, fp32_dest_acc_en, preserve_fp32_precision, optional_output_tensor);
 }
 }  // namespace detail
 
