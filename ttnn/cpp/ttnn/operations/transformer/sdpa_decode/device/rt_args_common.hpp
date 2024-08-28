@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "tt_metal/common/constants.hpp"
 #include <tuple>
 uint32_t nearest_n(uint32_t x, uint32_t n) {
