@@ -5,7 +5,7 @@
 #include "hc_sum_reduce_program_factory.hpp"
 
 #include "ttnn/common/constants.hpp"
-#include "ttnn/cpp/ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace ttnn::operations::experimental::ssm::detail {
 
@@ -32,7 +32,7 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     const bool row_major = false;
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
-            ttnn::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total, row_major);
+            split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total, row_major);
 
     const auto create_circular_buffer = [&program, &cores = all_cores](
                                             uint32_t index,

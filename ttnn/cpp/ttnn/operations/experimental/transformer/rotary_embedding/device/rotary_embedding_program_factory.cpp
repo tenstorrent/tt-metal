@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_program_factory.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 // We pull RotaryEmbedding from it to get token_idx from an operation
 // this is a circulas dependency and should be fixed
@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         row_major = true;
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2) =
-            ttnn::split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
+            split_work_to_cores(compute_with_storage_grid_size, num_rows, row_major);
         num_input_tiles = 2 * Wt;
         num_output_tiles = num_input_tiles;
     }

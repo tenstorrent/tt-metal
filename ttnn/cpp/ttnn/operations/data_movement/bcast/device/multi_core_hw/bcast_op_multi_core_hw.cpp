@@ -5,7 +5,7 @@
 #include "impl/buffers/buffer.hpp"
 
 #include "ttnn/cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = ttnn::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
     auto src0_buffer = a.buffer();
     auto src1_buffer = b.buffer();
@@ -258,7 +258,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 
         uint32_t bnc1 = (bN*bC == 1);
 
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = ttnn::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
         if (shard_spec.has_value()) {
             uint32_t num_tiles_per_shard = 0;

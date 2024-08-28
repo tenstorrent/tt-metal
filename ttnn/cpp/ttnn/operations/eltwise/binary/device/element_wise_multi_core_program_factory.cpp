@@ -7,7 +7,7 @@
 #include "binary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -82,7 +82,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         core_group_2 = CoreRangeSet({});
         num_tiles_per_core_group_1 = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
         num_tiles_per_core_group_2 = 0;
-        block_size_per_core_group_1 = ttnn::find_max_block_size(num_tiles_per_core_group_1);
+        block_size_per_core_group_1 = find_max_block_size(num_tiles_per_core_group_1);
         max_block_size = block_size_per_core_group_1;
 
         block_cnt_per_core_group_1 = num_tiles_per_core_group_1 / block_size_per_core_group_1;
@@ -104,7 +104,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         row_major = true;
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
-            ttnn::split_work_to_cores(compute_with_storage_grid_size, num_tiles, row_major);
+            split_work_to_cores(compute_with_storage_grid_size, num_tiles, row_major);
         block_cnt_per_core_group_1 = num_tiles_per_core_group_1;
         block_cnt_per_core_group_2 = num_tiles_per_core_group_2;
         cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
@@ -307,7 +307,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     uint32_t max_block_size = 1, num_tiles_per_shard = 0;
     if (shard_spec.has_value()) {
         num_tiles_per_shard = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
-        max_block_size = ttnn::find_max_block_size(num_tiles_per_shard);
+        max_block_size = find_max_block_size(num_tiles_per_shard);
     }
 
     tt_metal::Buffer* dst_buffer = output.buffer();

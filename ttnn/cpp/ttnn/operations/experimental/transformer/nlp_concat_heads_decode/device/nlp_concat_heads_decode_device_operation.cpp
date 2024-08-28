@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_concat_heads_decode_device_operation.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -61,7 +61,7 @@ std::vector<Tensor> NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(c
     auto batch = output_shape[2];
 
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-    auto shard_grid = ttnn::num_cores_to_corerange_set(num_heads, core_grid, true);
+    auto shard_grid = num_cores_to_corerange_set(num_heads, core_grid, true);
     ShardSpec shard_spec{shard_grid, {batch, head_dim}};
     auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1};
     mem_config.shard_spec = shard_spec;

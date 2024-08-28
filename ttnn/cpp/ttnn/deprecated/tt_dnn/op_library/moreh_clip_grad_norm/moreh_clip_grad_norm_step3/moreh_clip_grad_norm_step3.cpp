@@ -12,7 +12,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -47,7 +47,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(
          core_group_1,
          core_group_2,
          num_inputs_per_core_group_1,
-         num_inputs_per_core_group_2] = ttnn::split_work_to_cores(grid, num_inputs);
+         num_inputs_per_core_group_2] = split_work_to_cores(grid, num_inputs);
     TT_ASSERT(core_group_2.ranges().empty());
     TT_ASSERT(num_inputs_per_core_group_1 == 1);
     TT_ASSERT(num_inputs_per_core_group_2 == 0);

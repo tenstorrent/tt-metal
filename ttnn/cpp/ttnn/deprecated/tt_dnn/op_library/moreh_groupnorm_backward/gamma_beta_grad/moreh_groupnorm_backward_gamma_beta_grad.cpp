@@ -14,7 +14,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -85,7 +85,7 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
          core_group_1,
          core_group_2,
          num_channels_per_core_group_1,
-         num_channels_per_core_group_2] = ttnn::split_work_to_cores(grid, num_channels);
+         num_channels_per_core_group_2] = split_work_to_cores(grid, num_channels);
 
     log_debug(LogTest, fmt::format("num_cores_to_be_used: {}", num_cores_to_be_used).c_str());
     log_debug(LogTest, fmt::format("num_channels_per_core_group_1: {}", num_channels_per_core_group_1).c_str());
