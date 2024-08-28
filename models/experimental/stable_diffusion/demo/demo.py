@@ -108,7 +108,7 @@ def demo():
     # Initialize the device
     device = ttnn.open_device(0)
 
-    ttnn.experimental.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
     # enable_persistent_kernel_cache()
     disable_persistent_kernel_cache()
     # 1. Load the autoencoder model which will be used to decode the latents into image space.

@@ -85,10 +85,10 @@ class TestStats:
 
 class TestEPS:
     def test_basic_gs(self):
-        assert ttnn.experimental.device.EPS_GS == 0.001953125
+        assert ttnn.device.EPS_GS == 0.001953125
 
     def test_basic_whb0(self):
-        assert np.isclose(ttnn.experimental.device.EPS_WHB0, 1.19209e-07)
+        assert np.isclose(ttnn.device.EPS_WHB0, 1.19209e-07)
 
     def test_basic_bh(self):
-        assert np.isclose(ttnn.experimental.device.EPS_BH, 1.19209e-07)
+        assert np.isclose(ttnn.device.EPS_BH, 1.19209e-07)

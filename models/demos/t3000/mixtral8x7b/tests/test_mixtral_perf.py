@@ -105,7 +105,7 @@ def test_mixtral_model_perf(
     compile_and_iter_time = profiler.get("e2e_decode_compile")
 
     for device_id in t3k_device_mesh.get_device_ids():
-        ttnn.experimental.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
+        ttnn.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
@@ -239,7 +239,7 @@ def test_mixtral_model_with_prefill_perf(
 
     # Profiler dump, ready for real run
     for device_id in t3k_device_mesh.get_device_ids():
-        ttnn.experimental.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
+        ttnn.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("prefill perf run")
@@ -253,7 +253,7 @@ def test_mixtral_model_with_prefill_perf(
 
     # profile dump
     for device_id in t3k_device_mesh.get_device_ids():
-        ttnn.experimental.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
+        ttnn.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
     # Decode (Run 1 warmup iteration before running 1 perf iteration)
     generation_start_pos = prefill_seq_len
@@ -270,7 +270,7 @@ def test_mixtral_model_with_prefill_perf(
 
     # Profiler dump, ready for real run
     for device_id in t3k_device_mesh.get_device_ids():
-        ttnn.experimental.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
+        ttnn.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("decode perf run")

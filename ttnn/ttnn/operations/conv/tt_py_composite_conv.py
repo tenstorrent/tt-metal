@@ -803,7 +803,7 @@ class TTPyCompositeConv(TTPyOp):
                 if kernel_size == 1 and stride > 1:
                     use_downsample = True
             if use_downsample:
-                ttl.device.DumpDeviceMemoryState(device, "before_ds_")
+                ttnn.dump_device_memory_state(device, "before_ds_")
                 ds_out = ttnn.downsample(activation, [*self.input_tensor_shape[:-1], *self.strides])
                 if deallocate_activation:
                     activation.deallocate()
