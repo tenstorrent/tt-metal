@@ -2,24 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "layernorm_pre_all_gather_pybind.hpp"
+#include "rmsnorm_pre_all_gather_pybind.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "layernorm_pre_all_gather.hpp"
+#include "rmsnorm_pre_all_gather.hpp"
 
 namespace ttnn::operations::normalization::detail {
 
 namespace py = pybind11;
 
-void bind_normalization_layer_norm_pre_all_gather(py::module& module) {
+void bind_normalization_rms_norm_pre_all_gather(py::module& module) {
 
     ttnn::bind_registered_operation(
         module,
-        ttnn::layernorm_pre_all_gather,
-        R"doc(layer_norm_pre_all_gather(input_tensor: ttnn.Tensor, program_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        ttnn::rmsnorm_pre_all_gather,
+        R"doc(rmsnorm_pre_all_gather(input_tensor: ttnn.Tensor, program_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
             Compute layer_norm over :attr:`input_tensor`.
         )doc",
         ttnn::pybind_arguments_t{

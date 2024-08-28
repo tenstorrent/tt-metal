@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "layernorm_pre_all_gather.hpp"
+#include "rmsnorm_pre_all_gather.hpp"
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 
 namespace ttnn::operations::normalization {
 
-ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(
+ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<const LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
@@ -16,7 +16,7 @@ ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     return operation::run(
                 LayerNorm{
-                    .norm_type = LayerNormType::LAYERNORM,
+                    .norm_type = LayerNormType::RMSNORM,
                     .distributed_type = LayerNormDistributedType::PRE_ALL_GATHER,
                     .eps = 1e-12,
                     .output_mem_config = input_tensor.memory_config(),

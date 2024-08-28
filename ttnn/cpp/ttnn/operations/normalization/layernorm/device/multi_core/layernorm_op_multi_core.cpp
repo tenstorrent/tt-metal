@@ -574,7 +574,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
-    if (is_pre_all_gather && !is_rms_norm){
+    if (is_pre_all_gather && !rms_norm){
         ex_partial_CB_size = 2 * ex_partial_CB_size;
     }
     uint32_t ex_CB_size = ex_partial_CB_size;
@@ -616,9 +616,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
         num_blocks_second_stage = num_cores_all_to_all_second_stage;
     }
+    uint32_t num_tiles_per_partial_result = 1;
+    if (is_pre_all_gather && !rms_norm) {
+        num_tiles_per_partial_result = 2;
+    }
     // change tt::CB external size
     if (use_two_stage_reduce) {
-        ex_external_CB_size = (num_blocks_first_stage + num_blocks_second_stage - 1) * single_tile_size;
+        ex_external_CB_size = (num_blocks_first_stage + num_blocks_second_stage - 1) * single_tile_size * num_tiles_per_partial_result;
     }
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
     if (num_rows_per_all_to_all_worker_last == 0)
@@ -949,7 +953,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
     std::string writer_kernel = use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln_rm_gb.cpp" : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln.cpp";
     if (is_pre_all_gather) {
-        writer_kernel = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln_pre_all_gather.cpp"
+        writer_kernel = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln_pre_all_gather.cpp";
     }
     auto writer_mcast_sender_kernels_id = CreateKernel(
         program,
@@ -1371,7 +1375,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             if (use_two_stage_reduce) {
                 if (is_pre_all_gather) {
                     writer_mcast_sender_args.push_back(packed_cinv_value_one);
-                    writer_mcast_sender_args.push_back(packed_cinv_value_one);
                 } else {
                     if (width_index < num_cores_all_to_all_first_stage) {
                         writer_mcast_sender_args.push_back(packed_cinv_value);
@@ -1394,13 +1397,17 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             writer_kernel_ids.push_back(writer_mcast_sender_kernels_id);
         } else {
             std::vector<uint32_t> writer_mcast_receiver_args;
-            writer_mcast_receiver_args.push_back(packed_cinv_value);
-            writer_mcast_receiver_args.push_back(packed_winv_value);
-            writer_mcast_receiver_args.push_back(e.u);
-            writer_mcast_receiver_args.push_back(gamma_dram_addr);
-            writer_mcast_receiver_args.push_back(beta_dram_addr);
-            writer_mcast_receiver_args.push_back(gamma_tile_start_id);
-            writer_mcast_receiver_args.push_back(beta_tile_start_id);
+            if (is_pre_all_gather) {
+                writer_mcast_receiver_args.push_back(packed_cinv_value_one);
+            } else {
+                writer_mcast_receiver_args.push_back(packed_cinv_value);
+                writer_mcast_receiver_args.push_back(packed_winv_value);
+                writer_mcast_receiver_args.push_back(e.u);
+                writer_mcast_receiver_args.push_back(gamma_dram_addr);
+                writer_mcast_receiver_args.push_back(beta_dram_addr);
+                writer_mcast_receiver_args.push_back(gamma_tile_start_id);
+                writer_mcast_receiver_args.push_back(beta_tile_start_id);
+            }
             tt::tt_metal::SetRuntimeArgs(program, writer_mcast_receiver_kernels_id, core, writer_mcast_receiver_args);
             writer_kernel_ids.push_back(writer_mcast_receiver_kernels_id);
         }

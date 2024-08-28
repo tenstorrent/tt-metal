@@ -6,6 +6,8 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
+#include "debug/dprint.h"
+
 
 // split REDUCE across cores
 void kernel_main() {
@@ -110,6 +112,7 @@ void kernel_main() {
         }
     } else {
         remote_noc_addrs_first_stage[0] = get_noc_addr(in0_remote_noc_x[0], in0_remote_noc_y[0], 0);
+        remote_noc_addrs_second_stage[0] = get_noc_addr(in0_remote_noc_x[0], in0_remote_noc_y[0], 0);
     }
 
     volatile tt_l1_ptr uint32_t* reduce_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
@@ -127,14 +130,20 @@ void kernel_main() {
         #endif
         // global reduce
         // wait for local data ready
+        DPRINT << "[Receiver] Before wait front : " << num_tiles_per_partial_result*block_h << ENDL();
         cb_wait_front(cb_partial, num_tiles_per_partial_result*block_h); // two tiles * block_h
+
+        DPRINT << "[Receiver] After wait front" << ENDL();
 
         // inc mcast sender
         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
         noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
         noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
 
+        DPRINT << "[Receiver] After sync" << ENDL();
+
         if constexpr (is_all_to_all_worker) {
+            DPRINT << "[Receiver] is_all_to_all_worker " << ENDL();
             // read data from other cores - reduce first stage
             uint32_t l1_read_addr_ex_par = get_read_ptr(cb_partial);
             l1_read_addr_ex_par += all_to_all_tile_offset_bytes;
@@ -149,8 +158,11 @@ void kernel_main() {
                     block_index_stride = num_y;
                 }
             }
+            DPRINT << "[Receiver] here 1 " << ENDL();
             for (uint32_t i = 0; i < num_tiles_to_read; i++) {
+                DPRINT << "[Receiver] here 1 before reserve back " << ENDL();
                 cb_reserve_back(cb_external, num_tiles_per_partial_result*num_blocks_first_stage);
+                DPRINT << "[Receiver] here 1 after reserve back " << ENDL();
                 uint32_t l1_write_addr_external = get_write_ptr(cb_external);
                 for(uint32_t block = 0; block < num_blocks_first_stage; block++) {
                     for(uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; tile_idx++) { // loops over Sum(X), Sum(X2) --> 2x
@@ -159,34 +171,44 @@ void kernel_main() {
                         l1_write_addr_external+=single_tile_size_bytes;
                     }
                 }
+                DPRINT << "[Receiver] here 2 " << ENDL();
                 l1_read_addr_ex_par += single_tile_size_bytes;
                 noc_async_read_barrier();
                 cb_push_back(cb_external, num_tiles_per_partial_result*num_blocks_first_stage);
 
-                // // read data from other cores - reduce first stage
-                // if constexpr(use_two_stage_reduce) {
-                //     if (is_second_stage_reader) { // gather data from a column of cores (if row major)
-                //         if (i == 0) {
-                //             noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage-1);
-                //             noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
-                //         }
+                DPRINT << "[Receiver] here 3 " << ENDL();
 
-                //         // read data from other cores - second stage reduce
-                //         for(uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
-                //             uint64_t noc_addr_ex = remote_noc_addrs_second_stage[block + 1] | l1_read_addr_ex;
-                //             noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
-                //             l1_write_addr_external += single_tile_size_bytes;
-                //         }
-                //         l1_read_addr_ex += single_tile_size_bytes;
-                //         noc_async_read_barrier();
-                //         cb_push_back(cb_external, num_blocks_second_stage - 1);
-                //     }
-                // }
+                // read data from other cores - reduce first stage
+                if constexpr(use_two_stage_reduce) {
+                    if (is_second_stage_reader) { // gather data from a column of cores (if row major)
+                        DPRINT << "[Receiver] is_second_stage_reader " << ENDL();
+                        if (i == 0) {
+                            DPRINT << "[Receiver] Before semaphore wait second stage" << ENDL();
+                            noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage-1);
+                            noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
+                        }
+                        DPRINT << "[Receiver] After sync second stage" << ENDL();
+
+                        // read data from other cores - second stage reduce
+                        for(uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
+                            uint64_t noc_addr_ex = remote_noc_addrs_second_stage[block + 1] | l1_read_addr_ex;
+                            noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
+                            l1_write_addr_external += single_tile_size_bytes;
+                        }
+                        l1_read_addr_ex += single_tile_size_bytes;
+                        noc_async_read_barrier();
+                        cb_push_back(cb_external, num_blocks_second_stage - 1);
+                    }
+                }
             }
+
+            DPRINT << "[Receiver] Before first stage wait front" << ENDL();
 
             // sync with the gather worker
             cb_wait_front(cb_reduce_first_stage, num_tiles_per_partial_result*num_tiles_to_read);
             noc_semaphore_inc(reduce_second_stage_receiver_semaphore_noc_addr, 1);
+
+            DPRINT << "[Receiver] Semaphore inc done" << ENDL();
 
             // // read data from other cores - reduce first stage
             // if constexpr(use_two_stage_reduce) {
@@ -210,6 +232,8 @@ void kernel_main() {
             // }
         }
 
+        DPRINT << "[Receiver] Reder receiver done" << ENDL();
+
         // Wait for sender core to finish reduce on cb_ex_global and push back so that compute core can continue; pre all gather is done now!
         // for (uint32_t block = 0; block < num_all_to_all_workers; ++block) {
         //     uint32_t num_tiles = block == num_all_to_all_workers - 1 ? num_tiles_per_worker_last : num_tiles_per_worker;
@@ -218,9 +242,10 @@ void kernel_main() {
         //     cb_push_back(cb_ex_global, num_tiles);
         // }
     };
-    // #ifndef RMSNORM
+    #ifdef RMSNORM
+    global_reduce_receiver(cb_ex_partial2, cb_ex_external, cb_ex, cb_ex_global, cb_ex);
+    #else
     global_reduce_receiver(cb_ex_partial, cb_ex_external, cb_ex, cb_ex_global, cb_ex);
-    // #endif
-    // global_reduce_receiver(cb_ex_partial2, cb_ex_external2, cb_ex2pe, cb_ex2_global, cb_ex2);
+    #endif
 
 }
