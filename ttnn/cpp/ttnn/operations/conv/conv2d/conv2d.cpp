@@ -83,7 +83,7 @@ ParallelConfig determine_parallel_config(
             return 1u;
         }
 
-        TT_FATAL("Invalid Shard Layout",shard_layout);
+        TT_FATAL("Conv2d supports Height, Block or Width Sharded Layouts but got ",shard_layout);
         return 0u;
     };
 
@@ -113,7 +113,7 @@ ParallelConfig determine_parallel_config(
             return grid;
 
         } else {
-            TT_FATAL("Invalid Shard Layout in Conv Config", shard_layout);
+           TT_FATAL("Conv2d supports Height, Block or Width Sharded Layouts but got ",shard_layout);
             return CoreRangeSet({});
         }
     };

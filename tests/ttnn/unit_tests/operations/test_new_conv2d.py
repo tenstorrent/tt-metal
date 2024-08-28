@@ -72,10 +72,10 @@ def run_conv(
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
     conv_bias_shape = [1, 1, 1, output_channels]
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
-    # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
+
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
+
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
@@ -151,14 +151,6 @@ def run_conv(
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-
-    # if enable_auto_formatting:
-    #     torch_output_tensor = torch.split(torch_output_tensor, output_channels, 3)[0]
-    #     torch_output_tensor = torch.reshape(torch_output_tensor, output_shape_nhwc)
-    # else:
-    #     tt_output_tensor = conv.copy_output_from_device(tt_output_tensor_on_device)
-    #     assert tt_output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-    #     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
@@ -484,16 +476,8 @@ def test_conv_ws(
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
-    # print(torch_output_tensor)
-    # print("Ref = ",torch_out_golden_tensor)
     reader_patterns_cache.clear()
 
-    if not fp32_accum:
-        pcc = 0.995
-    elif math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
-        pcc = 0.9969
-    else:
-        pcc = 0.998
     pcc = 0.94
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     if not passing:
