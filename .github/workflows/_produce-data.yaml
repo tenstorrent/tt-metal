@@ -8,6 +8,10 @@ on:
         description: "Unique GitHub workflow run ID to use for data"
         default: 10066309412
         type: number
+      test_workflow_run_attempt:
+        description: "Run attempt of the workflow run"
+        default: 1
+        type: number
   workflow_run:
     workflows:
       - "All post-commit tests"
@@ -44,7 +48,7 @@ jobs:
           event_name="${{ github.event_name }}"
           if [[ "$event_name" == "workflow_dispatch" ]]; then
             run_id="${{ inputs.test_workflow_run_id }}"
-            attempt_number="1"
+            attempt_number="${{ inputs.test_workflow_run_attempt }}"
           elif [[ "$event_name" == "workflow_run" ]]; then
             run_id="${{ github.event.workflow_run.id }}"
             attempt_number="${{ github.event.workflow_run.run_attempt }}"
