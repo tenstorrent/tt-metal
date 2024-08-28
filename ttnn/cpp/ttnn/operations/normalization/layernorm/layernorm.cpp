@@ -24,6 +24,7 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
     return operation::run(
                 LayerNorm{
                     .norm_type = LayerNormType::LAYERNORM,
+                    .distributed_type = LayerNormDistributedType::NOT_DISTRIBUTED,
                     .eps = epsilon,
                     .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
                     .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),

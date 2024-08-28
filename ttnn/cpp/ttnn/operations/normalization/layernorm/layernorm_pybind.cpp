@@ -52,25 +52,9 @@ void bind_normalization_layernorm_operation(py::module& module) {
             py::arg("E_x2") = std::nullopt});
 }
 
-void bind_normalization_layernorm_distributed_pre_all_gather_operation(py::module& module) {
-
-    ttnn::bind_registered_operation(
-        module,
-        ttnn::layer_norm,
-        R"doc(rms_norm(input_tensor: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-            Compute layer_norm over :attr:`input_tensor`.
-        )doc",
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt});
-}
-
 void bind_normalization_layernorm(py::module& module) {
     bind_normalization_layernorm_program_config(module);
     bind_normalization_layernorm_operation(module);
-    bind_normalization_layernorm_distributed_pre_all_gather_operation(module);
 }
 
 }  // namespace ttnn::operations::normalization::detail
