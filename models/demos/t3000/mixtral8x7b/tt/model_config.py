@@ -19,7 +19,6 @@ class TtModelArgs:
     n_heads = 32
     n_kv_heads = 8
     norm_eps = 1e-05
-    sliding_window = 4096
     vocab_size = 32000
 
     max_batch_size = 32  # default

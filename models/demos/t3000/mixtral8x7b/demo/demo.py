@@ -94,8 +94,9 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
+        start_pos_ids=[0 for _ in range(batch_size)],  # Start position for decode mode
         dtype=dtype,
-        rotary_on_host=True,
+        rotary_on_host=False,
     )
 
     if not embed_on_host:
@@ -136,8 +137,6 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         model_args,
         current_rot_mat,
         rot_matrix,
-        generation_start_pos,
-        max_generated_tokens,
         dtype,
     )
 
@@ -158,19 +157,16 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
 
         iteration_time_start = time()
         start_pos = generation_start_pos + iteration
-        current_pos = start_pos
 
         if embed_on_host:
             decode_input_11BH = prepare_inputs_ttnn(
                 pt_decode_input,
                 model_args.dim,
-                start_pos,
-                model_args,
                 tt_model.device_mesh,
             )
 
         # Run ttnn mixtral model
-        tt_out_11BH = tt_model(decode_input_11BH, start_pos, current_pos)
+        tt_out_11BH = tt_model(decode_input_11BH, [start_pos] * batch_size, mode="decode")
 
         if embed_on_host:
             # Convert ttnn tensor to torch tensor

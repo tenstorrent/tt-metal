@@ -76,6 +76,7 @@ class TtTransformer(LightweightModule):
         transformation_mats=None,
         user_id=0,
         mode="decode",
+        get_last_token=-1,
     ):
         for i, layer in enumerate(self.layers):
             if mode == "decode":
@@ -94,10 +95,14 @@ class TtTransformer(LightweightModule):
         if attn_masks is not None:
             attn_masks.deallocate(True)
 
-        # slicing to only get the last token
-        if mode == "prefill":
+        if mode == "prefill" and get_last_token == -1:
             return x
-            x = x[:, :, :1, :]
+
+        # slicing for the last token
+        if get_last_token != -1:
+            x = ttnn.slice(
+                x, ttnn.Shape((0, 0, get_last_token, 0)), ttnn.Shape((0, 0, get_last_token + 31, 4095))
+            )  # [:, :, get_last_token:get_last_token+32, :]
 
         x_norm = self.norm(x)
         outputs = ttnn.matmul(
@@ -108,6 +113,8 @@ class TtTransformer(LightweightModule):
             memory_config=self.model_config["OUTPUT_MM_MEMCFG"],
             compute_kernel_config=self.compute_kernel,
         )
+        if get_last_token != -1:
+            return outputs
 
         if self.rotary_on_host:
             prev_rot_mat = self.current_rot_mat

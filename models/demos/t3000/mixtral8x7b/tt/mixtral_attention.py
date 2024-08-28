@@ -122,7 +122,7 @@ class TtMixtralAttention(LightweightModule):
                 dtype=ttnn.bfloat8_b,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 memory_config=self.model_config["ATTN_CACHE_WEIGHTS_MEMCFG"],
-                cache_file_name=cache_name(f"empty_attn_cache_{cache_k.shape}"),
+                cache_file_name=cache_name(f"empty_attn_cache_T_{cache_k.shape}"),
             )
             for lp in layer_past
         ]
@@ -212,7 +212,6 @@ class TtMixtralAttention(LightweightModule):
         if self.k_mem_config is None:
             self.k_mem_config = k_heads_1B1D.memory_config()
 
-        print("q_heads_1B4D", q_heads_1B4D.shape, "rot_mat", rot_mat.shape)
         q_heads_1B4D = ttnn.matmul(
             q_heads_1B4D,
             rot_mat,
