@@ -309,11 +309,11 @@ def to_torch(
         tensor([[-0.3008, -0.8438,  0.3242],
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
+    if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+        tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
-
-    if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
-        tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
 
     shape_without_tile_padding = tuple(tensor.shape)
     if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
