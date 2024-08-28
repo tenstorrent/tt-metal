@@ -45,15 +45,9 @@ import os
         [1, 2, 1024, 2560],
         [1, 2, 256, 5120],
         [1, 2, 64, 10240],
+        [1, 1, 64, 64],
     ),
-    ids=[
-        "1x2x64x64",
-        "1x2x64x128",
-        "1x2x256x2560",
-        "1x2x1024x2560",
-        "1x2x256x5120",
-        "1x2x64x10240",
-    ],
+    ids=["1x2x64x64", "1x2x64x128", "1x2x256x2560", "1x2x1024x2560", "1x2x256x5120", "1x2x64x10240", "1x1x64x64"],
 )
 def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dtype=ttnn.bfloat16):
     profile_location = "splitTwoChunks/"

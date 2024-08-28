@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "common/logger.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/cpp/ttnn/operation.hpp"
-
 namespace   ttnn::operations::data_movement::detail {
 
 void setup_runtime(const Program &program,
@@ -89,7 +89,7 @@ void setup_runtime(const Program &program,
     }
 }
 
-operation::ProgramWithCallbacks split_last_dim_n_chunks_tiled(
+operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     const Tensor &input_tensor, std::vector<Tensor> &output_tensors, const MemoryConfig &mem_config) {
     uint32_t dim = 3; // this op always splits on dim 3 for now.
     uint32_t num_chunks = output_tensors.size();
@@ -136,6 +136,12 @@ operation::ProgramWithCallbacks split_last_dim_n_chunks_tiled(
 
     uint32_t per_core_tiles = per_core_tiles_x * per_core_tiles_y * (z / num_cores_z); // FIXME: how is z / num_cores_z not always just 1?
 
+    // FIXME: remove debugging stuff
+    std::cout << "Per core tiles: " << per_core_tiles << std::endl;
+    std::cout << "per_core_x: " <<  per_core_tiles_x << std::endl;
+    std::cout << "per_core_y: " << per_core_tiles_y << std::endl;
+    // endFIXME: remove debugging stuff
+
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
 
@@ -175,8 +181,8 @@ operation::ProgramWithCallbacks split_last_dim_n_chunks_tiled(
 
                                                       // READER COMPILE TIME ARGS
                                                       (std::uint32_t)(z / num_cores_z),
-                                                      (std::uint32_t)per_core_tiles_x,  // out_num_tiles_per_tensor
-                                                      (std::uint32_t)per_core_tiles_y,  // out_num_tiles_per_tensor
+                                                      (std::uint32_t)per_core_tiles_x,
+                                                      (std::uint32_t)per_core_tiles_y,
                                                       (std::uint32_t)z_stride_read,
                                                       (std::uint32_t)y_stride_read,
                                                       (std::uint32_t)num_chunks};
@@ -187,8 +193,8 @@ operation::ProgramWithCallbacks split_last_dim_n_chunks_tiled(
                                                       (std::uint32_t)tile_dtype_is_bfloat16,
                                                       (std::uint32_t)out_is_dram,
 
-                                                      (std::uint32_t)per_core_tiles_x,  // out_num_tiles_per_tensor
-                                                      (std::uint32_t)per_core_tiles_y,  // out_num_tiles_per_tensor
+                                                      (std::uint32_t)per_core_tiles_x,
+                                                      (std::uint32_t)per_core_tiles_y,
 
                                                       (std::uint32_t)(z / num_cores_z),
                                                       (std::uint32_t)z_stride_write,

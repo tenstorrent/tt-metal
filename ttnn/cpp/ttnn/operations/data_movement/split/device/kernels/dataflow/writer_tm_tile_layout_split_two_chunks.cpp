@@ -6,8 +6,6 @@
 
 #include <algorithm>
 #include <array>
-
-#include "build_Release/std=c++20"
 #include "dataflow_api.h"
 
 //#define DEBUG
@@ -18,8 +16,8 @@ void kernel_main() {
     constexpr uint32_t out_is_dram = get_compile_time_arg_val(1);
     // WRITER COMPILE TIME ARGS
     //constexpr uint32_t out_num_tiles_per_tensor = get_compile_time_arg_val(2);
-    constexpr uint32_t out_num_tiles_per_tensor_y = get_compile_time_arg_val(2);
-    constexpr uint32_t out_num_tiles_per_tensor_x = get_compile_time_arg_val(3);
+    constexpr uint32_t per_core_tiles_y = get_compile_time_arg_val(2);
+    constexpr uint32_t per_core_tiles_x = get_compile_time_arg_val(3);
     constexpr uint32_t z = get_compile_time_arg_val(4);
     constexpr uint32_t z_stride = get_compile_time_arg_val(5);
     constexpr uint32_t y_stride = get_compile_time_arg_val(6);
@@ -27,9 +25,9 @@ void kernel_main() {
 
     // WRITER RUNTIME ARGS
     uint32_t out_tensor_tile_id = get_arg_val<uint32_t>(0);
-    uint32_t out_addrs[num_chunks];
+    std::array<uint32_t, num_chunks> out_addrs;
 
-    for (int i = 1; i <= num_chunks; i++) {
+    for (uint32_t i = 1; i <= num_chunks; i++) {
         out_addrs[i-1] = get_arg_val<uint32_t>(i);
     }
 
@@ -67,8 +65,8 @@ void kernel_main() {
         uint32_t z_stride_cum = 0;
         for (uint32_t k = 0; k < z; k++) {
             uint32_t y_stride_cum = 0;
-            for (uint32_t j = 0; j < out_num_tiles_per_tensor_y; j++) {
-                for (uint32_t i = 0; i < out_num_tiles_per_tensor_x; i++) {
+            for (uint32_t j = 0; j < per_core_tiles_y; j++) {
+                for (uint32_t i = 0; i < per_core_tiles_x; i++) {
                     uint32_t tile_id = y_stride_cum + z_stride_cum + i;
                     cb_wait_front(cb_id_out0, onetile);
                     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
