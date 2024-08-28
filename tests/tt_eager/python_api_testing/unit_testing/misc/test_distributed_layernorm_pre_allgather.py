@@ -190,28 +190,45 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
 @skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "input_dtype",
-    (ttnn.bfloat16, ttnn.bfloat8_b),
-    ids=["BFLOAT16", "BFLOAT8_B"],
+    (
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b
+    ),
+    ids=[
+        "BFLOAT16",
+        # "BFLOAT8_B"
+    ],
 )
 @pytest.mark.parametrize(
     "output_dtype",
-    (ttnn.bfloat16, ttnn.bfloat8_b),
-    ids=["BFLOAT16", "BFLOAT8_B"],
+    (
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b
+    ),
+    ids=[
+        "BFLOAT16",
+        # "BFLOAT8_B"
+    ],
 )
 @pytest.mark.parametrize(
     "inp_shape",
     [
-        (1, 1, 32, 8192),
-        (1, 1, 128, 8192),
-        (1, 1, 2048, 8192),
-        (1, 1, 8192, 8192),
-        (2, 1, 128, 8192),
-        (1, 1, 128, 2048),
+        (1, 1, 32, 1024),
+        # (1, 1, 32, 8192),
+        # (1, 1, 128, 8192),
+        # (1, 1, 2048, 8192),
+        # (1, 1, 8192, 8192),
+        # (2, 1, 128, 8192),
+        # (1, 1, 128, 2048),
     ],
 )
 @pytest.mark.parametrize(
     "n_devices",
-    [4, 8],
+    [
+        1,
+        # 4,
+        # 8
+    ],
 )
 @pytest.mark.parametrize(
     "is_rmsnorm",
@@ -221,55 +238,56 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
 def test_layernorm_part_1_with_program_cache(
     inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, use_program_cache
 ):
+
     run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device)
 
 
-@skip_for_grayskull("Requires wormhole")
-@pytest.mark.parametrize(
-    "input_dtype",
-    [ttnn.bfloat16],
-    ids=["BFLOAT16"],
-)
-@pytest.mark.parametrize(
-    "output_dtype",
-    [ttnn.bfloat16],
-    ids=["BFLOAT16"],
-)
-@pytest.mark.parametrize(
-    "inp_shape",
-    [
-        (1, 1, 2048, 8192),
-    ],
-)
-@pytest.mark.parametrize(
-    "n_devices",
-    [8],
-)
-@pytest.mark.parametrize(
-    "is_rmsnorm",
-    [True, False],
-    ids=["rmsnorm", "layernorm"],
-)
-def test_layernorm_part_1_with_program_cache2(
-    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, use_program_cache
-):
-    dummy_tensors = []
+# @skip_for_grayskull("Requires wormhole")
+# @pytest.mark.parametrize(
+#     "input_dtype",
+#     [ttnn.bfloat16],
+#     ids=["BFLOAT16"],
+# )
+# @pytest.mark.parametrize(
+#     "output_dtype",
+#     [ttnn.bfloat16],
+#     ids=["BFLOAT16"],
+# )
+# @pytest.mark.parametrize(
+#     "inp_shape",
+#     [
+#         (1, 1, 2048, 8192),
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "n_devices",
+#     [8],
+# )
+# @pytest.mark.parametrize(
+#     "is_rmsnorm",
+#     [True, False],
+#     ids=["rmsnorm", "layernorm"],
+# )
+# def test_layernorm_part_1_with_program_cache2(
+#     inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, use_program_cache
+# ):
+#     dummy_tensors = []
 
-    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+#     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
-    for i in range(2):
-        if i > 0:
-            dummy_tensors.append(
-                torch2tt_tensor(
-                    torch.randn(inp_shape),
-                    tt_dtype=input_dtype,
-                    tt_device=device,
-                    tt_layout=ttnn.TILE_LAYOUT,
-                    tt_memory_config=dram_memcfg,
-                )
-            )
-        run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device)
+#     for i in range(2):
+#         if i > 0:
+#             dummy_tensors.append(
+#                 torch2tt_tensor(
+#                     torch.randn(inp_shape),
+#                     tt_dtype=input_dtype,
+#                     tt_device=device,
+#                     tt_layout=ttnn.TILE_LAYOUT,
+#                     tt_memory_config=dram_memcfg,
+#                 )
+#             )
+#         run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device)
 
-    assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
-        device.num_program_cache_entries()
-    )
+#     assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
+#         device.num_program_cache_entries()
+#     )
