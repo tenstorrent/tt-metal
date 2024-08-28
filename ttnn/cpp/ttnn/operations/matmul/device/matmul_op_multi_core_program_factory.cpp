@@ -5,7 +5,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt;
@@ -50,7 +50,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
          core_group_2,
          num_output_tiles_per_core_group_1,
          num_output_tiles_per_core_group_2] =
-            ttnn::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+            split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");

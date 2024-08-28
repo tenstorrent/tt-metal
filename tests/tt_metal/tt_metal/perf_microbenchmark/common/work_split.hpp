@@ -8,7 +8,7 @@
 // Contains utility functions for partitioning work between multiple cores.
 //
 
-// cloned from ttnn/cpp/ttnn/operations/core/work_split/work_split.hpp
+// cloned from tt_metal/common/work_split.hpp
 
 #pragma once
 

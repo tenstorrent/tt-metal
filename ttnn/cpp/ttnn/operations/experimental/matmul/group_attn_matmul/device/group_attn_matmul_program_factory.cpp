@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "group_attn_matmul_device_operation.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
 
     // Only first 32 of cores mcast KV heads to match num_rows_in_one_tile in reader kernel, so these coordinates are static if we cache on compute_with_storage_grid_size
     // TODO: If this is not the case, then we should set reader_runtime_args to max possible size and update sender noc coordinates based on input
-    CoreCoord mcast_sender_grid = ((CoreRangeSet) ttnn::num_cores_to_corerange_set(TILE_HEIGHT, compute_with_storage_grid_size, row_major)).bounding_box().grid_size();
+    CoreCoord mcast_sender_grid = ((CoreRangeSet) num_cores_to_corerange_set(TILE_HEIGHT, compute_with_storage_grid_size, row_major)).bounding_box().grid_size();
     std::vector<uint32_t> in1_mcast_sender_noc_x(mcast_sender_grid.x);
     std::vector<uint32_t> in1_mcast_sender_noc_y(mcast_sender_grid.y);
     for(uint32_t core_idx_x = 0; core_idx_x < mcast_sender_grid.x; ++core_idx_x) {
@@ -320,7 +320,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         // TODO: To generalize to allow parallelizing/sharding across generic batch for KV_heads, we need to track sender cores across batch-number of rows instead of 32
         // TODO: Only support one block of work (ie. 1 Q head per core) because each core assumes only one KV_heads to use
         uint32_t num_active_cores = std::max(Q_HEADS, TILE_HEIGHT);
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = ttnn::split_work_to_cores(compute_with_storage_grid_size, num_active_cores, row_major);
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_active_cores, row_major);
         // num_cores should be same as num_active_cores
         TT_FATAL(num_output_blocks_per_core_group_1 == 1 and num_output_blocks_per_core_group_2 == 0, "Group attention matmul only supports one q_heads per core. Increase compute grid size to at least have as many cores as q_heads!");
 
@@ -363,7 +363,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(const Tensor &a, co
         // Mcast receiver args
         // NOTE: If Q_HEADS < 32, have all cores in mcast grid participate in semaphore syncing because we mcast KV_HEADS from/to the same CB
         // Otherwise, data corruption if sender is in mcast grid and it starts populating its mcast CB as other senders are sending
-        CoreRangeSet mcast_receiver_cores = ttnn::num_cores_to_corerange_set(Q_HEADS, compute_with_storage_grid_size, row_major);
+        CoreRangeSet mcast_receiver_cores = num_cores_to_corerange_set(Q_HEADS, compute_with_storage_grid_size, row_major);
         CoreRange mcast_receiver_cores_bounding_box = mcast_receiver_cores.bounding_box();
         uint32_t mcast_num_dests = mcast_receiver_cores.num_cores(); // same as num_active_cores if Q_HEADS >= 32; also, always same as Q_HEADS
         uint32_t mcast_num_cores = mcast_receiver_cores_bounding_box.size();

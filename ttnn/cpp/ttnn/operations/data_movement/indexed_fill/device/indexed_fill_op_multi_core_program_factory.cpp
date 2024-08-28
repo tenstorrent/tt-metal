@@ -5,7 +5,7 @@
 #include <algorithm>
 
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto set_of_core_ranges = ttnn::num_cores_to_corerange_set(num_cores_x*num_cores_y, compute_with_storage_grid_size);
+    auto set_of_core_ranges = num_cores_to_corerange_set(num_cores_x*num_cores_y, compute_with_storage_grid_size);
     CoreRangeSet all_cores(set_of_core_ranges);
 
 

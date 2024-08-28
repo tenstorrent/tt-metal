@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_create_qkv_heads_decode_device_operation.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 #include "tt_metal/host_api.hpp"
 
@@ -74,11 +74,11 @@ std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(c
     auto num_q_heads_padded = (this->num_q_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto num_kv_heads_padded = (this->num_kv_heads / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-    auto q_shard_grid = ttnn::num_cores_to_corerange_set(batch, core_grid, true);
+    auto q_shard_grid = num_cores_to_corerange_set(batch, core_grid, true);
     ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
     auto q_mem_config = this->output_mem_config;
     q_mem_config.shard_spec = q_shard_spec;
-    auto kv_shard_grid = ttnn::num_cores_to_corerange_set(batch, core_grid, true);
+    auto kv_shard_grid = num_cores_to_corerange_set(batch, core_grid, true);
     ShardSpec kv_shard_spec{kv_shard_grid, {num_kv_heads_padded, this->head_dim}};
     auto kv_mem_config = this->output_mem_config;
     kv_mem_config.shard_spec = kv_shard_spec;

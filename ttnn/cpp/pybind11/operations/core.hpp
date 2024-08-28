@@ -9,7 +9,7 @@
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/cpp/ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace py = pybind11;
 

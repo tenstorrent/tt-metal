@@ -12,7 +12,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 
@@ -1302,7 +1302,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     CoreRangeSet all_cores =
-                        ttnn::num_cores_to_corerange_set(num_cores, program_config.compute_with_storage_grid_size, true);
+                        num_cores_to_corerange_set(num_cores, program_config.compute_with_storage_grid_size, true);
                     ShardSpec shard_spec = ShardSpec{
                         all_cores, {per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, ShardOrientation::ROW_MAJOR};
                     auto mem_config = this->output_mem_config;
@@ -1380,7 +1380,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                         shard_orientation = input_tensor_b.shard_spec().value().orientation;
                     }
 
-                    CoreRangeSet all_cores = ttnn::num_cores_to_corerange_set(
+                    CoreRangeSet all_cores = num_cores_to_corerange_set(
                         num_cores,
                         program_config.compute_with_storage_grid_size,
                         shard_orientation == ShardOrientation::ROW_MAJOR);
