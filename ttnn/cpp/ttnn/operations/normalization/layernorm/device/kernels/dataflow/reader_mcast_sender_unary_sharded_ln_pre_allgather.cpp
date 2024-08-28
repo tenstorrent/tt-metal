@@ -215,7 +215,7 @@ void kernel_main() {
         // }
     };
     #ifdef RMSNORM
-    global_reduce_sender(cb_ex_partial2, cb_ex_external, cb_ex, cb_ex_global, cb_ex);
+    global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2, cb_ex_global, cb_ex2);
     #else
     global_reduce_sender(cb_ex_partial, cb_ex_external, cb_ex, cb_ex_global, cb_ex);
     #endif
