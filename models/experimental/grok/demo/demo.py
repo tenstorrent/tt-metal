@@ -201,7 +201,7 @@ def run_grok_demo(user_input, batch_size, device_mesh, instruct_mode):
 
     # TODO Debug (only device 0 is doing argmax, otherwise it throws an error)
     # Alternatively, send the output back to device: ttnn.Tensor.to()
-    ttnn.experimental.device.SetDefaultDevice(device_mesh.get_device(0))
+    ttnn.SetDefaultDevice(device_mesh.get_device(0))
 
     # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
     for iteration in range(max_generated_tokens):

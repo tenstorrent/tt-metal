@@ -24,7 +24,7 @@ from models.experimental.distilbert.tt.distilbert import *
 def test_gs_demo(model_name):
     device = ttnn.open_device(0)
 
-    ttnn.experimental.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 

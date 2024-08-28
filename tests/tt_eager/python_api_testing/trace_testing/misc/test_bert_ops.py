@@ -163,9 +163,9 @@ class TestBertOpsTrace:
         run_ops(in0_t_res)
         # Capture
         logger.info("Start Trace capture")
-        tid = ttnn.experimental.device.BeginTraceCapture(device, cq_id)
+        tid = ttnn.begin_trace_capture(device, cq_id=cq_id)
         output_t_res = run_ops(in0_t_res)
-        ttnn.experimental.device.EndTraceCapture(device, cq_id, tid)
+        ttnn.end_trace_capture(device, tid, cq_id=cq_id)
         logger.info("Trace captured")
 
         for iter in range(trace_loops):
@@ -175,7 +175,7 @@ class TestBertOpsTrace:
             )
             ttnn.copy_host_to_device_tensor(in0_t_updated, in0_t_res)
             logger.info(f"Running iteration {iter}")
-            ttnn.experimental.device.ReplayTrace(device, cq_id, tid, True)
+            ttnn.execute_trace(device, tid, cq_id=cq_id, blocking=True)
 
             pt_out = in0 @ in1
 
@@ -191,7 +191,7 @@ class TestBertOpsTrace:
             assert passing
 
         # Done with the trace, can deallocate the buffers now.
-        ttnn.experimental.device.ReleaseTrace(device, tid)
+        ttnn.release_trace(device, tid)
         device.enable_async(False)
 
     @pytest.mark.parametrize("device_params", [{"trace_region_size": 34816}], indirect=True)

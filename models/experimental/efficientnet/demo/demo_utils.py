@@ -65,7 +65,7 @@ def load_imagenet_labels():
 def run_gs_demo(efficientnet_model_constructor):
     device = ttnn.open_device(0)
 
-    ttnn.experimental.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
 
     img_path = ROOT / "input_image.jpg"
     download_images(img_path)

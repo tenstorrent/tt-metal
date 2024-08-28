@@ -153,6 +153,16 @@ from ttnn.device import (
     manage_device,
     synchronize_device,
     dump_device_memory_state,
+    GetPCIeDeviceID,
+    GetNumPCIeDevices,
+    GetNumAvailableDevices,
+    CreateDevice,
+    CreateDevices,
+    CloseDevice,
+    CloseDevices,
+    SetDefaultDevice,
+    GetDefaultDevice,
+    DumpDeviceProfiler,
 )
 
 from ttnn.multi_device import (

@@ -117,7 +117,7 @@ def run_test_LlamaDecoder_inference(
 def test_LlamaDecoder_inference(model_version, tokenizer_version, batch, seq_len, decoder_id, on_weka, pcc):
     # Initialize the device
     device = ttnn.open_device(0)
-    ttnn.experimental.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
 
     run_test_LlamaDecoder_inference(
         device,

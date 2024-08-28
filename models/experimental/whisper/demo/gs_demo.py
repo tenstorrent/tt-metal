@@ -9,7 +9,7 @@ from transformers import AutoFeatureExtractor, WhisperForAudioClassification
 from datasets import load_dataset
 from loguru import logger
 
-import tt_lib
+import ttnn
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
@@ -18,18 +18,13 @@ from models.experimental.whisper.tt.whisper_for_audio_classification import (
     TtWhisperForAudioClassification,
 )
 
+
 def test_gs_demo():
-
     torch.manual_seed(1234)
-    device = tt_lib.device.CreateDevice(0)
+    device = ttnn.CreateDevice(0)
 
-
-    feature_extractor = AutoFeatureExtractor.from_pretrained(
-        "sanchit-gandhi/whisper-medium-fleurs-lang-id"
-    )
-    model = WhisperForAudioClassification.from_pretrained(
-        "sanchit-gandhi/whisper-medium-fleurs-lang-id"
-    )
+    feature_extractor = AutoFeatureExtractor.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
+    model = WhisperForAudioClassification.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
 
     model.eval()
     state_dict = model.state_dict()
@@ -50,16 +45,12 @@ def test_gs_demo():
     logger.debug("Input audio language:")
     logger.debug(sample["language"])
 
-    tt_whisper_model = TtWhisperForAudioClassification(
-        state_dict=state_dict, device=device, config=model.config
-    )
+    tt_whisper_model = TtWhisperForAudioClassification(state_dict=state_dict, device=device, config=model.config)
 
     tt_whisper_model.eval()
 
     with torch.no_grad():
-        input_features = torch2tt_tensor(
-            input_features, device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        input_features = torch2tt_tensor(input_features, device, ttnn.ROW_MAJOR_LAYOUT)
         ttm_logits = tt_whisper_model(
             input_features=input_features,
         ).logits
@@ -69,11 +60,10 @@ def test_gs_demo():
         tt_predicted_class_ids = torch.argmax(ttm_logits).item()
         tt_predicted_label = model.config.id2label[tt_predicted_class_ids]
 
-
-    with open('sample_audio.npy', 'wb') as f:
-        np.save(f, sample['audio']['array'])
+    with open("sample_audio.npy", "wb") as f:
+        np.save(f, sample["audio"]["array"])
     # # actually save the input
     logger.info(f"Input audio is saved as sample_audio.npy.")
     logger.info(f"GS's predicted Output: {tt_predicted_label}.")
 
-    tt_lib.device.CloseDevice(device)
+    ttnn.CloseDevice(device)

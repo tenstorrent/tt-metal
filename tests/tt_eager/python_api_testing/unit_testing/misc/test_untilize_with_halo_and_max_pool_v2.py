@@ -77,7 +77,7 @@ def test_run_max_pool(
     device,
     dtype,
 ):
-    # ttnn.experimental.device.EnableMemoryReports()
+    # ttnn.device.EnableMemoryReports()
     if act_shape[0] >= 16 and dtype == ttnn.bfloat16:
         pytest.skip("Configuration does not fit in L1")
 

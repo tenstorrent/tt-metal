@@ -91,7 +91,7 @@ class TtUpBlock2D(nn.Module):
         temb=None,
         upsample_size=None,
     ) -> ttnn.Tensor:
-        device = ttnn.experimental.device.GetDefaultDevice()
+        device = ttnn.GetDefaultDevice()
         if not isinstance(hidden_states, ttnn.Tensor):
             hidden_states = ttnn.Tensor(
                 hidden_states.reshape(-1).tolist(), hidden_states.shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT

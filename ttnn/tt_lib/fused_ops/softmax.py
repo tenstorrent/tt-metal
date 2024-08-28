@@ -7,7 +7,6 @@ import math
 import torch
 
 import ttnn
-from tt_lib import tensor, device
 from tt_lib.utils import pad_activation, pad_weight, tilize, untilize, tilize_to_list, print_diff_argmax
 
 

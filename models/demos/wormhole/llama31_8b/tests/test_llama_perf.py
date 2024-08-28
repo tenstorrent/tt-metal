@@ -101,7 +101,7 @@ def test_llama_model_perf(
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")

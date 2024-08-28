@@ -16,7 +16,7 @@ from PIL import Image
 def test_gs_demo():
     device = ttnn.open_device(0)
 
-    ttnn.experimental.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
 
     image = Image.open("models/sample_data/huggingface_cat_image.jpg")
     image = image.resize((224, 224))

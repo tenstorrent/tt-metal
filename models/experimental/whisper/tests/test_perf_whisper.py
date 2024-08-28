@@ -9,7 +9,7 @@ from datasets import load_dataset
 from loguru import logger
 from transformers import WhisperModel, AutoFeatureExtractor
 
-import tt_lib
+import ttnn
 
 from models.experimental.whisper.tt.whisper_model import TtWhisperModel
 from models.utility_functions import (
@@ -66,21 +66,21 @@ def run_perf_whisper(expected_inference_time, expected_compile_time, device):
     tt_whisper.eval()
 
     with torch.no_grad():
-        input_features = torch2tt_tensor(input_features, device, tt_lib.tensor.Layout.ROW_MAJOR)
+        input_features = torch2tt_tensor(input_features, device, ttnn.ROW_MAJOR_LAYOUT)
         input_features = input_features.to(
             device,
-            tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
+            ttnn.L1_MEMORY_CONFIG,
         )
         profiler.start(first_key)
         ttm_output = tt_whisper(input_features=input_features, decoder_input_ids=decoder_input_ids)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(first_key)
 
         enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         ttm_output = tt_whisper(input_features=input_features, decoder_input_ids=decoder_input_ids)
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
 
     first_iter_time = profiler.get(first_key)

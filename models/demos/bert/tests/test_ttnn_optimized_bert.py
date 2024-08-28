@@ -24,7 +24,7 @@ from models.utility_functions import skip_for_wormhole_b0
 def test_bert_for_question_answering(device, use_program_cache, model_name, batch_size, sequence_size):
     torch.manual_seed(1234)
 
-    ttnn.experimental.device.EnableMemoryReports()
+    ttnn.device.EnableMemoryReports()
 
     config = transformers.BertConfig.from_pretrained(model_name)
 

@@ -87,7 +87,7 @@ def call_tt_llama_forward_func(
 
         logger.debug(f"The first call started: loop {i+1}")
         device = ttnn.open_device(0)
-        ttnn.experimental.device.SetDefaultDevice(device)
+        ttnn.SetDefaultDevice(device)
 
         first_out = run_llama_split_inference(
             device,
@@ -108,7 +108,7 @@ def call_tt_llama_forward_func(
         # The second call -------------------------------------------------------
         logger.debug(f"The second call started: loop {i+1}")
         device = ttnn.open_device(0)
-        ttnn.experimental.device.SetDefaultDevice(device)
+        ttnn.SetDefaultDevice(device)
 
         # send input tensor from host to tt device
         tt_input = torch_to_tt_tensor_rm(first_out, device)

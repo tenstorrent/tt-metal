@@ -16,7 +16,7 @@ def get_device_mesh_core_grid(device_mesh):
 
 DeviceMesh = ttnn._ttnn.multi_device.DeviceMesh
 DeviceMesh.core_grid = property(get_device_mesh_core_grid)
-DispatchCoreType = ttnn._ttnn.deprecated.device.DispatchCoreType
+DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 
 
 def _get_rich_table(
@@ -114,11 +114,11 @@ def visualize_device_mesh(device_mesh: "ttnn.DeviceMesh", tensor: "ttnn.Tensor" 
 
 
 def get_num_devices() -> List[int]:
-    return ttnn._ttnn.deprecated.device.GetNumAvailableDevices()
+    return ttnn._ttnn.device.GetNumAvailableDevices()
 
 
 def get_num_pcie_devices() -> int:
-    return ttnn._ttnn.deprecated.device.GetNumPCIeDevices()
+    return ttnn._ttnn.device.GetNumPCIeDevices()
 
 
 def get_pcie_device_ids() -> List[int]:
@@ -134,8 +134,8 @@ def get_device_ids() -> List[int]:
 def open_device_mesh(
     device_grid: ttnn.DeviceGrid,
     device_ids: List[int],
-    l1_small_size: int = ttnn._ttnn.deprecated.device.DEFAULT_L1_SMALL_SIZE,
-    trace_region_size: int = ttnn._ttnn.deprecated.device.DEFAULT_TRACE_REGION_SIZE,
+    l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
+    trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
     dispatch_core_type: int = DispatchCoreType.WORKER,
 ):
@@ -169,8 +169,8 @@ def close_device_mesh(device_mesh):
 def create_device_mesh(
     device_grid: ttnn.DeviceGrid,
     device_ids: List[int],
-    l1_small_size: int = ttnn._ttnn.deprecated.device.DEFAULT_L1_SMALL_SIZE,
-    trace_region_size: int = ttnn._ttnn.deprecated.device.DEFAULT_TRACE_REGION_SIZE,
+    l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
+    trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
     dispatch_core_type: int = DispatchCoreType.WORKER,
 ):
@@ -202,10 +202,10 @@ def synchronize_devices(devices: Union["ttnn.Device", "ttnn.DeviceMesh"], queue_
     otherwise operations for all command queues are waited on.
     """
     if isinstance(devices, ttnn.Device):
-        ttnn._ttnn.deprecated.device.Synchronize(devices, queue_id)
+        ttnn._ttnn.device.Synchronize(devices, queue_id)
     else:
         for device in devices.get_device_ids():
-            ttnn._ttnn.deprecated.device.Synchronize(devices.get_device(device), queue_id)
+            ttnn._ttnn.device.Synchronize(devices.get_device(device), queue_id)
 
 
 class TensorToMesh:

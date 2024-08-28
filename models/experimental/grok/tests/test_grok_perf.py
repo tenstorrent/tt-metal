@@ -103,7 +103,7 @@ def test_grok_model_perf(
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
     for device_id in t3k_device_mesh.get_device_ids():
-        ttnn.experimental.device.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
+        ttnn.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")

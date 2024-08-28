@@ -70,9 +70,9 @@ def test_run_average_pool(act_shape, dtype, device, use_program_cache, enable_as
     run_ops(ttact_res)
     # Trace
     logger.info("Start Trace capture")
-    tid = ttnn.experimental.device.BeginTraceCapture(device, 0)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
     out_res = run_ops(ttact_res)
-    ttnn.experimental.device.EndTraceCapture(device, 0, tid)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
     logger.info("Trace captured")
 
     for iter in range(trace_loops):
@@ -84,7 +84,7 @@ def test_run_average_pool(act_shape, dtype, device, use_program_cache, enable_as
         ttnn.copy_host_to_device_tensor(ttact_updated, ttact_res)
 
         logger.info(f"Running iteration {iter}")
-        ttnn.experimental.device.ReplayTrace(device, 0, tid, True)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
 
         out = out_res.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
         out_shape = [batch_size, 1, 1, channels]
@@ -107,5 +107,5 @@ def test_run_average_pool(act_shape, dtype, device, use_program_cache, enable_as
         assert passing_pcc
 
     # Done with the trace, can deallocate the buffers now.
-    ttnn.experimental.device.ReleaseTrace(device, tid)
+    ttnn.release_trace(device, tid)
     device.enable_async(False)

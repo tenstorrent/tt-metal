@@ -26,11 +26,11 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
     profiler.start("compile")
     _ = tt_resnet50(tt_inputs).cpu(blocking=True)
     profiler.end("compile")
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
         _ = tt_resnet50(tt_inputs).cpu(blocking=True)
-        ttnn.experimental.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
     outputs = []
     profiler.start(f"run")
@@ -38,7 +38,7 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
         outputs.append(tt_resnet50(tt_inputs).cpu(blocking=False))
     ttnn.synchronize_device(device)
     profiler.end(f"run")
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
 
 def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
@@ -69,14 +69,14 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
     ttnn.record_event(1, write_event)
     _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
     profiler.end("compile")
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res, 1)
         ttnn.record_event(1, write_event)
         _ = tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=True)
-        ttnn.experimental.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
     outputs = []
     profiler.start(f"run")
@@ -87,7 +87,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
         outputs.append(tt_resnet50(tt_image_res, write_event, op_event).cpu(blocking=False))
     ttnn.synchronize_device(device)
     profiler.end(f"run")
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
 
 def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
@@ -112,29 +112,29 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
     ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res)
     tt_resnet50(tt_image_res).cpu(blocking=True)
     profiler.end("compile")
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     # Capture
-    tid = ttnn.experimental.device.BeginTraceCapture(device, 0)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = tt_resnet50(tt_image_res)
-    ttnn.experimental.device.EndTraceCapture(device, 0, tid)
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    ttnn.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
         ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res)
-        ttnn.experimental.device.ReplayTrace(device, 0, tid, False)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         _ = tt_output_res.cpu(blocking=True)
-        ttnn.experimental.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
     outputs = []
     profiler.start(f"run")
     for iter in range(0, num_measurement_iterations):
         ttnn.copy_host_to_device_tensor(tt_inputs, tt_image_res)
-        ttnn.experimental.device.ReplayTrace(device, 0, tid, False)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(tt_output_res.cpu(blocking=False))
     ttnn.synchronize_device(device)
     profiler.end(f"run")
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
 
 def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
@@ -188,7 +188,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     first_out_addr = reshard_out.buffer_address()
     tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config).cpu(blocking=True)
     profiler.end("compile")
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     # Capture
     ttnn.wait_for_event(1, op_event)
@@ -199,14 +199,14 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config)
     ttnn.record_event(0, op_event)
 
-    tid = ttnn.experimental.device.BeginTraceCapture(device, 0)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config)
     reshard_out = ttnn.allocate_tensor_on_device(
         reshard_out.shape, reshard_out.dtype, reshard_out.layout, device, reshard_mem_config
     )
-    ttnn.experimental.device.EndTraceCapture(device, 0, tid)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
     assert first_out_addr == reshard_out.buffer_address()
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
         ttnn.wait_for_event(1, op_event)
@@ -216,10 +216,10 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.wait_for_event(0, write_event)
         reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config, reshard_out)
         ttnn.record_event(0, op_event)
-        ttnn.experimental.device.ReplayTrace(device, 0, tid, False)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
 
         _ = tt_output_res.cpu(blocking=True)
-        ttnn.experimental.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
     outputs = []
     profiler.start(f"run")
@@ -231,12 +231,12 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.wait_for_event(0, write_event)
         reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config, reshard_out)
         ttnn.record_event(0, op_event)
-        ttnn.experimental.device.ReplayTrace(device, 0, tid, False)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
 
         outputs.append(tt_output_res.cpu(blocking=False))
     ttnn.synchronize_device(device)
     profiler.end(f"run")
-    ttnn.experimental.device.DumpDeviceProfiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
 
 def run_perf_resnet(

@@ -366,7 +366,7 @@ if __name__ == "__main__":
 
     device_id = args.device_id
     device = ttnn.open_device(device_id)
-    ttnn.experimental.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
 
     logger.info(f"Running on device {device_id} for test.")
 
