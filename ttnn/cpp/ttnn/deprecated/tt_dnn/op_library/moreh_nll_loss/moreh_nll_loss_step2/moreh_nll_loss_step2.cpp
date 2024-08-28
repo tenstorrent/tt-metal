@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step2_impl_2d(
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(core_range, units_to_divide);
+        split_work_to_cores(core_range, units_to_divide);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
@@ -222,7 +222,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step2_impl_3d(
     uint32_t units_to_divide = origin_N * div_up(origin_W, FACE_WIDTH);
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(core_range, units_to_divide);
+        split_work_to_cores(core_range, units_to_divide);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
@@ -407,7 +407,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step2_impl_4d(
     uint32_t units_to_divide = target.volume() / H / W * Ht * Wt;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(core_range, units_to_divide);
+        split_work_to_cores(core_range, units_to_divide);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
