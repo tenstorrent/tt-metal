@@ -13,19 +13,19 @@ jobs:
             name: "N150",
             arch: wormhole_b0,
             runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n150 --dispatch-mode ""'
+            cmd: run_n150_tests
           },
           {
             name: "N300_functionality",
             arch: wormhole_b0,
             runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n300_func --dispatch-mode ""'
+            cmd: run_n300_func_tests
           },
           {
             name: "N300_performance",
             arch: wormhole_b0,
             runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_single_card_n300_perf --dispatch-mode ""'
+            cmd: run_n300_perf_tests
           }
         ]
     name: ${{ matrix.test-group.name }}
@@ -61,16 +61,17 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
+          source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ !cancelled() }}
+        if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           python3 .github/scripts/data_analysis/create_benchmark_environment_csv.py
       - name: Upload benchmark data
-        if: ${{ !cancelled() }}
+        if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
