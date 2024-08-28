@@ -31,7 +31,6 @@ namespace ttnn::operations::binary {
 struct BinaryDeviceOperation {
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
-        bool in_place;
         const std::optional<unary::FusedActivations> activations;
         const std::optional<unary::UnaryWithParam> input_tensor_a_activation;
         const MemoryConfig memory_config;
@@ -217,7 +216,6 @@ struct BinaryDeviceOperation {
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         BinaryOpType binary_op_type,
-        bool in_place,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         std::optional<Tensor> optional_output_tensor,

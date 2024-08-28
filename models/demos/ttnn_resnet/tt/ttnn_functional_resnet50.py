@@ -310,7 +310,6 @@ class resnet50Bottleneck:
                 out,
                 ds_out,
                 activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
-                memory_config=self.output_memory_config,
             )
         else:
             out = ttnn.add(
