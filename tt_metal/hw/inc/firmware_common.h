@@ -61,10 +61,6 @@ inline void firmware_kernel_common_init(void *init_local_l1_base) {
     for (void (** fptr)() = __init_array_start; fptr < __init_array_end; fptr++) {
         (**fptr)();
     }
-
-    // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
-    memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
-
 }
 FORCE_INLINE
 uint32_t firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {

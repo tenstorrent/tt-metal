@@ -44,8 +44,8 @@ void kernel_launch()
     tt_l1_ptr uint *local_l1_start_addr = (tt_l1_ptr uint *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
     firmware_kernel_common_init(local_l1_start_addr);
 #if defined(UCK_CHLKC_UNPACK)
-        // Hack workaround for issue #11591
-        for (volatile uint32_t xxx = 0; xxx < 100; xxx++);
+    // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
+    memory_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
 #endif
     run_kernel();
 #endif
