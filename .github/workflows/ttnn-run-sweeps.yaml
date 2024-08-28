@@ -2,29 +2,25 @@ name: "ttnn - Run sweeps"
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
 
-  ttnn-sweeps:
+  ttnn-generate-sweeps:
     needs: build-artifact
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        arch: [grayskull, wormhole_b0]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
+      ARCH_NAME: wormhole_b0
       ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
       ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    timeout-minutes: 720
-    runs-on: ${{ matrix.arch }}
+    timeout-minutes: 30
+    runs-on: [build, in-service]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
@@ -32,10 +28,63 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
         with:
-          arch: ${{ matrix.arch }}
-      - name: Run ttnn sweeps
+          arch: wormhole_b0
+      - name: Run ttnn sweeps generation
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          python tests/sweep_framework/runner.py --elastic cloud
+          python tests/sweep_framework/parameter_generator.py --elastic cloud --tag ci-main --explicit
+
+  ttnn-run-sweeps:
+    needs: ttnn-generate-sweeps
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group:
+          [
+            {
+              name: "Grayskull E150 Sweeps",
+              arch: grayskull,
+              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              tt-smi-cmd: "tt-smi-metal -r 0"
+            },
+            {
+              name: "Wormhole N150 Sweeps",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              tt-smi-cmd: "tt-smi-metal -r 0"
+            },
+            {
+              name: "Wormhole N300 Sweeps",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+              tt-smi-cmd: "tt-smi-metal -r 0"
+            }
+          ]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
+      ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
+      TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    environment: dev
+    timeout-minutes: 720
+    runs-on: ${{ matrix.test-group.runs-on }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: ./.github/actions/prepare-metal-run
+        with:
+          arch: ${{ matrix.test-group.arch }}
+      - name: Run ttnn sweeps runner
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          python tests/sweep_framework/runner.py --elastic cloud --tag ci-main
