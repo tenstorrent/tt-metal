@@ -13,6 +13,12 @@ namespace ttnn::operations::data_movement {
 
 void CopyDeviceOperation::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    TT_FATAL(
+        input_tensor_a.get_dtype() == DataType::BFLOAT16 or input_tensor_a.get_dtype() == DataType::BFLOAT8_B or input_tensor_a.get_dtype() == DataType::FLOAT32,
+        "Typecast operation is only supported on Grayskull for float/bfloat inputs");
+    TT_FATAL(
+        this->output_dtype == DataType::BFLOAT16 or this->output_dtype == DataType::BFLOAT8_B or this->output_dtype == DataType::FLOAT32,
+        "Typecast operation is only supported on Grayskull for float/bfloat outputs");
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to copy need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
@@ -39,7 +45,10 @@ std::vector<tt::tt_metal::Shape> CopyDeviceOperation::compute_output_shapes(cons
     }
 }
 
-std::vector<Tensor> CopyDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+std::vector<Tensor> CopyDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+    if (!output_tensors.empty() && output_tensors[0].has_value()) {
+        return {output_tensors[0].value()};
+    }
     if (input_tensors.size() == 2) {
         return {input_tensors[1]};
     } else {
@@ -59,7 +68,7 @@ std::vector<Tensor> CopyDeviceOperation::create_output_tensors(const std::vector
     }
 }
 
-operation::ProgramWithCallbacks CopyDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks CopyDeviceOperation::create_program(const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
 

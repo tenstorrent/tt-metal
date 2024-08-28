@@ -9,6 +9,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/copy/typecast/typecast.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -48,6 +49,9 @@ struct Typecast {
             TT_FATAL(
                 output_dtype == optional_output_tensor.value().get_dtype(),
                 "If both output dtype and output tensor provided dtype should match");
+        }
+        if (input.device()->arch() == tt::ARCH::GRAYSKULL) {
+            return ttnn::experimental::typecast(queue_id, input, output_dtype, memory_config_arg, optional_output_tensor);
         }
         DataType input_dtype = input.get_dtype();
         return detail::copy_impl(
