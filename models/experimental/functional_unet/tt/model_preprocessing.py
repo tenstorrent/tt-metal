@@ -20,14 +20,16 @@ def create_unet_input_tensors(
     input_width=160,
     mesh_mapper=None,
 ):
-    torch_input_tensor = torch.randn(batch, input_channels * groups, input_height, input_width)
-    ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    torch_input_tensor = torch.randn(2, input_channels * groups, input_height, input_width)
+    ttnn_input_tensor = torch.randn(batch, input_channels * groups, input_height, input_width)
+    ttnn_input_tensor = torch.permute(ttnn_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn_input_tensor.reshape(
+        ttnn_input_tensor.shape[0],
         1,
-        1,
-        ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
+        ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
         ttnn_input_tensor.shape[3],
     )
+    print(ttnn_input_tensor.shape)
     if pad_input:
         # Pad to 16 if grayskull run and 32 for wormhole
         pad = 32 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 16
@@ -37,7 +39,11 @@ def create_unet_input_tensors(
                 ttnn_input_tensor,
                 (0, max(0, pad - ttnn_input_tensor.shape[-1]), 0, max(0, hpad - ttnn_input_tensor.shape[-2])),
             )
-    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, device=device, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+    print(ttnn_input_tensor.shape)
+    ttnn_input_tensor = ttnn_input_tensor.reshape(
+        1, 1, ttnn_input_tensor.shape[2] * ttnn_input_tensor.shape[0], ttnn_input_tensor.shape[3]
+    )
 
     return torch_input_tensor, ttnn_input_tensor
 

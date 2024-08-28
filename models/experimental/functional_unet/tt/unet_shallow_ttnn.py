@@ -87,14 +87,13 @@ class UNetConv2D:
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
             enable_act_double_buffer=False,
-            enable_split_reader=False,
+            enable_split_reader=True,
             enable_subblock_padding=False,
             activation=activation,
         )
         config_override = conv.conv_blocking_and_parallelization_config_override
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
-
         if bn is not None:
             weight, bias = fold_batch_norm2d_into_conv2d(conv.module, bn.module)
         else:
@@ -107,9 +106,8 @@ class UNetConv2D:
         if bias.shape[-1] == 1:
             bias = bias.repeat((1, 1, 32, 32))
 
-        self.weight = ttnn.from_torch(weight, device=device, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-        self.bias = ttnn.from_torch(bias, device=device, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-        print(self.bias.shape)
+        self.weight = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
+        self.bias = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
 
     def __call__(self, x):
         x, output_height, output_width, self.weight, self.bias = ttnn.conv2d(
@@ -140,7 +138,6 @@ class UNetMaxPool2D:
         mesh_mapper=None,
     ):
         self.pool = pool
-        print(pool.dtype)
         self.max_pool = ttnn.MaxPool2d(
             kernel_size=pool.kernel_size,
             stride=pool.stride,
@@ -186,7 +183,6 @@ class UNetDownblock:
         self.conv1 = UNetConv2D(batch, conv1, bn=bn1, device=device, cache=conv_cache, mesh_mapper=mesh_mapper)
         self.conv2 = UNetConv2D(batch, conv2, bn=bn2, device=device, cache=conv_cache, mesh_mapper=mesh_mapper)
         self.pool1 = UNetMaxPool2D(pool, device=device, reader_patterns_cache=max_pool_cache, mesh_mapper=mesh_mapper)
-
         self.should_reshard = should_reshard
         if self.should_reshard:
             self.parallel_config = determine_parallel_config(
@@ -201,10 +197,6 @@ class UNetDownblock:
             )
 
     def __call__(self, x):
-        print(
-            nearest_32(self.conv1.input_height * self.conv1.input_width * self.conv1.batch_size),
-            x.shape[-1],  # Channels can be padded
-        )
         assert list(x.shape) == [
             1,
             1,
@@ -212,7 +204,6 @@ class UNetDownblock:
             x.shape[-1],  # Channels can be padded
         ], f"Expected downblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
         if self.should_reshard:
-            print("self.should_reshard")
             sharded_memory_config = create_sharded_memory_config_from_parallel_config(
                 tensor_shape=[
                     1,
@@ -227,11 +218,15 @@ class UNetDownblock:
                 x,
                 memory_config=sharded_memory_config,
             )
+        print("1")
         x = self.conv1(x)
+        print("2")
         x = self.conv2(x)
+        print("residual")
         residual = ttnn.sharded_to_interleaved(
             x, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16
         )  # pool deletes its activation - spill to DRAM
+        print("pool")
         x = self.pool1(x)
         return x, residual
 
@@ -240,7 +235,6 @@ class UNetUpblock:
     def __init__(
         self, batch, conv1, bn1, conv2, bn2, conv3, bn3, device, conv_cache={}, should_reshard=False, mesh_mapper=None
     ):
-        print(mesh_mapper)
         self.device = device
         self.conv1 = UNetConv2D(batch, conv1, bn1, device, conv_cache, mesh_mapper=mesh_mapper)
         self.conv2 = UNetConv2D(batch, conv2, bn2, device, conv_cache, mesh_mapper=mesh_mapper)
@@ -316,7 +310,6 @@ class UNet:
         self.device = device
         self.conv_cache = {}
         self.max_pool_cache = {}
-        print(parameters)
         self.downblock1 = UNetDownblock(
             batch,
             parameters.c1,
@@ -483,22 +476,31 @@ class UNet:
     def __call__(self, x, original_shape, perf_mode=False):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
 
-        x = x.to(self.device, ttnn.L1_MEMORY_CONFIG)
-
+        x = x.to(self.device)
+        print("downblock1")
         x, c1_residual = self.downblock1(x)
+        print("downblock2")
         x, c2_residual = self.downblock2(x)
+        print("downblock3")
         x, c3_residual = self.downblock3(x)
+        print("downblock4")
         x, c4_residual = self.downblock4(x)
-
+        print("bottleneck")
         x = self.bottleneck(x)
 
+        print("upblock1")
         x = self.upblock1(x, c4_residual)
+        print("upblock2")
         x = self.upblock2(x, c3_residual)
+        print("upblock3")
         x = self.upblock3(x, c2_residual)
+        print("upblock4")
         x = self.upblock4(x, c1_residual)
 
         # Pointwise convolutions currently don't handle padded inputs
+        print("pad")
         x = x.cpu().pad_to_tile(0)
+        print("output_layer")
         x = self.output_layer(x)
 
         x = ttnn.from_device(x)

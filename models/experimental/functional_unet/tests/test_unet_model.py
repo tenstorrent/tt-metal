@@ -42,21 +42,15 @@ def test_unet_model(batch, groups, device_mesh, version, use_program_cache):
         output_mesh_composer = ttnn.ConcatMeshToTensor(device_mesh, dim=0)
 
         torch_input, ttnn_input = create_unet_input_tensors(
-            device_mesh, batch, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
+            device_mesh, batch * num_devices, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
         )
-        torch_input_single_chip = torch_input
-
-        inputs1 = torch_input
-        for i in range(num_devices - 1):
-            torch_input = torch.cat((torch_input, inputs1), dim=0)
 
         model = unet_shallow_torch.UNet.from_random_weights(groups=1)
 
         parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device_mesh)
         ttnn_model = unet_shallow_ttnn.UNet(parameters, batch, device_mesh, weights_mesh_mapper=weights_mesh_mapper)
-
         torch_output_tensor = model(torch_input)
-        output_tensor = ttnn_model(ttnn_input, list(torch_input_single_chip.shape))
+        output_tensor = ttnn_model(ttnn_input, [2, 4, 1056, 160])
 
         B, C, H, W = torch_output_tensor.shape
         ttnn_tensor = ttnn.to_torch(output_tensor, device=device_mesh, mesh_composer=output_mesh_composer)
