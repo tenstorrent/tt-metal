@@ -16,7 +16,7 @@ constexpr uint8_t DEBUG_SANITIZE_NOC_SENTINEL_OK_8 = 0xda;
 
 // Struct containing relevant info for stack usage
 typedef struct {
-    CoreCoord core;
+    CoreDescriptor core;
     uint16_t stack_usage;
     uint16_t kernel_id;
 } stack_usage_info_t;
@@ -36,22 +36,22 @@ class WatcherDeviceReader {
 
     private:
     // Functions for dumping each watcher feature to the log
-    void DumpCore(CoreDescriptor logical_core, bool is_active_eth_core);
-    void DumpL1Status(CoreCoord core, const launch_msg_t *launch_msg);
-    void DumpNocSanitizeStatus(CoreCoord core, const string &core_str, const mailboxes_t *mbox_data, int noc);
-    void DumpAssertStatus(CoreCoord core, const string &core_str, const mailboxes_t *mbox_data);
-    void DumpPauseStatus(CoreCoord core, const string &core_str,const mailboxes_t *mbox_data);
-    void DumpRingBuffer(CoreCoord core, const mailboxes_t *mbox_data, bool to_stdout);
-    void DumpRunState(CoreCoord core, const launch_msg_t *launch_msg, uint32_t state);
-    void DumpLaunchMessage(CoreCoord core, const mailboxes_t *mbox_data);
-    void DumpWaypoints(CoreCoord core, const mailboxes_t *mbox_data, bool to_stdout);
-    void DumpSyncRegs(CoreCoord core);
-    void DumpStackUsage(CoreCoord core, const mailboxes_t *mbox_data);
-    void ValidateKernelIDs(CoreCoord core, const launch_msg_t *launch);
+    void DumpCore(CoreDescriptor &logical_core, bool is_active_eth_core);
+    void DumpL1Status(CoreDescriptor &core, const launch_msg_t *launch_msg);
+    void DumpNocSanitizeStatus(CoreDescriptor &core, const string &core_str, const mailboxes_t *mbox_data, int noc);
+    void DumpAssertStatus(CoreDescriptor &core, const string &core_str, const mailboxes_t *mbox_data);
+    void DumpPauseStatus(CoreDescriptor &core, const string &core_str,const mailboxes_t *mbox_data);
+    void DumpRingBuffer(CoreDescriptor &core, const mailboxes_t *mbox_data, bool to_stdout);
+    void DumpRunState(CoreDescriptor &core, const launch_msg_t *launch_msg, uint32_t state);
+    void DumpLaunchMessage(CoreDescriptor &core, const mailboxes_t *mbox_data);
+    void DumpWaypoints(CoreDescriptor &core, const mailboxes_t *mbox_data, bool to_stdout);
+    void DumpSyncRegs(CoreDescriptor &core);
+    void DumpStackUsage(CoreDescriptor &core, const mailboxes_t *mbox_data);
+    void ValidateKernelIDs(CoreDescriptor &core, const launch_msg_t *launch);
 
     // Helper functions
-    void LogRunningKernels(const launch_msg_t *launch_msg);
-    string GetKernelName(CoreCoord core, const launch_msg_t *launch_msg, uint32_t type);
+    void LogRunningKernels(CoreDescriptor &core, const launch_msg_t *launch_msg);
+    string GetKernelName(CoreDescriptor &core, const launch_msg_t *launch_msg, uint32_t type);
 
     FILE *f;
     Device *device;
