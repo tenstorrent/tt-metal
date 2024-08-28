@@ -141,6 +141,10 @@ op_map = {
         "tt_op": ttnn_ops.eltwise_eq,
         "pytorch_op": pytorch_ops.eq,
     },
+    "unary-eq": {
+        "tt_op": ttnn_ops.unary_eq,
+        "pytorch_op": pytorch_ops.unary_eq,
+    },
     "ttnn-eltwise-lt": {
         "tt_op": ttnn_ops.eltwise_lt,
         "pytorch_op": pytorch_ops.lt,
@@ -148,6 +152,10 @@ op_map = {
     "ttnn-eltwise-gt": {
         "tt_op": ttnn_ops.eltwise_gt,
         "pytorch_op": pytorch_ops.gt,
+    },
+    "unary-gt": {
+        "tt_op": ttnn_ops.unary_gt,
+        "pytorch_op": pytorch_ops.unary_gt,
     },
     "ttnn-eltwise-gte": {
         "tt_op": ttnn_ops.eltwise_gte,
@@ -613,6 +621,10 @@ op_map = {
     "ttnn-logical_and": {
         "tt_op": ttnn_ops.logical_and,
         "pytorch_op": pytorch_ops.logical_and,
+    },
+    "unary-logical_and": {
+        "tt_op": ttnn_ops.unary_logical_and,
+        "pytorch_op": pytorch_ops.unary_logical_and,
     },
     "ttnn-logical_or": {
         "tt_op": ttnn_ops.logical_or,

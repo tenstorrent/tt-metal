@@ -1648,7 +1648,6 @@ def eltwise_gt(
     x,
     y,
     *args,
-    scalar=0,
     device,
     dtype,
     layout,
@@ -1657,14 +1656,29 @@ def eltwise_gt(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    if scalar == 0:
-        t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    else:
-        t1 = scalar
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     t2 = ttnn.gt(t0, t1, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t2)
+
+
+def unary_gt(
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.gt(t0, scalar, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_gte(
@@ -1740,7 +1754,6 @@ def eltwise_eq(
     x,
     y,
     *args,
-    scalar=0,
     device,
     dtype,
     layout,
@@ -1749,14 +1762,29 @@ def eltwise_eq(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    if scalar == 0:
-        t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    else:
-        t1 = scalar
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     t2 = ttnn.eq(t0, t1, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t2)
+
+
+def unary_eq(
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.eq(t0, scalar, memory_config=memory_config_to_ttnn(output_mem_config))
+
+    return ttnn_tensor_to_torch(t1)
 
 
 def eltwise_ne(
@@ -2524,6 +2552,24 @@ def logical_and(
     t2 = ttnn.logical_and(t0, t1, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t2)
+
+
+def unary_logical_and(
+    x,
+    *args,
+    scalar,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttnn.logical_and(t0, scalar, memory_config=output_mem_config)
+
+    return ttnn_tensor_to_torch(t1)
 
 
 def logical_or(

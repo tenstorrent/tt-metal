@@ -955,6 +955,11 @@ def logical_and(x, y, *args, **kwargs):
     return result
 
 
+def unary_logical_and(x, scalar, *args, **kwargs):
+    result = torch.logical_and(x, scalar)
+    return result
+
+
 def logical_not_(x, *args, **kwargs):
     result = x.logical_not_()
     return result
@@ -1041,7 +1046,7 @@ def gte(x, y, *args, **kwargs):
         return x >= y
 
 
-def gt(x, y, *args, **kwargs):
+def gt(x, y=None, *args, **kwargs):
     if "scalar" in kwargs:
         scalar = kwargs.pop("scalar")
         return x > scalar
@@ -1050,11 +1055,12 @@ def gt(x, y, *args, **kwargs):
 
 
 def eq(x, y, *args, **kwargs):
-    if "scalar" in kwargs:
-        scalar = kwargs.pop("scalar")
-        return x == scalar
-    else:
-        return x == y
+    return x == y
+
+
+def unary_eq(x, *args, **kwargs):
+    scalar = kwargs.pop("scalar")
+    return x == scalar
 
 
 def ne(x, y, *args, **kwargs):
@@ -1066,8 +1072,8 @@ def ne(x, y, *args, **kwargs):
 
 
 def unary_gt(x, *args, **kwargs):
-    value = kwargs.pop("value")
-    result = torch.gt(x, value)
+    scalar = kwargs.pop("scalar")
+    result = torch.gt(x, scalar)
     return result
 
 
@@ -1142,6 +1148,11 @@ def logaddexp(x, y, *args, **kwargs):
 
 def logaddexp2(x, y, *args, **kwargs):
     return torch.logaddexp2(x, y)
+
+
+def unary_logaddexp2(x, scalar, *args, **kwargs):
+    scalar = torch.Tensor(torch.tensor([scalar]))
+    return torch.logaddexp2(x, scalar)
 
 
 def logical_or(x, y, *args, **kwargs):

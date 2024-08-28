@@ -152,7 +152,6 @@ def shapes_and_datagen(
 
             for i in range(len(generated_test_args["dtype"])):
                 _datagen_dict = datagen_dict[i] if isinstance(datagen_dict, list) else datagen_dict
-
                 datagen_funcs.append(
                     generation_funcs.gen_func_with_cast_tt(
                         partial(
