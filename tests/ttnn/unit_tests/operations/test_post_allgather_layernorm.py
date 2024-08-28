@@ -248,7 +248,7 @@ def test_post_allgather_layernorm(
     # assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
 
 
-@pytest.mark.parametrize("RMSNORM", [False])
+@pytest.mark.parametrize("RMSNORM", [True])
 @pytest.mark.parametrize("seed", [0])  # Test across 5 different seeds
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize(("min_pcc_sumx", "min_pcc_sumx2"), ([0.9997, 0.995],))
@@ -326,14 +326,11 @@ def test_pre_allgather_layernorm(
         )
     tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)  # [1, 1, 32, 64]
 
-    tt_ex_torch = tt_output_torch[..., :1]
-    tt_ex2_torch = tt_output_torch[..., 32:33]
-
-    print("GT E(X)")
-    print(E_x_tensor)
-
-    print("TT E(X)")
-    print(tt_ex_torch)
+    if RMSNORM:
+        tt_ex2_torch = tt_output_torch[..., :1]
+    else:
+        tt_ex_torch = tt_output_torch[..., :1]
+        tt_ex2_torch = tt_output_torch[..., 32:33]
 
     print("GT E(X2)")
     print(E_x2_tensor)
@@ -341,18 +338,25 @@ def test_pre_allgather_layernorm(
     print("TT E(X2)")
     print(tt_ex2_torch)
 
-    pcc_passing, pcc_out1 = comp_pcc(E_x_tensor, tt_ex_torch, pcc=min_pcc_sumx)
-    all_close_passing = torch.allclose(E_x_tensor, tt_ex_torch, atol=max_atol, equal_nan=False)
-    atol_delta = torch.max(torch.abs(E_x_tensor - tt_ex_torch)).item()
-    print(f"PCC: {pcc_out1}")
-    print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
+    if not RMSNORM:
+        print("GT E(X)")
+        print(E_x_tensor)
+
+        print("TT E(X)")
+        print(tt_ex_torch)
+
+        pcc_passing, pcc_out1 = comp_pcc(E_x_tensor, tt_ex_torch, pcc=min_pcc_sumx)
+        all_close_passing = torch.allclose(E_x_tensor, tt_ex_torch, atol=max_atol, equal_nan=False)
+        atol_delta = torch.max(torch.abs(E_x_tensor - tt_ex_torch)).item()
+        print(f"PCC: {pcc_out1}")
+        print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
+        assert pcc_out1 >= min_pcc_sumx, f"PCC of Sum(x) test failed: {pcc_out1} (threshold: {min_pcc_sumx})"
 
     pcc_passing, pcc_out2 = comp_pcc(E_x2_tensor, tt_ex2_torch, pcc=min_pcc_sumx2)
     all_close_passing = torch.allclose(E_x2_tensor, tt_ex2_torch, atol=max_atol, equal_nan=False)
     atol_delta = torch.max(torch.abs(E_x2_tensor - tt_ex2_torch)).item()
     print(f"PCC: {pcc_out2}")
     print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
-
-    assert pcc_out1 >= min_pcc_sumx, f"PCC of Sum(x) test failed: {pcc_out1} (threshold: {min_pcc_sumx})"
     assert pcc_out2 >= min_pcc_sumx2, f"PCC of Sum(x^2) test failed: {pcc_out2} (threshold: {min_pcc_sumx2})"
+
     # assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"

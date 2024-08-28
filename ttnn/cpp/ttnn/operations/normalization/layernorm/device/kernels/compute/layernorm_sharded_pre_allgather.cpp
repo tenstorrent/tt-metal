@@ -81,12 +81,16 @@ void MAIN {
     // #endif
     // constexpr uint32_t cb_ex_sqr = cb_x2;
 
-    const uint32_t cb_reduction_out = is_second_stage_reader ? cb_out : cb_ex;
+
 
     #ifdef RMSNORM
     constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3; // E[x^2] partial reduce
+    constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5; // E[x^2] partials recieved from other cores
+    const uint32_t cb_reduction_out = is_second_stage_reader ? cb_out : cb_ex2;
     #else
     constexpr uint32_t cb_ex_partial2 = cb_ex_partial;
+    constexpr uint32_t cb_ex_external2 = cb_ex_external;
+    const uint32_t cb_reduction_out = is_second_stage_reader ? cb_out : cb_ex;
     #endif
 
 
@@ -105,8 +109,6 @@ void MAIN {
     num_tiles_per_partial_result = 1;
     #endif
 
-    UNPACK(DPRINT << "Before E(X)" << ENDL());
-
     cb_wait_front(cb_scaler_global, 1);
 
     #ifndef RMSNORM
@@ -119,7 +121,6 @@ void MAIN {
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            UNPACK(DPRINT << "cb_in0 : "<<TSLICE(cb_in0, 0, SliceRange::h0_w0_32()) << ENDL());
             reduce_tile(cb_in0, cb_scaler_global, w+index_h_offset, scaler0, dst0);
         }
         tile_regs_commit();
@@ -163,9 +164,7 @@ void MAIN {
 
     cb_wait_front(cb_x2, num_tiles_per_block);
 
-    PACK(DPRINT << "paker before reserve back" << ENDL());
     cb_reserve_back(cb_ex_partial2, block_h); // RMS E(x2) #Layernorm //E(x) and E(x^2)
-    PACK(DPRINT << "paker after reserve back" << ENDL());
 
     reduce_init_delta<false>();
     index_h_offset = 0;
@@ -173,7 +172,6 @@ void MAIN {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
             reduce_tile(cb_x2, cb_scaler_global, w+index_h_offset, scaler0, dst0);
-            UNPACK(DPRINT << "after reducing tile" << ENDL());
         }
 
         tile_regs_commit();
@@ -184,17 +182,14 @@ void MAIN {
     }
     reduce_revert_delta();
     cb_pop_front(cb_x2, num_tiles_per_block);
-    UNPACK(DPRINT << "Before push back" << ENDL());
     cb_push_back(cb_ex_partial2, block_h);
     PACK(DPRINT << "paker After push back" << ENDL());
     UNPACK(DPRINT << "After push back" << ENDL());
     UNPACK(DPRINT << "Before Reduction E(X)" << ENDL());
 
-    cb_wait_front(cb_ex_partial2, block_h);
-
-    // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
+    // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial
     if constexpr(is_allgather_worker) {
-        unpack_reconfig_data_format_srca(cb_x2, cb_ex_external);
+        unpack_reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reduce_init_delta<false>();
         cb_reserve_back(cb_reduction_out, num_tiles_per_partial_result*num_tiles_per_allgather_worker);
 
@@ -203,11 +198,9 @@ void MAIN {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_tiles_per_partial_result*num_blocks_reduce; w++) { // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
                 UNPACK(DPRINT << "before tile regs ac" << ENDL());
-                cb_wait_front(cb_ex_external, 1);
-                UNPACK(DPRINT << " w : " << w << " w % num_tiles_per_partial_result : " << w % num_tiles_per_partial_result << ENDL());
-                UNPACK(DPRINT << " input 1nd stage : "<<TSLICE(cb_ex_external, 0, SliceRange::h0_w0_32()) << ENDL());
-                reduce_tile(cb_ex_external, cb_scaler_global, 0, scaler0, w % num_tiles_per_partial_result); // E(x) and E(x^2) interleaved so we reduce each one into different dest reg
-                cb_pop_front(cb_ex_external, 1);
+                cb_wait_front(cb_ex_external2, 1);
+                reduce_tile(cb_ex_external2, cb_scaler_global, 0, scaler0, w % num_tiles_per_partial_result); // E(x) and E(x^2) interleaved so we reduce each one into different dest reg
+                cb_pop_front(cb_ex_external2, 1);
             }
             tile_regs_commit();
             tile_regs_wait();
