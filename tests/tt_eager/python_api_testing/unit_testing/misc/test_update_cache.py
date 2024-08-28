@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-
+import tt_lib
 import ttnn
 from loguru import logger
 from models.utility_functions import nearest_32, pad_by_zero
@@ -40,7 +40,7 @@ class TestUpdateCache:
             if in_sharded:
                 compute_grid_size = device.compute_with_storage_grid_size()
                 num_cores = min(seq_len // 32 * num_heads, 32)  # Always use max 32 cores for testing
-                shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+                shard_grid = ttnn.CoreRangeSet(tt_lib.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
@@ -104,7 +104,7 @@ class TestUpdateCache:
         if in_sharded:
             compute_grid_size = device.compute_with_storage_grid_size()
             num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
-            shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+            shard_grid = ttnn.CoreRangeSet(tt_lib.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
@@ -170,7 +170,7 @@ class TestUpdateCacheFP32:
             if in_sharded:
                 compute_grid_size = device.compute_with_storage_grid_size()
                 num_cores = min(seq_len // 32 * num_heads, 32)  # Always use max 32 cores for testing
-                shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+                shard_grid = ttnn.CoreRangeSet(tt_lib.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
@@ -236,7 +236,7 @@ class TestUpdateCacheFP32:
         if in_sharded:
             compute_grid_size = device.compute_with_storage_grid_size()
             num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
-            shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+            shard_grid = ttnn.CoreRangeSet(tt_lib.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [

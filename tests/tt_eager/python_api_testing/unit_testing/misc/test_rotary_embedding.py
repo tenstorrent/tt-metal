@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import comp_pcc, divup, is_grayskull
+import tt_lib
 
 
 def rotate_half(x):
@@ -70,7 +71,7 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
 
         if in_sharded:
             Ht = divup(num_blocks, num_cores)
-            shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+            shard_grid = ttnn.CoreRangeSet(tt_lib.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
@@ -142,7 +143,7 @@ def test_rotary_embedding_decode(
 
         if in_sharded:
             Ht = divup(num_blocks, num_cores)
-            shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+            shard_grid = ttnn.CoreRangeSet(tt_lib.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
@@ -215,7 +216,7 @@ def test_rotary_embedding_prefill_fp32(
 
         if in_sharded:
             Ht = divup(num_blocks, num_cores)
-            shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+            shard_grid = ttnn.CoreRangeSet(tt_lib.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
@@ -285,7 +286,7 @@ def test_rotary_embedding_decode_fp32(
 
         if in_sharded:
             Ht = divup(num_blocks, num_cores)
-            shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+            shard_grid = ttnn.CoreRangeSet(tt_lib.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
