@@ -2,14 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/common/constants.hpp"
 #include "pad_op.hpp"
 #include "pad_program_factory.hpp"
-
 
 namespace ttnn::operations::data_movement {
 
 void Pad::validate_with_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");

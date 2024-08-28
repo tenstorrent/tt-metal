@@ -31,6 +31,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
 
 
 void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
@@ -174,6 +175,7 @@ const operation::Hash EltwiseBinaryBroadcast::compute_program_hash(
 }
 
 BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
