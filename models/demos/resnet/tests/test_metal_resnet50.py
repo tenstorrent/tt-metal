@@ -183,15 +183,15 @@ def run_trace_model(device, tt_image, tt_resnet50):
     # Compile
     tt_resnet50(tt_image_res)
     # Trace
-    tid = ttnn.experimental.device.BeginTraceCapture(device, 0)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = tt_resnet50(tt_image_res)
-    ttnn.experimental.device.EndTraceCapture(device, 0, tid)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
 
     ttnn.copy_host_to_device_tensor(tt_image, tt_image_res)
-    ttnn.experimental.device.ReplayTrace(device, 0, tid, True)
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
 
     # Done with the trace, can deallocate the buffers now.
-    ttnn.experimental.device.ReleaseTrace(device, tid)
+    ttnn.release_trace(device, tid)
 
     return tt_output_res.cpu(blocking=True)
 
@@ -256,12 +256,12 @@ def run_trace_2cq_model(device, tt_image, tt_resnet50):
     reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config)
     ttnn.record_event(0, op_event)
 
-    tid = ttnn.experimental.device.BeginTraceCapture(device, 0)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = tt_resnet50(reshard_out, final_out_mem_config=interleaved_dram_mem_config)
     reshard_out = ttnn.allocate_tensor_on_device(
         reshard_out.shape, reshard_out.dtype, reshard_out.layout, device, reshard_mem_config
     )
-    ttnn.experimental.device.EndTraceCapture(device, 0, tid)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
     assert first_out_addr == reshard_out.buffer_address()
     ttnn.synchronize_device(device)
 
@@ -276,12 +276,12 @@ def run_trace_2cq_model(device, tt_image, tt_resnet50):
         reshard_out = ttnn.reshard(tt_image_res, reshard_mem_config, reshard_out)
         ttnn.record_event(0, op_event)
 
-        ttnn.experimental.device.ReplayTrace(device, 0, tid, False)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(tt_output_res.cpu(blocking=False))
 
     ttnn.synchronize_device(device)
     # Done with the trace, can deallocate the buffers now.
-    ttnn.experimental.device.ReleaseTrace(device, tid)
+    ttnn.release_trace(device, tid)
 
     return outputs[1]
 

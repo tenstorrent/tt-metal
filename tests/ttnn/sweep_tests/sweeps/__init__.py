@@ -114,7 +114,7 @@ def _run_single_test(run, skip, xfail, permutation, *, device):
     finally:
         import ttnn
 
-        ttnn.experimental.device.DeallocateBuffers(device)
+        ttnn.device.DeallocateBuffers(device)
     return status, message
 
 
