@@ -5,7 +5,6 @@
 from typing import Union
 import time
 import ttnn
-from ttnn import ConcatMeshToTensor
 import torch
 import numpy as np
 from loguru import logger
@@ -212,7 +211,7 @@ def tt_tensors_to_torch_tensors(
         tt_tensors_device = ttnn.untilize(tt_tensors_device, use_multicore=False)
 
     tt_tensors_device = ttnn.to_torch(
-        tt_tensors_device, mesh_composer=ConcatMeshToTensor(device_mesh, dim=concat_dim), device=device_mesh
+        tt_tensors_device, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=concat_dim), device=device_mesh
     )
 
     return tt_tensors_device
