@@ -117,7 +117,10 @@ void py_module(py::module& m_primary) {
         &moreh_bmm,
         py::arg("input").noconvert(),
         py::arg("mat2").noconvert(),
+        py::kw_only(),
+        py::arg("output").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_bmm operation.
     )doc");
