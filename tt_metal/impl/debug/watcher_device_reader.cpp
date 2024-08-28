@@ -20,7 +20,7 @@ using std::string;
 namespace tt::watcher {
 
 // Helper function to get string rep of riscv type
-static const char *get_riscv_name(CoreCoord core, uint32_t type) {
+static const char *get_riscv_name(const CoreCoord &core, uint32_t type) {
     switch (type) {
         case DebugBrisc: return "brisc";
         case DebugNCrisc: return "ncrisc";
@@ -35,7 +35,7 @@ static const char *get_riscv_name(CoreCoord core, uint32_t type) {
 }
 
 // Helper function to get stack size by riscv core type
-uint32_t get_riscv_stack_size(CoreCoord core, uint32_t type) {
+static uint32_t get_riscv_stack_size(const CoreDescriptor &core, uint32_t type) {
     switch (type) {
         case DebugBrisc: return MEM_BRISC_STACK_SIZE;
         case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
@@ -44,13 +44,13 @@ uint32_t get_riscv_stack_size(CoreCoord core, uint32_t type) {
         case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
         case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
         case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
-        default: TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.str(), type);
+        default: TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
     }
     return 0;
 }
 
 // Helper function to get string rep of noc target.
-static string get_noc_target_str(Device *device, CoreCoord &core, int noc, const debug_sanitize_noc_addr_msg_t *san) {
+static string get_noc_target_str(Device *device, CoreDescriptor &core, int noc, const debug_sanitize_noc_addr_msg_t *san) {
     auto get_core_and_mem_type = [](Device *device, CoreCoord &noc_coord, int noc) -> std::pair<string, string> {
         // Get the physical coord from the noc coord
         const metal_SocDescriptor &soc_d = tt::Cluster::instance().get_soc_desc(device->id());
@@ -72,7 +72,7 @@ static string get_noc_target_str(Device *device, CoreCoord &core, int noc, const
             default: return {"Unknown", ""};
         }
     };
-    string out = fmt::format("{} using noc{} tried to access ", get_riscv_name(core, san->which), noc);
+    string out = fmt::format("{} using noc{} tried to access ", get_riscv_name(core.coord, san->which), noc);
     if (san->multicast) {
         CoreCoord target_phys_noc_core_start = {
             NOC_MCAST_ADDR_START_X(san->noc_addr), NOC_MCAST_ADDR_START_Y(san->noc_addr)};
@@ -146,7 +146,7 @@ void WatcherDeviceReader::Dump(FILE *file) {
         fprintf(f, "Stack usage summary:");
         for (auto &risc_id_and_stack_info : highest_stack_usage) {
             stack_usage_info_t &info = risc_id_and_stack_info.second;
-            const char *riscv_name = get_riscv_name(info.core, risc_id_and_stack_info.first);
+            const char *riscv_name = get_riscv_name(info.core.coord, risc_id_and_stack_info.first);
             uint16_t stack_size = get_riscv_stack_size(info.core, risc_id_and_stack_info.first);
             fprintf(
                 f,
@@ -154,14 +154,14 @@ void WatcherDeviceReader::Dump(FILE *file) {
                 riscv_name,
                 info.stack_usage,
                 stack_size,
-                info.core.str().c_str(),
+                info.core.coord.str().c_str(),
                 kernel_names[info.kernel_id].c_str());
             if (info.stack_usage >= stack_size) {
                 fprintf(f, " (OVERFLOW)");
                 log_fatal(
                     "Watcher detected stack overflow on Device {} Core {}: {}! Kernel {} uses {}/{} of the stack.",
                     device->id(),
-                    info.core.str(),
+                    info.core.coord.str(),
                     riscv_name,
                     kernel_names[info.kernel_id].c_str(),
                     info.stack_usage,
@@ -172,7 +172,7 @@ void WatcherDeviceReader::Dump(FILE *file) {
                     "Watcher detected stack usage within 10\% of max on Device {} Core {}: {}! Kernel {} uses "
                     "{}/{} of the stack.",
                     device->id(),
-                    info.core.str(),
+                    info.core.coord.str(),
                     riscv_name,
                     kernel_names[info.kernel_id].c_str(),
                     info.stack_usage,
@@ -216,10 +216,12 @@ void WatcherDeviceReader::Dump(FILE *file) {
     fflush(f);
 }
 
-void WatcherDeviceReader::DumpCore(CoreDescriptor logical_core, bool is_active_eth_core) {
+void WatcherDeviceReader::DumpCore(CoreDescriptor &logical_core, bool is_active_eth_core) {
     // Watcher only treats ethernet + worker cores.
     bool is_eth_core = (logical_core.type == CoreType::ETH);
-    CoreCoord core = device->physical_core_from_logical_core(logical_core.coord, logical_core.type);
+    CoreDescriptor core;
+    core.coord = device->physical_core_from_logical_core(logical_core.coord, logical_core.type);
+    core.type = logical_core.type;
 
     // Print device id, core coords (logical)
     string core_type = is_eth_core ? "ethnet" : "worker";
@@ -229,8 +231,8 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor logical_core, bool is_active_e
         core_type,
         logical_core.coord.x,
         logical_core.coord.y,
-        core.x,
-        core.y);
+        core.coord.x,
+        core.coord.y);
     fprintf(f, "%s: ", core_str.c_str());
 
     // Ethernet cores have a different mailbox base addr
@@ -243,7 +245,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor logical_core, bool is_active_e
     }
 
     std::vector<uint32_t> data;
-    data = tt::llrt::read_hex_vec_from_core(device->id(), core, mailbox_addr, sizeof(mailboxes_t));
+    data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, mailbox_addr, sizeof(mailboxes_t));
     mailboxes_t *mbox_data = (mailboxes_t *)(&data[0]);
 
     // Validate these first since they are used in diagnostic messages below.
@@ -311,18 +313,18 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor logical_core, bool is_active_e
     fflush(f);
 }
 
-void WatcherDeviceReader::DumpL1Status(CoreCoord core, const launch_msg_t *launch_msg) {
+void WatcherDeviceReader::DumpL1Status(CoreDescriptor &core, const launch_msg_t *launch_msg) {
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = tt::llrt::read_hex_vec_from_core(device->id(), core, MEM_L1_BASE, sizeof(uint32_t));
+    data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, MEM_L1_BASE, sizeof(uint32_t));
     if (data[0] != llrt::generate_risc_startup_addr(false)) {
-        LogRunningKernels(launch_msg);
-        TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", core.str(), data[0]);
+        LogRunningKernels(core, launch_msg);
+        TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", core.coord.str(), data[0]);
     }
 }
 
 void WatcherDeviceReader::DumpNocSanitizeStatus(
-    CoreCoord core, const string &core_str, const mailboxes_t *mbox_data, int noc) {
+    CoreDescriptor &core, const string &core_str, const mailboxes_t *mbox_data, int noc) {
     const launch_msg_t *launch_msg = &mbox_data->launch;
     const debug_sanitize_noc_addr_msg_t *san = &mbox_data->watcher.sanitize_noc[noc];
     string error_msg;
@@ -336,7 +338,7 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
                 san->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
                 error_msg = fmt::format(
                     "Watcher unexpected noc debug state on core {}, reported valid got noc{}{{0x{:08x}, {} }}",
-                    core.str().c_str(),
+                    core.coord.str().c_str(),
                     san->which,
                     san->noc_addr,
                     san->len);
@@ -346,7 +348,7 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
         case DebugSanitizeNocInvalidL1:
             error_msg = fmt::format(
                 "{} using noc{} accesses local L1[addr=0x{:08x},len={}]",
-                get_riscv_name(core, san->which),
+                get_riscv_name(core.coord, san->which),
                 noc,
                 san->l1_addr,
                 san->len);
@@ -368,7 +370,7 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
-                core.str(),
+                core.coord.str(),
                 san->invalid);
             error_reason += "corrupted noc sanitization state - unknown failure code.";
     }
@@ -379,14 +381,14 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
         log_warning("{}: {}", core_str, error_msg);
         DumpWaypoints(core, mbox_data, true);
         DumpRingBuffer(core, mbox_data, true);
-        LogRunningKernels(launch_msg);
+        LogRunningKernels(core, launch_msg);
         // Save the error string for checking later in unit tests.
         set_watcher_exception_message(fmt::format("{}: {}", core_str, error_msg));
         TT_THROW(error_reason);
     }
 }
 
-void WatcherDeviceReader::DumpAssertStatus(CoreCoord core, const string &core_str, const mailboxes_t *mbox_data) {
+void WatcherDeviceReader::DumpAssertStatus(CoreDescriptor &core, const string &core_str, const mailboxes_t *mbox_data) {
     const launch_msg_t *launch_msg = &mbox_data->launch;
     const debug_assert_msg_t *assert_status = &mbox_data->watcher.assert_status;
     switch (assert_status->tripped) {
@@ -398,7 +400,7 @@ void WatcherDeviceReader::DumpAssertStatus(CoreCoord core, const string &core_st
             string error_msg = fmt::format(
                 "{}: {} tripped an assert on line {}. Current kernel: {}. {}",
                 core_str,
-                get_riscv_name(core, assert_status->which),
+                get_riscv_name(core.coord, assert_status->which),
                 assert_status->line_num,
                 GetKernelName(core, launch_msg, assert_status->which).c_str(),
                 line_num_warning.c_str());
@@ -406,7 +408,7 @@ void WatcherDeviceReader::DumpAssertStatus(CoreCoord core, const string &core_st
             log_warning(error_msg.c_str());
             DumpWaypoints(core, mbox_data, true);
             DumpRingBuffer(core, mbox_data, true);
-            LogRunningKernels(launch_msg);
+            LogRunningKernels(core, launch_msg);
             set_watcher_exception_message(error_msg);
             TT_THROW("Watcher detected tripped assert and stopped device.");
             break;
@@ -421,28 +423,28 @@ void WatcherDeviceReader::DumpAssertStatus(CoreCoord core, const string &core_st
             }
             break;
         default:
-            LogRunningKernels(launch_msg);
+            LogRunningKernels(core, launch_msg);
             TT_THROW(
                 "Watcher data corruption, noc assert state on core {} unknown failure code: {}.\n",
-                core.str(),
+                core.coord.str(),
                 assert_status->tripped);
     }
 }
 
-void WatcherDeviceReader::DumpPauseStatus(CoreCoord core, const string &core_str, const mailboxes_t *mbox_data) {
+void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor &core, const string &core_str, const mailboxes_t *mbox_data) {
     const debug_pause_msg_t *pause_status = &mbox_data->watcher.pause_status;
     // Just record which cores are paused, printing handled at the end.
     for (int risc_id = 0; risc_id < DebugNumUniqueRiscs; risc_id++) {
         auto pause = pause_status->flags[risc_id];
         if (pause == 1) {
-            paused_cores.insert({core, static_cast<riscv_id_t>(risc_id)});
+            paused_cores.insert({core.coord, static_cast<riscv_id_t>(risc_id)});
         } else if (pause > 1) {
-            string error_reason = fmt::format("Watcher data corruption, pause state on core {} unknown code: {}.\n", core.str(), pause);
+            string error_reason = fmt::format("Watcher data corruption, pause state on core {} unknown code: {}.\n", core.coord.str(), pause);
             log_warning(error_reason.c_str());
             log_warning("{}: {}", core_str, error_reason);
             DumpWaypoints(core, mbox_data, true);
             DumpRingBuffer(core, mbox_data, true);
-            LogRunningKernels(&mbox_data->launch);
+            LogRunningKernels(core, &mbox_data->launch);
             // Save the error string for checking later in unit tests.
             set_watcher_exception_message(fmt::format("{}: {}", core_str, error_reason));
             TT_THROW(error_reason);
@@ -450,7 +452,7 @@ void WatcherDeviceReader::DumpPauseStatus(CoreCoord core, const string &core_str
     }
 }
 
-void WatcherDeviceReader::DumpRingBuffer(CoreCoord core, const mailboxes_t *mbox_data, bool to_stdout) {
+void WatcherDeviceReader::DumpRingBuffer(CoreDescriptor &core, const mailboxes_t *mbox_data, bool to_stdout) {
     const debug_ring_buf_msg_t *ring_buf_data = &mbox_data->watcher.debug_ring_buf;
     string out = "";
     if (ring_buf_data->current_ptr != DEBUG_RING_BUFFER_STARTING_INDEX) {
@@ -487,7 +489,7 @@ void WatcherDeviceReader::DumpRingBuffer(CoreCoord core, const mailboxes_t *mbox
     }
 }
 
-void WatcherDeviceReader::DumpRunState(CoreCoord core, const launch_msg_t *launch_msg, uint32_t state) {
+void WatcherDeviceReader::DumpRunState(CoreDescriptor &core, const launch_msg_t *launch_msg, uint32_t state) {
     char code = 'U';
     if (state == RUN_MSG_INIT)
         code = 'I';
@@ -496,10 +498,10 @@ void WatcherDeviceReader::DumpRunState(CoreCoord core, const launch_msg_t *launc
     else if (state == RUN_MSG_DONE)
         code = 'D';
     if (code == 'U') {
-        LogRunningKernels(launch_msg);
+        LogRunningKernels(core, launch_msg);
         TT_THROW(
             "Watcher data corruption, unexpected run state on core{}: {} (expected {} or {} or {})",
-            core.str(),
+            core.coord.str(),
             state,
             RUN_MSG_INIT,
             RUN_MSG_GO,
@@ -509,7 +511,7 @@ void WatcherDeviceReader::DumpRunState(CoreCoord core, const launch_msg_t *launc
     }
 }
 
-void WatcherDeviceReader::DumpLaunchMessage(CoreCoord core, const mailboxes_t *mbox_data) {
+void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor &core, const mailboxes_t *mbox_data) {
     const launch_msg_t *launch_msg = &mbox_data->launch;
     const slave_sync_msg_t *slave_sync = &mbox_data->slave_sync;
     fprintf(f, "rmsg:");
@@ -519,10 +521,10 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreCoord core, const mailboxes_t *m
     } else if (launch_msg->kernel_config.mode == DISPATCH_MODE_HOST) {
         fprintf(f, "H");
     } else {
-        LogRunningKernels(launch_msg);
+        LogRunningKernels(core, launch_msg);
         TT_THROW(
             "Watcher data corruption, unexpected launch mode on core {}: {} (expected {} or {})",
-            core.str(),
+            core.coord.str(),
             launch_msg->kernel_config.mode,
             DISPATCH_MODE_DEV,
             DISPATCH_MODE_HOST);
@@ -531,10 +533,10 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreCoord core, const mailboxes_t *m
     if (launch_msg->kernel_config.brisc_noc_id == 0 || launch_msg->kernel_config.brisc_noc_id == 1) {
         fprintf(f, "%d", launch_msg->kernel_config.brisc_noc_id);
     } else {
-        LogRunningKernels(launch_msg);
+        LogRunningKernels(core, launch_msg);
         TT_THROW(
             "Watcher data corruption, unexpected brisc noc_id on core {}: {} (expected 0 or 1)",
-            core.str(),
+            core.coord.str(),
             launch_msg->kernel_config.brisc_noc_id);
     }
 
@@ -545,10 +547,10 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreCoord core, const mailboxes_t *m
     if (launch_msg->kernel_config.enables & ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 |
                                               DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 |
                                               DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
-        LogRunningKernels(launch_msg);
+        LogRunningKernels(core, launch_msg);
         TT_THROW(
             "Watcher data corruption, unexpected kernel enable on core {}: {} (expected only low bits set)",
-            core.str(),
+            core.coord.str(),
             launch_msg->kernel_config.enables);
     }
 
@@ -581,7 +583,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreCoord core, const mailboxes_t *m
     fprintf(f, " ");
 }
 
-void WatcherDeviceReader::DumpWaypoints(CoreCoord core, const mailboxes_t *mbox_data, bool to_stdout) {
+void WatcherDeviceReader::DumpWaypoints(CoreDescriptor &core, const mailboxes_t *mbox_data, bool to_stdout) {
     const launch_msg_t *launch_msg = &mbox_data->launch;
     const debug_waypoint_msg_t *debug_waypoint = mbox_data->watcher.debug_waypoint;
     string out;
@@ -595,10 +597,10 @@ void WatcherDeviceReader::DumpWaypoints(CoreCoord core, const mailboxes_t *mbox_
             if (isprint(v)) {
                 risc_status += v;
             } else {
-                LogRunningKernels(launch_msg);
+                LogRunningKernels(core, launch_msg);
                 TT_THROW(
                     "Watcher data corrupted, unexpected debug status on core {}, unprintable character {}",
-                    core.str(),
+                    core.coord.str(),
                     (int)v);
             }
         }
@@ -620,7 +622,7 @@ void WatcherDeviceReader::DumpWaypoints(CoreCoord core, const mailboxes_t *mbox_
     }
 }
 
-void WatcherDeviceReader::DumpSyncRegs(CoreCoord core) {
+void WatcherDeviceReader::DumpSyncRegs(CoreDescriptor &core) {
     // Read back all of the stream state, most of it is unused
     std::vector<uint32_t> data;
     for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
@@ -629,11 +631,11 @@ void WatcherDeviceReader::DumpSyncRegs(CoreCoord core) {
         uint32_t base = NOC_OVERLAY_START_ADDR + (OPERAND_START_STREAM + operand) * NOC_STREAM_REG_SPACE_SIZE;
 
         uint32_t rcvd_addr = base + STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t);
-        data = tt::llrt::read_hex_vec_from_core(device->id(), core, rcvd_addr, sizeof(uint32_t));
+        data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, rcvd_addr, sizeof(uint32_t));
         uint32_t rcvd = data[0];
 
         uint32_t ackd_addr = base + STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t);
-        data = tt::llrt::read_hex_vec_from_core(device->id(), core, ackd_addr, sizeof(uint32_t));
+        data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, ackd_addr, sizeof(uint32_t));
         uint32_t ackd = data[0];
 
         if (rcvd != ackd) {
@@ -642,7 +644,7 @@ void WatcherDeviceReader::DumpSyncRegs(CoreCoord core) {
     }
 }
 
-void WatcherDeviceReader::DumpStackUsage(CoreCoord core, const mailboxes_t *mbox_data) {
+void WatcherDeviceReader::DumpStackUsage(CoreDescriptor &core, const mailboxes_t *mbox_data) {
     const debug_stack_usage_t *stack_usage_mbox = &mbox_data->watcher.stack_usage;
     for (int risc_id = 0; risc_id < DebugNumUniqueRiscs; risc_id++) {
         uint16_t stack_usage = stack_usage_mbox->max_usage[risc_id];
@@ -655,49 +657,67 @@ void WatcherDeviceReader::DumpStackUsage(CoreCoord core, const mailboxes_t *mbox
     }
 }
 
-void WatcherDeviceReader::ValidateKernelIDs(CoreCoord core, const launch_msg_t *launch) {
-    if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0] >= kernel_names.size()) {
-        uint16_t watcher_kernel_id = launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0];
-        TT_THROW(
-            "Watcher data corruption, unexpected brisc kernel id on Device {} core {}: {} (last valid {})",
-            device->id(),
-            core.str(),
-            watcher_kernel_id,
-            kernel_names.size());
-    }
-    used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]] = true;
+void WatcherDeviceReader::ValidateKernelIDs(CoreDescriptor &core, const launch_msg_t *launch) {
+    if (core.type == CoreType::ETH) {
+        if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0] >= kernel_names.size()) {
+            uint16_t watcher_kernel_id = launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0];
+            TT_THROW(
+                "Watcher data corruption, unexpected erisc kernel id on Device {} core {}: {} (last valid {})",
+                device->id(),
+                core.coord.str(),
+                watcher_kernel_id,
+                kernel_names.size());
+        }
+        used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]] = true;
+    } else {
+        if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0] >= kernel_names.size()) {
+            uint16_t watcher_kernel_id = launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0];
+            TT_THROW(
+                "Watcher data corruption, unexpected brisc kernel id on Device {} core {}: {} (last valid {})",
+                device->id(),
+                core.coord.str(),
+                watcher_kernel_id,
+                kernel_names.size());
+        }
+        used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]] = true;
 
-    if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1] >= kernel_names.size()) {
-        uint16_t watcher_kernel_id = launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1];
-        TT_THROW(
-            "Watcher data corruption, unexpected ncrisc kernel id on Device {} core {}: {} (last valid {})",
-            device->id(),
-            core.str(),
-            watcher_kernel_id,
-            kernel_names.size());
-    }
-    used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]] = true;
+        if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1] >= kernel_names.size()) {
+            uint16_t watcher_kernel_id = launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1];
+            TT_THROW(
+                "Watcher data corruption, unexpected ncrisc kernel id on Device {} core {}: {} (last valid {})",
+                device->id(),
+                core.coord.str(),
+                watcher_kernel_id,
+                kernel_names.size());
+        }
+        used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]] = true;
 
-    if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE] >= kernel_names.size()) {
-        uint16_t watcher_kernel_id = launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE];
-        TT_THROW(
-            "Watcher data corruption, unexpected trisc kernel id on Device {} core {}: {} (last valid {})",
-            device->id(),
-            core.str(),
-            watcher_kernel_id,
-            kernel_names.size());
+        if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE] >= kernel_names.size()) {
+            uint16_t watcher_kernel_id = launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE];
+            TT_THROW(
+                "Watcher data corruption, unexpected trisc kernel id on Device {} core {}: {} (last valid {})",
+                device->id(),
+                core.coord.str(),
+                watcher_kernel_id,
+                kernel_names.size());
+        }
+        used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]] = true;
     }
-    used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]] = true;
 }
 
-void WatcherDeviceReader::LogRunningKernels(const launch_msg_t *launch_msg) {
+void WatcherDeviceReader::LogRunningKernels(CoreDescriptor &core, const launch_msg_t *launch_msg) {
     log_info("While running kernels:");
-    log_info(" brisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]]);
-    log_info(" ncrisc: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]]);
-    log_info(" triscs: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]]);
+    if (core.type == CoreType::ETH) {
+        log_info(" erisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
+    } else {
+        log_info(" brisc : {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]]);
+        log_info(" ncrisc: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]]);
+        log_info(
+            " triscs: {}", kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]]);
+    }
 }
 
-string WatcherDeviceReader::GetKernelName(CoreCoord core, const launch_msg_t *launch_msg, uint32_t type) {
+string WatcherDeviceReader::GetKernelName(CoreDescriptor &core, const launch_msg_t *launch_msg, uint32_t type) {
     switch (type) {
         case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
         case DebugErisc:
@@ -707,8 +727,8 @@ string WatcherDeviceReader::GetKernelName(CoreCoord core, const launch_msg_t *la
         case DebugTrisc1:
         case DebugTrisc2: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]];
         default:
-            LogRunningKernels(launch_msg);
-            TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.str(), type);
+            LogRunningKernels(core, launch_msg);
+            TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
     }
     return "";
 }
