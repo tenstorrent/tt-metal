@@ -93,7 +93,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         """
         batch = x.size(0)
         seq_len = x.size(1)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta, use_scaled=False)
         freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
 
         attn_mask = torch.full((seq_len, seq_len), float("-inf"))
@@ -204,7 +204,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
         )
 
         cos, sin = precompute_freqs(
-            llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2, rope_theta, use_scaled=True
+            llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2, rope_theta, use_scaled=False
         )
         cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
         assert cos_gathered.size() == (1, 1, seq_len, llama_attention_model.head_dim)
@@ -214,7 +214,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             cos_gathered,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
+            # cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_attention_model.mesh_device,
             mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
@@ -223,7 +223,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             sin_gathered,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
+            # cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_attention_model.mesh_device,
             mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
@@ -238,7 +238,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             attn_mask,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
+            # cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
             mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_attention_model.mesh_device,

@@ -94,7 +94,7 @@ class TtLlamaModel_galaxy:
 
         # Rotary Embedding
         self.cos, self.sin = precompute_freqs(
-            self.head_dim, self.max_seq_len * 2, self.rope_theta, use_scaled=True
+            self.head_dim, self.max_seq_len * 2, self.rope_theta, use_scaled=False
         )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
         # Embedding
@@ -259,7 +259,7 @@ class TtLlamaModel_galaxy:
                 cos_gathered,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name(f"cos_gathered_prefill_galaxy_{start_pos}"),
+                # cache_file_name=cache_name(f"cos_gathered_prefill_galaxy_{start_pos}"),
                 device=self.device_mesh,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
@@ -268,7 +268,7 @@ class TtLlamaModel_galaxy:
                 sin_gathered,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name(f"sin_gathered_prefill_galaxy_{start_pos}"),
+                # cache_file_name=cache_name(f"sin_gathered_prefill_galaxy_{start_pos}"),
                 device=self.device_mesh,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
