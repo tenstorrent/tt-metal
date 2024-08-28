@@ -41,17 +41,17 @@ sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_sum_int_col() {
-    for (size_t i = 0; i < 2; ++i) {
+    for (unsigned i = 0; i < 2; ++i) {
         vInt a = dst_reg[i];
         a = sfpu_twos_comp_to_sign_mag(a);
 
-        for (size_t j = 2; j < 8; j += 2) {
+        for (unsigned j = 2; j < 8; j += 2) {
             vInt b = dst_reg[i + j];
             b = sfpu_twos_comp_to_sign_mag(b);
             a += b;
         }
 
-        for (size_t j = 16; j < 24; j += 2) {
+        for (unsigned j = 16; j < 24; j += 2) {
             vInt b = dst_reg[i + j];
             b = sfpu_twos_comp_to_sign_mag(b);
             a += b;
@@ -64,12 +64,12 @@ inline void calculate_sum_int_col() {
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_sum_int_row() {
-  for (size_t i = 0; i < 8; i += 2) {
+  for (unsigned i = 0; i < 8; i += 2) {
         vInt a = dst_reg[i];
         a = sfpu_twos_comp_to_sign_mag(a);
 
         int arr[] = {1, 8, 9};
-        for (size_t j = 0; j < sizeof(arr)/sizeof(arr[0]); ++j) {
+        for (unsigned j = 0; j < sizeof(arr)/sizeof(arr[0]); ++j) {
             vInt b = dst_reg[i + arr[j]];
             b = sfpu_twos_comp_to_sign_mag(b);
             a += b;
