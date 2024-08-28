@@ -59,7 +59,16 @@ def get_pipeline_row_from_github_info(github_runner_environment, github_pipeline
 
     jobs = github_jobs_json["jobs"]
     jobs_start_times = list(map(lambda job_: get_datetime_from_github_datetime(job_["started_at"]), jobs))
-    sorted_jobs_start_times = sorted(jobs_start_times)
+    eligible_jobs_start_times = list(
+        filter(
+            lambda job_start_time_: job_start_time_ >= get_datetime_from_github_datetime(pipeline_submission_ts),
+            jobs_start_times,
+        )
+    )
+    sorted_jobs_start_times = sorted(eligible_jobs_start_times)
+    assert (
+        sorted_jobs_start_times
+    ), f"It seems that this pipeline does not have any jobs that started on or after the pipeline was submitted, which should be impossible. Please directly inspect the JSON objects"
     pipeline_start_ts = get_data_pipeline_datetime_from_datetime(sorted_jobs_start_times[0])
 
     pipeline_end_ts = github_pipeline_json["updated_at"]
