@@ -46,6 +46,9 @@ struct dispatch_constants {
 
     static constexpr uint32_t DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;
     static constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
+    // dispatch_s CB page size is 128 bytes. This should currently be enough to accomodate all commands that
+    // are sent to it. Change as needed, once this endpoint is required to handle more than go signal mcasts.
+    static constexpr uint32_t DISPATCH_S_BUFFER_LOG_PAGE_SIZE = 7;
     static constexpr uint32_t DISPATCH_BUFFER_BASE =
         ((DISPATCH_L1_UNRESERVED_BASE - 1) | ((1 << DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) + 1;
 
@@ -84,6 +87,10 @@ struct dispatch_constants {
 
     uint32_t mux_buffer_pages(uint8_t num_hw_cqs = 1) const { return prefetch_d_buffer_pages_ / num_hw_cqs; }
 
+    uint32_t dispatch_s_buffer_size() const { return dispatch_s_buffer_size_; }
+
+    uint32_t dispatch_s_buffer_pages() const { return dispatch_s_buffer_size_ / (1 << DISPATCH_S_BUFFER_LOG_PAGE_SIZE); }
+
    private:
     dispatch_constants(const CoreType &core_type) {
         TT_ASSERT(core_type == CoreType::WORKER or core_type == CoreType::ETH);
@@ -96,6 +103,7 @@ struct dispatch_constants {
             scratch_db_size_ = 128 * 1024;
             dispatch_buffer_block_size = 512 * 1024;
             prefetch_d_buffer_size_ = 256 * 1024;
+            dispatch_s_buffer_size_ = 32 * 1024; // dispatch_s only sends Go Signals -> CB can be small
         } else {
             prefetch_q_entries_ = 128;
             max_prefetch_command_size_ = 32 * 1024;
@@ -103,6 +111,7 @@ struct dispatch_constants {
             scratch_db_size_ = 19 * 1024;
             dispatch_buffer_block_size = 128 * 1024;
             prefetch_d_buffer_size_ = 128 * 1024;
+            dispatch_s_buffer_size_ = 32 * 1024; // dispatch_s only sends Go Signals -> CB can be small
         }
         TT_ASSERT(cmddat_q_size_ >= 2 * max_prefetch_command_size_);
         TT_ASSERT(scratch_db_size_ % 2 == 0);
@@ -133,6 +142,7 @@ struct dispatch_constants {
     uint32_t dispatch_buffer_pages_;
     uint32_t prefetch_d_buffer_size_;
     uint32_t prefetch_d_buffer_pages_;
+    uint32_t dispatch_s_buffer_size_;
 };
 
 /// @brief Get offset of the command queue relative to its channel

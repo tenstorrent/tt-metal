@@ -27,6 +27,7 @@
 // Messages for host to tell brisc to go
 constexpr uint32_t RUN_MSG_INIT = 0x40;
 constexpr uint32_t RUN_MSG_GO = 0x80;
+constexpr uint32_t RUN_MSG_RESET_READ_PTR = 0xc0;
 constexpr uint32_t RUN_MSG_DONE = 0;
 
 // 0x80808000 is a micro-optimization, calculated with 1 riscv insn
@@ -88,22 +89,21 @@ struct kernel_config_msg_t {
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
-    volatile uint8_t enables;
     volatile uint8_t max_cb_index;
-    volatile uint8_t dispatch_core_x;
-    volatile uint8_t dispatch_core_y;
     volatile uint8_t exit_erisc_kernel;
-    volatile uint8_t pad1;
-    volatile uint16_t pad2;
+    volatile uint8_t pad;
+    volatile uint8_t enables;
 } __attribute__((packed));
 
 struct go_msg_t {
-    volatile uint32_t run;  // must be in last cacheline of this msg
+    volatile uint8_t pad;
+    volatile uint8_t master_x;
+    volatile uint8_t master_y;
+    volatile uint8_t signal; // INIT, GO, DONE, RESET_RD_PTR
 } __attribute__((packed));
 
 struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
-    go_msg_t go;
 } __attribute__((packed));
 
 struct slave_sync_msg_t {
@@ -275,11 +275,14 @@ struct core_info_msg_t {
     volatile uint8_t pad[29];
 };
 
+
+constexpr uint32_t launch_msg_buffer_num_entries = 4;
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct slave_sync_msg_t slave_sync;
-    uint32_t pads_1[LAUNCH_NOC_ALIGMENT_PAD_COUNT];
-    struct launch_msg_t launch;
+    uint32_t launch_msg_rd_ptr;
+    struct launch_msg_t launch[launch_msg_buffer_num_entries];
+    struct go_msg_t go_message;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
     uint32_t pads_2[PROFILER_NOC_ALIGMENT_PAD_COUNT];
@@ -304,6 +307,7 @@ static_assert(
 #endif
 #if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
 static_assert( eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + sizeof(mailboxes_t) < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END);
+static_assert( MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_IERISC_MAILBOX_END);
 static constexpr uint32_t ETH_LAUNCH_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static constexpr uint32_t ETH_PROFILER_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static_assert( ETH_LAUNCH_CHECK == 0);
@@ -317,6 +321,7 @@ static constexpr uint32_t TENSIX_LAUNCH_CHECK = (MEM_MAILBOX_BASE + offsetof(mai
 static constexpr uint32_t TENSIX_PROFILER_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static_assert( TENSIX_LAUNCH_CHECK == 0);
 static_assert( TENSIX_PROFILER_CHECK == 0);
+static_assert( sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 #endif
 #endif
 
