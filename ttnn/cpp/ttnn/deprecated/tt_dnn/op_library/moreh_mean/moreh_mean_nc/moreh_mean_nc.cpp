@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+<<<<<<< HEAD
+=======
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_mean/moreh_mean_op.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "tt_metal/common/work_split.hpp"
+>>>>>>> #11838: Update function calls
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"

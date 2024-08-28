@@ -6,7 +6,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
@@ -133,7 +133,7 @@ operation::ProgramWithCallbacks create_program(
             core_group_1,
             core_group_2,
             num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) = ttnn::split_work_to_cores(core_range, num_output_blocks_total);
+            num_blocks_per_core_group_2) = split_work_to_cores(core_range, num_output_blocks_total);
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     }

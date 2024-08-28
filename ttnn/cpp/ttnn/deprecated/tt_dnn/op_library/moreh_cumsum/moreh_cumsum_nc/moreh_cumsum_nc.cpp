@@ -4,7 +4,7 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks moreh_cumsum_nc(
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = ttnn::split_work_to_cores(grid, num_tiles_per_chip);
+         num_cols_per_core_group_2] = split_work_to_cores(grid, num_tiles_per_chip);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

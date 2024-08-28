@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -50,7 +50,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_cols = NC * Wt;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
-        ttnn::split_work_to_cores(compute_with_storage_grid_size, num_cols);
+        split_work_to_cores(compute_with_storage_grid_size, num_cols);
 
     // Current sharding only supports width, and that input and output are sharded
     if (in_sharded) {

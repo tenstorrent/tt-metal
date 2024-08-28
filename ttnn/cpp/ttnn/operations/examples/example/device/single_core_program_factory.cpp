@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "example_device_operation.hpp"
-#include "ttnn/operations/core/work_split/work_split.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 namespace ttnn::operations::examples {
 ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::SingleCore::create(
@@ -34,7 +34,7 @@ ExampleDeviceOperation::SingleCore::cached_program_t ExampleDeviceOperation::Sin
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        ttnn::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+        split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
