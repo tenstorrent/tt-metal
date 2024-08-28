@@ -99,12 +99,9 @@ void kernel_main() {
         num_tiles_per_partial_result = 1;
         #endif
 
-        DPRINT << "[Sender] Before wait front" << ENDL();
         // global reduce
         // wait for local data ready
-        DPRINT << "num_tiles_per_partial_result*block_h : " << num_tiles_per_partial_result*block_h << ENDL();
         cb_wait_front(cb_partial, num_tiles_per_partial_result*block_h); // TODO test for layernorm
-        DPRINT << "[Sender] After wait front" << ENDL();
 
         // inc semaphore of other cores, tell other all-to-all workers to start
         if constexpr(num_blocks > 1) {
@@ -113,8 +110,6 @@ void kernel_main() {
             noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
             noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
         }
-
-        DPRINT << "[Sender] After sync" << ENDL();
 
         // read data from other cores - first stage reduce
         uint32_t l1_read_addr_ex_par = get_read_ptr(cb_partial);
@@ -145,15 +140,11 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_external, num_tiles_per_partial_result*num_blocks_first_stage);
 
-            DPRINT << "[Sender] After push back" << ENDL();
-
             // sync with second-stage all-to-all workers
             if constexpr(use_two_stage_reduce) {
                 if (i == 0) {
-                    DPRINT << "[Sender] Before 0,0 sem wait second stage" << ENDL();
                     noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage-1);
                     noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
-                    DPRINT << "[Sender] After 0,0 sem wait second stage" << ENDL();
                 }
 
                 uint32_t curr_block_index = block_index_stride;
@@ -168,51 +159,9 @@ void kernel_main() {
                 l1_read_addr_ex += single_tile_size_bytes;
                 noc_async_read_barrier();
                 cb_push_back(cb_external, num_tiles_per_partial_result * (num_blocks_second_stage - 1)); // push back partials from all cores -> compute can start reducing now
-                DPRINT << "[Sender] After push back cb_external" << ENDL();
             }
         }
 
-        DPRINT << "[Sender] Reader sender done" << ENDL();
-
-        // l1_read_addr_ex = get_read_ptr(cb_ex);
-        // uint32_t l1_write_addr_ex_global = get_write_ptr(cb_ex_global);
-        // cb_wait_front(cb_ex, num_tiles_per_worker); // wait for the sender core to reduce all partials and store in cb_ex
-
-        // // sync with other all-to-all workers, on the same row
-        // if constexpr(num_all_to_all_workers_first_stage > 1) {
-        //     noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_all_to_all_workers_first_stage-1);
-        //     noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-        // }
-
-        // // gather data to top row
-        // cb_reserve_back(cb_ex_global, block_h);
-        // for (uint32_t block = 0; block < num_all_to_all_workers_first_stage; ++block) {
-        //     uint64_t noc_addr_ex = remote_noc_addrs[block] | l1_read_addr_ex;
-        //     uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1 ? num_tiles_per_worker_last_bytes : num_tiles_per_worker_bytes;
-        //     if constexpr (num_tiles_per_worker_bytes <= NOC_MAX_BURST_SIZE)
-        //         noc_async_read_one_packet(noc_addr_ex, l1_write_addr_ex_global, num_tiles_bytes);
-        //     else
-        //         noc_async_read(noc_addr_ex, l1_write_addr_ex_global, num_tiles_bytes);
-        //     l1_write_addr_ex_global += num_tiles_bytes;
-        // }
-        // noc_async_read_barrier();
-
-        // // mcast
-        // uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
-        // cb_push_back(cb_ex_global, block_h);
-        // if constexpr(num_blocks > 1) {
-        //     for (uint32_t block = 0; block < num_all_to_all_workers_first_stage; ++block) {
-        //         *reduce_sender_semaphore_addr_ptr = block + 2;
-
-        //         uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1 ? num_tiles_per_worker_last_bytes : num_tiles_per_worker_bytes;
-
-        //         noc_async_write_multicast(l1_read_addr_ex_global, multicast_data_noc | l1_read_addr_ex_global, num_tiles_bytes, num_blocks-1, false, false);
-        //         noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1, false, false);
-
-        //         l1_read_addr_ex_global += num_tiles_bytes;
-        //         noc_async_write_barrier();
-        //     }
-        // }
     };
     #ifdef RMSNORM
     global_reduce_sender(cb_ex_partial2, cb_ex_external2, cb_ex2, cb_ex_global, cb_ex2);

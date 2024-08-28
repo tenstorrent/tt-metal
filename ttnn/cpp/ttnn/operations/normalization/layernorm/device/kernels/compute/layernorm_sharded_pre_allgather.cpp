@@ -54,33 +54,15 @@ void MAIN {
     constexpr uint32_t scaler0 = 0;
 
     constexpr uint32_t cb_in0 = tt::CB::c_in0;
-    // constexpr uint32_t cb_in1 = tt::CB::c_in1;
-    // constexpr uint32_t cb_scaler = tt::CB::c_in2;
-    // constexpr uint32_t cb_eps = tt::CB::c_in3;
     constexpr uint32_t cb_scaler_global = tt::CB::c_in4;
-    // constexpr uint32_t cb_gamma = tt::CB::c_in5;
-    // constexpr uint32_t cb_beta = tt::CB::c_in6;
     constexpr uint32_t cb_x = tt::CB::c_intermed0; // x minus mean
     constexpr uint32_t cb_ex_partial = tt::CB::dataflow0; // E[x] partial reduce
     constexpr uint32_t cb_ex = tt::CB::dataflow1; // E[x] global reduce
     constexpr uint32_t cb_ex_external = tt::CB::dataflow2; // E[x] partials recieved from other cores
 
     constexpr uint32_t cb_ex2 = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
-    // constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5; // E[x^2] partials recieved from other cores
-    // constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
-    // constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x^2] global reduce
     constexpr uint32_t cb_x2 = cb_x; // x^2
-    // constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3; // [E[x^2]-E[x]^2]+eps
-    // constexpr uint32_t cb_fusion = tt::CB::c_intermed1; // stream gamma/beta
     constexpr uint32_t cb_out = tt::CB::c_out0;
-
-    // #ifdef RMSNORM
-    // constexpr uint32_t cb_var = cb_ex2;
-    // #else
-    // constexpr uint32_t cb_var = tt::CB::c_intermed2; // Var(x)
-    // #endif
-    // constexpr uint32_t cb_ex_sqr = cb_x2;
-
 
 
     #ifdef RMSNORM
@@ -183,9 +165,6 @@ void MAIN {
     reduce_revert_delta();
     cb_pop_front(cb_x2, num_tiles_per_block);
     cb_push_back(cb_ex_partial2, block_h);
-    PACK(DPRINT << "paker After push back" << ENDL());
-    UNPACK(DPRINT << "After push back" << ENDL());
-    UNPACK(DPRINT << "Before Reduction E(X)" << ENDL());
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial
     if constexpr(is_allgather_worker) {
@@ -194,10 +173,8 @@ void MAIN {
         cb_reserve_back(cb_reduction_out, num_tiles_per_partial_result*num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) { // loops over height
-            UNPACK(DPRINT << "After cb_global" << ENDL());
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_tiles_per_partial_result*num_blocks_reduce; w++) { // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
-                UNPACK(DPRINT << "before tile regs ac" << ENDL());
                 cb_wait_front(cb_ex_external2, 1);
                 reduce_tile(cb_ex_external2, cb_scaler_global, 0, scaler0, w % num_tiles_per_partial_result); // E(x) and E(x^2) interleaved so we reduce each one into different dest reg
                 cb_pop_front(cb_ex_external2, 1);
@@ -212,14 +189,8 @@ void MAIN {
         }
         reduce_revert_delta();
         cb_push_back(cb_reduction_out, num_tiles_per_partial_result*num_tiles_per_allgather_worker);
-        UNPACK(DPRINT << " ex 1nd stage : "<<TSLICE(cb_reduction_out, 0, SliceRange::h0_w0_32()) << ENDL());
     }
 
-    // unpack_reconfig_data_format(cb_ex_external, cb_in, cb_scaler_global, cb_in);
-
-    // cb_wait_front(cb_x2, num_tiles_per_block);
-
-    UNPACK(DPRINT << "Compute done" << ENDL());
 }
 
 }
