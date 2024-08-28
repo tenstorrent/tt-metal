@@ -254,7 +254,7 @@ def test_post_allgather_layernorm(
 @pytest.mark.parametrize(("min_pcc_sumx", "min_pcc_sumx2"), ([0.9997, 0.995],))
 @pytest.mark.parametrize("max_atol", [0.38])
 @pytest.mark.parametrize("input_width", [1024])
-@pytest.mark.parametrize("input_df", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("weights_df", [ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 def test_pre_allgather_layernorm(
