@@ -130,9 +130,13 @@ void py_module(py::module& m_primary) {
         py::arg("output_grad").noconvert(),
         py::arg("input").noconvert(),
         py::arg("mat2").noconvert(),
+        py::kw_only(),
+        py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true},
         py::arg("input_grad").noconvert() = std::nullopt,
         py::arg("mat2_grad").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("mat2_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("compute_kernel_config").noconvert() = std::nullopt,
         R"doc(
         "Performs a moreh_bmm_backward operation.
     )doc");
