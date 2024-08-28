@@ -536,7 +536,10 @@ struct MultiDeviceHostStorage {
 
         inline const MemoryConfig memory_config() const {
             std::lock_guard<std::mutex> lock(buffer_mtx);
-            auto first_device_id = this->ordered_device_ids.at(0);
+            if (this->ordered_device_ids.empty()) {
+                TT_FATAL("no such device...");
+            }
+            auto first_device_id = this->ordered_device_ids[0];
             if (this->buffers.at(first_device_id).get() == nullptr) {
                 TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
             }
@@ -679,6 +682,20 @@ struct Shape {
 
     Shape with_tile_padding() const {
         return Shape{tt::tt_metal::Shape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
+    }
+
+    bool has_tile_padding() const {
+        auto rank = this->rank();
+        for (auto index = 0; index < rank; index++) {
+            if (this->has_tile_padding(index)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool has_tile_padding(int dim) const {
+        return this->value.padding()[dim].front > 0 or this->value.padding()[dim].back > 0;
     }
 
     bool operator==(const Shape &other) const {

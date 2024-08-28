@@ -30,7 +30,8 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
     shape_first[this->dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
 
-    for (const Tensor &in_ref : input_tensors) {
+    for (int i = 0; i < input_tensors.size(); i++) {
+        const Tensor &in_ref = input_tensors[i];
         TT_FATAL(in_ref.buffer(), "Operand to concat needs to be allocated in a buffer on device.");
         TT_FATAL(in_ref.device(), "Operand to concat needs to be on device.");
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
@@ -39,6 +40,8 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
         tt::tt_metal::Shape curr_shape = in_ref.get_legacy_shape();
         TT_FATAL(curr_shape.rank() == shape_first.rank(), "Input tensor ranks must be equal");
         curr_shape[this->dim] = 0;
+            // last tensor can support without any kernel changes
+        TT_FATAL(!in_ref.get_shape().has_tile_padding(this->dim),fmt::format("Tile padding along concatenated dim ({}) not supported for concat yet (tensor: {}).",this->dim, i));
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
         if (in_ref.get_layout() == Layout::ROW_MAJOR && this->dim == shape_first.rank() - 1) {
             TT_FATAL(
