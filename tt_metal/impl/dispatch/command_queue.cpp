@@ -1921,7 +1921,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
     uint32_t max_data_sizeB =
-        max_prefetch_command_size - ((sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) * 2);  // * 2 to account for issue
+        max_prefetch_command_size - (CQ_PREFETCH_CMD_BARE_MIN_SIZE * 2);  // * 2 to account for issue
 
     uint32_t dst_page_index = 0;
 
@@ -2041,10 +2041,7 @@ void HWCommandQueue::enqueue_write_buffer(const Buffer& buffer, const void* src,
 
         uint32_t num_full_pages_written = 0;
         while (total_pages_to_write > 0) {
-            uint32_t data_offsetB =
-                (sizeof(CQPrefetchCmd) +
-                 sizeof(
-                     CQDispatchCmd));  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
+            uint32_t data_offsetB = CQ_PREFETCH_CMD_BARE_MIN_SIZE; // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
             bool issue_wait =
                 (dst_page_index == 0 and
                  bank_base_address == buffer.address());  // only stall for the first write of the buffer
