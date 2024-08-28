@@ -392,7 +392,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
     bool split_work_by_old_sticks = old_stick_size > new_stick_size;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, old_stick_size > new_stick_size ? num_old_sticks : num_new_sticks);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, old_stick_size > new_stick_size ? num_old_sticks : num_new_sticks);
 
     uint32_t src0_cb_index = 0;
     auto num_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
@@ -489,7 +489,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
         bool split_work_by_old_sticks = old_stick_size > new_stick_size;
 
         auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, old_stick_size > new_stick_size ? num_old_sticks : num_new_sticks);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, old_stick_size > new_stick_size ? num_old_sticks : num_new_sticks);
         auto all_runtime_args = get_runtime_args_rm_multi_core(src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, num_sticks_per_core_group_1, core_group_2, num_sticks_per_core_group_2, split_work_by_old_sticks);
 
         for(uint32_t i = 0; i < num_cores_total; i++) {

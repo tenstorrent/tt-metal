@@ -415,7 +415,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             out_subblock_w_ntiles = find_max_block_size(out_subblock_w_ntiles, 4);
         } else {
             while (out_subblock_h_ntiles * out_subblock_w_ntiles > 4) {
-                uint32_t div = find_max_divisor(out_subblock_h_ntiles, out_subblock_h_ntiles - 1);
+                uint32_t div = tt::tt_metal:: find_max_divisor(out_subblock_h_ntiles, out_subblock_h_ntiles - 1);
                 out_subblock_h_ntiles = find_max_block_size(out_subblock_h_ntiles, div);
             }
         }

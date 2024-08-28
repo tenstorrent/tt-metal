@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
 
 
     auto grid_size = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     tt::log_debug("num_cores: {}", num_cores);
     tt::log_debug("grid_size: {}", grid_size);

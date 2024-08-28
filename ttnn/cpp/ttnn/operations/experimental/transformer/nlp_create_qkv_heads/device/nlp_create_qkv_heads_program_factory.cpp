@@ -76,7 +76,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of in0_w_tiles per core
     uint32_t num_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_blocks);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
 
 
     ////////////////////////////////////////////////////////////////////////////

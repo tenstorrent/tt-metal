@@ -50,7 +50,7 @@ inline std::tuple<uint32_t, uint32_t> get_max_cores_divisible_by_tiles_per_core_
 }
 
 // Finds the maximum even divisor of val starting at start_max_div and below
-inline int find_max_divisor(uint32_t val, uint32_t start_max_div) {
+inline int tt::tt_metal:: find_max_divisor(uint32_t val, uint32_t start_max_div) {
     int result = 1;
     for (int find_divisor = start_max_div; find_divisor >= 1; find_divisor--) {
         if (find_divisor == 7 || find_divisor == 5)
@@ -74,7 +74,7 @@ inline int find_max_block_size(uint32_t val, uint32_t max_block_size = 8) {
     return result;
 }
 
-inline std::set<CoreRange> num_cores_to_corerange_set(
+inline std::set<CoreRange> tt::tt_metal:: num_cores_to_corerange_set(
     const CoreCoord start_core,
     const uint32_t target_num_cores,
     const CoreCoord grid_size,
@@ -149,15 +149,15 @@ inline std::set<CoreRange> num_cores_to_corerange_set(
 }
 
 // TODO: Get rid of old function
-inline std::set<CoreRange> num_cores_to_corerange_set(
+inline std::set<CoreRange> tt::tt_metal:: num_cores_to_corerange_set(
     const uint32_t target_num_cores, const CoreCoord grid_size, const bool row_wise = false) {
-    return num_cores_to_corerange_set({0, 0}, target_num_cores, grid_size, row_wise);
+    return tt::tt_metal:: num_cores_to_corerange_set({0, 0}, target_num_cores, grid_size, row_wise);
 }
 
-// TODO: Switch num_cores_to_corerange_set to always return CoreRangeSet
+// TODO: Switch tt::tt_metal:: num_cores_to_corerange_set to always return CoreRangeSet
 inline CoreRangeSet num_cores_to_core_range_set(
     const uint32_t target_num_cores, const CoreCoord grid_size, const bool row_wise = false) {
-    return CoreRangeSet(num_cores_to_corerange_set({0, 0}, target_num_cores, grid_size, row_wise));
+    return CoreRangeSet(tt::tt_metal:: num_cores_to_corerange_set({0, 0}, target_num_cores, grid_size, row_wise));
 }
 
 // This function takes in the core grid size, as well as the number of units of work to divide between the cores
@@ -165,12 +165,12 @@ inline CoreRangeSet num_cores_to_core_range_set(
 // the greater amount of work, and the CoreRangeSet that does less work if work cannot be evenly divided
 // If it can be evenly divided, the second CoreRangeSet is the same as the first, and the last is empty
 // The last 2 args are the units of work for the two core grids
-inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
+inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> tt::tt_metal::split_work_to_cores(
     const CoreCoord grid_size, const uint32_t units_to_divide, const bool row_wise = false) {
     ZoneScoped;
     uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y;
     auto target_num_cores = std::min(units_to_divide, num_cores_x * num_cores_y);
-    CoreRangeSet all_cores(num_cores_to_corerange_set(target_num_cores, grid_size, row_wise));
+    CoreRangeSet all_cores(tt::tt_metal:: num_cores_to_corerange_set(target_num_cores, grid_size, row_wise));
 
     std::set<CoreRange> core_group_1_set;
     std::set<CoreRange> core_group_2_set;
@@ -184,7 +184,7 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
         // which is implicitly assumed in the following logic
     } else {
         // Group of cores that do more work
-        core_group_1_set = num_cores_to_corerange_set(units_to_divide % target_num_cores, grid_size, row_wise);
+        core_group_1_set = tt::tt_metal:: num_cores_to_corerange_set(units_to_divide % target_num_cores, grid_size, row_wise);
         auto last_block_group_1 = (*core_group_1_set.rbegin());
         auto last_block_all_cores = (*all_cores.ranges().rbegin());
         if (row_wise) {

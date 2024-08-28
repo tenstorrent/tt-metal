@@ -527,7 +527,7 @@ operation::ProgramWithCallbacks concat_multi_core(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_output_pages, rm_orientation);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_pages, rm_orientation);
 
     uint32_t num_input_tensors = input_tensors.size();
 

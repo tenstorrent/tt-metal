@@ -47,7 +47,7 @@ operation::ProgramWithCallbacks moreh_sgd_(
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(core_range, units_to_divide);
+        tt::tt_metal::split_work_to_cores(core_range, units_to_divide);
 
     auto arch = param_in.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(arch, compute_kernel_config);

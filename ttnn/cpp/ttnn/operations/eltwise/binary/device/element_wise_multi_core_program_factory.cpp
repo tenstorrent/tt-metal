@@ -104,7 +104,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         row_major = true;
         std::tie(
             num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
-            split_work_to_cores(compute_with_storage_grid_size, num_tiles, row_major);
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles, row_major);
         block_cnt_per_core_group_1 = num_tiles_per_core_group_1;
         block_cnt_per_core_group_2 = num_tiles_per_core_group_2;
         cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);

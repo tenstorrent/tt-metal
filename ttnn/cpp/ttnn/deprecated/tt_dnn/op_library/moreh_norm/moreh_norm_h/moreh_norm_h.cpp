@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks moreh_norm_h_impl(const Tensor &input, float p, 
          core_group_1,
          core_group_2,
          num_units_per_core_group_1,
-         num_units_per_core_group_2] = split_work_to_cores(grid, num_units);
+         num_units_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_units);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup

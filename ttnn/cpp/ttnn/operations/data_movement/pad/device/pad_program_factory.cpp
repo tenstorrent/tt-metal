@@ -1003,7 +1003,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_padded_per_core_group_1, num_sticks_padded_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_padded_per_core_group_1, num_sticks_padded_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, NCH_padded);
 
     uint32_t src0_cb_index = 0;
     auto num_sticks = num_sticks_padded_per_core_group_1 > num_sticks_padded_per_core_group_2 ? num_sticks_padded_per_core_group_1 : num_sticks_padded_per_core_group_2;
