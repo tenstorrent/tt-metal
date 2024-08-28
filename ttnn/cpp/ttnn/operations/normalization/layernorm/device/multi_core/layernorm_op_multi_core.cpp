@@ -190,7 +190,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     uint32_t num_tile_rows = NC * Ht;
     auto grid_size = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

@@ -145,7 +145,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor &a, Tensor 
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -206,7 +206,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor &a, Tensor 
         uint32_t num_cores_total = num_cores_x * num_cores_y;
         uint32_t num_tensor_tiles = src_tensor.volume() / TILE_HW;
 
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
         override_runtime_args_mc_cn<false>(
             program,
@@ -477,7 +477,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, row_major ? NCH : num_tensor_tiles);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, row_major ? NCH : num_tensor_tiles);
 
     tt::tt_metal::Shape output_shape = output.get_legacy_shape();
 
@@ -598,7 +598,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
         uint32_t NCH = N * C * H;
         bool row_major = src_tensor.get_layout() == Layout::ROW_MAJOR;
 
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, row_major ? NCH : num_tensor_tiles);
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, row_major ? NCH : num_tensor_tiles);
 
         if (row_major) {
             override_runtime_args_mc_hc_rm<false>(
@@ -1376,7 +1376,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
     uint32_t num_cores_total = num_cores_x*num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x-1, num_cores_y-1});
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, row_major ? NC : num_tensor_tiles);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, row_major ? NC : num_tensor_tiles);
 
     tt::tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -1530,7 +1530,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         uint32_t NC = src_tensor.shape()[1] * src_tensor.shape()[0];
         bool row_major = src_tensor.get_layout() == Layout::ROW_MAJOR;
 
-        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, row_major ? NC : num_tensor_tiles);
+        auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, row_major ? NC : num_tensor_tiles);
 
         if (row_major) {
             override_runtime_args_wh_rm<false>(

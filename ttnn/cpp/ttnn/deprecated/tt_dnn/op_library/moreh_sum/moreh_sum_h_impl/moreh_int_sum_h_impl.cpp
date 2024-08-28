@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = split_work_to_cores(grid, num_cols);
+         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_cols);
 
     log_debug(LogOp, "num_tiles {}, num_cols {}, num_cols_per_core_group_1 {}, num_cols_per_core_group_2 {}", num_tiles, num_cols, num_cols_per_core_group_1, num_cols_per_core_group_2);
 
@@ -260,7 +260,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
     // uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // auto num_cols = other_dims_product * Wt;
     // auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
-    //     split_work_to_cores(compute_with_storage_grid_size, num_cols);
+    //     tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
 
     // string compute_kernel_name = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_h_impl/kernels/moreh_sum_h_int.cpp";
 
