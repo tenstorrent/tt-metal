@@ -62,8 +62,6 @@ std::vector<Tensor> AllGatherMatmul::create_output_tensors(const std::vector<Ten
 
 operation::ProgramWithCallbacks AllGatherMatmul::create_program(const std::vector<Tensor> & input_tensors, const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const {
 
-    auto& program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(this->matmul_struct.program_config.value());
-
     // Return the AllGatherMatmul program with callbacks
     return all_gather_matmul_multi_core_with_workers(
         input_tensors[0], // input_tensor
@@ -85,16 +83,8 @@ operation::ProgramWithCallbacks AllGatherMatmul::create_program(const std::vecto
         /* Matmul Params */
         {}, // Bias
         this->matmul_struct.bcast_batch.value(),
-        program_config.compute_with_storage_grid_size,
         this->matmul_struct.compute_kernel_config.value(),
-        program_config.in0_block_w,
-        program_config.out_subblock_h,
-        program_config.out_subblock_w,
-        program_config.per_core_M,
-        program_config.per_core_N,
-        program_config.fuse_batch,
-        program_config.transpose_mcast,
-        program_config.fused_activation,
+        this->matmul_struct.program_config.value(),
         this->matmul_struct.untilize_out
     );
 }
@@ -111,7 +101,8 @@ std::vector <ttnn::Tensor> all_gather_matmul(
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
     const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& memory_config_ag,
+    const std::optional<MemoryConfig>& memory_config_mm,
     const bool transpose_a,
     const bool transpose_b,
     const std::optional<const DataType> dtype,
@@ -131,7 +122,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
 
 
     operation::launch_op(
-        [dim, all_gather_core_grid_offset, num_links, memory_config, transpose_a, transpose_b, dtype, program_config, activation, compute_kernel_config, core_grid, devices](
+        [dim, all_gather_core_grid_offset, num_links, memory_config_ag, memory_config_mm, transpose_a, transpose_b, dtype, program_config, activation, compute_kernel_config, core_grid, devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -140,7 +131,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
             const auto& weight_tensor = input_tensors[1];
 
             /* AllGather setup */
-            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config, devices);
+            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config_ag, devices);
 
             // Create the all gather output tensor used as input (activation) to the matmul
             ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
@@ -161,7 +152,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
                     /*parameters=*/operations::matmul::Matmul{
                         program_config,
                         /*bcast_batch=*/std::nullopt,
-                        memory_config.value_or(input_tensor.memory_config()),
+                        memory_config_mm.value_or(input_tensor.memory_config()),
                         dtype.value_or(input_tensor.get_dtype()),
                         compute_kernel_config,
                         /*untilize_out=*/false,

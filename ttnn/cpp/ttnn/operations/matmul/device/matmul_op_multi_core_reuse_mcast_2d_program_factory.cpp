@@ -1437,18 +1437,13 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helpe
     const std::optional<const Tensor> bias,
     Tensor& output_tensor,
     bool broadcast_batch,
-    CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N,
-    bool fuse_batch,
-    bool transpose_mcast,
-    std::optional<UnaryWithParam> fused_activation,
+    const MatmulProgramConfig program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
+
+    MatmulMultiCoreReuseMultiCastProgramConfig config = std::get<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config);
+
     return matmul_multi_core_reuse_mcast_2d_optimized_(
         program,
         a,
@@ -1456,16 +1451,16 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helpe
         bias,
         output_tensor,
         broadcast_batch,
-        compute_with_storage_grid_size,
+        config.compute_with_storage_grid_size,
         compute_kernel_config,
-        in0_block_w,
-        out_subblock_h,
-        out_subblock_w,
-        per_core_M,
-        per_core_N,
-        fuse_batch,
-        transpose_mcast,
-        fused_activation,
+        config.in0_block_w,
+        config.out_subblock_h,
+        config.out_subblock_w,
+        config.per_core_M,
+        config.per_core_N,
+        config.fuse_batch,
+        config.transpose_mcast,
+        config.fused_activation,
         untilize_out,
         fused_op_signaler);
 }

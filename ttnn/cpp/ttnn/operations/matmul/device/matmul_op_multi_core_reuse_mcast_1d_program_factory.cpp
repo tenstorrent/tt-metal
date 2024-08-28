@@ -23,6 +23,7 @@ using ttnn::operations::unary::UnaryWithParam;
 namespace reuse_mcast_1d_optimized_helpers {
 
 operation::ProgramWithCallbacks create_program_mcast_in0(
+    tt_metal::Program& program,
     const Tensor& a,
     tt_metal::Device* device,
     MathFidelity math_fidelity,
@@ -51,10 +52,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     tt::DataFormat output_data_format,
     bool in0_is_sharded,
     bool output_is_sharded,
-    bool untilize_out) {
-    tt_metal::Program program{};
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
+    // tt_metal::Program program{};
 
-    bool fuse_op = false;
+    bool fuse_op = fused_op_signaler.has_value();
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -366,6 +368,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
 
+    if (fuse_op) {
+        // Create semaphores
+        fused_op_signaler->init_fused_op(program, device, in0_mcast_cores_with_work_and_in_receiver_grid);
+    }
+
     auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
         program,
         in0_is_sharded
@@ -635,6 +642,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
 
             if (i < num_cores_with_work) {
+                if (fuse_op) {
+                    fused_op_signaler->emit_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+                }
+
                 tt_metal::SetRuntimeArgs(
                     program,
                     mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
@@ -669,6 +680,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 // padding args
                 (std::uint32_t)per_core_M  // last_block_h
             };
+
+            if (fuse_op) {
+                fused_op_signaler->emit_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+            }
+
             tt_metal::SetRuntimeArgs(
                 program,
                 mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
@@ -733,7 +749,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 mm_in1_sender_writer_args.push_back((std::uint32_t)bias_buffer->address());
                 mm_in1_sender_writer_args.push_back(
                     (std::uint32_t)per_core_N * output_idx_x);  // in3_tensor_start_tile_id
+            } else { // Placeholder args
+                mm_in1_sender_writer_args.push_back(0);
+                mm_in1_sender_writer_args.push_back(0);
             }
+
+            if (fuse_op) {
+                fused_op_signaler->emit_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
+            }
+
             tt_metal::SetRuntimeArgs(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
         }
@@ -1494,6 +1518,7 @@ namespace operations {
 namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
+    tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor> bias,
@@ -1509,7 +1534,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     bool fuse_batch,
     std::optional<UnaryWithParam> fused_activation,
     bool mcast_in0,
-    bool untilize_out) {
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // CB dataformats
@@ -1623,6 +1649,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     if (mcast_in0) {
         return reuse_mcast_1d_optimized_helpers::create_program_mcast_in0(
+            program,
             a,
             device,
             math_fidelity,
@@ -1651,7 +1678,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             output_data_format,
             a.memory_config().is_sharded(),
             output.memory_config().is_sharded(),
-            untilize_out);
+            untilize_out,
+            fused_op_signaler);
     } else {
         return reuse_mcast_1d_optimized_helpers::create_program_mcast_in1(
             device,
@@ -1702,7 +1730,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     std::optional<UnaryWithParam> fused_activation,
     bool mcast_in0,
     bool untilize_out) {
+
+    tt_metal::Program program{}; /* Create a program */
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
+
     return matmul_multi_core_reuse_mcast_1d_optimized_(
+        program,
         a,
         b,
         bias,
@@ -1718,7 +1751,43 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
         fuse_batch,
         fused_activation,
         mcast_in0,
-        untilize_out);
+        untilize_out,
+        empty_fused_op_signaler);
+}
+
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<const Tensor> bias,
+    Tensor& output_tensor,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
+
+    MatmulMultiCoreReuseMultiCast1DProgramConfig config = std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
+
+    return matmul_multi_core_reuse_mcast_1d_optimized_(
+        program,
+        a,
+        b,
+        bias,
+        output_tensor,
+        broadcast_batch,
+        config.compute_with_storage_grid_size,
+        compute_kernel_config,
+        config.in0_block_w,
+        config.out_subblock_h,
+        config.out_subblock_w,
+        config.per_core_M,
+        config.per_core_N,
+        config.fuse_batch,
+        config.fused_activation,
+        config.mcast_in0,
+        untilize_out,
+        fused_op_signaler);
 }
 
 }  // namespace matmul

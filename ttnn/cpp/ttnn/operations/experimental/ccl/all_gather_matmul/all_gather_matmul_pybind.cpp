@@ -32,7 +32,8 @@ void py_bind_all_gather_matmul(pybind11::module& module) {
 
         Keyword Args:
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+            * :attr:`memory_config_ag` (Optional[ttnn.MemoryConfig]): Memory configuration for the All Gather operation.
+            * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the Matmul operation.
             * :attr:`transpose_a` (bool)
             * :attr:`transpose_b` (bool)
             * :attr:`dtype` (Optional[DataType])
@@ -55,7 +56,8 @@ void py_bind_all_gather_matmul(pybind11::module& module) {
             py::arg("all_gather_core_grid_offset"),
             py::kw_only(),
             py::arg("num_links") = 1,
-            py::arg("memory_config") = std::nullopt,
+            py::arg("memory_config_ag") = std::nullopt,
+            py::arg("memory_config_mm") = std::nullopt,
             py::arg("transpose_a") = false,
             py::arg("transpose_b") = false,
             py::arg("dtype") = std::nullopt,

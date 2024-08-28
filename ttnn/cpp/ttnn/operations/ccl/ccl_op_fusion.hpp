@@ -93,7 +93,7 @@ struct MatmulFusedOpSignaler {
     void init_fused_op(
         Program& program,
         Device const* device,
-        const CoreRange& core_range_to_signal
+        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal
     );
 
     void emit_matmul_fused_op_rt_args(

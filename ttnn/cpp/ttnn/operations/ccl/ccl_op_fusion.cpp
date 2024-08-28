@@ -115,15 +115,30 @@ void MatmulFusedOpSignaler::init_all_gather(
 void MatmulFusedOpSignaler::init_fused_op(
     Program& program,
     Device const* device,
-    const CoreRange& core_range_to_signal
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal
 ) {
-
-    // Get the noc coords for the fused op receiver cores
+    // Clear the existing receiver cores
     this->fused_op_receiver_cores_noc.clear();
-    const auto& cores = grid_to_cores(core_range_to_signal.start_coord, core_range_to_signal.end_coord, true);
-    for (auto& core : cores) {
-        this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
-    }
+
+    // Visit the variant to handle CoreRange and CoreRangeSet differently
+    std::visit([&](auto& arg) {
+        using T = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<T, CoreRange>) {
+            // Handle CoreRange
+            const auto& cores = grid_to_cores(arg.start_coord, arg.end_coord, true);
+            for (auto& core : cores) {
+                this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+            }
+        } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+            // Handle CoreRangeSet
+            for (const auto& range : arg.ranges()) {
+                const auto& cores = grid_to_cores(range.start_coord, range.end_coord, true);
+                for (auto& core : cores) {
+                    this->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(core));
+                }
+            }
+        }
+    }, core_range_to_signal);
 
     // Create the semaphores
     this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));

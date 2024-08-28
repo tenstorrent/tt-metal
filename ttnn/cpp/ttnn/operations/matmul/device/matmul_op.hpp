@@ -81,25 +81,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
-    tt::tt_metal::Program& program,
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    const std::optional<const Tensor> bias,
-    Tensor &output_tensor,
-    bool bcast_batch,
-    CoreCoord compute_with_storage_grid_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N,
-    bool fuse_batch,
-    bool transpose_mcast,
-    std::optional<UnaryWithParam> fused_activation,
-    bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &matmul_signal_info);
 operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
@@ -206,6 +187,29 @@ Matmul create_matmul_struct(
     const Tensor &input_tensor_b,
     const struct Matmul &parameters
 );
+
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    const std::optional<const Tensor> bias,
+    Tensor &output_tensor,
+    bool bcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor &input_tensor_a,
+    const Tensor &input_tensor_b,
+    const std::optional<const Tensor> bias,
+    Tensor &output_tensor,
+    bool bcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &matmul_signal_info);
 
 Tensor matmul(
     const Tensor &input_tensor_a,

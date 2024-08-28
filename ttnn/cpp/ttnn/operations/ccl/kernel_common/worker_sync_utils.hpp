@@ -311,4 +311,42 @@ struct MatmulOpReceiver {
         }
     }
 
+    uint32_t align_to_slice_and_sync(uint32_t block_idx, uint32_t sender_id) {
+        ASSERT(this->initialized);
+
+        // Align the id to the start of the tensor slice in order of processing from all gather
+        uint32_t block_id = this->ring_idxs[this->curr_dir];
+
+        if (block_idx % this->num_blocks_per_slice == 0) { // Aligned to the start of a tensor slice
+
+            if (this->curr_transfer_idx != 0) { // Skip update for local slice
+                // Change direction
+                this->curr_dir = !this->curr_dir;
+
+                // Update the start page idx of the tensor slice in curr_direction
+                // We only want to know the update for the ring index
+                advance_start_page_idx(
+                    this->start_page_idxs[this->curr_dir],
+                    this->ring_idxs[this->curr_dir],
+                    this->ring_size,
+                    this->is_clockwise_dirs[this->curr_dir],
+                    this->output_page_offset,
+                    this->last_output_page_offset
+                );
+            }
+
+            // Update the alignment
+            block_id = this->ring_idxs[this->curr_dir];
+
+            // Wait for a sempaphore signal to start processing the tensor slice
+            if (this->wait_for_op_signal && block_id == sender_id) {
+                uint32_t tensor_slice_cnt = (this->curr_transfer_idx) / this->num_directions;
+                noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[this->curr_dir], tensor_slice_cnt + 1);
+            }
+
+            this->curr_transfer_idx++;
+        }
+
+        return block_id;
+    }
 };

@@ -216,16 +216,8 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     /* Matmul Params */
     const std::optional<const Tensor> bias,
     bool bcast_batch,
-    CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N,
-    bool fuse_batch,
-    bool transpose_mcast,
-    std::optional<operations::matmul::UnaryWithParam> fused_activation,
+    const operations::matmul::MatmulProgramConfig program_config,
     bool untilize_out
 
 ) {
@@ -259,33 +251,54 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     );
 
     // Matmul
-    auto matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
-        program,
-        all_gather_output_tensor,
-        weight_tensor,
-        bias,
-        matmul_output_tensor,
-        bcast_batch,
-        compute_with_storage_grid_size,
-        compute_kernel_config,
-        in0_block_w,
-        out_subblock_h,
-        out_subblock_w,
-        per_core_M,
-        per_core_N,
-        fuse_batch,
-        transpose_mcast,
-        fused_activation,
-        untilize_out,
-        matmul_fused_op_signaler
-    );
-    const auto matmul_override_runtime_arguments_callback = matmul_program_with_callbacks.override_runtime_arguments_callback;
+    std::optional<operation::ProgramWithCallbacks> matmul_program_with_callbacks;
+    std::optional<operation::OverrideRuntimeArgumentsCallback<Tensors>> matmul_override_runtime_arguments_callback;
+
+    std::visit([&] (const auto& config) {
+        using ProgramConfigType = std::decay_t<decltype(config)>;
+        if (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
+            matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
+                program,
+                all_gather_output_tensor,
+                weight_tensor,
+                bias,
+                matmul_output_tensor,
+                bcast_batch,
+                compute_kernel_config,
+                config,
+                untilize_out,
+                matmul_fused_op_signaler
+            );
+            matmul_override_runtime_arguments_callback = matmul_program_with_callbacks->override_runtime_arguments_callback;
+        } else if (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+            matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+                program,
+                all_gather_output_tensor,
+                weight_tensor,
+                bias,
+                matmul_output_tensor,
+                bcast_batch,
+                compute_kernel_config,
+                config,
+                untilize_out,
+                matmul_fused_op_signaler
+            );
+            matmul_override_runtime_arguments_callback = matmul_program_with_callbacks->override_runtime_arguments_callback;
+        } else {
+            TT_FATAL("Unsupported MatmulProgramConfig type");
+        }
+    }, program_config);
+
+    if (!matmul_program_with_callbacks.has_value()) {
+        TT_FATAL("Matmul program with callbacks not created");
+    }
+
 
     // Datacopy
     DatacopyParams datacopy_params;
     if (use_datacopy) {
         datacopy_params = setup_datacopy(
-            matmul_program_with_callbacks.program,
+            matmul_program_with_callbacks->program,
             input_tensor,
             all_gather_output_tensor,
             datacopy_output_tensor,
@@ -315,7 +328,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
 
     // All Gather
     operation::ProgramWithCallbacks program_with_callbacks = ttnn::all_gather_multi_core_with_workers_helper(
-        matmul_program_with_callbacks.program,
+        matmul_program_with_callbacks->program,
         input_tensor,
         all_gather_output_tensor,
         dim,
