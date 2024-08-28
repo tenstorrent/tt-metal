@@ -419,7 +419,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     const std::optional<const Tensor> E_x2,
     Tensor& output,
     LayerNormType norm_type,
-    LayerNormDistributedType distributed_type
+    LayerNormDistributedType distributed_type,
     float eps,
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
@@ -428,7 +428,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     DeviceComputeKernelConfig compute_kernel_config
 ) {
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
-    bool is_pre_all_gather_norm = distributed_type == LayerNormDistributedType::PRE_ALL_GATHER;
+    bool is_pre_all_gather = distributed_type == LayerNormDistributedType::PRE_ALL_GATHER;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -553,6 +553,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
     }
     uint32_t num_rows_per_all_to_all_worker_last = block_ht - (block_ht / num_rows_per_all_to_all_worker) * num_rows_per_all_to_all_worker;
+    uint32_t stats_block_tiles = 2;
+    if (rms_norm) {
+        stats_block_tiles = 1;
+    }
     uint32_t in0_block_tiles = block_wt * block_ht;
     uint32_t in0_CB_tiles = in0_block_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
@@ -570,6 +574,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
+    if (is_pre_all_gather && !is_rms_norm){
+        ex_partial_CB_size = 2 * ex_partial_CB_size;
+    }
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
@@ -577,6 +584,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
     // output buffer size
     uint32_t out_CB_size = in0_block_tiles * out_single_tile_size;
+    if (is_pre_all_gather) {
+        out_CB_size = stats_block_tiles * out_single_tile_size;
+    }
+
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -840,7 +851,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::string sender_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp";
     std::string reciever_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp";
 
-    if(E_x.has_value() or E_x2.has_value()) {
+    if (is_pre_all_gather) {
+        sender_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
+        reciever_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
+    } else if(E_x.has_value() or E_x2.has_value()) {
         sender_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
         reciever_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
     }
@@ -934,6 +948,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // writer kernel
     bool use_row_major_kernel = (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR);
     std::string writer_kernel = use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln_rm_gb.cpp" : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln.cpp";
+    if (is_pre_all_gather) {
+        writer_kernel = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_sharded_ln_pre_all_gather.cpp"
+    }
     auto writer_mcast_sender_kernels_id = CreateKernel(
         program,
         writer_kernel,
@@ -988,7 +1005,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     };
     // compute kernel
     std::string compute_kernel_file;
-    if (E_x.has_value() or E_x2.has_value()) {
+    if (is_pre_all_gather) {
+        compute_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_pre_allgather.cpp";
+    } else if (E_x.has_value() or E_x2.has_value()) {
         compute_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp";
     } else {
         compute_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
@@ -1350,12 +1369,17 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         {
             std::vector<uint32_t> writer_mcast_sender_args;
             if (use_two_stage_reduce) {
-                if (width_index < num_cores_all_to_all_first_stage) {
-                    writer_mcast_sender_args.push_back(packed_cinv_value);
-                    writer_mcast_sender_args.push_back(packed_winv_value);
-                } else {
+                if (is_pre_all_gather) {
                     writer_mcast_sender_args.push_back(packed_cinv_value_one);
-                    writer_mcast_sender_args.push_back(packed_winv_value);
+                    writer_mcast_sender_args.push_back(packed_cinv_value_one);
+                } else {
+                    if (width_index < num_cores_all_to_all_first_stage) {
+                        writer_mcast_sender_args.push_back(packed_cinv_value);
+                        writer_mcast_sender_args.push_back(packed_winv_value);
+                    } else {
+                        writer_mcast_sender_args.push_back(packed_cinv_value_one);
+                        writer_mcast_sender_args.push_back(packed_winv_value);
+                    }
                 }
             } else {
                 writer_mcast_sender_args.push_back(packed_cinv_value);
