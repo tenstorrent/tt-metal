@@ -119,7 +119,7 @@ def test_run_unpadding_test(
                 False,
             ),
         )
-        test_tensor = ttnn.experimental.tensor.interleaved_to_sharded(test_tensor, sharded_mem_config=test_mem_cfg)
+        test_tensor = ttnn.interleaved_to_sharded(test_tensor, test_mem_cfg)
 
         a_pt, a_ref, memory_config, num_cache_entries = unpadding_test(
             kv_cache_shape,

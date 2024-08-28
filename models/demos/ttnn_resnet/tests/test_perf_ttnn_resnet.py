@@ -35,9 +35,6 @@ try:
 except ModuleNotFoundError:
     use_signpost = False
 
-# TODO: Create ttnn apis for this
-ttnn.dump_device_profiler = ttnn.experimental.device.DumpDeviceProfiler
-
 
 model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
@@ -53,18 +50,18 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
     tt_inputs = tt_inputs_host.to(device, input_mem_config)
     _ = ttnn.from_device(tt_resnet50(tt_inputs, device, ops_parallel_config), blocking=True)
     profiler.end("compile")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     profiler.start("cache")
     tt_inputs = tt_inputs_host.to(device, input_mem_config)
     _ = ttnn.from_device(tt_resnet50(tt_inputs, device, ops_parallel_config), blocking=True)
     profiler.end("cache")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
         tt_inputs = tt_inputs_host.to(device, input_mem_config)
         _ = ttnn.from_device(tt_resnet50(tt_inputs, device, ops_parallel_config), blocking=True)
-        ttnn.dump_device_profiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
     ttnn.synchronize_device(device)
     if use_signpost:
@@ -78,7 +75,7 @@ def run_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measure
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
 
 def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
@@ -99,7 +96,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
     ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("compile")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     profiler.start("cache")
     ttnn.wait_for_event(1, op_event)
@@ -110,7 +107,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
     ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("cache")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
         ttnn.wait_for_event(1, op_event)
@@ -120,7 +117,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
         reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
         ttnn.record_event(0, op_event)
         _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
-        ttnn.dump_device_profiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
     ttnn.synchronize_device(device)
     if use_signpost:
@@ -139,7 +136,7 @@ def run_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_mea
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
 
 def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
@@ -152,14 +149,14 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("compile")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     profiler.start("cache")
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("cache")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     # Capture
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
@@ -167,13 +164,13 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
     reshard_out = ttnn.to_memory_config(tt_image_res, input_mem_config)
     tt_output_res = tt_resnet50(reshard_out, device, ops_parallel_config)
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         _ = ttnn.from_device(tt_output_res, blocking=True)
-        ttnn.dump_device_profiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
     ttnn.synchronize_device(device)
     if use_signpost:
@@ -188,7 +185,7 @@ def run_trace_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_m
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
 
 def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, num_measurement_iterations):
@@ -210,7 +207,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("compile")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     profiler.start("cache")
     ttnn.wait_for_event(1, op_event)
@@ -222,7 +219,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     ttnn.record_event(0, op_event)
     _ = ttnn.from_device(tt_resnet50(reshard_out, device, ops_parallel_config), blocking=True)
     profiler.end("cache")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     # Capture
     ttnn.wait_for_event(1, op_event)
@@ -240,17 +237,17 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     )
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert first_out_addr == reshard_out.buffer_address()
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
     for iter in range(0, num_warmup_iterations):
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
         ttnn.record_event(1, write_event)
         ttnn.wait_for_event(0, write_event)
-        reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, input_mem_config, reshard_out)
+        reshard_out = ttnn.reshard(tt_image_res, input_mem_config, reshard_out)
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        ttnn.dump_device_profiler(device)
+        ttnn.DumpDeviceProfiler(device)
 
     ttnn.synchronize_device(device)
     if use_signpost:
@@ -263,7 +260,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
         ttnn.record_event(1, write_event)
         ttnn.wait_for_event(0, write_event)
         # TODO: Add in place support to ttnn to_memory_config
-        reshard_out = ttnn.experimental.tensor.reshard(tt_image_res, input_mem_config, reshard_out)
+        reshard_out = ttnn.reshard(tt_image_res, input_mem_config, reshard_out)
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(tt_output_res.cpu(blocking=False))
@@ -271,7 +268,7 @@ def run_trace_2cq_model(device, tt_inputs, tt_resnet50, num_warmup_iterations, n
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
-    ttnn.dump_device_profiler(device)
+    ttnn.DumpDeviceProfiler(device)
 
 
 def run_perf_resnet(

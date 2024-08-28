@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
 
 	auto bcast_kernel_group_1_id = tt_metal::CreateKernel(
 		program,
-		"ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/kernels/compute/bcast_hw.cpp",
+		"ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw.cpp",
 		core,
 		tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_compute_defines}
 	);

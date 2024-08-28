@@ -76,7 +76,7 @@ std::vector<CBHandle> initialize_dummy_circular_buffers(Program& program, const 
     return cb_handles;
 }
 
-bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & program_config){
+bool cb_config_successful(Device* device, Program &program, const DummyProgramMultiCBConfig & program_config){
     bool pass = true;
 
     // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
@@ -86,7 +86,9 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
-            tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
+            tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord,
+                program.get_sem_base_addr(device, core_coord, CoreType::WORKER),
+                cb_config_buffer_size, cb_config_vector);
 
             uint32_t cb_addr = L1_UNRESERVED_BASE;
             for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
@@ -115,7 +117,7 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyP
     EnqueueProgram(cq, program, is_blocking_op);
     Finish(cq);
 
-    return cb_config_successful(device, program_config);
+    return cb_config_successful(device, program, program_config);
 }
 
 bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
@@ -126,7 +128,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    const bool is_cb_config_before_update_successful = cb_config_successful(device, program_config);
+    const bool is_cb_config_before_update_successful = cb_config_successful(device, program, program_config);
 
     DummyProgramMultiCBConfig program_config_2 = program_config;
     for (uint32_t cb_id = 0; cb_id < program_config.cb_config_vector.size(); cb_id++) {
@@ -139,7 +141,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    const bool is_cb_config_after_update_successful = cb_config_successful(device, program_config_2);
+    const bool is_cb_config_after_update_successful = cb_config_successful(device, program, program_config_2);
     return is_cb_config_before_update_successful && is_cb_config_after_update_successful;
 }
 
@@ -163,7 +165,8 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Progr
             vector<uint32_t> semaphore_vals;
             uint32_t expected_semaphore_vals_for_core_idx = 0;
             const uint32_t semaphore_buffer_size = program_config.num_sems * L1_ALIGNMENT;
-            tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, SEMAPHORE_BASE, semaphore_buffer_size, semaphore_vals);
+            uint32_t semaphore_base = program.get_sem_base_addr(device, core_coord, CoreType::WORKER);
+            tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size(); i += (L1_ALIGNMENT / sizeof(uint32_t)))
             {
                 const bool is_semaphore_value_correct = semaphore_vals[i] == expected_semaphore_vals_for_core[expected_semaphore_vals_for_core_idx];
@@ -775,7 +778,8 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCor
         vector<uint32_t> cb_config_vector;
 
         tt::tt_metal::detail::ReadFromDeviceL1(
-            device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
+            device, core_coord,
+            program.get_cb_base_addr(device, core_coord, CoreType::WORKER), cb_config_buffer_size, cb_config_vector);
         uint32_t cb_addr = L1_UNRESERVED_BASE;
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
@@ -859,8 +863,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanitySingleCoreDataMo
 }
 
 // Sanity test for setting and verifying common and unique runtime args to single cores via ERISC(IDLE). Some arch may return 0 active eth cores, that's okay.
-// FIXME - Disabled due to #7771 kernels not running on idle eth cores. At one point this was passing, but then before merging same day
-// it started hanging just like below inactive-idle-eth test.
+// FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
     for (Device *device : devices_) {
         for (const auto &eth_core : device->get_active_ethernet_cores(true)) {
@@ -874,7 +877,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleC
 }
 
 // Sanity test for setting and verifying common and unique runtime args to single cores via inactive ERISC cores. Some arch may return 0 active eth cores, that's okay.
-// FIXME - Disabled due to #7771 kernels not running on idle eth cores.
+// FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
     for (Device *device : devices_) {
         for (const auto &eth_core : device->get_inactive_ethernet_cores()) {

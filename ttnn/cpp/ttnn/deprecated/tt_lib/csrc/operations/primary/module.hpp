@@ -7,8 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_adam/moreh_adam_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
@@ -38,7 +36,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/bcast/bcast_op.hpp"
 
 namespace py = pybind11;
 
@@ -47,54 +44,6 @@ namespace operations {
 namespace primary {
 
 void py_module(py::module& m_primary) {
-    m_primary.def(
-        "layernorm_pre_allgather",
-        tt::operations::primary::layernorm_pre_allgather,
-        py::arg("input").noconvert(),
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        py::arg("output_dtype").noconvert() = DataType::BFLOAT16,
-        R"doc(
-            Performs the first part of a distributed layernorm operation collecting local statistics E(x) and E(xˆ2).
-        )doc");
-
-    m_primary.def(
-        "rmsnorm_pre_allgather",
-        tt::operations::primary::rmsnorm_pre_allgather,
-        py::arg("input").noconvert(),
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        py::arg("output_dtype").noconvert() = DataType::BFLOAT16,
-        R"doc(
-            Performs the first part of a distributed rms norm operation collecting local statistics E(x) and E(xˆ2).
-        )doc");
-
-    m_primary.def(
-        "layernorm_post_allgather",
-        tt::operations::primary::layernorm_post_allgather,
-        py::arg("input").noconvert(),
-        py::arg("stats").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs the second part of a distributed layernorm operation normalizing the input based on the gathered statistics input.
-        )doc");
-
-    m_primary.def(
-        "rmsnorm_post_allgather",
-        tt::operations::primary::rmsnorm_post_allgather,
-        py::arg("input").noconvert(),
-        py::arg("stats").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs the second part of a distributed rms norm operation normalizing the input based on the gathered statistics input.
-        )doc");
-
 
     // moreh_adam
     m_primary.def(
@@ -367,46 +316,6 @@ void py_module(py::module& m_primary) {
         py::arg("memory_config").noconvert() = std::nullopt,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_layernorm_backward operation.");
-
-    m_primary.def(
-        "bcast",
-        &tt::operations::primary::bcast,
-        py::arg("input_a").noconvert(),
-        py::arg("input_b").noconvert(),
-        py::arg("math_op"),
-        py::arg("dim"),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("in_place") = false,
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("queue_id").noconvert() = 0,
-        R"doc(
-        Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
-
-        Let tensor ``input_a`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``input_b`` shape ``[W1, Z1, Y1, X1]``. ``dim`` determines the type of broadcast performed.
-
-        For ``dim=BcastOpDim::W`` broadcast is performed on dimension ``X``. ``Y0`` and ``Y1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
-
-        For ``dim=BcastOpDim::H`` broadcast is performed on dimension  ``Y``. ``X0`` and ``X1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
-
-        For ``dim=BcastOpDim::HW`` broadcast is performed on dimensions ``X`` and ``Y``. Either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1) must hold for input shapes.
-
-        Both input tensors must have BFLOAT16 data type.
-
-        Output tensor will have BFLOAT16 data type.
-
-        Input tensors must have TILE layout. Output tensors will have TILE layout.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input_a", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0], where Y0%32=0 and X0%32=0", "Yes"
-            "input_b", "Input tensor to broadcast", "Tensor", "Tensor of shape [W1, Z1, Y1, X1], where Y1%32=0 and X1%32=0", "Yes"
-            "math_op", "Aggregating math operation", " BcastOpMath", "ADD, SUB, MUL", "Yes"
-            "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-            "in_place", "Whether to perform bcast in place, without allocating space for output tensor", "Bool", "Default is false", "No"
-            "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
-    )doc");
 
     py::enum_<MorehSoftmaxOpParallelizationStrategy>(m_primary, "MorehSoftmaxOpParallelizationStrategy")
         .value("NONE", MorehSoftmaxOpParallelizationStrategy::NONE)

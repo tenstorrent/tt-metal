@@ -397,15 +397,11 @@ class TtLlamaAttention(nn.Module):
         k_fill = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
         # sharding k_fill to deal with update_cache memory limitation
         if seq_len > 128:
-            k_fill = ttnn.experimental.tensor.interleaved_to_sharded(
-                k_fill, sharded_mem_config=self.model_config["KV_PREFILL_MEM_CFG"](seq_len)
-            )
+            k_fill = ttnn.interleaved_to_sharded(k_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         v_fill = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
         # sharding v_fill to deal with update_cache memory limitation
         if seq_len > 128:
-            v_fill = ttnn.experimental.tensor.interleaved_to_sharded(
-                v_fill, sharded_mem_config=self.model_config["KV_PREFILL_MEM_CFG"](seq_len)
-            )
+            v_fill = ttnn.interleaved_to_sharded(v_fill, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         ttnn.fill_cache(
             keys_BKSD,
             k_fill,

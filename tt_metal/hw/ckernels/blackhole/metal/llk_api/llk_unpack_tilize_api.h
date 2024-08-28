@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -103,8 +103,8 @@ inline void llk_unpack_tilizeA_B_hw_configure(
 
     // unpA -> srcA
     // Unpack only 1x16 row of datums to SrcA per UNPACK instruction
-    const uint32_t num_faces_a = 1;
-    const uint32_t face_r_dim_a = 1;
+    const uint32_t num_faces_a = get_operand_num_faces(unpA_operand_id);
+    const uint32_t face_r_dim_a = get_operand_face_r_dim(unpA_operand_id);
 
     // unpB -> srcB
     const uint32_t num_faces_b = get_operand_num_faces(unpB_operand_id);
@@ -138,14 +138,14 @@ inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, cons
     // Lambda function to set up replay buffer
     load_replay_buf(0, replay_buf_run_len, false, []{
         //Unpacks 1x16 row of datums to SrcA
-        TTI_UNPACR(SrcA, 0b00010000, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b01000000/*CH1_Y+=1*/, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
         // THCON_SEC0_REG3_Base_address_ADDR32 =  THCON_SEC0_REG3_Base_address_ADDR32 +  SCRATCH_SEC0_val_ADDR32
         TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
         TTI_NOP;
 
         //Unpacks 1x16 row of datums to SrcA
-        TTI_UNPACR(SrcA, 0b00010000, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b01000000/*CH1_Y+=1*/, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
         // THCON_SEC0_REG3_Base_cntx1_address_ADDR32 =  THCON_SEC0_REG3_Base_cntx1_address_ADDR32 +  SCRATCH_SEC0_val_ADDR32
         TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
@@ -180,36 +180,42 @@ inline void llk_unpack_tilizeA_B_init(
     const bool narrow_tile = get_operand_narrow_tile(operandA_id);
 
     //Sets the block_c_dim for unpack to use to increment the L1 address
-    const std::uint32_t c_dim_size = (SCALE_DATUM_SIZE(unpack_src_format[operandA_id], ct_dim * TILE_C_DIM)) >> 4;
+    const std::uint32_t c_dim_size = SCALE_DATUM_SIZE(unpack_src_format[operandA_id], ct_dim * ((num_faces==1) ? FACE_C_DIM: TILE_C_DIM)) >> 4;
 
+    //This sets the scartch register that CFGSHIFTMASK instruction uses to increment the L1 address
     TT_SETDMAREG(0, LOWER_HALFWORD(c_dim_size), 0, LO_16(p_gpr_unpack::TILE_OFFSET));
     TT_SETDMAREG(0, UPPER_HALFWORD(c_dim_size), 0, HI_16(p_gpr_unpack::TILE_OFFSET));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_unpack::TILE_OFFSET, 0, SCRATCH_SEC0_val_ADDR32);
     TTI_NOP;
 
-    //Set Z stride for SrcA to be one 1x16 row of datums
-    uint unpA_ch1_z_stride = FACE_C_DIM*SCALE_DATUM_SIZE(unpack_dst_format[operandA_id]&0x3,1);
-    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(unpA_ch1_z_stride);
+    //Unpack 1 row of 1x16 at a time for SrcA
+    config_unpacker_x_end<p_setadc::UNP_A>(1);
+    config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
 
+    //Set Y stride for SrcA to be one 1x16 row of datums
+    uint unpA_ch1_y_stride = SCALE_DATUM_SIZE(unpack_dst_format[operandA_id], FACE_C_DIM);
+    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(unpA_ch1_y_stride);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     llk_unpack_tilizeA_B_mop_config(narrow_tile, num_faces);
 }
 
-template <bool zero_srcA = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
 inline void llk_unpack_tilizeA_B(
     std::uint32_t operandA,
     std::uint32_t operandB,
     std::uint32_t tile_index_a,
     std::uint32_t tile_index_b,
     std::uint32_t block_ct_dim,
-    std::uint32_t num_faces = 4) {
+    std::uint32_t num_faces = 4,
+    std::uint32_t unpA_face_r_dim = FACE_R_DIM) {
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
 
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
-    const bool narrow_tile = get_operand_narrow_tile(operandA_id);
+    //TODO: RT face_r_dim should be taken from get_operand_face_r_dim(operandA_id);
+    //But currently ops do not populate that array correctly
+    const std::uint32_t face_r_dim = unpA_face_r_dim;
 
     const std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
     const std::uint32_t offset_address_a = SCALE_DATUM_SIZE(unpack_src_format[operandA_id], tile_index_a) << 1;
@@ -219,18 +225,25 @@ inline void llk_unpack_tilizeA_B(
     const std::uint32_t offset_address_b = tile_index_b * cb_interface[operandB_id].fifo_page_size;
     const std::uint32_t address_b = base_address_b + offset_address_b;
 
-    const std::uint32_t block_c_dim = block_ct_dim * TILE_C_DIM * face_r_dim;
+    const std::uint32_t block_c_dim = block_ct_dim * ((num_faces==1) ? FACE_C_DIM: TILE_C_DIM) * face_r_dim;
+    const bool run_r_dim_loop = (face_r_dim > 1);
 
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
-    // Clear z/w start counters for SrcB
-    TTI_SETADCZW(0b010, 0, 0, 0, 0, 0b1111);
+    // Clear z/w start counters for SrcA/B
+    TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111);
 
     DEBUG_STATUS("UPTW");
 
     for (std::uint32_t n = 0; n < num_faces; n++) {
 
-        std::uint32_t address_face_a = (n % 2 == 0) ? address_a : (address_a + (2));
+        /*
+        Face 0: address = base_address
+        Face 1: address = base_address + 1x16 row of datums
+        Face 2: address = base_address + block_ct_dim * TILE_C_DIM * face_r_dim (address for the bottom 2 faces of tiles)
+        Face 3: address = base_address + block_ct_dim * TILE_C_DIM * face_r_dim + 1x16 row of datums
+        */
+        std::uint32_t address_face_a = (n % 2 == 0) ? address_a : (address_a + (SCALE_DATUM_SIZE(unpack_src_format[operandA_id], FACE_C_DIM) >> 4));
         address_face_a += (n >= 2) ? ((SCALE_DATUM_SIZE(unpack_src_format[operandA_id], block_c_dim)) >> 4) : 0;
 
         // Wait for free context
@@ -238,6 +251,10 @@ inline void llk_unpack_tilizeA_B(
 
         // Trisc::SEMPOST for context acquire
         semaphore_post(semaphore::UNPACK_SYNC);
+
+        if constexpr (neginf_srcA) {
+            TTI_UNPACR_NOP(SrcA,0,0,0,0,0,0,p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
+        }
 
         // Get tile address
         if (0 == unp_cfg_context) {
@@ -247,17 +264,21 @@ inline void llk_unpack_tilizeA_B(
             cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_face_a;
             cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b;
         }
-        //Clear SrcA Z&W counters
-        TTI_SETADCZW(0b01, 0, 0, 0, 0, 0b1111);
 
+        //Reset Y counters for SrcA
+        TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1010);
         //Unpack SrcB 16x16 face & Set Data Valid
-        TTI_UNPACR(SrcB, 0b1 /*inc Z cntr*/, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+
+        //If reload_srcB, only first face needs to be loaded, otherwise CH0_Z+=1
+        TTI_UNPACR(SrcB, reload_srcB ? 0b0 : 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
         //Unpacks face_r_dim-1 rows of 1x16 datums to SrcA
-        ckernel_unpack_template::run(instrn_buffer, face_r_dim-1, unp_cfg_context == 0 ? 0 : 0xffff);
+        if (run_r_dim_loop) {
+            ckernel_unpack_template::run(instrn_buffer, face_r_dim-1, unp_cfg_context == 0 ? 0 : 0xffff);
+        }
 
         //Unpack last SrcA row of a 16x16 face and SetDvalid
-        TTI_UNPACR(SrcA, 0b00010000, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        TTI_UNPACR(SrcA, 0b0, 0, 0, 0, 1, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
@@ -266,19 +287,18 @@ inline void llk_unpack_tilizeA_B(
         switch_config_context(unp_cfg_context);
     }
 
-
-
     DEBUG_STATUS("UPTD");
 }
 
-template <bool zero_srcA = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
 inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
     std::uint32_t tile_idx_b,
-    std::uint32_t num_faces = 4) {
+    std::uint32_t num_faces = 4,
+    std::uint32_t unpA_face_r_dim = FACE_R_DIM) {
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
-        llk_unpack_tilizeA_B<zero_srcA>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
+        llk_unpack_tilizeA_B<neginf_srcA, reload_srcB, zero_srcA>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces, unpA_face_r_dim);
     }
 }

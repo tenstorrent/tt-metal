@@ -98,7 +98,7 @@ def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     in1_t = torch2tt_tensor(input_tensor, device, tt_memory_config=in0_mem_config, tt_dtype=in_dtype)
-    in1_t_shard = ttnn.experimental.tensor.interleaved_to_sharded(
+    in1_t_shard = ttnn.interleaved_to_sharded(
         in1_t,
         grid_size,
         [M // grid_size[1], K // grid_size[0]],
@@ -130,7 +130,7 @@ def test_softmax(device, in_dtype, causal_mask, grid_size, seq_len, scale_mask):
     else:
         tt_output_sharded = ttnn.softmax_in_place(in1_t_shard, program_config=program_config)
 
-    tt_output = ttnn.experimental.tensor.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
+    tt_output = ttnn.sharded_to_interleaved(tt_output_sharded, in0_mem_config)
     tt_output_tensor = tt_output.cpu().to_torch().float()
     tt_output_tensor = torch.Tensor(tt_output_tensor).reshape(input_shape)
     tt_output_tensor = untilize(tt_output_tensor)

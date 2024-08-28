@@ -190,34 +190,34 @@ class TtFusedFalconLayernorm:
             program_config=self.prg_config,
         )
 
-        out1 = ttnn.experimental.tensor.bcast(
+        out1 = ttnn.bcast(
             out2,
             self.ln_attn_gamma,
-            math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=self.sharded_memconfig,
+            math_op=ttnn.BcastOpMath.MUL,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=self.sharded_memconfig,
         )
-        out1 = ttnn.experimental.tensor.bcast(
+        out1 = ttnn.bcast(
             out1,
             self.ln_attn_beta,
-            math_op=ttnn.experimental.tensor.BcastOpMath.ADD,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=self.sharded_memconfig,
+            math_op=ttnn.BcastOpMath.ADD,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=self.sharded_memconfig,
         )
 
-        out2 = ttnn.experimental.tensor.bcast(
+        out2 = ttnn.bcast(
             out2,
             self.ln_mlp_gamma,
-            math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=self.sharded_memconfig,
+            math_op=ttnn.BcastOpMath.MUL,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=self.sharded_memconfig,
         )
-        out2 = ttnn.experimental.tensor.bcast(
+        out2 = ttnn.bcast(
             out2,
             self.ln_mlp_beta,
-            math_op=ttnn.experimental.tensor.BcastOpMath.ADD,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=self.sharded_memconfig,
+            math_op=ttnn.BcastOpMath.ADD,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=self.sharded_memconfig,
         )
 
         return out1, out2
@@ -296,7 +296,7 @@ def run_test_FalconLayernorm_inference(pcc, devices, model_location_generator, g
     #         False,
     #     ),
     # )
-    input = ttnn.experimental.tensor.interleaved_to_sharded(input, sharded_mem_config=block_sharded_memconfig)
+    input = ttnn.interleaved_to_sharded(input, block_sharded_memconfig)
 
     # PyTorch output --------------------------------------------------------------------
     pytorch_FalconLayernorm_model = PytorchFusedLayernorm(hugging_face_reference_model)

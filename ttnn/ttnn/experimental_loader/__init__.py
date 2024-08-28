@@ -8,13 +8,14 @@ import ttnn._ttnn
 import ttnn
 import types
 
+from ttnn.decorators import create_module_if_not_exists
+
 
 def register_tt_lib_operations_as_ttnn_operations(module):
     module_name = module.__name__
     if not (
         module_name.startswith("ttnn._ttnn.deprecated.tensor")
         or module_name.startswith("ttnn._ttnn.deprecated.operations")
-        or module_name.startswith("ttnn._ttnn.deprecated.device")
         or module_name.startswith("ttnn._ttnn.deprecated.profiler")
     ):
         return
@@ -35,17 +36,10 @@ def register_tt_lib_operations_as_ttnn_operations(module):
         elif isinstance(attribute, types.ModuleType):
             register_tt_lib_operations_as_ttnn_operations(attribute)
         else:
-            ttnn_module = ttnn
-            ttnn_module_path = ttnn_module_name.split(".")[1:]
-            while ttnn_module_path:
-                ttnn_submodule_name = ttnn_module_path.pop(0)
-                ttnn_submodule = getattr(ttnn_module, ttnn_submodule_name, types.ModuleType(ttnn_submodule_name))
-                setattr(ttnn_module, ttnn_submodule_name, ttnn_submodule)
-                ttnn_module = ttnn_submodule
-            setattr(ttnn_module, attribute_name, attribute)
+            target_module = create_module_if_not_exists(ttnn_module_name)
+            setattr(target_module, attribute_name, attribute)
 
 
 register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.tensor)
 register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.operations)
-register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.device)
 register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.profiler)

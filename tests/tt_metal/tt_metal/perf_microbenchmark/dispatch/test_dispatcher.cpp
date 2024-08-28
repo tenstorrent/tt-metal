@@ -488,6 +488,7 @@ int main(int argc, char **argv) {
             {"MY_NOC_Y", std::to_string(phys_spoof_prefetch_core.y)},
             {"DISPATCH_NOC_X", std::to_string(phys_dispatch_core.x)},
             {"DISPATCH_NOC_Y", std::to_string(phys_dispatch_core.y)},
+            {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
         };
         if (fire_once_g) {
             prefetch_defines.insert(std::pair<string, string>("FIRE_ONCE", std::to_string(1)));

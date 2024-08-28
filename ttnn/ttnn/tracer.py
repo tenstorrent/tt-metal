@@ -155,7 +155,7 @@ def trace_ttnn_operation(pretty_operation_name, operation):
     import torch
 
     def call_wrapper(*function_args, **function_kwargs):
-        operation_id = ttnn._ttnn.get_operation_id()
+        operation_id = ttnn._ttnn.get_python_operation_id()
 
         original_function_args = function_args
         original_function_kwargs = function_kwargs

@@ -888,8 +888,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
             if (split_reader) {
                 num_C_blocks_per_core_reader = num_C_blocks_per_core / 2;
                 num_C_blocks_per_core_writer = num_C_blocks_per_core - num_C_blocks_per_core_reader;
-                writer_read_stick_offset = num_sticks_per_shard_core * stick_size_bytes;
-                writer_write_stick_offset = num_C_blocks_per_core_reader * num_non_repeat_cores * writer_read_stick_offset;
+                writer_read_stick_offset = num_C_blocks_per_core_reader * stick_size_bytes;
+                writer_write_stick_offset = num_C_blocks_per_core_reader * num_non_repeat_cores * num_sticks_per_shard_core * stick_size_bytes;
             }
 
             for (uint32_t i = 0; i < num_non_repeat_cores; ++i) {
@@ -1617,7 +1617,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor &a,
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 

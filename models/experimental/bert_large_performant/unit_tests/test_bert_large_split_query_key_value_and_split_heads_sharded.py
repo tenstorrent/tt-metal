@@ -54,7 +54,7 @@ def test_split_query_key_value_and_split_heads_with_program_cache(device, dtype,
 
     in0 = torch.randn(input_shape)
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=dtype)
-    in0_t_shard = ttl.tensor.interleaved_to_sharded(
+    in0_t_shard = ttnn.interleaved_to_sharded(
         in0_t,
         grid_size,
         [M // grid_size[0], K // grid_size[1]],
@@ -69,13 +69,13 @@ def test_split_query_key_value_and_split_heads_with_program_cache(device, dtype,
         num_heads=num_heads,
     )
 
-    tt_q = ttl.tensor.sharded_to_interleaved(q, out_mem_config)
+    tt_q = ttnn.sharded_to_interleaved(q, out_mem_config)
     tt_q = tt_q.cpu().to_torch().float()
     tt_q = untilize(tt_q)
-    tt_k = ttl.tensor.sharded_to_interleaved(k, out_mem_config)
+    tt_k = ttnn.sharded_to_interleaved(k, out_mem_config)
     tt_k = tt_k.cpu().to_torch().float()
     tt_k = untilize(tt_k)
-    tt_v = ttl.tensor.sharded_to_interleaved(v, out_mem_config)
+    tt_v = ttnn.sharded_to_interleaved(v, out_mem_config)
     tt_v = tt_v.cpu().to_torch().float()
     tt_v = untilize(tt_v)
 

@@ -487,7 +487,7 @@ def run_falcon_demo_kv(
 
         if tt_logits.get_layout() == ttnn.TILE_LAYOUT:
             if tt_logits.memory_config().is_sharded():
-                tt_logits = ttnn.experimental.tensor.sharded_to_interleaved(tt_logits)
+                tt_logits = ttnn.sharded_to_interleaved(tt_logits)
 
             tt_logits = ttnn.untilize(tt_logits, use_multicore=False)
 

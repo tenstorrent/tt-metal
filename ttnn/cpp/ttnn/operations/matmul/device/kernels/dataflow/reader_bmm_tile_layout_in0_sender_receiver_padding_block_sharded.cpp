@@ -171,9 +171,7 @@ void kernel_main() {
                                 local_read_addr,
                                 in0_multicast_data_addr,
                                 in0_block_size_bytes,
-                                in0_mcast_num_cores - 1,
-                                false,
-                                false);
+                                in0_mcast_num_cores - 1);
                         }
                     }
                     // Mcast from different CB to another CB
@@ -185,8 +183,8 @@ void kernel_main() {
                             in0_multicast_data_addr,
                             in0_block_size_bytes,
                             in0_mcast_num_cores,
-                            false,
-                            false);
+                            true,
+                            true);
                     }
 
                     // We should also multicast the flag to destinations
@@ -199,9 +197,7 @@ void kernel_main() {
                         noc_semaphore_set_multicast_loopback_src(
                             in0_mcast_sender_semaphore_valid_addr,
                             in0_mcast_receiver_semaphore_noc_addr,
-                            in0_mcast_num_cores,
-                            false,
-                            false);
+                            in0_mcast_num_cores);
                     }
                 } else {
                     // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all cores
@@ -211,16 +207,14 @@ void kernel_main() {
                         in0_multicast_data_addr,
                         in0_block_size_bytes,
                         in0_mcast_num_cores,
-                        false,
-                        false);
+                        true,
+                        true);
 
                     // We should also multicast the flag to destinations
                     noc_semaphore_set_multicast(
                         in0_mcast_sender_semaphore_valid_addr,
                         in0_mcast_receiver_semaphore_noc_addr,
-                        in0_mcast_num_cores,
-                        false,
-                        false);
+                        in0_mcast_num_cores);
                 }
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc,
                 // same cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).

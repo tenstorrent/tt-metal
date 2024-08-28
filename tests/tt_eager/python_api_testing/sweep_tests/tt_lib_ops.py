@@ -29,7 +29,7 @@ def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
 def setup_host_and_device(func):
     def wrap(*args, device, **kwargs):
         output = func(*args, device=device, **kwargs)
-        ttnn.experimental.device.DeallocateBuffers(device)
+        ttnn.device.DeallocateBuffers(device)
         return output
 
     return wrap
@@ -2044,9 +2044,6 @@ eltwise_nez = make_unary_op_optional_output(ttnn.nez)
 eltwise_eqz = make_unary_op_optional_output(ttnn.eqz)
 zeros_like = make_ttnn_unary_op(ttnn.zeros_like)
 ones_like = make_ttnn_unary_op(ttnn.ones_like)
-eltwise_ceil = make_unary_op_optional_output(ttnn.ceil)
-eltwise_trunc = make_ttnn_unary_op(ttnn.trunc)
-eltwise_frac = make_ttnn_unary_op(ttnn.frac)
 
 
 def make_binary_op(ttl_tensor_binop):

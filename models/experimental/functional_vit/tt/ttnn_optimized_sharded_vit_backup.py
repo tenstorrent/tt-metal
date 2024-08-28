@@ -198,7 +198,7 @@ def vit_patch_embeddings(
     #         False,
     #     ),
     # )
-    # resharded_pixel_values = ttnn.experimental.tensor.reshard(pixel_values, post_fold_config)
+    # resharded_pixel_values = ttnn.reshard(pixel_values, post_fold_config)
 
     # return resharded_pixel_values
 

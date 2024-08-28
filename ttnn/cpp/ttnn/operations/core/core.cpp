@@ -7,7 +7,6 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/move/move.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sharded/sharded_op.hpp"
 
 namespace ttnn::operations::core {
 

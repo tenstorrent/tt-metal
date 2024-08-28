@@ -80,9 +80,7 @@ def run_test_FalconSoftmax_inference(
 
     attention_mask_bool = torch.ones(1, 1, seqlen, seqlen, dtype=bool).triu(diagonal=1)
 
-    input = ttnn.experimental.tensor.interleaved_to_sharded(
-        input, sharded_mem_config=model_config["SOFTMAX_HEIGHT_SHARDED_MEMCFG"]
-    )
+    input = ttnn.interleaved_to_sharded(input, model_config["SOFTMAX_HEIGHT_SHARDED_MEMCFG"])
 
     attn_mask_bool = torch.ones(1, 1, seqlen, seqlen, dtype=bool)
     attn_mask_bool = attn_mask_bool.triu(diagonal=1)

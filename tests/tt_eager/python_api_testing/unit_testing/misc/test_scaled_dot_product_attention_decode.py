@@ -454,10 +454,9 @@ def run_test_sdpa_decode_single_iter(
         [32, 8, 1, 32768, 128, (8, 8), True, True],  # Mixtral8x7b
     ),
 )
-def test_sdpa_decode(
-    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, cur_pos_tensor, use_program_cache
-):
-    ttnn.experimental.device.DisablePersistentKernelCache()
+
+def test_sdpa_decode(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, cur_pos_tensor, use_program_cache):
+    ttnn.device.DisablePersistentKernelCache()
     if single_iter:
         run_test_sdpa_decode_single_iter(
             device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor, sharded_in=False, sharded_out=False
@@ -486,7 +485,7 @@ def test_sdpa_decode(
     ([16, 8, 1, 32768, 128, (8, 6)],),  # Llama2-70B
 )
 def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
-    ttnn.experimental.device.DisablePersistentKernelCache()
+    ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_single_iter(
         device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=True, sharded_out=False
     )
@@ -564,7 +563,7 @@ def test_sdpa_decode_perf(device, use_program_cache):
     ([16, 8, 1, 8192, 128],),  # Llama2-70B
 )
 def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_cache):
-    ttnn.experimental.device.DisablePersistentKernelCache()
+    ttnn.device.DisablePersistentKernelCache()
 
     dummy_tensors = []
     for i in range(2):
@@ -794,5 +793,5 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     ),
 )
 def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, use_program_cache):
-    ttnn.experimental.device.DisablePersistentKernelCache()
+    ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype)

@@ -92,9 +92,7 @@ class TtRMSNormSharded(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor, out_sharded=False) -> ttnn.Tensor:
-        x = ttnn.experimental.tensor.interleaved_to_sharded(
-            x, sharded_mem_config=self.model_config["SHARDED_NORM_INPUT_MEMCFG"]
-        )
+        x = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_NORM_INPUT_MEMCFG"])
         x = ttnn.rms_norm(
             x,
             epsilon=self.eps,
@@ -104,6 +102,6 @@ class TtRMSNormSharded(LightweightModule):
         )
         if out_sharded:
             return x
-        x_interleaved = ttnn.experimental.tensor.sharded_to_interleaved(x)
+        x_interleaved = ttnn.sharded_to_interleaved(x)
         x.deallocate(True)
         return x_interleaved

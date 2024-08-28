@@ -20,7 +20,7 @@ namespace ttnn {
 
     void queue_synchronize(CommandQueue& cq);
 
-    void event_synchronize(Device* device, std::shared_ptr<Event> event);
+    void event_synchronize(std::shared_ptr<Event> event);
 
     bool event_query(std::shared_ptr<Event> event);
 

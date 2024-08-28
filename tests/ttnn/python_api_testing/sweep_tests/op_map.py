@@ -1022,4 +1022,24 @@ op_map = {
         "tt_op": ttnn_ops.unary_remainder_bw,
         "pytorch_op": pytorch_ops.unary_remainder_bw,
     },
+    "topk": {
+        "tt_op": ttnn_ops.topk,
+        "pytorch_op": pytorch_ops.topk,
+    },
+    "eltwise-trunc": {
+        "tt_op": ttnn_ops.eltwise_trunc,
+        "pytorch_op": pytorch_ops.trunc,
+    },
+    "eltwise-frac": {
+        "tt_op": ttnn_ops.eltwise_frac,
+        "pytorch_op": pytorch_ops.frac,
+    },
+    "eltwise-ceil": {
+        "tt_op": ttnn_ops.eltwise_ceil,
+        "pytorch_op": pytorch_ops.ceil,
+    },
+    "argmax": {
+        "tt_op": ttnn_ops.argmax,
+        "pytorch_op": pytorch_ops.argmax,
+    },
 }

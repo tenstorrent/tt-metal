@@ -11,8 +11,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_pre_allgather_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/layernorm_distributed/layernorm_post_allgather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
@@ -313,54 +311,6 @@ void TensorModule(py::module& m_tensor) {
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)
         .def_readwrite("packer_l1_acc", &WormholeComputeKernelConfig::packer_l1_acc);
 
-    m_tensor.def(
-        "layernorm_pre_allgather",
-        tt::operations::primary::layernorm_pre_allgather,
-        py::arg("input").noconvert(),
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        py::arg("output_dtype").noconvert() = DataType::BFLOAT16,
-        R"doc(
-            Performs the first part of a distributed layernorm operation collecting local statistics E(x) and E(xˆ2).
-        )doc");
-
-    m_tensor.def(
-        "rmsnorm_pre_allgather",
-        tt::operations::primary::rmsnorm_pre_allgather,
-        py::arg("input").noconvert(),
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        py::arg("output_dtype").noconvert() = DataType::BFLOAT16,
-        R"doc(
-            Performs the first part of a distributed rms norm operation collecting local statistics E(x) and E(xˆ2).
-        )doc");
-
-    m_tensor.def(
-        "layernorm_post_allgather",
-        tt::operations::primary::layernorm_post_allgather,
-        py::arg("input").noconvert(),
-        py::arg("stats").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs the second part of a distributed layernorm operation normalizing the input based on the gathered statistics input.
-        )doc");
-
-    m_tensor.def(
-        "rmsnorm_post_allgather",
-        tt::operations::primary::rmsnorm_post_allgather,
-        py::arg("input").noconvert(),
-        py::arg("stats").noconvert(),
-        py::arg("eps").noconvert(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-            Performs the second part of a distributed rms norm operation normalizing the input based on the gathered statistics input.
-        )doc");
-
     // TMs
     m_tensor.def(
         "convert_conv_weight_tensor_to_tiled_layout",
@@ -518,7 +468,6 @@ void TensorModule(py::module& m_tensor) {
         )doc");
 
     detail::TensorModulePyTensor(m_tensor);
-    detail::TensorModuleDMOPs(m_tensor);
 }
 
 }  // namespace tt::tt_metal

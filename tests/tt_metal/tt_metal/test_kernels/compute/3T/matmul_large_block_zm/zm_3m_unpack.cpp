@@ -122,7 +122,6 @@ inline void unpack_for_matmul_output_row(
 void unpack_main()
 {
 uint32_t in0_block_w = get_compile_time_arg_val(0);
-llk_setup_operands();
 llk_unpack_AB_matmul_init(0);
 // inner block size in tiles
 uint32_t in0_num_subblocks = get_compile_time_arg_val(1);

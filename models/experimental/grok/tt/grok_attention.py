@@ -262,10 +262,10 @@ class TtGrokAttention(LightweightModule):
 
         # Softmax and scaling
         # FIXME: Maintain sharded memory layout when #9773 is fixed
-        attn_1B4P = ttnn.experimental.tensor.sharded_to_interleaved(attn_1B4P, output_mem_config=ttnn.L1_MEMORY_CONFIG)
+        attn_1B4P = ttnn.sharded_to_interleaved(attn_1B4P, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn_1B4P = attn_1B4P * self.attn_output_multiplier
         attn_1B4P = self.max_attn_value * ttnn.tanh(attn_1B4P * (1.0 / self.max_attn_value))
-        attn_1B4P = ttnn.experimental.tensor.interleaved_to_sharded(attn_1B4P, sharded_mem_config=attn_1B4P_memconfig)
+        attn_1B4P = ttnn.interleaved_to_sharded(attn_1B4P, attn_1B4P_memconfig)
 
         attn_1B4P = ttnn.scale_mask_softmax_in_place(
             attn_1B4P,
@@ -302,9 +302,7 @@ class TtGrokAttention(LightweightModule):
         )
         attn_output_1B4D.deallocate(True)
 
-        attn_output_11BH = ttnn.experimental.tensor.sharded_to_interleaved(
-            attn_output_11BH, output_mem_config=ttnn.L1_MEMORY_CONFIG
-        )
+        attn_output_11BH = ttnn.sharded_to_interleaved(attn_output_11BH, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         ###
         # Output matmul

@@ -18,7 +18,7 @@ struct UnaryWithParam;
 }
 namespace binary {
 
-template <BinaryOpType binary_op_type, bool in_place>
+template <BinaryOpType binary_op_type>
 struct BinaryOperation {
     static Tensor invoke(
         uint8_t queue_id,
@@ -60,7 +60,6 @@ struct BinaryOperation {
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
 };
-
 
 template <BinaryOpType binary_op_type>
 struct RelationalBinary {
@@ -130,27 +129,42 @@ struct InplaceLogicalBinary {
         const Tensor& input_tensor_b);
 };
 
+template <BinaryOpType binary_op_type>
+struct InplaceBinaryOperation {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const float scalar,
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt);
+};
+
 }  // binary
 }  // operations
 
 constexpr auto add = ttnn::register_operation_with_auto_launch_op<
     "ttnn::add",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, false>>();
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD>>();
 constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::add_",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::ADD, true>>();
+    operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::ADD>>();
 constexpr auto subtract = ttnn::register_operation_with_auto_launch_op<
     "ttnn::subtract",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, false>>();
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB>>();
 constexpr auto subtract_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::subtract_",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::SUB, true>>();
+    operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::SUB>>();
 constexpr auto multiply = ttnn::register_operation_with_auto_launch_op<
     "ttnn::multiply",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL, false>>();
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL>>();
 constexpr auto multiply_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::multiply_",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL, true>>();
+    operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::MUL>>();
 constexpr auto eq = ttnn::register_operation_with_auto_launch_op<
     "ttnn::eq",
     operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ>>();
@@ -171,25 +185,25 @@ constexpr auto lt = ttnn::register_operation_with_auto_launch_op<
     operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT>>();
 constexpr auto logical_and = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logical_and",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_AND, false>>();
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_AND>>();
 constexpr auto logical_or = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logical_or",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_OR, false>>();
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_OR>>();
 constexpr auto ldexp = ttnn::register_operation_with_auto_launch_op<
     "ttnn::ldexp",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LDEXP, false>>();
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LDEXP>>();
 constexpr auto logaddexp = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logaddexp",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGADDEXP, false>>();
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGADDEXP>>();
 constexpr auto logaddexp2 = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logaddexp2",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGADDEXP2, false>>();
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGADDEXP2>>();
 constexpr auto squared_difference = ttnn::register_operation_with_auto_launch_op<
     "ttnn::squared_difference",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::SQUARED_DIFFERENCE, false>>();
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::SQUARED_DIFFERENCE>>();
 constexpr auto divide = ttnn::register_operation_with_auto_launch_op<
     "ttnn::divide",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::DIV_FAST, false>>();
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::DIV_FAST>>();
 constexpr auto gt_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::gt_",
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GT>>();

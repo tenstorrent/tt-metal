@@ -10,17 +10,15 @@
 
 //#include "debug/dprint.h"
 inline void tilizeA_B_binary_init(uint32_t icb0, uint32_t icb1, uint32_t block, uint32_t ocb = 16, uint32_t num_faces = 4, uint32_t face_r_dim = 16) {
-    UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_tilizeA_B_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1) ));
     UNPACK(( llk_unpack_tilizeA_B_init<true, true>(icb0, icb1, block, num_faces, face_r_dim, face_r_dim) ));
 
     MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
-    MATH(( llk_math_hw_configure_disaggregated<false>() ));
+    MATH(( llk_math_hw_configure_disaggregated() ));
     MATH(( llk_math_eltwise_binary_init<ELWADD, NONE>(0/*transpose*/, 0/*acc_to_dest*/) ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_init(ocb) ));
-    PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>(ocb) ));
 }
 

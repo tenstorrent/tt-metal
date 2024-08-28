@@ -18,11 +18,9 @@ def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=F
             return [convert_to_layout(t, input_memory_layout, output_memory_layout, clone=clone) for t in tensor]
         else:
             if input_memory_layout.is_sharded() and not output_memory_layout.is_sharded():  # sharded_to_interleaved
-                tensor = ttnn.experimental.tensor.sharded_to_interleaved(tensor, output_mem_config=output_memory_layout)
+                tensor = ttnn.sharded_to_interleaved(tensor, memory_config=output_memory_layout)
             elif not input_memory_layout.is_sharded() and output_memory_layout.is_sharded():  # interleaved_to_sharded
-                tensor = ttnn.experimental.tensor.interleaved_to_sharded(
-                    tensor, sharded_mem_config=output_memory_layout
-                )
+                tensor = ttnn.interleaved_to_sharded(tensor, output_memory_layout)
             elif (
                 not input_memory_layout.is_sharded() and not output_memory_layout.is_sharded()
             ):  # interleaved to interleaved with different memory location
@@ -31,15 +29,13 @@ def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=F
                 else:
                     tensor = ttnn.move(tensor, memory_config=output_memory_layout)
             else:  # reshard
-                tensor = ttnn.experimental.tensor.sharded_to_interleaved(
+                tensor = ttnn.sharded_to_interleaved(
                     tensor,
-                    output_mem_config=ttnn.experimental.tensor.MemoryConfig(
+                    memory_config=ttnn.experimental.tensor.MemoryConfig(
                         ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
                     ),
                 )
-                tensor = ttnn.experimental.tensor.interleaved_to_sharded(
-                    tensor, sharded_mem_config=output_memory_layout
-                )
+                tensor = ttnn.interleaved_to_sharded(tensor, output_memory_layout)
             return tensor
 
 
@@ -480,19 +476,19 @@ def fused_partial_layernorm(
             )
 
             # Apply first layernorm gamma+beta
-            xs_output_slice_1 = ttnn.experimental.tensor.bcast(
+            xs_output_slice_1 = ttnn.bcast(
                 xs_slice,
                 ln_gamma_1,
-                math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
-                dim=ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=memconfig,
+                math_op=ttnn.BcastOpMath.MUL,
+                dim=ttnn.BcastOpDim.H,
+                memory_config=memconfig,
             )
-            xs_output_slice_1 = ttnn.experimental.tensor.bcast(
+            xs_output_slice_1 = ttnn.bcast(
                 xs_output_slice_1,
                 ln_beta_1,
-                math_op=ttnn.experimental.tensor.BcastOpMath.ADD,
-                dim=ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=memconfig,
+                math_op=ttnn.BcastOpMath.ADD,
+                dim=ttnn.BcastOpDim.H,
+                memory_config=memconfig,
             )
 
             ttnn.sharded_to_interleaved_partial(
@@ -505,19 +501,19 @@ def fused_partial_layernorm(
             xs_output_slice_1.deallocate(True)
 
             # Apply second layernorm gamma+beta inplace
-            xs_slice = ttnn.experimental.tensor.bcast(
+            xs_slice = ttnn.bcast(
                 xs_slice,
                 ln_gamma_2,
-                math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
-                dim=ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=memconfig,
+                math_op=ttnn.BcastOpMath.MUL,
+                dim=ttnn.BcastOpDim.H,
+                memory_config=memconfig,
             )
-            xs_slice = ttnn.experimental.tensor.bcast(
+            xs_slice = ttnn.bcast(
                 xs_slice,
                 ln_beta_2,
-                math_op=ttnn.experimental.tensor.BcastOpMath.ADD,
-                dim=ttnn.experimental.tensor.BcastOpDim.H,
-                output_mem_config=memconfig,
+                math_op=ttnn.BcastOpMath.ADD,
+                dim=ttnn.BcastOpDim.H,
+                memory_config=memconfig,
             )
 
             ttnn.sharded_to_interleaved_partial(
@@ -532,7 +528,7 @@ def fused_partial_layernorm(
             output1 = out_tensor_1
             output2 = out_tensor_2
     else:
-        xs_output2 = ttnn.experimental.tensor.interleaved_to_sharded(xs, sharded_mem_config=memconfig)
+        xs_output2 = ttnn.interleaved_to_sharded(xs, memconfig)
         xs_output2 = ttnn.layer_norm(
             xs_output2,
             epsilon=ln_eps,
@@ -543,38 +539,38 @@ def fused_partial_layernorm(
         )
 
         # Apply first layernorm gamma+beta
-        xs_output1 = ttnn.experimental.tensor.bcast(
+        xs_output1 = ttnn.bcast(
             xs_output2,
             ln_gamma_1,
-            math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=memconfig,
+            math_op=ttnn.BcastOpMath.MUL,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=memconfig,
         )
-        xs_output1 = ttnn.experimental.tensor.bcast(
+        xs_output1 = ttnn.bcast(
             xs_output1,
             ln_beta_1,
-            math_op=ttnn.experimental.tensor.BcastOpMath.ADD,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=memconfig,
+            math_op=ttnn.BcastOpMath.ADD,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=memconfig,
         )
-        xs_output1 = ttnn.experimental.tensor.sharded_to_interleaved(xs_output1, output_mem_config=dram_memcfg)
+        xs_output1 = ttnn.sharded_to_interleaved(xs_output1, memory_config=dram_memcfg)
 
         # Apply second layernorm gamma+beta
-        xs_output2 = ttnn.experimental.tensor.bcast(
+        xs_output2 = ttnn.bcast(
             xs_output2,
             ln_gamma_2,
-            math_op=ttnn.experimental.tensor.BcastOpMath.MUL,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=memconfig,
+            math_op=ttnn.BcastOpMath.MUL,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=memconfig,
         )
-        xs_output2 = ttnn.experimental.tensor.bcast(
+        xs_output2 = ttnn.bcast(
             xs_output2,
             ln_beta_2,
-            math_op=ttnn.experimental.tensor.BcastOpMath.ADD,
-            dim=ttnn.experimental.tensor.BcastOpDim.H,
-            output_mem_config=memconfig,
+            math_op=ttnn.BcastOpMath.ADD,
+            dim=ttnn.BcastOpDim.H,
+            memory_config=memconfig,
         )
-        xs_output2 = ttnn.experimental.tensor.sharded_to_interleaved(xs_output2, output_mem_config=dram_memcfg)
+        xs_output2 = ttnn.sharded_to_interleaved(xs_output2, memory_config=dram_memcfg)
 
         output1 = xs_output1
         output2 = xs_output2

@@ -19,13 +19,11 @@ namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb = 16)
 {
-    UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(icb) ));
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)  ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_init<false>(ocb) ));
-    PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>() ));
 
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb) ));

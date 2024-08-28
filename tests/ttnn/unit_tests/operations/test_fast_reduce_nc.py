@@ -143,7 +143,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device, use_program_cache):
                 False,
             ),
         )
-        test_tensor = ttnn.experimental.tensor.interleaved_to_sharded(test_tensor, sharded_mem_config=test_mem_cfg)
+        test_tensor = ttnn.interleaved_to_sharded(test_tensor, test_mem_cfg)
 
         # Test op
         for dim in dims:

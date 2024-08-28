@@ -179,66 +179,19 @@ def operations(report_hash):
 
     operations = list(ttnn.database.query_operations(get_report_path()))
 
-    try:
-        with open(report_path / ttnn.database.OPERATION_HISTORY_JSON) as f:
-            operation_history = json.load(f)
-    except FileNotFoundError:
-        logger.warning(f"Operation history file not found: {report_path / ttnn.database.OPERATION_HISTORY_JSON}")
-
-    def load_underlying_operations(operation_id):
-        try:
-            underlying_operations = [
-                underlying_operation
-                for underlying_operation in operation_history
-                if underlying_operation["ttnn_operation_id"] == operation_id
-            ]
-
-            def convert_to_pandas_df(underlying_operations):
-                df = pd.DataFrame(columns=["operation_name", "operation_type", "program_cache_hit", "program_hash"])
-                for underlying_operion in underlying_operations:
-                    df.loc[len(df)] = [
-                        underlying_operion["operation_name"],
-                        underlying_operion["operation_type"],
-                        underlying_operion["program_cache_hit"],
-                        underlying_operion["program_hash"],
-                    ]
-                return df
-
-            underlying_operations = convert_to_pandas_df(underlying_operations)
-
-            def normalize_program_cache_hit(value):
-                if value == "std::nullopt":
-                    return ""
-                else:
-                    return "HIT" if value == 1 else "MISS"
-
-            underlying_operations["program_cache"] = underlying_operations.program_cache_hit.apply(
-                normalize_program_cache_hit
-            )
-
-            def normalize_program_hash(value):
-                if value == "std::nullopt":
-                    return ""
-                else:
-                    return value
-
-            underlying_operations["program_hash"] = underlying_operations.program_hash.apply(normalize_program_hash)
-
-            return underlying_operations.to_html(
-                columns=["operation_name", "operation_type", "program_cache", "program_hash"],
-                index=False,
-                justify="center",
-            )
-        except Exception as e:
-            logger.warning(e)
-            return ""
+    def load_captured_graph(operation_id):
+        captured_graph = ttnn.database.query_captured_graph(get_report_path(), operation_id=operation_id)
+        output = ttnn.graph.pretty_format(captured_graph)
+        output = output.replace(" ", "&nbsp;")
+        output = output.replace("\n", "<br>")
+        return output
 
     return render_template(
         "operations.html",
         operations=operations,
         comparison_color=comparison_color,
         get_actual_pccs=get_actual_pccs,
-        load_underlying_operations=load_underlying_operations,
+        load_captured_graph=load_captured_graph,
     )
 
 

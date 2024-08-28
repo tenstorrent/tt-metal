@@ -20,7 +20,7 @@ def test_gs_demo():
     # Initialize the device
     device = ttnn.open_device(0)
 
-    ttnn.experimental.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
 
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     HF_model = ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")  # loaded for the labels

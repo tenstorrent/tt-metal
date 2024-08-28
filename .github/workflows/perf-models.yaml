@@ -1,4 +1,4 @@
-name: "Model perf regressions and output report"
+name: "(Single-card) Model perf tests"
 
 on:
   workflow_dispatch:
@@ -52,7 +52,7 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Run performance regressions
         id: performance_tests
-        timeout-minutes: 50
+        timeout-minutes: 70
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}

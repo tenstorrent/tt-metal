@@ -57,33 +57,22 @@ constexpr static std::uint32_t PROFILER_RISC_COUNT = 5;
 static_assert (PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC > PROFILER_L1_BUFFER_SIZE);
 
 // Kernel config buffer is WIP
-// Will eventually move CBs/Sems and likely kernel bins into this buffer
-// Size is presently based on the old size of the RTAs (large enough to hold 1 set)
+// Size is presently based on the old sizes of the RTAs + CB config + Sems
 // plus some extra space freed up in the mem map
 constexpr static std::uint32_t L1_KERNEL_CONFIG_BASE = PROFILER_L1_END_ADDRESS;
-constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 4 * 1024 + 256;
+constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 4 * 1024 + 256 + 128 + 512;
 
 constexpr static std::uint32_t IDLE_ERISC_L1_KERNEL_CONFIG_BASE = 32 * 1024;
 
-// config for 32 L1 buffers is at addr BUFFER_CONFIG_BASE
-// 12 bytes for each buffer: (addr, size, size_in_tiles)
-// addr and size are in 16B words (byte address >> 4)
-// this is a total of 32 * 3 * 4 = 384B
-constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_BASE = L1_KERNEL_CONFIG_BASE + L1_KERNEL_CONFIG_SIZE;
 constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
 constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
-constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_SIZE = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
 constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
 constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);
-constexpr static std::uint32_t PROFILER_L1_BUFFER_CONTROL = CIRCULAR_BUFFER_CONFIG_BASE + CIRCULAR_BUFFER_CONFIG_SIZE;
+constexpr static std::uint32_t PROFILER_L1_BUFFER_CONTROL = L1_KERNEL_CONFIG_BASE + L1_KERNEL_CONFIG_SIZE;
 
-// 4 uint32_t semaphores per core aligned to 16B
-constexpr static std::uint32_t SEMAPHORE_BASE = PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE;
-constexpr static std::uint32_t NUM_SEMAPHORES = 8;
-constexpr static std::uint32_t SEMAPHORE_SIZE = NUM_SEMAPHORES * L1_ALIGNMENT;
+constexpr static std::uint32_t L1_UNRESERVED_BASE = ((PROFILER_L1_BUFFER_CONTROL + PROFILER_L1_CONTROL_BUFFER_SIZE - 1) | (DRAM_ALIGNMENT - 1)) + 1;
 
-constexpr static std::uint32_t L1_UNRESERVED_BASE = ((SEMAPHORE_BASE + SEMAPHORE_SIZE - 1) | (DRAM_ALIGNMENT - 1)) + 1;
 constexpr static std::uint32_t ERISC_L1_UNRESERVED_BASE = L1_UNRESERVED_BASE; // Start of unreserved space
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.

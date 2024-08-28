@@ -314,8 +314,9 @@ class Device {
    uint32_t trace_buffers_size = 0;
    void update_dispatch_cores_for_multi_cq_eth_dispatch();
 
+    HalProgrammableCoreType get_programmable_core_type(CoreCoord phys_core) const;
     template <typename T = DeviceAddr>
-    T get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type);
+    T get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) const;
 
     template <typename CoreRangeContainer>
     std::vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
@@ -326,22 +327,25 @@ class Device {
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 };
 
-template <typename T>
-T Device::get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) {
+inline HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord phys_core) const {
 
-    HalProgrammableCoreType dispatch_core_type = HalProgrammableCoreType::TENSIX;;
-
+    HalProgrammableCoreType programmable_core_type = HalProgrammableCoreType::TENSIX;
     if (tt::llrt::is_ethernet_core(phys_core, this->id_)) {
         // Eth pcores have a different address, but only active ones.
         CoreCoord logical_core = this->logical_core_from_ethernet_core(phys_core);
         if (this->is_active_ethernet_core(logical_core)) {
-            dispatch_core_type = HalProgrammableCoreType::ACTIVE_ETH;
+            programmable_core_type = HalProgrammableCoreType::ACTIVE_ETH;
         } else {
-            dispatch_core_type = HalProgrammableCoreType::IDLE_ETH;
+            programmable_core_type = HalProgrammableCoreType::IDLE_ETH;
         }
     }
 
-    return hal.get_dev_addr<T>(dispatch_core_type, addr_type);
+    return programmable_core_type;
+}
+
+template <typename T>
+inline T Device::get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) const {
+    return hal.get_dev_addr<T>(this->get_programmable_core_type(phys_core), addr_type);
 }
 
 // TODO: Find a better home for this function

@@ -134,7 +134,7 @@ def test_ttnn_bert(device, use_program_cache, model_name, batch_size, sequence_s
 def test_falcon7b_instruct():
     from functools import partial
     from loguru import logger
-    from models.demos.falcon7b_common.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
+    from transformers import FalconConfig, FalconForCausalLM
 
     model_version = "tiiuae/falcon-7b-instruct"
 

@@ -21,7 +21,10 @@ set(UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_sfpu_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_dropout_sfpu_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_untilize_tilize.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_copy_block_matmul_partials.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_reconfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_transpose.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_broadcast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_adjacent.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_contains.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRange_intersects.cpp

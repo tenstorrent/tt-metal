@@ -1767,6 +1767,11 @@ void configure_for_single_chip(Device *device,
             };
 
             log_info(LogTest, "run prefetch relay mux at x={},y={}", prefetch_relay_mux_core.x, prefetch_relay_mux_core.y);
+
+            std::map<string, string> defines = {
+                {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
+            };
+
             auto mux_kernel = tt_metal::CreateKernel(
                 program,
                 "tt_metal/impl/dispatch/kernels/packet_mux.cpp",
@@ -1775,7 +1780,7 @@ void configure_for_single_chip(Device *device,
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = prefetch_relay_mux_compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
 
@@ -1840,7 +1845,7 @@ void configure_for_single_chip(Device *device,
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = demux_compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
         }
@@ -2002,6 +2007,11 @@ void configure_for_single_chip(Device *device,
             };
 
             log_info(LogTest, "run dispatch relay mux at x={},y={}", dispatch_relay_mux_core.x, dispatch_relay_mux_core.y);
+
+            std::map<string, string> defines = {
+                {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
+            };
+
             auto mux_kernel = tt_metal::CreateKernel(
                 program,
                 "tt_metal/impl/dispatch/kernels/packet_mux.cpp",
@@ -2010,7 +2020,7 @@ void configure_for_single_chip(Device *device,
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = dispatch_relay_mux_compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
 
@@ -2075,7 +2085,7 @@ void configure_for_single_chip(Device *device,
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = demux_compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
         }
@@ -2381,6 +2391,11 @@ void configure_for_multi_chip(Device *device,
             };
 
             log_info(LogTest, "run prefetch relay mux at x={},y={}", prefetch_relay_mux_core.x, prefetch_relay_mux_core.y);
+
+            std::map<string, string> defines = {
+                {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
+            };
+
             auto mux_kernel = tt_metal::CreateKernel(
                 program,
                 "tt_metal/impl/dispatch/kernels/packet_mux.cpp",
@@ -2389,7 +2404,7 @@ void configure_for_multi_chip(Device *device,
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = prefetch_relay_mux_compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
 
@@ -2539,7 +2554,7 @@ void configure_for_multi_chip(Device *device,
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = demux_compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
         }
@@ -2705,6 +2720,11 @@ void configure_for_multi_chip(Device *device,
             };
 
             log_info(LogTest, "run dispatch relay mux at x={},y={}", dispatch_relay_mux_core.x, dispatch_relay_mux_core.y);
+
+            std::map<string, string> defines = {
+                {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
+            };
+
             auto mux_kernel = tt_metal::CreateKernel(
                 program_r,
                 "tt_metal/impl/dispatch/kernels/packet_mux.cpp",
@@ -2713,7 +2733,7 @@ void configure_for_multi_chip(Device *device,
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = dispatch_relay_mux_compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
 
@@ -2781,7 +2801,7 @@ void configure_for_multi_chip(Device *device,
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                     .compile_args = demux_compile_args,
-                    .defines = {}
+                    .defines = defines,
                 }
             );
         }

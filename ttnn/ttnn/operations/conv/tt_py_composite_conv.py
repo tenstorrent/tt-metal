@@ -803,7 +803,7 @@ class TTPyCompositeConv(TTPyOp):
                 if kernel_size == 1 and stride > 1:
                     use_downsample = True
             if use_downsample:
-                ttl.device.DumpDeviceMemoryState(device, "before_ds_")
+                ttnn.dump_device_memory_state(device, "before_ds_")
                 ds_out = ttnn.downsample(activation, [*self.input_tensor_shape[:-1], *self.strides])
                 if deallocate_activation:
                     activation.deallocate()
@@ -976,7 +976,7 @@ class TTPyCompositeConv(TTPyOp):
         untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
         # Convert interleaved to sharded
         if self.is_1d_systolic:
-            conv_input_on_device = ttl.tensor.interleaved_to_sharded(
+            conv_input_on_device = ttnn.interleaved_to_sharded(
                 conv_input_on_device,
                 grid_size,
                 [
@@ -998,7 +998,7 @@ class TTPyCompositeConv(TTPyOp):
             assert (
                 not self.use_shallow_conv_variant
             ), "Do not support shallow depth convs with 2d systolic variant. Run with use_1d_systolic_array=True or unset use_shallow_conv_variant. Default value of use_shallow_conv_variant is False."
-            conv_input_on_device = ttl.tensor.interleaved_to_sharded(
+            conv_input_on_device = ttnn.interleaved_to_sharded(
                 conv_input_on_device,
                 grid_size,
                 [
@@ -1064,7 +1064,7 @@ class TTPyCompositeConv(TTPyOp):
             ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
         )
         # Convert sharded output to tiled interleaved
-        return ttl.tensor.sharded_to_interleaved(conv_output_on_device, interleaved_mem_config)
+        return ttnn.sharded_to_interleaved(conv_output_on_device, interleaved_mem_config)
 
     def copy_output_from_device(self, conv_output_on_device):
         interleaved_mem_config = ttl.tensor.MemoryConfig(

@@ -258,9 +258,7 @@ class TtLlamaModel_optimized:
                 self.hidden_size // self.num_devices,
             )
 
-            xs = ttnn.experimental.tensor.interleaved_to_sharded(
-                xs, sharded_mem_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-            )
+            xs = ttnn.interleaved_to_sharded(xs, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
 
             rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=batch)
             assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
@@ -276,9 +274,7 @@ class TtLlamaModel_optimized:
             )
             rot_mats = ttnn.to_device(rot_mats, self.device_mesh)
 
-            rot_mats = ttnn.experimental.tensor.interleaved_to_sharded(
-                rot_mats, sharded_mem_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"]
-            )
+            rot_mats = ttnn.interleaved_to_sharded(rot_mats, self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
 
             attn_masks = None
 
@@ -351,8 +347,8 @@ class TtLlamaModel_optimized:
 
     def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
         # Run distributed rmsnorm part 1
-        tt_stats = ttnn.experimental.operations.primary.rmsnorm_pre_allgather(
-            inp, compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"], output_dtype=ttnn.bfloat16
+        tt_stats = ttnn.rms_norm_pre_all_gather(
+            inp, compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"], dtype=ttnn.bfloat16
         )
 
         # AllGather stats
@@ -364,8 +360,12 @@ class TtLlamaModel_optimized:
         )
 
         # Run distributed rmsnorm part 2
-        tt_out = ttnn.experimental.operations.primary.rmsnorm_post_allgather(
-            inp, tt_stats, epsilon, gamma, compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"]
+        tt_out = ttnn.rms_norm_post_all_gather(
+            inp,
+            tt_stats,
+            epsilon=epsilon,
+            weight=gamma,
+            compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
 
         tt_stats.deallocate(True)

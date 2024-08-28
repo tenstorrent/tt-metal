@@ -8,7 +8,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-#include "ttnn/operations/eltwise/unary/device/unary_op.hpp"
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -453,8 +452,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t num_cores_x = p_config.grid_size.x;
     uint32_t num_cores_y = p_config.grid_size.y;
     uint32_t total_num_cores = num_cores_x * num_cores_y;
-    assert(num_cores_x < 13);
-    assert(num_cores_y < 10);
+
     uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
     uint32_t per_core_out_matrix_width_ntiles = p_config.per_core_out_matrix_width_ntiles;
 

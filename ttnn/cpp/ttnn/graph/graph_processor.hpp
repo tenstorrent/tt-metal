@@ -12,7 +12,7 @@
 #include <unordered_map>
 #include <functional>
 #include <any>
-namespace ttnn {
+namespace ttnn::graph {
 
     class ProcessorHooks : public tt::tt_metal::IGraphHooks {
     private:
@@ -59,7 +59,7 @@ namespace ttnn {
 
         struct Vertex {
             int counter = 0;
-            std::string name;
+            std::string node_type;
             std::unordered_map<std::string, std::string> params;
             std::vector<int> connections;
         };
@@ -71,9 +71,8 @@ namespace ttnn {
         std::mutex mutex;
         RunMode run_mode = RunMode::NORMAL;
         std::stack<int> current_op_id;
-        std::unordered_map<uint64_t, int> id_to_counter;
+        std::unordered_map<std::int64_t, int> id_to_counter;
         int last_finished_op_id = -1;
-        int tensors_used = 0;
         std::vector<Vertex> graph;
         std::unordered_map<std::type_index, ProcessFunc> begin_function_any_map;
         std::unordered_map<std::type_index, ProcessFunc> end_function_any_map;

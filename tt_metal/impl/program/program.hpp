@@ -63,6 +63,10 @@ struct ProgramConfig {
     uint32_t rta_offset;
     std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
     std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
+    uint32_t sem_offset;
+    uint32_t sem_size;
+    uint32_t cb_offset;
+    uint32_t cb_size;
 };
 
 class Program {
@@ -119,7 +123,7 @@ class Program {
 
     size_t num_semaphores ( const CoreCoord & core ) const;
     size_t num_semaphores () const;
-    void init_semaphores ( const Device & device, const CoreCoord &logical_core, CoreType core_type) const;
+    void init_semaphores ( const Device & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
     std::vector<std::vector<CoreCoord>> logical_cores() const;
 
@@ -141,6 +145,14 @@ class Program {
     void capture_multi_device_dependencies() { capture_multi_device_dependencies_ = true; }
     bool has_multi_device_dependencies() { return capture_multi_device_dependencies_; }
 
+    ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
+
+    // debug/test
+    uint32_t get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
+
    private:
     void populate_dispatch_data(Device *device);
 
@@ -152,6 +164,7 @@ class Program {
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_;
+
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
 
@@ -232,10 +245,12 @@ class Program {
 
     void update_kernel_groups(uint32_t programmable_core_type_index);
 
-    ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
     uint32_t& get_program_config_size(uint32_t programmable_core_type_index);
 
     uint32_t finalize_rt_args(uint32_t programmable_core_type_index, uint32_t base_offset);
+    uint32_t finalize_sems(uint32_t programmable_core_type_index, uint32_t base_offset);
+    uint32_t finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset);
+    void set_launch_msg_sem_offsets();
 
     friend class HWCommandQueue;
     friend class EnqueueProgramCommand;

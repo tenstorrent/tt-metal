@@ -26,7 +26,8 @@ struct FoldOperation {
         const std::optional<const tt::tt_metal::Shape> &output_shape = std::nullopt,
         uint8_t pad_c = 0,
         uint8_t pad_h = 0,
-        uint8_t pad_w = 0);
+        uint8_t pad_w = 0,
+        const std::optional<CoreCoord> grid_size = std::nullopt);
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor,
@@ -36,7 +37,8 @@ struct FoldOperation {
         const std::optional<const tt::tt_metal::Shape> &output_shape = std::nullopt,
         uint8_t pad_c = 0,
         uint8_t pad_h = 0,
-        uint8_t pad_w = 0);
+        uint8_t pad_w = 0,
+        const std::optional<CoreCoord> grid_size = std::nullopt);
 
 };
 

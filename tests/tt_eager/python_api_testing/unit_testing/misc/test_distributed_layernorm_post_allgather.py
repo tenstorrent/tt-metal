@@ -91,12 +91,12 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device, fp32_e
         )
 
         if is_rmsnorm:
-            tt_lnp2_out = ttnn.experimental.operations.primary.rmsnorm_post_allgather(
-                tt_inp, tt_stats, epsilon, tt_gamma, compute_kernel_config=kernel_config
+            tt_lnp2_out = ttnn.rms_norm_post_all_gather(
+                tt_inp, tt_stats, epsilon=epsilon, weight=tt_gamma, compute_kernel_config=kernel_config
             )
         else:
-            tt_lnp2_out = ttnn.experimental.operations.primary.layernorm_post_allgather(
-                tt_inp, tt_stats, epsilon, tt_gamma, tt_beta, compute_kernel_config=kernel_config
+            tt_lnp2_out = ttnn.layer_norm_post_all_gather(
+                tt_inp, tt_stats, epsilon=epsilon, weight=tt_gamma, bias=tt_beta, compute_kernel_config=kernel_config
             )
 
         tt_lnp2_out_cpu = tt2torch_tensor(tt_lnp2_out)

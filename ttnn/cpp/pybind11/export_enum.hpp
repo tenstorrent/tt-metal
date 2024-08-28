@@ -16,5 +16,6 @@ py::enum_<E> export_enum(const py::handle &scope, std::string name = "", Extra&&
     for (const auto &[value, name] : magic_enum::enum_entries<E>()) {
         enum_type.value(name.data(), value);
     }
+
     return enum_type;
 }

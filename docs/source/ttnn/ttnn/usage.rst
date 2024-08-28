@@ -89,9 +89,6 @@ Basic Examples
     # To print currently executing ttnn operations
     export TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false, "enable_logging": true}'
 
-    # To generate a csv with all of the ttnn and tt_lib operations, their attributes and their input tensors:
-    export OPERATION_HISTORY_CSV=operation_history.csv
-
     # To print the currently executing ttnn and tt_lib operation and its input tensors to stdout
     export TT_METAL_LOGGER_TYPES=Op
     export TT_METAL_LOGGER_LEVEL=Debug
@@ -257,12 +254,17 @@ Open the visualizer by running the following command:
     ttnn.query_registered_operations()
 
 
-
 14. Falling back to torch
 -------------------------
-
 
 .. code-block:: python
 
 .. literalinclude:: ../../../../ttnn/examples/usage/falling_back_to_torch.py
+   :language: python
+
+
+15. Capturing graph of C++ functions, buffer allocations, etc
+-------------------------------------------------------------
+
+.. literalinclude:: ../../../../ttnn/examples/usage/graph_capture.py
    :language: python

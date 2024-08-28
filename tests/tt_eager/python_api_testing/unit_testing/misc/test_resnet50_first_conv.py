@@ -7,7 +7,6 @@ from loguru import logger
 import numpy as np
 
 import ttnn
-
 from tt_lib.utils import (
     tilize_to_list,
     tilize,
@@ -223,7 +222,7 @@ def test_resnet50_first_conv(
             output_mem_config,
         )
         if sharded_out:
-            out = ttnn.experimental.tensor.sharded_to_interleaved(out, memory_config)
+            out = ttnn.sharded_to_interleaved(out, memory_config)
 
         if not untilize_out:
             out_unpadded_shape = [1, 1, N * OH * OW, K]

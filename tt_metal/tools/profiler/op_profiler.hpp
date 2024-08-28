@@ -25,12 +25,6 @@ namespace tt {
 
 namespace tt_metal {
 
-extern std::atomic<uint32_t> operation_id_atomic_count;
-
-inline uint32_t assign_operation_id() {
-    return operation_id_atomic_count.fetch_add(1);
-}
-
 namespace op_profiler {
 
 enum class OpType { python_fallback, tt_dnn_cpu, tt_dnn_device, unknown };

@@ -9,7 +9,6 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/operation_history.hpp"
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/type_name.hpp"
 
@@ -41,114 +40,6 @@ auto generic_create_output_tensors(
     return output_tensors;
 }
 
-#ifdef DEBUG
-namespace detail {
-
-template <typename OperationType>
-std::string operation_type_to_string() {
- if constexpr (std::is_same_v<OperationType, DeviceOperation<Tensors>>) {
-        return "device<Tensors>";
-    }else if constexpr (std::is_same_v<OperationType, DeviceOperation<OptionalTensors>>) {
-        return "device<OptionalTensors>";
-    } else if constexpr (std::is_same_v<OperationType, ExternalOperation>) {
-        return "external";
-    } else {
-        static_assert(tt::stl::concepts::always_false_v<OperationType>, "OperationType is not supported!");
-    }
-}
-
-template <typename OperationType>
-static void append_operation_to_operation_history(
-    const std::size_t ttnn_operation_id,
-    const OperationType& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors) {
-
-    std::vector<operation_history::TensorRecord> input_tensor_records;
-    input_tensor_records.reserve(input_tensors.size() + optional_input_tensors.size());
-
-    for (const auto& tensor : input_tensors) {
-        input_tensor_records.emplace_back(operation_history::create_tensor_record(tensor));
-    }
-    for (const auto& tensor : optional_input_tensors) {
-        if (tensor.has_value()) {
-            input_tensor_records.emplace_back(operation_history::create_tensor_record(tensor.value()));
-        }
-    }
-
-    std::optional<bool> program_cache_hit = std::nullopt;
-    std::optional<tt::stl::hash::hash_t> program_hash = std::nullopt;
-    if constexpr (std::is_same_v<OperationType, DeviceOperation<typename OperationType::OutputTensors>>) {
-        auto& program_cache = input_tensors[0].device()->program_cache;
-        if (program_cache.is_enabled()) {
-            program_hash = operation.compute_program_hash(input_tensors, optional_input_tensors);
-            auto program_cache_hit = program_cache.contains(program_hash.value());
-        }
-    }
-
-    operation_history::append(operation_history::OperationRecord{
-        ttnn_operation_id,
-        std::string(tt::stl::short_type_name<OperationType>),
-        operation.get_type_name(),
-        operation.attributes(),
-        input_tensor_records,
-        program_cache_hit,
-        program_hash,
-    });
-}
-
-}  // namespace detail
-
-template<typename OperationType>
-inline void log_operation(
-    const OperationType& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors = {},
-    const OptionalTensors& optional_output_tensors = {}) {
-    tt::log_debug(
-        tt::LogOp,
-        "Launching Operation: \"{}\" ({})",
-        operation.get_type_name(),
-        detail::operation_type_to_string<OperationType>());
-
-    auto attributes = operation.attributes();
-    if (not attributes.empty()) {
-        tt::log_debug(tt::LogOp, "Attributes:");
-        for (auto&& [name, value] : attributes) {
-            tt::log_debug(tt::LogOp, "\t{} = {}", name, value);
-        }
-    }
-
-    tt::log_debug(tt::LogOp, "Input Tensors:");
-    for (auto index = 0; index < input_tensors.size(); index++) {
-        const auto& tensor = input_tensors[index];
-        tt::log_debug(tt::LogOp, "\t{}: {}", index, tensor);
-    }
-
-    if (not optional_input_tensors.empty()) {
-        tt::log_debug(tt::LogOp, "Optional Input Tensors:");
-        for (auto index = 0; index < optional_input_tensors.size(); index++) {
-            const auto& tensor = optional_input_tensors[index];
-            tt::log_debug(tt::LogOp, "\t{}: {}", index, tensor);
-        }
-    }
-
-    tt::log_debug(tt::LogOp, "");
-
-    if (operation_history::enabled()) {
-        detail::append_operation_to_operation_history(
-            ttnn::OPERATION_ID, operation, input_tensors, optional_input_tensors);
-    }
-}
-#else
-
-template <typename OperationType>
-inline void log_operation(
-    const OperationType& operation,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors = {},
-    const OptionalTensors& optional_output_tensors = {}) {}
-#endif
 
 template<class OutputTensors=Tensors>
 OutputTensors run(

@@ -21,7 +21,7 @@ from models.experimental.trocr.tt.trocr import trocr_causal_llm
 def test_gs_demo(model_name):
     device = ttnn.open_device(0)
 
-    ttnn.experimental.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
 
     processor = TrOCRProcessor.from_pretrained(model_name)
     model = VisionEncoderDecoderModel.from_pretrained(model_name)

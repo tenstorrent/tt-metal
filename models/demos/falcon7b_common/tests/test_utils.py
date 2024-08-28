@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
-from models.demos.falcon7b_common.reference.hf_modeling_falcon import FalconForCausalLM
+from transformers import FalconForCausalLM
 from models.utility_functions import tt_tensors_to_torch_tensors
 
 
@@ -326,4 +326,4 @@ def dump_device_profiler(device):
     # device is either a ttnn.DeviceMesh or a ttnn.Device
     devices = get_devices(device)
     for device in devices:
-        ttnn.experimental.device.DumpDeviceProfiler(device)
+        ttnn.DumpDeviceProfiler(device)

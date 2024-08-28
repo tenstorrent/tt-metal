@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -434,7 +434,6 @@ class resnet50Bottleneck:
                 out,
                 ds_out,
                 activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
-                memory_config=ttnn.get_memory_config(out),
             )
         else:
             out = ttnn.add(
@@ -576,6 +575,8 @@ class resnet50:
         )  # num_classes = 1000
 
         self.transpose_shards = True
+        act_block_h_override = 1568
+
         if is_wormhole_b0():
             self.transpose_shards = False
             if batch_size == 16:

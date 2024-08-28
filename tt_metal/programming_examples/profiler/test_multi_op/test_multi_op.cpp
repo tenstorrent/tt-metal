@@ -58,7 +58,7 @@ int main(int argc, char **argv) {
 
         // Run 2
         RunCustomCycle(device, PROFILER_OP_SUPPORT_COUNT);
-        Finish(device->command_queue());
+        tt_metal::detail::DumpDeviceProfileResults(device);
 
         pass &= tt_metal::CloseDevice(device);
 

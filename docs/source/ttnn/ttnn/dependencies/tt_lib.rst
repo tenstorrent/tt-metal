@@ -112,8 +112,6 @@ To wait for kernels to complete, either read a tensor from device to host with:
 
 or to perform only a wait, use:
 
-.. autofunction:: tt_lib.device.Synchronize
-
 
 Program Caching
 ===============
@@ -205,9 +203,6 @@ The logs will print currently running op and information related to program cach
     Op | DEBUG    | Input Tensors: {tt::tt_metal::Tensor(storage=tt::tt_metal::DeviceStorage(memory_config=tt::tt_metal::MemoryConfig(memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type=tt::tt_metal::BufferType::DRAM)), shape={1, 1, 32, 32}, dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)}
 
 
-If `OPERATION_HISTORY_CSV=<csv_file_path>` environment variable is set, then the history of all executed operations will be dumped into `<csv_file_path>`
-
-
 TT-LIB API through ``tt_lib``
 *****************************
 
@@ -245,15 +240,11 @@ Primary Operations
 Enums
 =====
 
-.. autoclass:: tt_lib.tensor.BcastOpMath
+.. autoclass:: ttnn.BcastOpMath
 
-.. autoclass:: tt_lib.tensor.BcastOpDim
+.. autoclass:: ttnn.BcastOpDim
 
 
-Broadcast and Reduce
-====================
-
-.. autofunction:: tt_lib.tensor.bcast
 
 
 

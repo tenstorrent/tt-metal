@@ -24,7 +24,8 @@ def merge_perf_files(fname, perf_fname, expected_cols):
     repo = git.Repo(search_parent_directories=True)
 
     merge_res = open(fname, "w")
-    merge_res.write(f"branch: {repo.active_branch} \n")
+    if not repo.head.is_detached:
+        merge_res.write(f"branch: {repo.active_branch} \n")
     merge_res.write(f"hash: {repo.head.object.hexsha} \n")
     cols = ", ".join(expected_cols)
     merge_res.write(f"{cols} \n")

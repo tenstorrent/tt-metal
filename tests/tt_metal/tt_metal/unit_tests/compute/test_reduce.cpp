@@ -33,6 +33,7 @@ enum ReduceDim : uint8_t {
 };
 
 struct ReduceConfig {
+    bool short_init = false;
     std::vector<uint32_t> shape;
     ReduceDim reduce_dim;
     bool do_max;
@@ -43,6 +44,7 @@ struct ReduceConfig {
     float rtol;
     std::function<std::vector<uint16_t>(const std::vector<uint16_t>&, const std::vector<uint32_t>&, float, bool, bool)> golden_function;
     std::vector<uint32_t> result_shape;
+    bool math_only_reduce = false;
 };
 
 void add_reader_writer_kernels(tt_metal::Program &program, const CoreCoord &logical_core, const ReduceConfig &test_config, std::shared_ptr<tt_metal::Buffer> src_dram_buffer, std::shared_ptr<tt_metal::Buffer> dst_dram_buffer) {
@@ -258,6 +260,17 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
         {"REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim)}
     };
 
+    if (test_config.short_init)
+    {
+        reduce_defines["SHORT_INIT"] = "1";
+    }
+  
+    if (test_config.math_only_reduce) {
+        reduce_defines["MATH_ONLY"] = "1";
+    } else {
+        reduce_defines["MATH_ONLY"] = "0";
+    }
+
     std::string compute_kernel_name = get_compute_kernel_name(test_config.reduce_dim);
 
     auto reduce_compute_kernel = tt_metal::CreateKernel(
@@ -356,6 +369,94 @@ TEST_F(DeviceFixture, ComputeReduceHW) {
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (bool do_max : {false, true}) {
         unit_tests::compute::reduce::ReduceConfig test_config = {
+            .shape = shape,
+            .reduce_dim = unit_tests::compute::reduce::ReduceDim::HW,
+            .do_max = do_max,
+            .data_gen_rand_max = 1.0f,
+            .data_gen_seed = 0x1234,
+            .data_gen_offset = -0.48f,
+            .atol = 1e-2f,
+            .rtol = 0.06f,
+            .golden_function = unit_tests::compute::gold_reduce_hw,
+            .result_shape = result_shape
+        };
+        unit_tests::compute::reduce::run_single_core_reduce_program(this->devices_.at(0), test_config);
+    }
+}
+
+TEST_F(DeviceFixture, ComputeReduceWMathOnly) {
+    std::vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
+    std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
+    for (bool do_max : {false, true}) {
+        unit_tests::compute::reduce::ReduceConfig test_config = {
+            .shape = shape,
+            .reduce_dim = unit_tests::compute::reduce::ReduceDim::W,
+            .do_max = do_max,
+            .data_gen_rand_max = 1.0f,
+            .data_gen_seed = 0x1234,
+            .data_gen_offset = 0.0f,
+            .atol = 0.20f,
+            .rtol = 0.10f,
+            .golden_function = unit_tests::compute::gold_reduce_w,
+            .result_shape = result_shape,
+            .math_only_reduce = true
+        };
+        unit_tests::compute::reduce::run_single_core_reduce_program(this->devices_.at(0), test_config);
+    }
+}
+
+TEST_F(DeviceFixture, ComputeReduceHShortInit) {
+    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+        // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
+        GTEST_SKIP();
+    }
+    std::vector<uint32_t> shape = {1, 3, 19*TILE_HEIGHT, 17*TILE_WIDTH};
+    std::vector<uint32_t> result_shape = {shape[0], shape[1], TILE_HEIGHT, shape[3]};
+    for (int do_max = 0; do_max <= 1; do_max++) {
+        unit_tests::compute::reduce::ReduceConfig test_config = {
+            .short_init = true,
+            .shape = shape,
+            .reduce_dim = unit_tests::compute::reduce::ReduceDim::H,
+            .do_max = do_max,
+            .data_gen_rand_max = 10.0f,
+            .data_gen_seed = 0x1234,
+            .data_gen_offset = -4.5f,
+            .atol = 1e-2f,
+            .rtol = 0.06f,
+            .golden_function = unit_tests::compute::gold_reduce_h,
+            .result_shape = result_shape
+        };
+        unit_tests::compute::reduce::run_single_core_reduce_program(this->devices_.at(0), test_config);
+    }
+}
+
+TEST_F(DeviceFixture, ComputeReduceWShortInit) {
+    std::vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
+    std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
+    for (int do_max = 0; do_max <= 1; do_max++) {
+        unit_tests::compute::reduce::ReduceConfig test_config = {
+            .short_init = true,
+            .shape = shape,
+            .reduce_dim = unit_tests::compute::reduce::ReduceDim::W,
+            .do_max = do_max,
+            .data_gen_rand_max = 1.0f,
+            .data_gen_seed = 0x1234,
+            .data_gen_offset = 0.0f,
+            .atol = 0.20f,
+            .rtol = 0.10f,
+            .golden_function = unit_tests::compute::gold_reduce_w,
+            .result_shape = result_shape
+        };
+        unit_tests::compute::reduce::run_single_core_reduce_program(this->devices_.at(0), test_config);
+    }
+}
+
+TEST_F(DeviceFixture, ComputeReduceHWShortInit) {
+    std::vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
+    std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
+    for (int do_max = 0; do_max <= 1; do_max++) {
+        unit_tests::compute::reduce::ReduceConfig test_config = {
+            .short_init = true,
             .shape = shape,
             .reduce_dim = unit_tests::compute::reduce::ReduceDim::HW,
             .do_max = do_max,

@@ -7,13 +7,14 @@
 #include "ttnn/types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/program/program.hpp"
-
+#include "ttnn/graph/graph_consts.hpp"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <cxxabi.h>
 #include <memory>
 #include <typeindex>
 #include <unordered_map>
+#include "ttnn/core.hpp"
 
 namespace {
 std::string demangle(const char* name) {
@@ -53,16 +54,16 @@ std::type_info const& get_type_in_var(const Variant& v){
     return std::visit( [](auto&&x)->decltype(auto){ return typeid(x); }, v );
 }
 
-nlohmann::json to_json(const ttnn::GraphProcessor::Vertex& data) {
+nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
     nlohmann::json j;
-    j["counter"] = data.counter;
-    j["name"] = data.name;
-    j["params"] = data.params;
-    j["connections"] = data.connections;
+    j[ttnn::graph::kCounter] = data.counter;
+    j[ttnn::graph::kNodeType] = data.node_type;
+    j[ttnn::graph::kParams] = data.params;
+    j[ttnn::graph::kConnections] = data.connections;
     return j;
 }
 
-nlohmann::json to_json(const std::vector<ttnn::GraphProcessor::Vertex>& data) {
+nlohmann::json to_json(const std::vector<ttnn::graph::GraphProcessor::Vertex>& data) {
     nlohmann::json j = nlohmann::json::array();
     for (const auto& item : data) {
         j.push_back(to_json(item));
@@ -72,7 +73,8 @@ nlohmann::json to_json(const std::vector<ttnn::GraphProcessor::Vertex>& data) {
 
 }
 
-namespace ttnn {
+namespace ttnn::graph {
+
 GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) {
     begin_capture(mode);
     begin_function_any_map[typeid(std::reference_wrapper<std::vector<Tensor>>)] = [ptr = this]  (const std::any& val) mutable {ptr->begin_function_process_ref_vector(val);};
@@ -98,15 +100,15 @@ void GraphProcessor::track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up
     auto counter = graph.size();
 
     std::unordered_map<std::string, std::string> params = {
-            {"size", std::to_string(buffer->size())},
-            {"address", std::to_string(buffer->address())},
-            {"type", buffer->is_dram() ? "DRAM" : "L1"},
-            {"layout", tensorMemoryLayoutToString(buffer->buffer_layout())}
+            {kSize, std::to_string(buffer->size())},
+            {kAddress, std::to_string(buffer->address())},
+            {kType, buffer->is_dram() ? "DRAM" : "L1"},
+            {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())}
     };
     {
         graph.push_back(Vertex{
             .counter = counter,
-            .name = "buffer_allocate",
+            .node_type = kNodeBufferAllocate,
             .params = params,
             .connections = {buf_id}
         });
@@ -119,14 +121,14 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
     auto counter = graph.size();
     auto buffer_idx = add_buffer(buffer);
     std::unordered_map<std::string, std::string> params = {
-            {"size", std::to_string(buffer->size())},
-            {"type", buffer->is_dram() ? "DRAM" : "L1"},
-            {"layout", tensorMemoryLayoutToString(buffer->buffer_layout())}
+            {kSize, std::to_string(buffer->size())},
+            {kType, buffer->is_dram() ? "DRAM" : "L1"},
+            {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())}
     };
     {
         graph.push_back(Vertex{
             .counter = counter,
-            .name = "buffer_deallocate",
+            .node_type = kNodeBufferDeallocate,
             .params = params,
             .connections = {buffer_idx}
         });
@@ -138,15 +140,15 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
 void GraphProcessor::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size) {
     const std::lock_guard<std::mutex> lock(mutex);
     std::unordered_map<std::string, std::string> params = {
-        {"size", std::to_string(size)},
-        {"address", std::to_string(addr)},
+        {kSize, std::to_string(size)},
+        {kAddress, std::to_string(addr)},
         {"core_range_set", core_range_set.str()}
     };
     auto counter = graph.size();
     {
         graph.push_back({
             .counter = counter,
-            .name = "circular_buffer_allocate",
+            .node_type = kNodeCBAllocate,
             .params = params,
             .connections = {}
         });
@@ -161,7 +163,7 @@ void GraphProcessor::track_deallocate_cb() {
     {
         graph.push_back(Vertex{
             .counter = counter,
-            .name = "circular_buffer_deallocate_all",
+            .node_type = kNodeCBDeallocateAll,
             .params = {},
             .connections = {current_op_id.top()}
         });
@@ -187,14 +189,14 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
     const std::lock_guard<std::mutex> lock(mutex);
     tt::log_info("Begin op: {}", function_name);
     std::unordered_map<std::string, std::string> params = {
-        {"inputs", std::to_string(input_parameters.size())},
-        {"name", std::string(function_name)},
+        {kInputs, std::to_string(input_parameters.size())},
+        {kName, std::string(function_name)},
     };
     auto counter = graph.size();
     {
         graph.push_back(Vertex{
             .counter = counter,
-            .name = "function_start",
+            .node_type = kNodeFunctionStart,
             .params = params,
             .connections = {/*current_op_id.top()*/}
         });
@@ -207,7 +209,7 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
 
     }
 
-    for (int i = 0; auto& any : input_parameters) {
+    for (auto& any : input_parameters) {
         std::type_index any_type = any.type();
         auto it = begin_function_any_map.find(any_type);
 
@@ -216,21 +218,19 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         } else {
             tt::log_info("input any type name ignored: {}", demangle(any.type().name()));
         }
-        i++;
     }
-
 }
 
 void GraphProcessor::track_function_end_impl() {
-    auto name = graph[current_op_id.top()].params["name"];
+    auto name = graph[current_op_id.top()].params[kName];
     tt::log_info("End op: {}", name);
 
     auto counter = graph.size();
     {
         graph.push_back(Vertex{
             .counter = counter,
-            .name = fmt::format("function_end"),
-            .params = {{"name", name}},
+            .node_type = kNodeFunctionEnd,
+            .params = {{kName, name}},
             .connections = {}
         });
         graph[current_op_id.top()].connections.push_back(counter);
@@ -241,8 +241,8 @@ void GraphProcessor::track_function_end_impl() {
 void GraphProcessor::track_function_end() {
     const std::lock_guard<std::mutex> lock(mutex);
     this->track_function_end_impl();
+    TT_ASSERT(current_op_id.size() > 0);  // we should always have capture_start on top
     current_op_id.pop();
-    TT_ASSERT(current_op_id.size() > 0); // we should always have capture_start on top
 }
 
 void GraphProcessor::track_function_end(const std::any& output_tensors) {
@@ -257,41 +257,40 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     } else {
         tt::log_info("output any type name ignored: {}", demangle(output_tensors.type().name()));
     }
+    TT_ASSERT(current_op_id.size() > 0);  // we should always have capture_start on top
     current_op_id.pop();
 }
 
 int GraphProcessor::add_tensor(const Tensor& t) {
-    const uint64_t pointer_shift = (uint64_t)1 << 32; // to avoid reusing the same alloc_id
     auto& storage = t.get_storage();
     auto buffer = std::visit(
-    [&t](auto&& storage) -> tt::tt_metal::Buffer* {
-        using T = std::decay_t<decltype(storage)>;
-        if constexpr (std::is_same_v<T, DeviceStorage>) {
-            return t.buffer();
-        } else {
-            return nullptr;
-        }
-    },
-    storage);
-    auto alloc_id = buffer ? reinterpret_cast<std::uintptr_t>(buffer) + pointer_shift : reinterpret_cast<std::uintptr_t>(t.tensor_attributes.get());
-    tt::log_info("Tensor ID: {}, used: {}", alloc_id, tensors_used);
-    auto tensor_counter = id_to_counter.count(alloc_id) > 0 ? id_to_counter[alloc_id] : graph.size();
+        [&t](auto&& storage) -> tt::tt_metal::Buffer* {
+            using T = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<T, DeviceStorage>) {
+                return t.buffer();
+            } else {
+                return nullptr;
+            }
+        },
+        storage);
+    std::int64_t tensor_id;
+    if (not t.tensor_id.has_value()) {
+        tt::log_warning("Tensor doesn't have tensor_id, generating new one. Ideally this should not happen. Please set tensor_id for this tensor ahead of time.");
+        ttnn::increment_tensor_id();
+        tensor_id = ttnn::get_tensor_id();
+    } else {
+        tensor_id = t.tensor_id.value();
+    }
+    auto tensor_counter = id_to_counter.count(tensor_id) > 0 ? id_to_counter[tensor_id] : graph.size();
     auto shape = t.get_shape();
-    std::ostringstream oss;
-    oss << shape;
-    std::string shape_str = oss.str();
     std::unordered_map<std::string, std::string> params = {
-        {"shape", shape_str},
+        {kShape, fmt::format("{}", shape)},
+        {kTensorId, fmt::format("{}", tensor_id)},
     };
-    if (id_to_counter.count(alloc_id) == 0) {
-        graph.push_back(Vertex{
-            .counter = tensor_counter,
-            .name = fmt::format("tensor[{}]", tensors_used),
-            .params = params,
-            .connections = {}
-        });
-        tensors_used++;
-        id_to_counter[alloc_id] = tensor_counter;
+
+    if (id_to_counter.count(tensor_id) == 0) {
+        graph.push_back(Vertex{.counter = tensor_counter, .node_type = kNodeTensor, .params = params, .connections = {}});
+        id_to_counter[tensor_id] = tensor_counter;
     }
 
     if (buffer) {
@@ -308,14 +307,14 @@ int GraphProcessor::add_buffer(tt::tt_metal::Buffer* buffer) {
     auto counter = id_to_counter.count(buffer_alloc_id) > 0 ? id_to_counter[buffer_alloc_id] : graph.size();
     if (id_to_counter.count(buffer_alloc_id) == 0) {
         std::unordered_map<std::string, std::string> params = {
-            {"size", std::to_string(buffer->size())},
-            {"type", buffer->is_dram() ? "DRAM" : "L1"},
-            {"layout", tensorMemoryLayoutToString(buffer->buffer_layout())}
+            {kSize, std::to_string(buffer->size())},
+            {kType, buffer->is_dram() ? "DRAM" : "L1"},
+            {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())}
         };
 
         graph.push_back(Vertex{
             .counter = counter,
-            .name = "buffer",
+            .node_type = kNodeBuffer,
             .params = params,
             .connections = {}
         });
@@ -427,7 +426,7 @@ void GraphProcessor::begin_capture(RunMode mode) {
     id_to_counter.clear();
     graph.push_back(Vertex{
         .counter = 0,
-        .name = "capture_start",
+        .node_type = kNodeCaptureStart,
         .params = {},
         .connections = {}
     });
@@ -444,7 +443,7 @@ nlohmann::json GraphProcessor::end_capture() {
     int counter = graph.size();
     graph.push_back(Vertex{
         .counter = counter,
-        .name = "capture_end",
+        .node_type = kNodeCaptureEnd,
         .params = {},
         .connections = {}
     });

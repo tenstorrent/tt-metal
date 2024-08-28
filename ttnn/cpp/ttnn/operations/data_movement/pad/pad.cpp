@@ -175,6 +175,16 @@ ttnn::Tensor ExecutePad::invoke(\
     const ttnn::Tensor& input_tensor,\
     const ShapeType& output_padded_shape,\
     const ShapeType& input_tensor_start,\
+    const float value,\
+    const std::optional<MemoryConfig>& memory_config_arg) {\
+\
+    return pad_impl<ShapeType>(DefaultQueueId, input_tensor, output_padded_shape, input_tensor_start, value, false, memory_config_arg);\
+}\
+\
+ttnn::Tensor ExecutePad::invoke(\
+    const ttnn::Tensor& input_tensor,\
+    const ShapeType& output_padded_shape,\
+    const ShapeType& input_tensor_start,\
     const float value) {\
 \
     return pad_impl<ShapeType>(DefaultQueueId, input_tensor, output_padded_shape, input_tensor_start, value, false, std::nullopt);\

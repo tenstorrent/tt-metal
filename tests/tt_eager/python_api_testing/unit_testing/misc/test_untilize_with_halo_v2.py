@@ -26,7 +26,6 @@ from ttnn.operations.conv.tt_py_untilize_with_halo import (
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc, comp_pcc
 from tt_lib.utils import _nearest_y
-
 from loguru import logger
 
 
@@ -421,7 +420,7 @@ def test_generate_all_configs_and_references(
     if is_block_sharded:
         num_cores_c = num_cores_h
         assert input_padded_c % num_cores_c == 0
-        untilize_with_halp_input_tt_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+        untilize_with_halp_input_tt_tensor = ttnn.interleaved_to_sharded(
             untilize_with_halp_input_tt_tensor,
             grid_size,  ## need to pass in actual grid size for block sharded
             [input_size_to_shard_evenly // num_cores_nhw, input_padded_c // num_cores_c],
@@ -429,7 +428,7 @@ def test_generate_all_configs_and_references(
             ttnn.ShardOrientation.COL_MAJOR,
         )
     else:
-        untilize_with_halp_input_tt_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+        untilize_with_halp_input_tt_tensor = ttnn.interleaved_to_sharded(
             untilize_with_halp_input_tt_tensor,
             grid_size_binary,
             [input_size_to_shard_evenly // num_cores_nhw, input_padded_c],

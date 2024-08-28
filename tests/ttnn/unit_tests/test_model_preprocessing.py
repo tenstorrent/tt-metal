@@ -21,7 +21,7 @@ from ttnn.model_preprocessing import (
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
 
 
 @contextlib.contextmanager
@@ -475,6 +475,7 @@ def test_conv2d_with_batch_norm2d(device, use_conv_bias):
 
 
 @skip_for_wormhole_b0()
+@skip_for_grayskull("see issue #11917")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_resnet_with_module_cache(device):
     torch.manual_seed(0)
