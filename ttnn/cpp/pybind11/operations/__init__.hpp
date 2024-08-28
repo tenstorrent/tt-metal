@@ -48,6 +48,7 @@ namespace operations {
 
 void py_module(py::module& module) {
     auto m_core = module.def_submodule("core", "core operations");
+    core::py_module_types(m_core);
     core::py_module(m_core);
 
     auto m_examples = module.def_submodule("examples", "examples of operations");
