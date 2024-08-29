@@ -116,36 +116,18 @@ void device_module(py::module &m_device) {
 
     m_device.attr("INF_GS") = INF_GS;
     m_device.attr("INF_WHB0") = INF_WHB0;
-    m_device.attr("INF_BH") = INF_BH
+    m_device.attr("INF_BH") = INF_BH;
 
     pyDevice.def("sfpu_eps", &Device::sfpu_eps, R"doc(
-        Machine epsilon value for current device.
-
-        +------------------+------------------------+-----------------------+-------------+----------+
-        | Argument         | Description            | Data type             | Valid range | Required |
-        +==================+========================+=======================+=============+==========+
-        | device           | return machine epsilon | tt_lib.device.Device  |     NA      | Yes      |
-        +------------------+------------------------+-----------------------+-------------+----------+
+        Returns machine epsilon value for current device.
         )doc");
 
     pyDevice.def("sfpu_nan", &Device::sfpu_nan, R"doc(
-        NaN value for current device.
-
-        +------------------+------------------------+-----------------------+-------------+----------+
-        | Argument         | Description            | Data type             | Valid range | Required |
-        +==================+========================+=======================+=============+==========+
-        | device           | return machine NaN     | ttnn.device.Device    |     NA      | Yes      |
-        +------------------+------------------------+-----------------------+-------------+----------+
+        Returns NaN value for current device.
         )doc");
 
     pyDevice.def("sfpu_inf", &Device::sfpu_inf, R"doc(
-        Infinity value for current device.
-
-        +------------------+------------------------+-----------------------+-------------+----------+
-        | Argument         | Description            | Data type             | Valid range | Required |
-        +==================+========================+=======================+=============+==========+
-        | device           | return machine Inf     | ttnn.device.Device    |     NA      | Yes      |
-        +------------------+------------------------+-----------------------+-------------+----------+
+        Returns Infinity value for current device.
         )doc");
 
     m_device.def(
@@ -190,7 +172,7 @@ void device_module(py::module &m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
         | Argument         | Description            | Data type             | Valid range | Required |
         +==================+========================+=======================+=============+==========+
-        | device           | TT Device to close     | tt_lib.device.Device  |             | Yes      |
+        | device           | TT Device to close     | ttnn.Device           |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
     m_device.def("CloseDevices", &tt::tt_metal::detail::CloseDevices, R"doc(
@@ -199,7 +181,7 @@ void device_module(py::module &m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
         | Argument         | Description            | Data type             | Valid range | Required |
         +==================+========================+=======================+=============+==========+
-        | device           | TT Device to close     | tt_lib.device.Device  |             | Yes      |
+        | device           | TT Device to close     | ttnn.Device           |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 
@@ -221,7 +203,7 @@ void device_module(py::module &m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
         | Argument         | Description            | Data type             | Valid range | Required |
         +==================+========================+=======================+=============+==========+
-        | device           | TT Device to use       | tt_lib.device.Device  |             | Yes      |
+        | device           | TT Device to use       | ttnn.Device           |             | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 
@@ -287,7 +269,7 @@ void device_module(py::module &m_device) {
         +------------------+----------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                      | Data type             | Valid range | Required |
         +==================+==================================+=======================+=============+==========+
-        | device           | Device to dump memory state for  | tt_lib.device.Device  |             | Yes      |
+        | device           | Device to dump memory state for  | ttnn.Device           |             | Yes      |
         | prefix           | Dumped report filename prefix    | str                   |             | No       |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
@@ -319,7 +301,7 @@ void device_module(py::module &m_device) {
         +------------------+----------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                      | Data type             | Valid range | Required |
         +==================+==================================+=======================+=============+==========+
-        | device           | Device to dump profiling data of | tt_lib.device.Device  |             | Yes      |
+        | device           | Device to dump profiling data of | ttnn.Device           |             | Yes      |
         | last_dump        | Last dump before process dies    | bool                  |             | No       |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
