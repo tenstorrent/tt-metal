@@ -314,6 +314,10 @@ struct OwnedStorage {
         return this->buffer;
     }
 
+    inline bool is_allocated() const {
+         return std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, buffer);
+    }
+
 };
 
 using DeviceBuffer = std::shared_ptr<Buffer>;
@@ -344,6 +348,10 @@ struct DeviceStorage {
     inline DeviceBuffer get_buffer() const { return this->buffer; }
     static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
+
+    inline bool is_allocated() const {
+         return buffer && buffer->size() > 0;
+    }
 };
 
 using BorrowedBuffer = std::variant<
@@ -404,6 +412,11 @@ struct BorrowedStorage {
 
     static constexpr auto attribute_names = std::forward_as_tuple();
     const auto attribute_values() const { return std::forward_as_tuple(); }
+
+    inline bool is_allocated() const {
+        return true;
+    }
+
 };
 
 struct MultiDeviceHostStorage {
@@ -461,7 +474,7 @@ struct MultiDeviceHostStorage {
         OwnedBuffer get_buffer(int buffer_index) const {
             std::lock_guard<std::mutex> lock(mtx);
             TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index " + std::to_string(buffer_index));
-            return buffers[buffer_index];;
+            return buffers[buffer_index];
         }
 
         OwnedBuffer& get_buffer(int buffer_index) {
@@ -479,6 +492,18 @@ struct MultiDeviceHostStorage {
         uint32_t num_buffers() const {
             std::lock_guard<std::mutex> lock(mtx);
             return buffers.size();
+        }
+
+        inline bool is_allocated() const {
+            // not sure what is better mutex for each buffer 10 times or one here.
+            // I think this one is better.
+            std::lock_guard<std::mutex> lock(mtx);
+            bool is_allocated = true;
+            for (int i = 0; i < num_buffers(); i++) {
+                    is_allocated &=
+                        std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, buffers[i]);
+            }
+            return is_allocated;
         }
     };
 
@@ -608,6 +633,17 @@ struct MultiDeviceHostStorage {
         inline bool has_buffer_for_device_id(uint32_t device_id) const {
             std::lock_guard<std::mutex> lock(buffer_mtx);
             return buffers.find(device_id) != buffers.end();
+        }
+
+        inline bool is_allocated() const {
+            std::lock_guard<std::mutex> lock(buffer_mtx);
+            bool is_allocated = true;
+            for (int i = 0; i < ordered_device_ids.size(); ++i) {
+                auto device_id = ordered_device_ids[i];
+                const auto& buffer = buffers.at(device_id);
+                is_allocated &= buffer && buffer->size() > 0;
+            }
+            return is_allocated;
         }
     };
 

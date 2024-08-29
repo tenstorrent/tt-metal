@@ -20,6 +20,7 @@
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "types.hpp"
 using namespace tt::constants;
 
 
@@ -450,31 +451,7 @@ bool Tensor::is_allocated() const {
     ZoneScoped;
     auto output = std::visit(
         [](auto&& storage) -> bool {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, OwnedStorage>) {
-                return std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.buffer);
-            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return bool(storage.buffer) and storage.buffer->size() > 0;
-            } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
-                return true;
-            } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                bool is_allocated = true;
-                for (int i = 0; i < storage.num_buffers(); i++) {
-                    is_allocated &=
-                        std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.get_buffer(i));
-                }
-                return is_allocated;
-            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                bool is_allocated = true;
-                for (int i = 0; i < storage.ordered_device_ids.size(); ++i) {
-                    auto device_id = storage.ordered_device_ids[i];
-                    const auto& buffer = storage.get_buffer_for_device_id(device_id);
-                    is_allocated &= bool(buffer) and buffer->size() > 0;
-                }
-                return is_allocated;
-            } else {
-                raise_unsupported_storage<T>();
-            }
+            return storage.is_allocated();
         },
         this->get_storage());
     return output;
