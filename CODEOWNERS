@@ -89,7 +89,7 @@ tests/scripts/run_performance.sh @tt-rkim
 # eager - tensor and op infra
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/ @SeanNijjar
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/program_cache.*pp @arakhmati @eyonland @cfjchu @xanderchin
-ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/** @razorback3 @dongjin-na
+ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na
 ttnn/cpp/ttnn/tensor/ @arakhmati @patrickroberts @yan-zaretskiy @eyonland @cfjchu @xanderchin
 
 # eager - python api
@@ -113,7 +113,7 @@ ttnn/cpp/ttnn/operations/reduction/ @SeanNijjar @tarafdarTT @sjameelTT
 ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho
 ttnn/cpp/ttnn/operations/embedding/ @tarafdarTT @tt-aho @TT-BrianLiu
 ttnn/cpp/ttnn/operations/embedding_backward/ @TT-BrianLiu @yan-zaretskiy
-ttnn/cpp/ttnn/operations/moreh*/** @razorback3 @dongjin-na
+ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na
 tests/ttnn/ @eyonland @arakhmati @patrickroberts @yan-zaretskiy @cfjchu @xanderchin @TT-BrianLiu @ayerofieiev-tt @dmakoviichuk-tt @razorback3 @dongjin-na
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 # models
