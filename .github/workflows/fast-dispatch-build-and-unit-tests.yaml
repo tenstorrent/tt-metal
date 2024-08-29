@@ -71,6 +71,10 @@ jobs:
       - uses: ./.github/actions/prepare-metal-run
         with:
           arch: ${{ inputs.arch }}
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          theme: dark
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
