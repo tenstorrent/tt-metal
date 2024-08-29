@@ -7,11 +7,11 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import skip_for_wormhole_b0, torch_random, is_wormhole_b0, is_grayskull
+from models.utility_functions import is_wormhole_b0, torch_random, is_wormhole_b0, is_grayskull, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("height", [32])
 @pytest.mark.parametrize("width", [32])
@@ -31,7 +31,7 @@ def test_ttnn_experimental_tensor_exp(device, height, width):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [32])
 @pytest.mark.parametrize("n_size", [32])
@@ -51,7 +51,7 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("m_size", [32])
 @pytest.mark.parametrize("k_size", [32])
 @pytest.mark.parametrize("n_size", [32])

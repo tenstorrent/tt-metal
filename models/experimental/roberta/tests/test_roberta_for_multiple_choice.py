@@ -14,12 +14,13 @@ from models.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.skip(reason="Mismatch happening on GS, issue #5943")
 def test_roberta_for_multiple_choice(device):
     """

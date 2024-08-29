@@ -7,7 +7,8 @@ import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import compare_pcc, data_gen_with_range, data_gen_with_val
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 
 
@@ -68,7 +69,7 @@ def test_bw_polygamma_range_pos(input_shapes, order, device):
     "order",
     [2, 5],
 )
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bw_polygamma_zero(input_shapes, order, device):
     in_data, input_tensor = data_gen_with_val(input_shapes, device, True, 0)
     grad_data, grad_tensor = data_gen_with_val(input_shapes, device, True, 0)

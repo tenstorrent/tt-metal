@@ -14,7 +14,7 @@ from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
 )
 
 

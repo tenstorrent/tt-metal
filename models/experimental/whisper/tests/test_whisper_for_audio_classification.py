@@ -18,7 +18,8 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 
 
@@ -86,7 +87,7 @@ def run_whisper_for_audio_classification(device):
         assert does_pass
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_WhipserForAudioClassification_inference(device):
     torch.manual_seed(1234)
     run_whisper_for_audio_classification(device=device)

@@ -21,7 +21,8 @@ from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     torch2tt_tensor,
@@ -45,7 +46,7 @@ def get_imagenet_label_dict():
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])

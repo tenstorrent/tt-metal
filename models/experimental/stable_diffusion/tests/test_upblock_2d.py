@@ -12,14 +12,15 @@ from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 from models.experimental.stable_diffusion.tt.upblock_2d import TtUpBlock2D
 import pytest
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_run_upblock_real_input_inference(device, model_location_generator):
     # setup pytorch model
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)

@@ -12,12 +12,13 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.experimental.mnist.tt.mnist_model import mnist_model
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_mnist_inference(device, model_location_generator):
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])

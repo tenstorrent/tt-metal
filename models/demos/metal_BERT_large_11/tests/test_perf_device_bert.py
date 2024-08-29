@@ -5,7 +5,7 @@
 import pytest
 
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
+from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_blackhole
 
 
 def run_bert_perf(batch_size, test, expected_perf):
@@ -29,7 +29,7 @@ def run_bert_perf(batch_size, test, expected_perf):
     )
 
 
-@skip_for_wormhole_b0("Incorrect device metrics for wormhole b0")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Incorrect device metrics for wormhole b0")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",

@@ -8,7 +8,7 @@ import torch.optim as optim
 
 import ttnn
 import pytest
-from models.utility_functions import skip_for_wormhole_b0, comp_allclose_and_pcc, comp_pcc, is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, comp_allclose_and_pcc, comp_pcc, is_wormhole_b0
 from loguru import logger
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,

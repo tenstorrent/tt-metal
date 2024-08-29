@@ -13,13 +13,13 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_blackhole, is_wormhole_b0
 from loguru import logger
 
 MODEL_NAME = "openai/whisper-base"
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -84,7 +84,7 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
     assert_with_pcc(torch_output, output, 0.98)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -120,7 +120,7 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -174,7 +174,7 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
     assert_with_pcc(torch_output, output, 0.97)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -233,7 +233,7 @@ def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     assert_with_pcc(torch_output, output, 0.97)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
@@ -305,7 +305,7 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_functional_whisper])
 def test_ttnn_whisper(device, ttnn_model):
     torch.manual_seed(0)

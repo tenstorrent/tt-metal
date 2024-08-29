@@ -19,7 +19,8 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     is_e75,
     skip_for_grayskull,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 
 
@@ -57,7 +58,7 @@ class TestParametrized:
             "decode_batch32_2047_bf16_l1",
         ],
     )
-    @skip_for_wormhole_b0()
+    @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
     def test_perf_gs_bare_metal(
         self,
         model_version,

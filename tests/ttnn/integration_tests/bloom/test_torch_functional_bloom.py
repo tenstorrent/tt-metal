@@ -8,7 +8,7 @@ import torch
 from transformers.models import bloom
 
 from models.demos.grayskull.functional_bloom.reference import torch_functional_bloom
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -20,7 +20,7 @@ def torch_random(shape, low, high, dtype):
     return torch.zeros(shape, dtype=dtype).uniform_(low, high)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bloom_gelu():
     torch.manual_seed(0)
 
@@ -33,7 +33,7 @@ def test_bloom_gelu():
     assert_with_pcc(torch_output, output, pcc=0.9999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -79,7 +79,7 @@ def test_bloom_attention(model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, pcc=0.9999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -108,7 +108,7 @@ def test_bloom_mlp(model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, pcc=0.9999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -151,7 +151,7 @@ def test_bloom_block(model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, pcc=0.9999)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])
@@ -185,7 +185,7 @@ def test_bloom(model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, pcc=0.994)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["bigscience/bloom-560m"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [384])

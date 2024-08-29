@@ -15,11 +15,12 @@ from transformers import AutoImageProcessor
 
 import ttnn
 from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
-from models.utility_functions import torch_random, skip_for_wormhole_b0, torch2tt_tensor
+from models.utility_functions import torch_random, is_wormhole_b0, torch2tt_tensor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     torch_random,
@@ -35,7 +36,7 @@ def get_expected_times(functional_vit):
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
@@ -121,7 +122,7 @@ def test_performance_vit_embeddings(device, model_name, batch_size, image_size, 
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
@@ -192,7 +193,7 @@ def test_performance_vit_encoder(device, use_program_cache, model_name, batch_si
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])

@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
     data_gen_with_range,
     compare_all_close,
@@ -25,7 +25,7 @@ from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
 #   self: zeros_like(grad)
 #   value: grad.sum()
 #   result: at::fill(self_t, value_t)
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bw_fill(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)

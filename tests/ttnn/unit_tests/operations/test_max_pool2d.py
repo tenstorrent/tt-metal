@@ -7,12 +7,12 @@ from loguru import logger
 import torch
 import pytest
 import math
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 
 
-# @skip_for_wormhole_b0()
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 ## max-pool params:
 ## kernel_h, kernel_w
 ## stride_h, stride_w

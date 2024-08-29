@@ -13,10 +13,10 @@ import os
 from loguru import logger
 import models.experimental.nanogpt.tt.nanogpt_model as nanogpt_model
 
-from models.utility_functions import tt_to_torch_tensor, comp_allclose, comp_pcc, skip_for_wormhole_b0
+from models.utility_functions import tt_to_torch_tensor, comp_allclose, comp_pcc, is_wormhole_b0, is_blackhole
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.skip(reason="Test is failing gs, see issue #7534")
 @pytest.mark.parametrize(
     "dtype",

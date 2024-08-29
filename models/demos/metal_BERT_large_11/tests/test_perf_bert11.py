@@ -22,7 +22,8 @@ from models.utility_functions import (
     profiler,
     run_for_grayskull,
     run_for_wormhole_b0,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -150,7 +151,7 @@ def run_perf_bert11(
     logger.info(f"bert11 compile time: {compile_time}")
 
 
-@skip_for_wormhole_b0(reason_str="Didn't test on WH yet")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Didn't test on WH yet")
 @run_for_wormhole_b0(reason_str="WH specific batch size")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

@@ -8,7 +8,7 @@ import torch
 import transformers
 
 from models.demos.grayskull.t5.tt import ttnn_functional_t5 as functional_t5
-from models.utility_functions import torch_random, skip_for_wormhole_b0
+from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -36,7 +36,7 @@ def test_t5_layer_norm(device, model_name, batch_size, sequence_size):
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9999
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
@@ -60,7 +60,7 @@ def test_t5_dense_act_dense(device, model_name, batch_size, sequence_size):
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99917
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
@@ -84,7 +84,7 @@ def test_t5_dense_gated_act_dense(device, model_name, batch_size, sequence_size)
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99907
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
@@ -108,7 +108,7 @@ def test_t5_layer_ff(device, model_name, batch_size, sequence_size):
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99910
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
@@ -132,7 +132,7 @@ def test_t5_attention(device, model_name, batch_size, sequence_size):
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99901
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
@@ -156,7 +156,7 @@ def test_t5_layer_self_attention(device, model_name, batch_size, sequence_size):
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9983
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
@@ -186,7 +186,7 @@ def test_t5_layer_cross_attention(device, model_name, batch_size, sequence_size)
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9999
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
@@ -210,7 +210,7 @@ def test_t5_block_encoder(device, model_name, batch_size, sequence_size):
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99734
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
@@ -247,7 +247,7 @@ def test_t5_block_decoder(device, model_name, batch_size, sequence_size):
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.99749
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
@@ -282,7 +282,7 @@ def test_t5_stack_encoder(device, model_name, batch_size, sequence_size):
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9962
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
@@ -324,7 +324,7 @@ def test_t5_stack_decoder(device, model_name, batch_size, sequence_size):
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9963
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])

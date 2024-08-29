@@ -114,7 +114,7 @@ def test_moreh_clip_grad_norm(
             assert pass_input_i
 
 
-# @skip_for_wormhole_b0()
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 # @pytest.mark.parametrize("error_if_nonfinite", [True, False])
 # def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite, device):
 #     torch.manual_seed(2023)

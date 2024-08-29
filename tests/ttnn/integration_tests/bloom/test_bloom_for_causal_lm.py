@@ -11,7 +11,7 @@ from transformers import BloomConfig, BloomForCausalLM, BloomTokenizerFast
 from models import generation_utils
 from models.demos.grayskull.functional_bloom.reference import torch_functional_bloom
 from models.demos.grayskull.functional_bloom.tt import ttnn_optimized_functional_bloom
-from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
+from models.utility_functions import is_wormhole_b0, skip_for_grayskull, is_blackhole
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -99,7 +99,7 @@ def test_torch_bloom_for_causal_lm():
     assert expected_generated_text == generated_text
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @skip_for_grayskull(reason_str="#10797: OOM")
 def test_ttnn_bloom_for_causal_lm(device, batch_size=8):
     model_name = "bigscience/bloom-560m"

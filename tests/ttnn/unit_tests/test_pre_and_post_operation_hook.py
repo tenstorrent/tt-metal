@@ -8,11 +8,11 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 from models.utility_functions import torch_random
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
@@ -35,7 +35,7 @@ def test_pre_and_post_operation_hooks_for_printing(device, batch_size, h, w, dim
         ttnn.exp(input_tensor) * 2 + 1
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [32])

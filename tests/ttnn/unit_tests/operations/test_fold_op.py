@@ -14,9 +14,10 @@ from models.utility_functions import (
     pad_and_fold_conv_activation_for_unity_stride,
     pad_and_fold_conv_filters_for_unity_stride,
     _nearest_y,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
     torch2tt_tensor,
     tt2torch_tensor,
+    is_blackhole,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
@@ -331,7 +332,7 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
 
 
-# @skip_for_wormhole_b0()
+# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "act_shape,stride_h,stride_w",
     [
@@ -366,7 +367,7 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_allclose(actual, expected)
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_fold_sharded(device):
     torch.manual_seed(0)
 

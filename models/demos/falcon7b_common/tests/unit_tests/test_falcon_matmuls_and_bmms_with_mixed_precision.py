@@ -10,7 +10,7 @@ import ttnn
 from models.demos.falcon7b_common.tt.falcon_causallm import falcon_lm_head_matmul
 from models.demos.falcon7b_common.tt.falcon_mlp import falcon_dense_4h_to_h_matmul, falcon_dense_h_to_4h_matmul
 from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid
-from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor, skip_for_wormhole_b0
+from models.utility_functions import comp_pcc, tt2torch_tensor, torch2tt_tensor, is_wormhole_b0, is_blackhole
 import torch
 import math
 
@@ -157,7 +157,7 @@ def run_falcon_matmul_test(
 
 
 # TODO: We could parametrize these separately for comprehensive testing
-@skip_for_wormhole_b0("non-determinstic hang, see issue #5882")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="non-determinstic hang, see issue #5882")
 @pytest.mark.parametrize(
     "in0_mem_config, in1_mem_config, out_mem_config",
     (
@@ -231,7 +231,7 @@ def test_falcon_matmul(
 
 
 # Test matmul attention sequence with InterleavedToShardedPartialOp
-@skip_for_wormhole_b0("non-determinstic hang, see issue #5882")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="non-determinstic hang, see issue #5882")
 @pytest.mark.parametrize("seq_len", [128, 1024, 2048], ids=["seq_len_128", "seq_len_1024", "seq_len_2048"])
 @pytest.mark.parametrize("num_cores", [64])
 def test_falcon7b_attnention_sliced(
@@ -483,7 +483,7 @@ def test_falcon7b_attnention_sliced(
 
 @pytest.mark.parametrize("seq_len", [128, 1024, 2048], ids=["seq_len_128", "seq_len_1024", "seq_len_2048"])
 @pytest.mark.parametrize("num_cores", [64])
-@skip_for_wormhole_b0("non-determinstic hang, see issue #5882")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="non-determinstic hang, see issue #5882")
 @pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
 def test_falcon7b_attention_softmax_sequence(
     device,

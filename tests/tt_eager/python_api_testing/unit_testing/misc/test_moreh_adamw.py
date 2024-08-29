@@ -10,7 +10,7 @@ import ttnn
 import ttnn
 import pytest
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
     comp_allclose_and_pcc,
     comp_pcc,
     comp_allclose,

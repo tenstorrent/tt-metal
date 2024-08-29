@@ -7,7 +7,7 @@ import pytest
 import random
 import ttnn
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
-from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
+from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_blackhole
 
 
 @pytest.mark.parametrize(
@@ -721,7 +721,7 @@ def test_unary_softshrink(input_shapes, param, device):
     assert comp_pass
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "input_shapes",
     (

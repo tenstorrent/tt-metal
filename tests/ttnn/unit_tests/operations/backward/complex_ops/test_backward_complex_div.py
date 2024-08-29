@@ -16,9 +16,9 @@ from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal, comp_allclose
 
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
-from models.utility_functions import is_wormhole_b0
 from tests.ttnn.unit_tests.operations.backward.complex_ops.backward_complex_utility_funcs import (
     Complex,
     convert_to_torch_tensor,
@@ -86,7 +86,7 @@ def test_level2_complex_div_bw(bs, hw, memcfg, dtype, device, function_level_def
 @pytest.mark.parametrize("dtype", ((ttnn.bfloat16,)))
 @pytest.mark.parametrize("bs", ((1, 1), (1, 2)))
 @pytest.mark.parametrize("hw", ((32, 64), (320, 384)))
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_level2_complex_div_bw_other_zero(bs, hw, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], hw[0], hw[1]])
 

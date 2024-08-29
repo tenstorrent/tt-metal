@@ -940,6 +940,10 @@ def is_grayskull():
     return "grayskull" in ARCH_NAME
 
 
+def skip_for_blackhole(reason_str="not working for Blackhole"):
+    return pytest.mark.skipif(is_blackhole(), reason=reason_str)
+
+
 def skip_for_wormhole_b0(reason_str="not working for Wormhole B0"):
     return pytest.mark.skipif(is_wormhole_b0(), reason=reason_str)
 

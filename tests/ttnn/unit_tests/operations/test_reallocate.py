@@ -9,10 +9,10 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_blackhole
 
 
-@skip_for_wormhole_b0("#7733: fix for sharding on whb0")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="#7733: fix for sharding on whb0")
 @pytest.mark.parametrize(
     "mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG]
 )

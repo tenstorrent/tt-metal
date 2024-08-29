@@ -19,7 +19,8 @@ from models.demos.bert.tt import ttnn_optimized_bert
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
@@ -33,7 +34,7 @@ def get_expected_times(bert):
     }[bert]
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["deepset/roberta-large-squad2"])
