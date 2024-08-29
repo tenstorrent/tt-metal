@@ -126,7 +126,6 @@ def preprocess_inputs_prefill(
 
     logger.info(f"# of users: {len(encoded_prompts)}")
     input_tokens_prefill = []
-    input_tokens_decode = []
     decoding_pos = []
     prefill_lens = []
 
@@ -145,14 +144,8 @@ def preprocess_inputs_prefill(
         decoding_pos.append(len(encoded))
         prefill_lens.append(prefill_seq_len)
 
-    input_tokens_prefill_tt = None
-    input_tokens_decode_tt = None
-
     return (
-        input_tokens_prefill_tt,
-        input_tokens_decode_tt,
         input_tokens_prefill,
-        input_tokens_decode,
         encoded_prompts,
         decoding_pos,
         prefill_lens,

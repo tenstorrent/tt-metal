@@ -109,7 +109,8 @@ def run_test_perplexity(
         args=model_args,
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
-        rotary_on_host=True,
+        rotary_on_host=False,
+        start_pos_ids=[0] * batch_size,
     )
 
     if validate_ref_model:
@@ -160,21 +161,18 @@ def run_test_perplexity(
                 pt_decode_input = embd(input_ids[:, kv_cache_len]).view(batch_size, seqlen, -1)
 
                 start_pos = generation_start_pos + kv_cache_len
-                current_pos = start_pos
 
                 if embed_on_host:
                     decode_input_11BH = prepare_inputs_ttnn(
                         pt_decode_input,
                         model_args.dim,
-                        start_pos,
-                        model_args,
                         tt_model.device_mesh,
                     )
                 else:
                     assert "Only embedding on host is supported for now!"
 
                 # Run ttnn mixtral model
-                tt_logits = tt_model(decode_input_11BH, start_pos, current_pos)
+                tt_logits = tt_model(decode_input_11BH, [start_pos] * batch_size)
 
                 if embed_on_host:
                     # Convert ttnn tensor to torch tensor

@@ -105,13 +105,12 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
     profiler.end("weight_loading")
     logger.info("Loading weights finished!")
 
+    max_generated_tokens = 120
+
     profiler.start("preprocess_prefill_inputs")
     # Preprocess initial prompt inputs
     (
-        input_tokens_prefill_tt,
-        input_tokens_decode_tt,
         input_tokens_prefill_pt,
-        input_tokens_decode_pt,
         encoded_prompts,
         decoding_pos,
         prefill_lens,
@@ -168,8 +167,6 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
         model_args.max_seq_len,
     )
     profiler.end("prepare_rot_mat_for_decode")
-
-    max_generated_tokens = 120
 
     logger.info(f"Starting prefill ...")
     profiler.start("prepare_rot_mat_for_prefill")
