@@ -192,7 +192,7 @@ namespace kernel_profiler{
             return;
         }
         uint32_t pageSize =
-            PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * profiler_core_count_per_dram;
+            PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
 
         while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
         uint32_t dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
@@ -213,7 +213,7 @@ namespace kernel_profiler{
 		if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
 		{
 		    dram_offset =
-			(core_flat_id % profiler_core_count_per_dram) * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+			(core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
 			hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
 			profiler_control_buffer[hostIndex] * sizeof(uint32_t);
 
@@ -226,7 +226,7 @@ namespace kernel_profiler{
 		{
                     dram_offset =
                         (core_flat_id % profiler_core_count_per_dram) *
-                        PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                        MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                         hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
 
                     send_size = CUSTOM_MARKERS * sizeof(uint32_t);
@@ -270,14 +270,14 @@ namespace kernel_profiler{
         core_flat_id = noc_xy_to_profiler_flat_id[my_x[0]][my_y[0]];
 
         uint32_t dram_offset =
-            (core_flat_id % profiler_core_count_per_dram) * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+            (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
             (HOST_BUFFER_END_INDEX_BR_ER + myRiscID) * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
             profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
 
         while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
         const InterleavedAddrGen<true> s = {
             .bank_base_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS],
-            .page_size = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * profiler_core_count_per_dram
+            .page_size = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram
         };
 
         uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
