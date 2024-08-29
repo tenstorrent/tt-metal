@@ -380,6 +380,9 @@ static void add_worker_config_to_edm_builders(
                 device->worker_core_from_logical_core(worker_cores.at(w)).y));
         }
 
+        // Get the maximum message size we'd like to use. Not the actual packet size
+        uint32_t expected_message_size_bytes = clockwise_edm_builders.at(link).get_eth_buffer_size_bytes();//tensor_slicer.get_worker_slice_size_bytes(global_worker_idx);
+
         bool sender_enabled = true;  // (!is_linear || !is_last_chip_in_chain); // update for linear
         if (sender_enabled) {
             auto& sender_edm_builder = is_buffer_in_clockwise_direction_fn(c) ? clockwise_edm_builders.at(link)
@@ -389,12 +392,12 @@ static void add_worker_config_to_edm_builders(
                 sender_edm_builder.add_sender_channel(
                     worker_sender_semaphore_id,
                     1,  // cw_edm_channel_num_messages_to_send_per_transfer.at(c) * (ring_size - 1),
-                    sender_worker_coords);
+                    sender_worker_coords,
+                    expected_message_size_bytes);
             edm_interface_addresses.worker_sender_edm_semaphore_addresses.insert(
                 {global_worker_idx, sender_channel_buffer_info.eth_semaphore_l1_address});
             edm_interface_addresses.worker_sender_edm_buffer_addresses.insert(
                 {global_worker_idx, sender_channel_buffer_info.eth_buffer_l1_address});
-            sender_edm_builder.set_max_message_size_bytes(sender_channel_buffer_info.channel, clockwise_edm_builders.at(0).get_eth_buffer_size_bytes());
         }
 
         bool receiver_enabled = true;  //(!is_linear || !is_first_chip_in_chain);
@@ -409,12 +412,12 @@ static void add_worker_config_to_edm_builders(
                     // Since we are in worker signal EDM termination mode, we don't need to set the actual number of
                     // messages the EDM must forward as it will receive its finish signal from the worker instead
                     1,
-                    receiver_worker_coords);
+                    receiver_worker_coords,
+                    expected_message_size_bytes);
             edm_interface_addresses.worker_receiver_edm_semaphore_addresses.insert(
                 {global_worker_idx, receiver_channel_buffer_info.eth_semaphore_l1_address});
             edm_interface_addresses.worker_receiver_edm_buffer_addresses.insert(
                 {global_worker_idx, receiver_channel_buffer_info.eth_buffer_l1_address});
-            receiver_edm_builder.set_max_message_size_bytes(receiver_channel_buffer_info.channel, clockwise_edm_builders.at(0).get_eth_buffer_size_bytes());
         }
     }
 }
