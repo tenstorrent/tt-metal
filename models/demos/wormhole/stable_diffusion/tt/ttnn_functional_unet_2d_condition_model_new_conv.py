@@ -386,7 +386,9 @@ class UNet2DConditionModel:
             math_approx_mode_enabled=True,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
-            height_sharding=True if in_channels < 320 else False,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            if self.in_channels < 320
+            else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             input_channels_alignment=32,
             transpose_shards=False,
             reshard_if_not_optimal=True,
@@ -646,7 +648,7 @@ class UNet2DConditionModel:
             weights_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.LoFi,
             activation="",
-            height_sharding=True,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             math_approx_mode_enabled=True,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
