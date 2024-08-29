@@ -306,11 +306,11 @@ struct OwnedStorage {
     static constexpr auto attribute_names = std::forward_as_tuple();
     const auto attribute_values() const { return std::forward_as_tuple(); }
 
-    inline void insert_buffer(OwnedBuffer buffer_) {
+    inline void insert_buffer(const OwnedBuffer& buffer_) {
         this->buffer = buffer_;
     }
 
-    inline OwnedBuffer get_buffer() const {
+    inline const OwnedBuffer& get_buffer() const {
         return this->buffer;
     }
 
@@ -465,13 +465,13 @@ struct MultiDeviceHostStorage {
 
         // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
         // preinitialize empty tensor handles and use/populate them in the worker threads.
-        void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer buffer, const Shape shape) {
+        void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer& buffer, const Shape shape) {
             std::lock_guard<std::mutex> lock(mtx);
             buffers[buffer_index] = buffer;
             shapes[buffer_index] = shape;
         }
 
-        OwnedBuffer get_buffer(int buffer_index) const {
+        const OwnedBuffer& get_buffer(int buffer_index) const {
             std::lock_guard<std::mutex> lock(mtx);
             TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index " + std::to_string(buffer_index));
             return buffers[buffer_index];
