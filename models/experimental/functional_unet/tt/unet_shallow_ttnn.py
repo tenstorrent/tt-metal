@@ -136,15 +136,16 @@ class UNetConv2D:
         self.cache = cache
         self.mesh_mapper = mesh_mapper
 
+        shard_layout = (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            if self.use_1d_systolic_array
+            else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )
         self.conv_config = ttnn.Conv2dConfig(
             dtype=activation_dtype,
             weights_dtype=weights_dtype,
             math_fidelity=ttnn.MathFidelity.LoFi,
-            shard_layout=(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if self.use_1d_systolic_array
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            ),
+            shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
