@@ -232,7 +232,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
 
         # Device synchrozization ensures profiler is accurate in end-to-end timing
         for dev in device_mesh.get_devices():
-            ttnn.device.synchronize_device(dev)
+            ttnn.synchronize_device(dev)
 
         profiler.end(f"inference_prefill")
         logger.info(f"Prefill finished [{prefill_seq_len} tokens]")

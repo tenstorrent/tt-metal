@@ -138,16 +138,16 @@ class TtFalconDecoderLayer:
 
     def __call__(
         self,
-        hidden_states: ttnn.experimental.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         alibi: torch.Tensor,
-        attention_mask: ttnn.experimental.tensor.Tensor,
+        attention_mask: ttnn.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[ttnn.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """Input shape: [batch, 1, seq_len, hidden_size]"""
 
         if llm_mode == "prefill":
@@ -179,16 +179,16 @@ class TtFalconDecoderLayer:
 
     def fwd_prefill(
         self,
-        hidden_states: ttnn.experimental.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[ttnn.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """Input shape: [batch, 1, seq_len, hidden_size]"""
 
         assert not output_attentions
@@ -288,16 +288,16 @@ class TtFalconDecoderLayer:
 
     def fwd_decode(
         self,
-        hidden_states: ttnn.experimental.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         alibi: torch.Tensor,
         attention_mask: torch.Tensor,
         llm_mode: str,
         user_id: int = 0,
-        layer_past: Optional[Tuple[ttnn.experimental.tensor.Tensor]] = None,
+        layer_past: Optional[Tuple[ttnn.Tensor]] = None,
         layer_past_len: int = 0,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-    ) -> Tuple[ttnn.experimental.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[ttnn.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """Input shape: [batch, 1, seq_len, hidden_size]"""
 
         assert not output_attentions

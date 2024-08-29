@@ -153,7 +153,7 @@ def print_output_prompts(generated_ids, tokenizer, num_users_to_display=None):
 
 def synchronize_devices(devices):
     for device in devices:
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
 
 
 def top_pk_logits(logits, p=0.9, k=10, temperature=1.0, return_probs=False):

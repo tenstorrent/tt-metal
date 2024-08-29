@@ -118,7 +118,7 @@ def get_rand_falcon_inputs(
                 tt_attention_mask = [
                     tt_from_torch(
                         attn_mask,
-                        dtype=ttnn.experimental.tensor.DataType.BFLOAT4_B,
+                        dtype=ttnn.bfloat4_b,
                         device=device_mesh,
                         layout=ttnn.TILE_LAYOUT,
                         mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
