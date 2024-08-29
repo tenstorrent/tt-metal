@@ -35,8 +35,6 @@ def get_torch_tensors(shape):
 
 
 def get_tt_tensors(torch_input, torch_target, torch_weight, torch_divisor, torch_output, device):
-    C = torch_input.shape[1]
-
     npu_index_dtype = ttnn.int32
 
     tt_input = to_npu(torch_input, device)

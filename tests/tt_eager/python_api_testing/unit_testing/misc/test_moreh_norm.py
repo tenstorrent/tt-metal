@@ -18,29 +18,8 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     compute_output_shape,
     TILE_HEIGHT,
     TILE_WIDTH,
+    check_dim,
 )
-
-
-def check_dim(input_shape, dim, keepdim):
-    if type(dim) == int and dim >= len(input_shape):
-        pytest.skip("dim bigger than input rank")
-
-    if type(dim) == list:
-        for i in dim:
-            if i >= len(input_shape):
-                pytest.skip("dim bigger than input rank")
-
-    if keepdim == False:
-        if dim in [None, []]:
-            pytest.skip("`keepdim == false` don't support last 2-dim")
-
-        if type(dim) == int and len(input_shape) - 2 <= dim:
-            pytest.skip("`keepdim == false` don't support last 2-dim")
-
-        if type(dim) == list:
-            for i in dim:
-                if len(input_shape) - 2 <= i:
-                    pytest.skip("`keepdim == false` don't support last 2-dim")
 
 
 def make_cpu_tensors(input_shape, dim, keepdim=False):
@@ -68,7 +47,6 @@ def torch_norm(cpu_x, cpu_dy, *, p=2.0, dim=None, keepdim=False, do_backward=Fal
 
 def tt_norm(
     cpu_x,
-    expected_y,
     cpu_dy,
     *,
     p=2.0,
@@ -129,7 +107,6 @@ def run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=False, compu
     # actual
     actual_y, _ = tt_norm(
         cpu_x,
-        expected_y,
         cpu_dy,
         p=p,
         dim=dim,
@@ -157,7 +134,6 @@ def run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=Fal
     # actual
     _, actual_dx = tt_norm(
         cpu_x,
-        expected_dx,
         cpu_dy,
         p=p,
         dim=dim,

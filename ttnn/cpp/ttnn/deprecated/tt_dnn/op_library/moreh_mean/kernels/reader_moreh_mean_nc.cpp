@@ -2,27 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "dprint.h"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
-inline uint32_t get_read_tile_id(uint32_t tile_id, uint32_t dim, uint32_t input_tile_offset, uint32_t HtWt) {
-    return (dim == 0 ) ? (tile_id) : (tile_id / HtWt * input_tile_offset) + (tile_id % HtWt);
-}
-
 void kernel_main() {
-    const auto input_addr = get_arg_val<uint32_t>(0);
-    const auto num_input_tiles = get_arg_val<uint32_t>(1);
-    const auto num_output_tiles = get_arg_val<uint32_t>(2);
-    const auto input_tile_offset = get_arg_val<uint32_t>(3);
-    const auto start_id = get_arg_val<uint32_t>(4);
-    const auto input_is_dram = (get_arg_val<uint32_t>(5) == 1);
-    const auto HtWt = get_arg_val<uint32_t>(6);
-    const auto CHtWt = get_arg_val<uint32_t>(7);
-    const auto dim = get_arg_val<uint32_t>(8);
+    uint32_t i = 0;
+    const auto input_addr = get_arg_val<uint32_t>(i++);
+    const auto num_input_tiles = get_arg_val<uint32_t>(i++);
+    const auto num_output_tiles = get_arg_val<uint32_t>(i++);
+    const auto input_tile_stride = get_arg_val<uint32_t>(i++);
+    const auto start_id = get_arg_val<uint32_t>(i++);
+    const auto input_is_dram = (get_arg_val<uint32_t>(i++) == 1);
+    const auto HtWt = get_arg_val<uint32_t>(i++);
+    const auto inner_size = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t cb_id_in2 = 2;
+    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in1 = tt::CB::c_in1;
+    constexpr uint32_t cb_id_in2 = tt::CB::c_in2;
 
     union {
         float f;
@@ -43,7 +40,11 @@ void kernel_main() {
         .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
-        auto read_tile_id = get_read_tile_id(i, dim, CHtWt, HtWt);
+        uint32_t hw_tile_id = i % HtWt;
+        uint32_t inner_id = (i / HtWt) % inner_size * HtWt;
+        uint32_t outer_id = (i / HtWt / inner_size) * inner_size * HtWt * num_input_tiles;
+
+        auto read_tile_id = outer_id + inner_id + hw_tile_id;
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             cb_reserve_back(cb_id_in0, onetile);
             l1_write_addr_in0 = get_write_ptr(cb_id_in0);
@@ -54,7 +55,7 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(cb_id_in0, onetile);
-            read_tile_id += input_tile_offset;
+            read_tile_id += input_tile_stride;
         }
     }
 }

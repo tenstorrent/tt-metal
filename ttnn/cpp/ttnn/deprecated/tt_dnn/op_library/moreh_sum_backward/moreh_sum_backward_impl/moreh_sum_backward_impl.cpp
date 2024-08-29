@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include <vector>
+
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-
-#include <vector>
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 namespace tt {
 using namespace constants;
 namespace operations {
@@ -18,7 +18,7 @@ namespace primary {
 
 namespace {
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
+void get_tensor_dim(std::vector<uint32_t> &dim, const Shape &shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -26,8 +26,7 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
         // last 2-dim
         if (idx == rank - 1 || idx == rank - 2) {
             dim[i] = shape[idx] / TILE_HEIGHT;
-        }
-        else {
+        } else {
             dim[i] = shape[idx];
         }
     }
@@ -38,7 +37,8 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape& shape) {
     }
 }
 
-Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
+Shape get_output_grad_shape(
+    const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim) {
     if (keep_batch_dim) {
         return output_grad.get_legacy_shape();
     }
@@ -59,9 +59,14 @@ Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad,
 
     return Shape(shape, padding);
 }
-}
+}  // namespace
 
-operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keep_batch_dim, const DeviceComputeKernelConfig &compute_kernel_config) {
+operation::ProgramWithCallbacks moreh_sum_backward_impl(
+    const Tensor &output_grad,
+    const Tensor &input_grad,
+    const std::vector<int64_t> &dims,
+    const bool &keep_batch_dim,
+    const DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -100,7 +105,8 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
         }
     }
     const auto num_input_grad_tiles = input_grad.volume() / TILE_HW;
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+        get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
 
     for (auto i = 0; i < input_grad_rank; ++i) {
         log_debug(LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);
@@ -120,9 +126,6 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
-    const uint32_t in0_t = 2;   // input
-    const uint32_t in1_t = 1;   // zero
-    const uint32_t out0_t = 2;  // output
     const auto
         [num_cores_to_be_used,
          all_cores,
@@ -139,20 +142,22 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, in0_t},    // input
-            {CB::c_in1, in1_t},    // zero
-            {CB::c_out0, out0_t},  // output
+            {CB::c_in0, 2},   // input
+            {CB::c_in1, 1},   // zero
+            {CB::c_out0, 2},  // output
         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args =
-    { static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank };
-    std::vector<uint32_t> writer_compile_time_args =
-    { static_cast<uint32_t>(is_dram(input_grad)) };
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/reader_moreh_sum_backward.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/writer_moreh_sum_backward.cpp";
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(input_grad))};
+    const auto reader_kernel_file =
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/"
+        "reader_moreh_sum_backward.cpp";
+    const auto writer_kernel_file =
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/"
+        "writer_moreh_sum_backward.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
@@ -164,16 +169,22 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto compute_kernel_file = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/moreh_sum_backward.cpp";
+    const auto compute_kernel_file =
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_impl/kernels/"
+        "moreh_sum_backward.cpp";
     const auto compute_kernel_1_id = CreateComputeKernel(
-        program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines,
+        program,
+        compute_kernel_file,
+        {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
+        compute_defines,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
+        const std::vector<uint32_t> compute_args_group_2{
+            num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
         compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
@@ -207,22 +218,10 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(const Tensor &output_gra
         reader_rt_args.insert(reader_rt_args.end(), input_grad_dim.begin(), input_grad_dim.end());
         reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            reader_rt_args
-        );
+        SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
         SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {input_grad.buffer()->address(),
-             num_tiles_per_core,
-             tile_offset
-            }
-        );
+            program, writer_kernel_id, core, {input_grad.buffer()->address(), num_tiles_per_core, tile_offset});
 
         tile_offset += num_tiles_per_core;
     }

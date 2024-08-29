@@ -7,9 +7,7 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
-
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -36,39 +34,44 @@ void MAIN {
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             bool last_out = (j == num_input_tiles - 1);
 
-            ACQ();
+            tile_regs_acquire();
             cb_wait_front(cb_in0, onetile);
             if (enable_reload) {
                 cb_wait_front(cb_intermed0, onetile);
             }
 
-            uint32_t cb_add  = (enable_reload) ? (cb_intermed0) : (cb_in1);
-            add_tiles_init();
+            uint32_t cb_add = (enable_reload) ? (cb_intermed0) : (cb_in1);
+            add_tiles_init_with_dt(cb_in0, cb_add);
             add_tiles(cb_in0, cb_add, first_tile, first_tile, dst0);
 
             cb_pop_front(cb_in0, onetile);
             if (enable_reload) {
                 cb_pop_front(cb_intermed0, onetile);
             }
+            tile_regs_commit();
 
             cb_reserve_back(cb_intermed0, onetile);
-            pack_tile(dst0, cb_intermed0);
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, cb_intermed0);
+            tile_regs_release();
             cb_push_back(cb_intermed0, onetile);
-            REL();
 
             enable_reload = true;
         }
 
         // output * (1 / number_of_elements)
-        ACQ();
+        tile_regs_acquire();
         cb_wait_front(cb_intermed0, onetile);
-        mul_tiles_bcast_scalar_init_short();
+        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0, cb_scalar);
         mul_tiles_bcast<BroadcastType::SCALAR>(cb_intermed0, cb_scalar, 0, 0, 0);
+        tile_regs_commit();
+
         cb_reserve_back(cb_out0, onetile);
-        pack_tile(dst0, cb_out0);
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_out0);
+        tile_regs_release();
         cb_push_back(cb_out0, onetile);
         cb_pop_front(cb_intermed0, onetile);
-        REL();
     }
 }
 }  // namespace NAMESPACE

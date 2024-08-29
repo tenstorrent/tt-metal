@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -22,29 +23,67 @@ using namespace tt_metal;
 
 struct MorehMean {
     int64_t dim;
-    void validate(const std::vector<Tensor> &inputs) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &inputs) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &inputs) const;
+    bool keepdim;
+    const std::optional<uint32_t> divisor;
+    MemoryConfig memory_config;
+    const CoreRange core_range;  // unused for now
+    const DeviceComputeKernelConfig compute_kernel_config;
+
+    void validate_with_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs, std::vector<Tensor> &outputs) const;
+
+    static constexpr auto attribute_names =
+        std::make_tuple("dim", "keepdim", "divisor", "memory_config", "compute_kernel_config");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->dim),
+            std::cref(this->keepdim),
+            std::cref(this->divisor),
+            std::cref(this->memory_config),
+            std::cref(this->compute_kernel_config));
+    }
 };
 
-operation::ProgramWithCallbacks moreh_mean_nc(const Tensor &input, const Tensor &output, int64_t dim);
+operation::ProgramWithCallbacks moreh_mean_nc(
+    const Tensor &input,
+    const Tensor &output,
+    int64_t dim,
+    const CoreRange core_range,
+    const DeviceComputeKernelConfig compute_kernel_config);
 // revised from reduce_op
-operation::ProgramWithCallbacks moreh_mean_w(const Tensor &a, const Tensor &output);
-operation::ProgramWithCallbacks moreh_mean_h(const Tensor &a, const Tensor &output);
+operation::ProgramWithCallbacks moreh_mean_w(
+    const Tensor &input,
+    const Tensor &output,
+    const CoreRange core_range,
+    const DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks moreh_mean_h(
+    const Tensor &input,
+    const Tensor &output,
+    const CoreRange core_range,
+    const DeviceComputeKernelConfig compute_kernel_config);
 
 Tensor moreh_mean_(
     const Tensor &input,
-    std::optional<std::reference_wrapper<const Tensor>> output,
     const int64_t &dim,
-    const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const bool keepdim = false,
+    const std::optional<uint32_t> divisor = std::nullopt,
+    const std::optional<const Tensor> output = std::nullopt,
+    const std::optional<MemoryConfig> memory_config = std::nullopt,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-Tensor moreh_mean(
+std::optional<Tensor> moreh_mean(
     const Tensor &input,
-    const Tensor &output,
-    std::vector<int64_t> &dims,
-    const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    std::optional<std::variant<int64_t, std::vector<int64_t>>> dim = std::nullopt,
+    const bool keepdim = false,
+    const std::optional<uint32_t> divisor = std::nullopt,
+    const std::optional<const Tensor> output = std::nullopt,
+    const std::optional<MemoryConfig> memory_config = std::nullopt,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 
