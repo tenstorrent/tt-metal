@@ -88,7 +88,7 @@ def test_slice_rm_sharded_with_program_cache(device, n, c, h, w, use_program_cac
 @pytest.mark.parametrize("w", [16])
 def test_slice_rm(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
-    torch_output_tensor = torch_input_tensor[:, :115, :115, :]
+    torch_output_tensor = torch_input_tensor[:, :115, 2:115, :]
     activation_pyt_padded = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.DataType.BFLOAT16,
@@ -98,7 +98,7 @@ def test_slice_rm(device, n, c, h, w):
     )
     activation_pyt_padded = ttnn.slice(
         activation_pyt_padded,
-        (0, 0, 0, 0),
+        (0, 0, 2, 0),
         (n - 1, 115 - 1, 115 - 1, w - 1),
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )

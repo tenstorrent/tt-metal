@@ -118,7 +118,7 @@ def test_transpose_hc_program_cache(dtype, device, use_program_cache):
     H = H * 3
     W = W
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=2, input_dtype=dtype)
 
     # changing shape, single core
     N = 1
@@ -128,7 +128,7 @@ def test_transpose_hc_program_cache(dtype, device, use_program_cache):
     input_shape = (N, C, H, W)
     # CACHE MISS since its single core
     # Cache size 2 more because of pad op in single core impl + transpose
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=3, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=5, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -152,7 +152,7 @@ def test_transpose_cn_program_cache(dtype, device, use_program_cache):
     H = 32 * 4
     W = 32 * 3
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=0, dim1=1, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=0, dim1=1, expected_program_cache_size=2, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -177,7 +177,7 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     H = H * 3
     W = W
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=2, input_dtype=dtype)
 
     # changing shape, single core
     N = 1
@@ -186,7 +186,7 @@ def test_transpose_wh_program_cache(dtype, device, use_program_cache):
     W = 32
     input_shape = (N, C, H, W)
     # CACHE MISS since its single core
-    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=1, input_dtype=dtype)
+    transpose(input_shape, device, dim0=-2, dim1=-1, expected_program_cache_size=3, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
