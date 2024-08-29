@@ -691,6 +691,8 @@ void bind_binary_backward_assign(py::module& module, const binary_backward_opera
 
         Keyword args:
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
+            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+            * :attr:`queue_id` (Optional[uint8]): command queue id
 
         Supported dtypes, layouts, and ranks:
 
