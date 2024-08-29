@@ -581,8 +581,8 @@ def unary_fmod(x, *args, **kwargs):
 
 
 def unary_ne(x, *args, **kwargs):
-    value = kwargs.pop("scalar")
-    result = torch.ne(x, value)
+    scalar = kwargs.pop("scalar")
+    result = torch.ne(x, scalar)
     return result
 
 
@@ -1077,10 +1077,22 @@ def unary_gt(x, *args, **kwargs):
     return result
 
 
+def unary_gte(x, *args, **kwargs):
+    scalar = kwargs.pop("scalar")
+    result = torch.lt(x, scalar)
+    return x >= scalar
+
+
 def unary_lt(x, *args, **kwargs):
-    value = kwargs.pop("value")
-    result = torch.lt(x, value)
+    scalar = kwargs.pop("scalar")
+    result = torch.lt(x, scalar)
     return result
+
+
+def unary_lte(x, *args, **kwargs):
+    scalar = kwargs.pop("scalar")
+    result = torch.lt(x, scalar)
+    return x <= scalar
 
 
 def max(x, y, *args, **kwargs):
