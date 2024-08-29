@@ -48,6 +48,7 @@ struct SlidingWindowConfig {
     CoreRangeSet core_range_set = std::set{CoreRange({0, 0}, {0, 0})};   // active cores
 
     bool snap_to_tile = false;
+    bool is_bilinear = false;
 
     std::string to_string() const;
     bool has_parallel_config() const;

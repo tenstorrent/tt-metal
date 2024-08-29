@@ -16,7 +16,9 @@ struct ExecuteUpSample {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         std::variant<int, tt::tt_metal::Array2D, tt::tt_metal::Array3D, tt::tt_metal::Array4D> scale_factor,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+        std::string mode="nearest",
+        std::optional<MemoryConfig> output_mem_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 } // upsample
 } // operations
