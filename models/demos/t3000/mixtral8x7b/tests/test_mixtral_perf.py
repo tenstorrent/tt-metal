@@ -247,7 +247,6 @@ def test_mixtral_model_with_prefill_perf(
         ttnn.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
     comment = f"time_to_1st_token_seqlen={prefill_seqlen}_num_layers={model_args.n_layers}"
 
-    # Time to first token is measured as 1 user prefill time + 1 decode iteration, since we currently do not generate first token during prefill
     prefill_time_to_first = prefill_time
 
     prep_perf_report(

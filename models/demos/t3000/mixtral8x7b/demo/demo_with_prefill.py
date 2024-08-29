@@ -361,26 +361,25 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
         for user in range(batch_size):
             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
-    # FIXME Issue #11850: Token verification is disabled for now
-    # if is_ci_env:
-    #     # When running in CI, check the output against the expected output to avoid accuracy regressions
-    #     if max_prefill_len == 128:
-    #         expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
-    #     else:  # max_prefill_len == 16k
-    #         expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_16k.json"
+    if is_ci_env:
+        # When running in CI, check the output against the expected output to avoid accuracy regressions
+        if max_prefill_len == 128:
+            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
+        else:  # max_prefill_len == 16k
+            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_16k.json"
 
-    #     with open(expected_output, "r") as f:
-    #         expected_out = json.load(f)
+        with open(expected_output, "r") as f:
+            expected_out = json.load(f)
 
-    #     for i in range(batch_size):
-    #         user_output = "".join(tokenizer.decode(all_outputs[i]))
-    #         # CI is running instruct weights only
-    #         user_expect = expected_out[i + batch_size]["output_instruct"]
+        for i in range(batch_size):
+            user_output = "".join(tokenizer.decode(all_outputs[i]))
+            # CI is running instruct weights only
+            user_expect = expected_out[i + batch_size]["output_instruct"]
 
-    #         # Only compare the new generated tokens (prefill part will match input)
-    #         assert user_expect in user_output, f"Output for user {i} does not contain the expected output!"
+            # Only compare the new generated tokens (prefill part will match input)
+            assert user_expect in user_output, f"Output for user {i} does not contain the expected output!"
 
-    #     logger.info("[CI-Only] Output token validation passed!")
+        logger.info("[CI-Only] Output token validation passed!")
 
     # Benchmark metrics
     compile_prefill_time = profiler.get_duration("compile_prefill")
