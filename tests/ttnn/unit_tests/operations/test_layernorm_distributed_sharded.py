@@ -142,8 +142,6 @@ def test_post_allgather_layernorm(
     max_atol,
 ):
     device = all_devices[0]
-    print(device)
-    return
 
     if is_rmsnorm:
         print("Testing RMSNorm")
@@ -161,7 +159,7 @@ def test_post_allgather_layernorm(
     if is_rmsnorm:
         torch_output_tensor = rms_norm(torch_input_tensor, torch_weight, eps=eps)
     else:
-        torch_output_tensor = torch.nn.functional.layernorm_post_all_gather(
+        torch_output_tensor = torch.nn.functional.layer_norm(
             torch_input_tensor, (input_width,), weight=torch_weight.squeeze(0).squeeze(0).squeeze(0), eps=eps
         )
 
@@ -240,14 +238,14 @@ def test_post_allgather_layernorm(
             memory_config=tt_sharded_config,
         )
     else:
-        tt_output_tensor = ttnn.layer_norm_post_all_gather(
+        tt_output_tensor = ttnn.layernorm_post_all_gather(
             tt_input_tensor,
             epsilon=eps,
             weight=tt_weights,
             program_config=SHARDED_NORM_PRGM_CFG,
             memory_config=tt_sharded_config,
-            E_x=tt_sum_x_tensor,
-            E_x2=tt_sum_x2_tensor,
+            sum_x=tt_sum_x_tensor,
+            sum_x2=tt_sum_x2_tensor,
         )
     tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
 
@@ -256,7 +254,6 @@ def test_post_allgather_layernorm(
     atol_delta = torch.max(torch.abs(torch_output_tensor - tt_output_torch)).item()
     print(f"PCC: {pcc_out}")
     print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
-    breakpoint()
     assert pcc_out >= min_pcc, f"PCC test failed: {pcc_out} (threshold: {min_pcc})"
     # assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
 
