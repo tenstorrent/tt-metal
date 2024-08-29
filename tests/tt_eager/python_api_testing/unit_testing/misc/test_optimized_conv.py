@@ -172,9 +172,7 @@ def test_run_optimized_conv(
         if not untilize_out:
             out_unpadded_shape = [1, 1, N * OH * OW, K]
             assert out_unpadded_shape == list(out.shape_without_padding())
-            out = ttnn.experimental.tensor.format_output_tensor(
-                out, out.shape_without_padding(), device, ttnn.ROW_MAJOR_LAYOUT
-            )
+            out = ttnn.format_output_tensor(out, out.shape_without_padding(), device, ttnn.ROW_MAJOR_LAYOUT)
             out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
         out = out.cpu()
         assert list(out.get_legacy_shape()) == conv_output_shape

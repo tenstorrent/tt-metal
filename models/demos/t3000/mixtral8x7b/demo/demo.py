@@ -119,8 +119,8 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, is_ci_e
         decode_input_11BH = ttnn.reshape(decode_input_11BH, ttnn.Shape([1, 1, batch_size, model_args.dim]))
 
         decode_input_11BH = ttnn.to_layout(decode_input_11BH, layout=ttnn.TILE_LAYOUT)
-        # decode_input_11BH = [ttnn.experimental.tensor.tilize(decode_input_11BH[i]) for i in range(len(devices))]
-        # decode_input_11BH = [ttnn.experimental.tensor.tilize_with_val_padding(decode_input_11BH[i], ) for i in range(len(devices))]")
+        # decode_input_11BH = [ttnn.tilize(decode_input_11BH[i]) for i in range(len(devices))]
+        # decode_input_11BH = [ttnn.tilize_with_val_padding(decode_input_11BH[i], ) for i in range(len(devices))]")
 
     # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
     current_rot_mat, rot_matrix = get_single_rot_mat(

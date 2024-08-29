@@ -14,7 +14,7 @@
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 
 namespace py = pybind11;
@@ -178,8 +178,8 @@ void device_module(py::module &m_device) {
         Returns associated mmio device of give device id.
     )doc");
 
-    m_device.def("SetDefaultDevice", &tt::tt_metal::AutoFormat::SetDefaultDevice, R"doc(
-        Sets the default device to use for ops when inputs aren't on device.
+    m_device.def("SetDefaultDevice", &ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice, R"doc(
+        Sets the default device to use for ops when inputs aren't on device. This will be deprecated soon.
 
         +------------------+------------------------+-----------------------+-------------+----------+
         | Argument         | Description            | Data type             | Valid range | Required |
@@ -188,9 +188,38 @@ void device_module(py::module &m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_device.def("GetDefaultDevice", &tt::tt_metal::AutoFormat::GetDefaultDevice, R"doc(
-        Gets the default device to use for ops when inputs aren't on device.
+    m_device.def("GetDefaultDevice", &ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice, R"doc(
+        Gets the default device to use for ops when inputs aren't on device.This will be deprecated soon.
     )doc");
+
+    m_device.def(
+        "format_input_tensor",
+        &ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor,
+        py::arg("input").noconvert(),
+        py::arg("device").noconvert(),
+        py::arg("padded_shape"),
+        py::arg("pad_value"),
+        py::arg("target_layout").noconvert(),
+        py::arg("target_mem_config").noconvert() = std::nullopt);
+
+    m_device.def(
+        "format_output_tensor",
+        &ttnn::operations::experimental::auto_format::AutoFormat::format_output_tensor,
+        py::arg("output").noconvert(),
+        py::arg("shape"),
+        py::arg("device").noconvert(),
+        py::arg("target_layout").noconvert(),
+        py::arg("target_mem_config").noconvert() = std::nullopt);
+
+    m_device.def(
+        "pad_to_tile_shape",
+        [](const std::array<uint32_t, 4>& unpadded_shape,
+        bool pad_c = false,
+        bool pad_n = false,
+        bool pad_h = true,
+        bool pad_w = true) -> tt::tt_metal::Shape {
+            return ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w);
+        });
 
     m_device.def("EnablePersistentKernelCache", &tt::tt_metal::detail::EnablePersistentKernelCache, R"doc(
         Enable kernel compilation cache to be persistent across runs. When this is called, kernels will not be compiled if the output binary path exists.

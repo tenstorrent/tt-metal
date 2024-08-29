@@ -173,7 +173,7 @@ def run_test_FalconModel_inference(
         use_global_cos_sin_cache=use_global_cos_sin_cache,
     )
     for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
 
     # TODO: Generate embeddings and attention_mask on device
     if llm_mode == "prefill":

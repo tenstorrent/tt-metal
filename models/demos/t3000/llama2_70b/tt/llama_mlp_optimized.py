@@ -72,11 +72,11 @@ class TtLlamaMLP_optimized:
 
         # w1: 8k x 4k. width-sharded on 12 banks, 4224 over 12 banks.
         device = self.device_mesh.get_device(0)
-        weight_grid = ttnn.experimental.tensor.CoreRangeSet(
+        weight_grid = ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
                 )
             }
         )

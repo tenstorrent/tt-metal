@@ -42,12 +42,14 @@ void py_bind_typecast(py::module& module) {
                 const ttnn::Tensor& input_tensor,
                 const ttnn::DataType dtype,
                 const std::optional<ttnn::MemoryConfig> memory_config,
+                const std::optional<ttnn::Tensor> &optional_output_tensor,
                 uint8_t queue_id) {
-                    return self(queue_id, input_tensor, dtype, memory_config);
+                    return self(queue_id, input_tensor, dtype, memory_config, optional_output_tensor);
                 },
                 py::arg("input_tensor").noconvert(),
                 py::arg("dtype").noconvert(),
                 py::arg("memory_config") = std::nullopt,
+                py::arg("optional_output_tensor") = std::nullopt,
                 py::arg("queue_id") = 0}
     );
 }

@@ -7,17 +7,14 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
-
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
-    const auto num_output_tiles = get_arg_val<uint32_t>(0);
-    const auto n_need_bcast = get_arg_val<uint32_t>(1);
-    const auto c_need_bcast = get_arg_val<uint32_t>(2);
-    const auto ht_need_bcast = get_arg_val<uint32_t>(3);
-    const auto wt_need_bcast = get_arg_val<uint32_t>(4);
+    // compile-time args
+    constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
+    constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
+    constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
 
     constexpr auto cb_in0 = tt::CB::c_in0;  // input
     constexpr auto cb_in1 = tt::CB::c_in1;  // zero tile
@@ -30,38 +27,47 @@ void MAIN {
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in1);
     cb_wait_front(cb_in1, onetile);
     for (uint32_t i = 0; i < num_output_tiles; i++) {
-        ACQ();
+        tile_regs_acquire();
         cb_wait_front(cb_in0, onetile);
         if (ht_need_bcast && wt_need_bcast) {
-            add_bcast_scalar_init_short();
+            add_bcast_scalar_init_short_with_dt(cb_in1, cb_in0);
             add_tiles_bcast_scalar(cb_in1, cb_in0, 0, 0, dst0);
         } else if (ht_need_bcast) {
-            add_bcast_rows_init_short();
+            add_bcast_rows_init_short_with_dt(cb_in1, cb_in0);
             add_tiles_bcast_rows(cb_in1, cb_in0, 0, 0, dst0);
         } else if (wt_need_bcast) {
-            add_bcast_cols_init_short();
+            add_bcast_cols_init_short_with_dt(cb_in1, cb_in0);
             add_tiles_bcast_cols(cb_in1, cb_in0, 0, 0, dst0);
         } else {
-            copy_tile_init();
+            copy_tile_init_with_dt(cb_in0);
             copy_tile(cb_in0, 0, dst0);
         }
+        tile_regs_commit();
+
         cb_reserve_back(cb_intermed0, onetile);
-        pack_tile(dst0, cb_intermed0);
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_intermed0);
+        tile_regs_release();
+
         cb_push_back(cb_intermed0, onetile);
         cb_pop_front(cb_in0, onetile);
-        REL();
 
         // output * (1 / number_of_elements)
-        ACQ();
+        tile_regs_acquire();
         cb_wait_front(cb_intermed0, onetile);
-        mul_tiles_bcast_scalar_init_short();
+        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0, cb_scalar);
         mul_tiles_bcast<BroadcastType::SCALAR>(cb_intermed0, cb_scalar, 0, 0, 0);
+        tile_regs_commit();
+
         cb_reserve_back(cb_out0, onetile);
-        pack_tile(dst0, cb_out0);
+
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, cb_out0);
+        tile_regs_release();
+
         cb_push_back(cb_out0, onetile);
         cb_pop_front(cb_intermed0, onetile);
-        REL();
-
     }
     cb_pop_front(cb_in1, onetile);
 }

@@ -149,7 +149,7 @@ def test_run_downsample(
     assert out_shape == list(out.get_legacy_shape())
     out_shape_unpadded = [1, 1, batch_size * output_height * output_width, input_channels]
     assert out_shape_unpadded == list(out.shape_without_padding())
-    out = ttnn.experimental.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.format_output_tensor(out, out.shape_without_padding(), device, ttnn.ROW_MAJOR_LAYOUT)
     out = out.cpu()
 
     out_debug = out
