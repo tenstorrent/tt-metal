@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "common/logger.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -123,23 +122,37 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t num_cores_x_limit = device->compute_with_storage_grid_size().x;
     uint32_t num_cores_y_limit = device->compute_with_storage_grid_size().y;
 
+    // print out all of these
+    std::cout << "z: " << z << std::endl;
+    std::cout << "num_tiles_dim_2: " << num_tiles_dim_2 << std::endl;
+    std::cout << "num_tiles_dim_3: " << num_tiles_dim_3 << std::endl;
+    std::cout << "num_cores_x_limit: " << num_cores_x_limit << std::endl;
+    std::cout << "num_cores_y_limit: " << num_cores_y_limit << std::endl;
+
     // parallelize z
     auto num_cores_z = z;
 
     // parallelize y
     auto [num_cores_y, per_core_tiles_y] =
         get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_3, num_cores_y_limit, /*request_even=*/true);
+    num_cores_y /= num_chunks;
+    per_core_tiles_y *= num_chunks;
 
     // parallelize x
     auto [num_cores_x, per_core_tiles_x] =
         get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_2, num_cores_x_limit / num_cores_z);
+    num_cores_x /= num_chunks;
+    per_core_tiles_x *= num_chunks;
 
     uint32_t per_core_tiles = per_core_tiles_x * per_core_tiles_y * (z / num_cores_z); // FIXME: how is z / num_cores_z not always just 1?
 
     // FIXME: remove debugging stuff
+    std::cout << "Num chunks: " << num_chunks << std::endl;
     std::cout << "Per core tiles: " << per_core_tiles << std::endl;
     std::cout << "per_core_x: " <<  per_core_tiles_x << std::endl;
     std::cout << "per_core_y: " << per_core_tiles_y << std::endl;
+    std::cout << "num_cores_x: " << num_cores_x << std::endl;
+    std::cout << "num_cores_y: " << num_cores_y << std::endl;
     // endFIXME: remove debugging stuff
 
     uint32_t start_core_x = 0;

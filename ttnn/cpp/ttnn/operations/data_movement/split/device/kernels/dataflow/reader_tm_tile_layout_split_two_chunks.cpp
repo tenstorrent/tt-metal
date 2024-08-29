@@ -49,7 +49,7 @@ void kernel_main() {
     DPRINT << "Reader Z Stride: " << z_stride << ENDL();
     DPRINT << "Reader Y Stride: " << y_stride << ENDL();
 #endif
-    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+    for (uint32_t chunk = 0; chunk < 1; chunk++) {
         uint32_t z_stride_cum = 0;
         for (uint32_t k = 0; k < z; k++) {
             uint32_t y_stride_cum = 0;
