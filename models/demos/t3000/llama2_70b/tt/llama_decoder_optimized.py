@@ -264,7 +264,7 @@ class TtLlamaDecoder_optimized:
         # xs_replicated = []
         # for i in range(self.num_devices):
         #     xs_replicated.append(
-        #         ttnn.experimental.tensor.typecast(ttnn.experimental.tensor.clone(xs[i]), dtype=ttnn.bfloat8_b)
+        #         ttnn.experimental.tensor.typecast(ttnn.clone(xs[i]), dtype=ttnn.bfloat8_b)
         #     )
 
         attn_norm_interleaved = self.tt_distributed_rmsnorm(xs, self.norm_eps, self.attn_norm_sharded)

@@ -111,14 +111,14 @@ class TtModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         # Set configurations for sharded type
-        self.model_config["WIDTH_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        self.model_config["WIDTH_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1
         )
-        self.model_config["HEIGHT_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        self.model_config["HEIGHT_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1
         )
-        self.model_config["BLOCK_SHARDED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttnn.experimental.tensor.BufferType.L1
+        self.model_config["BLOCK_SHARDED_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1
         )
 
         # Useful core grid based on batch size
@@ -187,8 +187,8 @@ class TtModelArgs:
             k_chunk_size=32,
         )
 
-        self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+        self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
@@ -368,8 +368,8 @@ class TtModelArgs:
             fused_activation=None,
             fuse_batch=False,
         )
-        self.model_config["PREFILL_MLP_COMPUTE_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+        self.model_config["PREFILL_MLP_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -427,14 +427,14 @@ class TtModelArgs:
             packer_l1_acc=True,
         )
 
-        self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,  # Highest fidelity
+        self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
-        self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
+        self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
