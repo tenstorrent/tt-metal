@@ -43,31 +43,31 @@ class upsample_nearest2d:
         ncores = (nshards_h, nshards_w)
         assert ncores == max_grid_size
 
-        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        shard_grid = ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(max_grid_size[1] - 1, max_grid_size[0] - 1),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(max_grid_size[1] - 1, max_grid_size[0] - 1),
                 )
             }
         )
 
-        shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
-        tensor_memory_layout = ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+        shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+        tensor_memory_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 
         ## input shard
         shard_height = math.ceil(batch_size * input_height * input_width / ncores[0])
         shard_width = math.ceil(in_channels / ncores[1])
 
         shard_shape = (shard_height, shard_width)
-        shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
-        self.in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
+        self.in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
 
         ## output shard
         shard_height = shard_height * scale_factor * scale_factor
         shard_shape = (shard_height, shard_width)
-        shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
-        self.out_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
+        self.out_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
 
     def __call__(self, input):
         if input.memory_config() != self.in_sharded_mem_config:

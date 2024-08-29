@@ -100,40 +100,40 @@ def get_ln_block_sharded_config(height_dim, hidden_dim):
     ln_shard_height_hidden_dim = num_tiles_per_core_h * 32
     ln_shard_width_hidden_dim = num_tiles_per_core_w * 32
 
-    core_range_block_sharded_layernorm = ttnn.experimental.tensor.CoreRangeSet(
+    core_range_block_sharded_layernorm = ttnn.CoreRangeSet(
         {
-            ttnn.experimental.tensor.CoreRange(
-                ttnn.experimental.tensor.CoreCoord(0, 0),
-                ttnn.experimental.tensor.CoreCoord(ln_num_cores_x - 1, ln_num_cores_y - 1),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(ln_num_cores_x - 1, ln_num_cores_y - 1),
             ),
         }
     )
 
-    ln_block_sharded_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ttnn.experimental.tensor.BufferType.L1,
-        ttnn.experimental.tensor.ShardSpec(
+    ln_block_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
             core_range_block_sharded_layernorm,
             [
                 ln_shard_height_hidden_dim,
                 ln_shard_width_hidden_dim,
             ],
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
 
     fp32_dest_acc_en = False
     if is_wormhole_b0():
-        ln_block_sharded_compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+        ln_block_sharded_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=False,
         )
     else:
-        ln_block_sharded_compute_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+        ln_block_sharded_compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
         )
 
@@ -169,14 +169,10 @@ def pretty_print_model_config(model_config):
 
 def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
-    DRAM_MEMCFG = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-    )
-    L1_MEMCFG = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
-    )
-    BFP8_DTYPE = ttnn.experimental.tensor.DataType.BFLOAT8_B
-    BFP4_DTYPE = ttnn.experimental.tensor.DataType.BFLOAT4_B
+    DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
+    L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
+    BFP8_DTYPE = ttnn.bfloat8_b
+    BFP4_DTYPE = ttnn.bfloat4_b
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in ("BFLOAT16-DRAM", "BFLOAT16-L1", "BFLOAT16-L1_SHARDED"):
@@ -184,11 +180,7 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
         # TODO: Set default memcfg for BFLOAT16-L1 to L1
         # mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
         mem_config = DRAM_MEMCFG
-        dtype = (
-            ttnn.experimental.tensor.DataType.BFLOAT16
-            if dtype_str == "BFLOAT16"
-            else ttnn.experimental.tensor.DataType.BFLOAT8_B
-        )
+        dtype = ttnn.bfloat16 if dtype_str == "BFLOAT16" else ttnn.bfloat8_b
     else:
         raise NotImplementedError(f"Model config {model_config_str} is not supported!")
 
@@ -199,7 +191,7 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_DECODER_OUTPUT_BOOL": False,
         "DEFAULT_CACHE_PATH": Path(f"models/demos/falcon7b_common/datasets/"),
-    }  # DEFAULT_MEMCFG also used to determine banking for ttl.device.InitializeDevice
+    }  # DEFAULT_MEMCFG also used to determine banking for ttnn.experimental.device.InitializeDevice
     model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
     model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
 
@@ -217,7 +209,7 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
     model_config["LAYERNORM_BLOCK_SHARDED_COMPUTE_KERNEL_CONFIG"][decode_batch_size] = ln_compute_kernel_config_decode
 
     # Input ids are UINT32
-    model_config["INPUT_DTYPE"] = ttnn.experimental.tensor.DataType.UINT32
+    model_config["INPUT_DTYPE"] = ttnn.uint32
 
     # Use BFP4_B for attention mask in optimized prefill
     model_config["ATTN_MASK_OPTIMIZED_PREFILL_DTYPE"] = BFP4_DTYPE
@@ -244,18 +236,16 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
 
     if model_config_str in ("BFLOAT16-L1_SHARDED"):
         # Q, K, V are batch sharded across cores
-        model_config[
-            "ATTN_BATCH_SHARDED_MEMCFG"
-        ] = lambda shard_height, shard_width: ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
-            ttnn.experimental.tensor.ShardSpec(
-                ttnn.experimental.tensor.CoreRangeSet(
+        model_config["ATTN_BATCH_SHARDED_MEMCFG"] = lambda shard_height, shard_width: ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(
+                        ttnn.CoreRange(
                             # Volume must match batch size
-                            ttnn.experimental.tensor.CoreCoord(0, 0),
-                            ttnn.experimental.tensor.CoreCoord(7, 3),
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(7, 3),
                         ),
                     }
                 ),
@@ -263,7 +253,7 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
                     shard_height,
                     shard_width,
                 ],
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         )
@@ -280,23 +270,21 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
         )
 
         if is_wormhole_b0():
-            model_config["PRE_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+            model_config["PRE_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
-            model_config[
-                "POST_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"
-            ] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+            model_config["POST_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
         else:
-            gs_compute_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
-                math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+            gs_compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
             )
             model_config["PRE_SOFTMAX_MM_COMPUTE_KERNEL_CONFIG"] = gs_compute_kernel_config
@@ -316,15 +304,15 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     model_config["MLP_GRID_SIZE"] = (8, 8)
 
     if is_wormhole_b0():
-        default_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi2,
+        default_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
     else:
-        default_kernel_config = ttnn.experimental.tensor.GrayskullComputeKernelConfig(
-            math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+        default_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
         )
     model_config["MLP_KERNEL_CONFIG"] = default_kernel_config
@@ -365,8 +353,8 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         transpose_mcast=False,
         fused_activation=None,
     )
-    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi2,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -392,13 +380,13 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
         fused_activation=None,
         mcast_in0=False,
     )
-    model_config["QKTV_MM_OPTIMIZED_MEMCFG"] = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
+    model_config["QKTV_MM_OPTIMIZED_MEMCFG"] = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
-    model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"] = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi2,
+    model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,

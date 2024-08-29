@@ -131,7 +131,7 @@ def run_test_FalconCausalLM_end_to_end(
         use_global_cos_sin_cache,
     )
     for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
     profiler.end("TtFalcon_model_setup")
     logger.info("Done loading TT Falcon Model")
 
@@ -192,7 +192,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     profiler.end("first_model_run_with_compile", force_enable=True)
     for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
 
     del tt_out
     del tt_inputs
@@ -227,7 +227,7 @@ def run_test_FalconCausalLM_end_to_end(
                     layer_past_len=kv_cache_len,
                     use_cache=use_cache,
                 )
-                if tt_out.get_layout() != ttnn.experimental.tensor.Layout.ROW_MAJOR:
+                if tt_out.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
                     tt_out = ttnn.untilize(tt_out, use_multicore=False)
                 tt_outs.append(tt_out)
 
@@ -248,7 +248,7 @@ def run_test_FalconCausalLM_end_to_end(
             )
             tt_out = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=-1))
         for device in device_mesh.get_devices():
-            ttnn.device.synchronize_device(device)
+            ttnn.synchronize_device(device)
 
         del tt_out
         del tt_inputs
@@ -272,7 +272,7 @@ def run_test_FalconCausalLM_end_to_end(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
     for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
     profiler.start(f"model_run_for_inference")
 
     if llm_mode == "prefill":
@@ -300,7 +300,7 @@ def run_test_FalconCausalLM_end_to_end(
         )
     profiler.end(f"model_run_for_inference")
     for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
 
     if llm_mode == "prefill":
         tensors = [

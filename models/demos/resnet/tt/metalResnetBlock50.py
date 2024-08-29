@@ -1384,9 +1384,9 @@ class ResNet(nn.Module):
         self.model_config = model_config
         self.reader_patterns_cache = {}
         if self.storage_in_dram:
-            self.memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+            self.memory_config = ttnn.DRAM_MEMORY_CONFIG
         else:
-            self.memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+            self.memory_config = ttnn.L1_MEMORY_CONFIG
         if sharded:
             self.height_sharded_memory_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1

@@ -179,7 +179,7 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env):
         # tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
         # tt_out = ttnn.permute(tt_out, (2, 1, 0, 3))
         # tt_out = ttnn.reshape(tt_out, (tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]))  # Squeeze(1)
-        # tt_out_argmax = ttnn.experimental.tensor.argmax(tt_out, dim=-1)
+        # tt_out_argmax = ttnn.argmax(tt_out, dim=-1)
         # Typecast from bf16 to uint32 for embedding
         # tt_out_tok = ttnn.clone(tt_out_argmax, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.uint32)
         # tt_out_tok = ttnn.experimental.tensor.typecast(tt_out_tok, dtype=ttnn.uint32)

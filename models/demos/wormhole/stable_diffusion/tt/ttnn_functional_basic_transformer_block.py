@@ -65,11 +65,11 @@ class basic_transformer_block:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
         if hidden_states.memory_config().shard_spec.num_cores() == 64:
-            end_grid = ttnn.experimental.tensor.CoreCoord(7, 7)
+            end_grid = ttnn.CoreCoord(7, 7)
         elif hidden_states.memory_config().shard_spec.num_cores() == 40:
-            end_grid = ttnn.experimental.tensor.CoreCoord(4, 7)
+            end_grid = ttnn.CoreCoord(4, 7)
         elif hidden_states.memory_config().shard_spec.num_cores() == 32:
-            end_grid = ttnn.experimental.tensor.CoreCoord(7, 3)
+            end_grid = ttnn.CoreCoord(7, 3)
 
         sharded_mem_cfg = ttnn.get_memory_config(hidden_states)
         program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -174,11 +174,11 @@ class basic_transformer_block:
         hidden_states = ttnn.add(norm_hidden_states, hidden_states, memory_config=hidden_states.memory_config())
 
         if hidden_states.memory_config().shard_spec.num_cores() == 64:
-            end_grid = ttnn.experimental.tensor.CoreCoord(7, 7)
+            end_grid = ttnn.CoreCoord(7, 7)
         elif hidden_states.memory_config().shard_spec.num_cores() == 40:
-            end_grid = ttnn.experimental.tensor.CoreCoord(7, 4)
+            end_grid = ttnn.CoreCoord(7, 4)
         elif hidden_states.memory_config().shard_spec.num_cores() == 32:
-            end_grid = ttnn.experimental.tensor.CoreCoord(3, 7)
+            end_grid = ttnn.CoreCoord(3, 7)
         else:
             assert False, f"Unsupported number of cores: {hidden_states.memory_config().shard_spec.num_cores()}"
 

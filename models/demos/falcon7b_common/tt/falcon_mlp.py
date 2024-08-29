@@ -203,8 +203,8 @@ class TtFalconMLPPrefill(nn.Module):
                     [self.seq_len // num_slices // grid_size[1], padded_hidden_size // grid_size[0]],
                     num_slices,
                     slice_idx,
-                    ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                    ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    ttnn.ShardOrientation.ROW_MAJOR,
                 )
 
                 hidden_states = ttnn.matmul(

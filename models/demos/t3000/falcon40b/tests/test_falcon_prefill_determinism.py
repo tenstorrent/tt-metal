@@ -95,7 +95,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
         use_global_cos_sin_cache,
     )
     for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
     logger.info("Done loading TT Falcon Model")
 
     # Prepare inputs -----------------------------------------------------------------------
@@ -133,7 +133,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
     logger.info("Done running TT Falcon model")
 
     for device in device_mesh.get_devices():
-        ttnn.device.synchronize_device(device)
+        ttnn.synchronize_device(device)
 
     reference_out = torch.vstack(tt_outs)
     reference_kv_cache = []

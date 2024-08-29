@@ -42,7 +42,7 @@ def run_falcon_lm_head_matmul_2d(
     a_t = torch2tt_tensor(
         A,
         device,
-        ttnn.experimental.tensor.Layout.TILE,
+        ttnn.TILE_LAYOUT,
         in0_mem_config,
         in0_dtype,
     )
@@ -56,7 +56,7 @@ def run_falcon_lm_head_matmul_2d(
             torch2tt_tensor(
                 B_slices[i],
                 device,
-                ttnn.experimental.tensor.Layout.TILE,
+                ttnn.TILE_LAYOUT,
                 in1_mem_config,
                 in1_dtype,
             )
@@ -84,19 +84,13 @@ def test_falcon_lm_head_matmul_2d(
     seq_len,
     device,
 ):
-    in0_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-    )
-    in1_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-    )
-    out_mem_config = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-    )
+    in0_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    in1_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
-    in0_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
-    in1_dtype = ttnn.experimental.tensor.DataType.BFLOAT8_B
-    out_dtype = ttnn.experimental.tensor.DataType.BFLOAT16
+    in0_dtype = ttnn.bfloat16
+    in1_dtype = ttnn.bfloat8_b
+    out_dtype = ttnn.bfloat16
 
     run_falcon_lm_head_matmul_2d(
         seq_len, device, in0_mem_config, in1_mem_config, out_mem_config, in0_dtype, in1_dtype, out_dtype

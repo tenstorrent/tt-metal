@@ -87,9 +87,7 @@ class TtFalconMLP:
                 mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
             )
 
-    def __call__(
-        self, x: List[ttnn.experimental.tensor.Tensor], llm_mode: str
-    ) -> List[ttnn.experimental.tensor.Tensor]:
+    def __call__(self, x: List[ttnn.Tensor], llm_mode: str) -> List[ttnn.Tensor]:
         if llm_mode == "prefill":
             return self.fwd_prefill(x)
         elif llm_mode == "decode":
@@ -97,7 +95,7 @@ class TtFalconMLP:
         else:
             assert False
 
-    def fwd_decode(self, x: List[ttnn.experimental.tensor.Tensor]) -> List[ttnn.experimental.tensor.Tensor]:
+    def fwd_decode(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         hidden_states = ttnn.matmul(
             x,
             self.dense_h_to_4h_weights,
@@ -142,7 +140,7 @@ class TtFalconMLP:
         # return TT Tensor
         return hidden_states
 
-    def fwd_prefill(self, x: List[ttnn.experimental.tensor.Tensor]) -> List[ttnn.experimental.tensor.Tensor]:
+    def fwd_prefill(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         hidden_states = []
         should_deallocate_ln_tensors = determine_tensor_deallocation(
             self.model_config["layernorm_params"]["slice_size"], x.get_legacy_shape()[2]
@@ -157,7 +155,7 @@ class TtFalconMLP:
                 mlp_num_slices,
                 slice_idx,
                 self.model_config["MLP_INPUT_SHARD_LAYOUT"],
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
 
             hidden_states_slice = falcon_prefill_matmul(

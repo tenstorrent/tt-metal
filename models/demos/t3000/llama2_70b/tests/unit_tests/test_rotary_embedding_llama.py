@@ -241,9 +241,9 @@ def test_rotary_embedding_llama(
             inp.reshape(-1).tolist(),
             inp.shape,
             ttnn.bfloat16,
-            ttnn.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
-        .to(ttnn.Layout.TILE)
+        .to(ttnn.TILE_LAYOUT)
         .to(devices[0])
     )
 
@@ -299,9 +299,9 @@ def test_rotary_embedding_llama_with_program_cache(
                 inp.reshape(-1).tolist(),
                 inp.shape,
                 ttnn.bfloat16,
-                ttnn.Layout.ROW_MAJOR,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttnn.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(devices[0])
         )
 

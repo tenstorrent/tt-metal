@@ -249,9 +249,9 @@ class TtFalconAttentionPrefill(nn.Module):
             memory_config=(
                 self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
                 if llm_mode == "prefill" or self.model_config["l1_sharded"] == False
-                else ttnn.experimental.tensor.MemoryConfig(
-                    ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.experimental.tensor.BufferType.L1,
+                else ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
                 )
             ),
         )
@@ -336,7 +336,7 @@ class TtFalconAttentionPrefill(nn.Module):
                 self.query_key_value_weights,
                 program_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_PROGCFG"],
                 memory_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_MEMCFG"],
-                dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=self.model_config["FUSED_QKV_MM_OPTIMIZED_KERNEL_CONFIG"],
             )
         else:
@@ -400,8 +400,8 @@ class TtFalconAttentionPrefill(nn.Module):
                 mm_activations_height_shard_spec,
                 num_slices,  # num_slices
                 i,  # slice_index
-                ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
 
             subblock_h = 1
@@ -417,7 +417,7 @@ class TtFalconAttentionPrefill(nn.Module):
                 key_layer_transposed,
                 program_config=qkt_prg_cfg,
                 memory_config=self.model_config["QKTV_MM_OPTIMIZED_MEMCFG"],
-                dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
             )
 
@@ -440,7 +440,7 @@ class TtFalconAttentionPrefill(nn.Module):
                 value_layer,
                 program_config=qktv_prg_cfg,
                 memory_config=self.model_config["QKTV_MM_OPTIMIZED_MEMCFG"],
-                dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=self.model_config["QKTV_AND_SOFTMAX_OPTIMIZED_KERNEL_CONFIG"],
             )
 
@@ -663,9 +663,9 @@ class TtFalconAttentionDecode(nn.Module):
             memory_config=(
                 self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"]
                 if self.model_config["l1_sharded"] == False
-                else ttnn.experimental.tensor.MemoryConfig(
-                    ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.experimental.tensor.BufferType.L1,
+                else ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
                 )
             ),
         )

@@ -342,7 +342,7 @@ def run_inference_prefill(tt_model, model_args, prefill_seq_len, device_mesh, pt
         profiler.start(f"e2e_prefill_inference_sync_{batch_id}")
         devices = device_mesh.get_devices()
         for device in devices:
-            ttnn.device.synchronize_device(device)
+            ttnn.synchronize_device(device)
         profiler.end(f"e2e_prefill_inference_sync_{batch_id}")
 
 
