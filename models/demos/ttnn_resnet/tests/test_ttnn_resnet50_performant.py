@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 from models.utility_functions import (
+    is_grayskull,
     is_wormhole_b0,
     divup,
     skip_for_grayskull,
@@ -20,19 +21,46 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"l1_small_size": 32768},
+        {"l1_small_size": 24576},
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+    (
+        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+    ),
 )
 def test_run_resnet50_inference(
-    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+    device,
+    use_program_cache,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    model_location_generator,
+    device_params,
 ):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
-    if is_wormhole_b0() and batch_size == 20:
-        pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+
+    if is_grayskull():
+        if device_params["l1_small_size"] != 32768:
+            pytest.skip("Skipping non Grayskull device params")
+        if batch_size == 16:
+            pytest.skip("Skipping batch size 16 for Grayskull")
+
+    if is_wormhole_b0():
+        if device_params["l1_small_size"] != 24576:
+            pytest.skip("Skipping non Wormhole device params")
+        if batch_size == 20:
+            pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+
     test_infra = create_test_infra(
         device,
         batch_size,
@@ -61,11 +89,20 @@ def test_run_resnet50_inference(
     test_infra.validate()
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"l1_small_size": 32768, "trace_region_size": 1332224},
+        {"l1_small_size": 24576, "trace_region_size": 800768},
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+    (
+        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+    ),
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_run_resnet50_trace_inference(
@@ -77,11 +114,22 @@ def test_run_resnet50_trace_inference(
     math_fidelity,
     enable_async,
     model_location_generator,
+    device_params,
 ):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
-    if is_wormhole_b0() and batch_size == 20:
-        pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+
+    if is_grayskull():
+        if device_params["l1_small_size"] != 32768:
+            pytest.skip("Skipping non Grayskull device params")
+        if batch_size == 16:
+            pytest.skip("Skipping batch size 16 for Grayskull")
+
+    if is_wormhole_b0():
+        if device_params["l1_small_size"] != 24576:
+            pytest.skip("Skipping non Wormhole device params")
+        if batch_size == 20:
+            pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
 
     device.enable_async(enable_async)
 
@@ -127,19 +175,46 @@ def test_run_resnet50_trace_inference(
     device.enable_async(False)
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "num_hw_cqs": 2}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"l1_small_size": 32768, "num_hw_cqs": 2},
+        {"l1_small_size": 24576, "num_hw_cqs": 2},
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+    (
+        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+    ),
 )
 def test_run_resnet50_2cqs_inference(
-    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+    device,
+    use_program_cache,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    model_location_generator,
+    device_params,
 ):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
-    if is_wormhole_b0() and batch_size == 20:
-        pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+
+    if is_grayskull():
+        if device_params["l1_small_size"] != 32768:
+            pytest.skip("Skipping non Grayskull device params")
+        if batch_size == 16:
+            pytest.skip("Skipping batch size 16 for Grayskull")
+
+    if is_wormhole_b0():
+        if device_params["l1_small_size"] != 24576:
+            pytest.skip("Skipping non Wormhole device params")
+        if batch_size == 20:
+            pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+
     test_infra = create_test_infra(
         device,
         batch_size,
@@ -196,13 +271,20 @@ def test_run_resnet50_2cqs_inference(
         test_infra.validate(output)
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 800768, "num_hw_cqs": 2}], indirect=True
+    "device_params",
+    [
+        {"l1_small_size": 32768, "trace_region_size": 1332224, "num_hw_cqs": 2},
+        {"l1_small_size": 24576, "trace_region_size": 800768, "num_hw_cqs": 2},
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+    (
+        (20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+    ),
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_run_resnet50_trace_2cqs_inference(
@@ -214,11 +296,22 @@ def test_run_resnet50_trace_2cqs_inference(
     math_fidelity,
     enable_async,
     model_location_generator,
+    device_params,
 ):
     if batch_size == 8:
         pytest.skip("Skipping batch size 8 due to memory config issue")
-    if is_wormhole_b0() and batch_size == 20:
-        pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+
+    if is_grayskull():
+        if device_params["l1_small_size"] != 32768:
+            pytest.skip("Skipping non Grayskull device params")
+        if batch_size == 16:
+            pytest.skip("Skipping batch size 16 for Grayskull")
+
+    if is_wormhole_b0():
+        if device_params["l1_small_size"] != 24576:
+            pytest.skip("Skipping non Wormhole device params")
+        if batch_size == 20:
+            pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
 
     device.enable_async(enable_async)
 

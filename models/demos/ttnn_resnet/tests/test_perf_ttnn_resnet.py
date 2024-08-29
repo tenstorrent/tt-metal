@@ -13,6 +13,8 @@ from ttnn.model_preprocessing import (
 )
 
 from models.utility_functions import (
+    is_grayskull,
+    is_wormhole_b0,
     profiler,
     disable_persistent_kernel_cache,
     run_for_wormhole_b0,
@@ -284,11 +286,28 @@ def run_perf_resnet(
     device,
     model_version,
     model_location_generator,
+    device_params,
 ):
     profiler.clear()
     disable_persistent_kernel_cache()
     if batch_size <= 2:
         pytest.skip("Batch size 1 and 2 are not supported with sharded data")
+
+    if batch_size == 8:
+        pytest.skip("Skipping batch size 8 due to memory config issue")
+
+    if is_grayskull():
+        if device_params["l1_small_size"] != 32768:
+            pytest.skip("Skipping non Grayskull device params")
+        if batch_size == 16:
+            pytest.skip("Skipping batch size 16 for Grayskull")
+
+    if is_wormhole_b0():
+        if device_params["l1_small_size"] != 24576:
+            pytest.skip("Skipping non Wormhole device params")
+        if batch_size == 20:
+            pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+
     first_key = f"first_iter_batchsize{batch_size}"
     second_key = f"second_iter_batchsize{batch_size}"
     cpu_key = f"ref_key_batchsize{batch_size}"
@@ -368,12 +387,21 @@ def run_perf_resnet(
     logger.info(f"{model_name} compile time: {compile_time}")
 
 
-@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"l1_small_size": 32768},
+        {"l1_small_size": 24576},
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0070, 26),),
+    (
+        (20, 0.0080, 20),
+        (16, 0.0070, 26),
+    ),
 )
 def test_perf_bare_metal(
     device,
@@ -383,6 +411,7 @@ def test_perf_bare_metal(
     expected_compile_time,
     hf_cat_image_sample_input,
     model_location_generator,
+    device_params,
 ):
     run_perf_resnet(
         batch_size,
@@ -392,15 +421,24 @@ def test_perf_bare_metal(
         device,
         "resnet50",
         model_location_generator,
+        device_params,
     )
 
 
-@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"l1_small_size": 32768, "trace_region_size": 1332224},
+        {"l1_small_size": 24576, "trace_region_size": 800768},
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
     (
+        (20, True, 0.0064, 10),
+        (20, False, 0.0064, 5),
         (16, True, 0.005, 25),
         (16, False, 0.0046, 25),
     ),
@@ -415,6 +453,7 @@ def test_perf_trace_bare_metal(
     hf_cat_image_sample_input,
     enable_async_mode,
     model_location_generator,
+    device_params,
 ):
     mode = "async" if enable_async_mode else "sync"
     run_perf_resnet(
@@ -425,15 +464,25 @@ def test_perf_trace_bare_metal(
         device,
         f"resnet50_trace_{mode}",
         model_location_generator,
+        device_params,
     )
 
 
-@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"l1_small_size": 32768, "num_hw_cqs": 2},
+        {"l1_small_size": 24576, "num_hw_cqs": 2},
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0070, 26),),
+    (
+        (20, 0.0080, 19),
+        (16, 0.0070, 26),
+    ),
 )
 def test_perf_2cqs_bare_metal(
     device,
@@ -443,6 +492,7 @@ def test_perf_2cqs_bare_metal(
     expected_compile_time,
     hf_cat_image_sample_input,
     model_location_generator,
+    device_params,
 ):
     run_perf_resnet(
         batch_size,
@@ -452,17 +502,25 @@ def test_perf_2cqs_bare_metal(
         device,
         "resnet50_2cqs",
         model_location_generator,
+        device_params,
     )
 
 
-@run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2, "trace_region_size": 1332224}], indirect=True
+    "device_params",
+    [
+        {"l1_small_size": 32768, "trace_region_size": 1332224, "num_hw_cqs": 2},
+        {"l1_small_size": 24576, "trace_region_size": 800768, "num_hw_cqs": 2},
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.004, 25),),
+    (
+        (20, 0.004, 5),
+        (16, 0.004, 25),
+    ),
 )
 def test_perf_trace_2cqs_bare_metal(
     device,
@@ -472,6 +530,7 @@ def test_perf_trace_2cqs_bare_metal(
     expected_compile_time,
     hf_cat_image_sample_input,
     model_location_generator,
+    device_params,
 ):
     run_perf_resnet(
         batch_size,
@@ -481,4 +540,5 @@ def test_perf_trace_2cqs_bare_metal(
         device,
         "resnet50_trace_2cqs",
         model_location_generator,
+        device_params,
     )
