@@ -499,7 +499,7 @@ struct MultiDeviceHostStorage {
             // I think this one is better.
             std::lock_guard<std::mutex> lock(mtx);
             bool is_allocated = true;
-            for (int i = 0; i < num_buffers(); i++) {
+            for (int i = 0; i < buffers.size(); i++) {
                     is_allocated &=
                         std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, buffers[i]);
             }
