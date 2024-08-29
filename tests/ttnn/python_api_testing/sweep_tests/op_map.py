@@ -638,10 +638,6 @@ op_map = {
         "tt_op": ttnn_ops.logical_and,
         "pytorch_op": pytorch_ops.logical_and,
     },
-    "unary-logical_and": {
-        "tt_op": ttnn_ops.unary_logical_and,
-        "pytorch_op": pytorch_ops.unary_logical_and,
-    },
     "ttnn-logical_or": {
         "tt_op": ttnn_ops.logical_or,
         "pytorch_op": pytorch_ops.logical_or,

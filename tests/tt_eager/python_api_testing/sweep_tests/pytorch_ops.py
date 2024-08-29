@@ -955,11 +955,6 @@ def logical_and(x, y, *args, **kwargs):
     return result
 
 
-def unary_logical_and(x, scalar, *args, **kwargs):
-    result = torch.logical_and(x, scalar)
-    return result
-
-
 def logical_not_(x, *args, **kwargs):
     result = x.logical_not_()
     return result
