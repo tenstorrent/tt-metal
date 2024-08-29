@@ -8,7 +8,7 @@
 #include "reshape.hpp"
 
 #include <ttnn/deprecated/tt_numpy/functions.hpp>
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/reshape_op.hpp"
 
@@ -68,7 +68,7 @@ ttnn::Tensor ReshapeOperation::invoke(
         return input_tensor.reshape(N, C, H, W);
     }
     if (input_tensor.get_legacy_shape() == output_shape) {
-        return AutoFormat::move_tensor_to_mem_config(input_tensor, output_mem_config);
+        return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(input_tensor, output_mem_config);
     }
     uint32_t ROW_MAJOR_WIDTH = 8;
     if (input_tensor.get_layout() == Layout::ROW_MAJOR &&

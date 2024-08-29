@@ -160,9 +160,12 @@ from ttnn.device import (
     CreateDevices,
     CloseDevice,
     CloseDevices,
+    DumpDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
-    DumpDeviceProfiler,
+    format_input_tensor,
+    format_output_tensor,
+    pad_to_tile_shape,
 )
 
 from ttnn.multi_device import (

@@ -69,7 +69,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
                 (normalized_dim1 == normalized_dim2) ||
                 (a.get_legacy_shape()[normalized_dim1] == 1 && a.get_legacy_shape()[normalized_dim2] == 1)
             ) {
-                return {AutoFormat::move_tensor_to_mem_config(a, memory_config)};
+                return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(a, memory_config)};
             }
 
             if ( normalized_dim1 > normalized_dim2 ) {

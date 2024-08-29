@@ -6,7 +6,7 @@
 #include "prod.hpp"
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -17,6 +17,7 @@ namespace ttnn::operations::reduction {
 
 // Autoformat support
 inline Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     auto formatted_input_tensor = temp;
     if(formatted_input_tensor.get_layout()==Layout::ROW_MAJOR){
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
@@ -28,6 +29,7 @@ inline Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& outp
 }
 
 inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_config) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     auto formatted_input_tensor = input_a;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(input_a.get_legacy_shape(), false, false, true, true);
@@ -42,6 +44,7 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
 }
 
 inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& output_mem_config) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
     // layout conversion
     auto formatted_input_tensor = temp;
     if(formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {

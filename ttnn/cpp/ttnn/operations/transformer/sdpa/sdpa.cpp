@@ -23,7 +23,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> valid_seq_len) {
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
-                                                                     : AutoFormat::GetDefaultDevice()->arch();
+                                                                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 

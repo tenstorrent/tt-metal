@@ -35,7 +35,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
-                                                                     : AutoFormat::GetDefaultDevice()->arch();
+                                                                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     // formatting input tensors
     auto q_shape = input_tensor_q.get_legacy_shape();
     auto k_shape = input_tensor_k.get_legacy_shape();

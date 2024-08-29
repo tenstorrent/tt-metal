@@ -1040,12 +1040,12 @@ class TTPyCompositeConv(TTPyOp):
             conv_input_on_device = conv_input
         assert conv_input_on_device.get_legacy_shape()[3] % 16 == 0
         if not self.use_shallow_conv_variant:
-            input_padded_shape = ttl.tensor.pad_to_tile_shape(
+            input_padded_shape = ttnn.pad_to_tile_shape(
                 conv_input_on_device.get_legacy_shape(), False, False, True, True
             )
             assert self.padded_input_channels == input_padded_shape[3]
             if conv_input.get_legacy_shape() != input_padded_shape:
-                conv_input_on_device = ttl.tensor.format_input_tensor(
+                conv_input_on_device = ttnn.format_input_tensor(
                     conv_input_on_device,
                     self.device,
                     input_padded_shape,
@@ -1075,7 +1075,7 @@ class TTPyCompositeConv(TTPyOp):
 
         # convert tiled output to RM
         if conv_output_on_device.get_legacy_shape() != conv_output_on_device.shape_without_padding():
-            conv_output_on_device = ttl.tensor.format_output_tensor(
+            conv_output_on_device = ttnn.format_output_tensor(
                 conv_output_on_device,
                 conv_output_on_device.shape_without_padding(),
                 self.device,

@@ -186,15 +186,15 @@ Tensor reduce(
 
                 // Get the device
                 if (input_tensor.storage_type() != StorageType::DEVICE) {
-                    device = AutoFormat::GetDefaultDevice();
+                    device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
                     TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
                 } else {
                     device = input_tensor.device();
                 }
-                auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+                auto input_tensor_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
                 auto formatted_input_tensor = input_tensor;
-                if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-                    formatted_input_tensor = AutoFormat::format_input_tensor(
+                if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
+                    formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
                         input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
                 }
                 const Tensor output_tensor = operation::run_without_autoformat(

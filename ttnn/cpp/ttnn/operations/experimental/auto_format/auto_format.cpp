@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
-
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -18,9 +17,7 @@
 
 using namespace tt::constants;
 
-namespace tt {
-
-namespace tt_metal {
+namespace ttnn::operations::experimental::auto_format{
 
 Tensor AutoFormat::move_tensor_to_device(const Tensor& input, Device* device, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
@@ -54,14 +51,14 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(const Tensor& input, Device *de
         (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
         (device_shape[-1] % TILE_WIDTH != 0 ? (device_shape[-1] / TILE_WIDTH + 1) * TILE_WIDTH : device_shape[-1])
         };
-    const auto new_shape = tt_metal::Shape(new_intended_shape, new_device_shape);
+    const auto new_shape = tt::tt_metal::Shape(new_intended_shape, new_device_shape);
     return AutoFormat::format_input_tensor(input, device, new_shape, 0.0, target_layout, target_mem_config);
 }
 
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input,
     Device* device,
-    const Shape& padded_shape,
+    const tt::tt_metal::Shape& padded_shape,
     float pad_value,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
@@ -125,7 +122,7 @@ Tensor AutoFormat::format_input_tensor(
 
 Tensor AutoFormat::format_output_tensor(
     const Tensor& output,
-    const Shape& shape,
+    const tt::tt_metal::Shape& shape,
     Device* device,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
@@ -234,5 +231,4 @@ Tensor AutoFormat::format_output_tensor(
     return formatted_output;
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  //namespace ttnn::operations::auto_format

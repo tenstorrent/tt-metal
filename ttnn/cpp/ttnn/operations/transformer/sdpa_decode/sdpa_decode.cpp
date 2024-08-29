@@ -33,7 +33,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
-                                                                     : AutoFormat::GetDefaultDevice()->arch();
+                                                                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
     uint32_t k_chunk_size = get_chunk_size(max_cur_pos + 1);
 

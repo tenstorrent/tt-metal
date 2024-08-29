@@ -19,8 +19,8 @@ Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::option
                         input_tensor.get_legacy_shape()[-1],
                         TILE_WIDTH * 2));
 
-    tt::tt_metal::Shape pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
-    FormatParams input_format_params = {.pad_shape=pad_shape, .pad_value=0.0, .target_layout=Layout::TILE};
+    tt::tt_metal::Shape pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+    ttnn::operations::experimental::auto_format::FormatParams input_format_params = {.pad_shape=pad_shape, .pad_value=0.0, .target_layout=Layout::TILE};
     return operation::run_with_autoformat(RotateHalf{memory_config.value_or(input_tensor.memory_config())}, {input_tensor}, {input_format_params}, {Layout::TILE}).at(0);
 }
 
