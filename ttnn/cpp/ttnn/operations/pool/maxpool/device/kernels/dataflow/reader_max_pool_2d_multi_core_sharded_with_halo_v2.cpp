@@ -6,7 +6,10 @@
 #include <cstring>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
+
+#define DUMP(a) \
+    do { DPRINT << "reader_max_pool: "<< #a " = " << a << ENDL(); } while(false)
 
 #if ENABLE_DEBUG_PRINT == 1
     #include "debug/dprint.h"
@@ -92,24 +95,35 @@ void kernel_main() {
     uint32_t in_w_padded = in_w + 2 * pad_w;
 
     uint32_t npages_to_reserve = nblocks;
-    uint32_t counter = reader_id;
-    while (counter < reader_nindices) {
-        cb_reserve_back(in_cb_id, npages_to_reserve);
+    uint32_t num_8_tile_blocks = 1;
+    uint32_t read_bytes = in_nbytes_c;
+    if(in_nbytes_c > 512) {
+        num_8_tile_blocks = in_nbytes_c / 512;
+        read_bytes = 512; // for now, pow of 2 channels are only supported.
+    }
+    for(uint32_t j = 0; j < num_8_tile_blocks; j++ ) {
+        uint32_t counter = reader_id;
+        while (counter < reader_nindices) {
 
-        uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
-        uint32_t out_l1_write_addr = out_l1_write_addr_base;
-        for (uint32_t i = 0; i < nblocks; ++ i) {
-            uint16_t top_left_local_index = reader_indices_ptr[counter ++];
-            uint32_t h_multiples = 0;
-            for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
-                uint32_t stick_offset = top_left_local_index + h_multiples;
-                uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
-                noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
-                out_l1_write_addr += in_nbytes_c * window_w;
+            cb_reserve_back(in_cb_id, npages_to_reserve);
+            uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
+            uint32_t out_l1_write_addr = out_l1_write_addr_base;
+            for (uint32_t i = 0; i < nblocks; ++ i) {
+                uint16_t top_left_local_index = reader_indices_ptr[counter ++];
+                uint32_t h_multiples = 0;
+                for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
+                    uint32_t stick_offset = top_left_local_index + h_multiples;
+                    uint32_t read_offset = j * 512 + in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
+                    for(uint32_t w = 0; w < window_w; w++) {
+                        noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
+                        out_l1_write_addr += read_bytes;
+                        read_offset += in_nbytes_c;
+                    }
+                }
+                if (split_reader) counter++; // interleave the indices
             }
-            if (split_reader) counter++; // interleave the indices
+            noc_async_read_barrier();
+            cb_push_back(in_cb_id, npages_to_reserve);
         }
-        noc_async_read_barrier();
-        cb_push_back(in_cb_id, npages_to_reserve);
     }
 } // kernel_main()
