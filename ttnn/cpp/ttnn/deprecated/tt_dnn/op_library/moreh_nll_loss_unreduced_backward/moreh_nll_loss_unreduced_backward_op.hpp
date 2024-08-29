@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -23,14 +23,14 @@ operation::ProgramWithCallbacks moreh_nll_loss_unreduced_backward_impl(
     const Tensor &input_grad,
     const int32_t ignore_index,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 struct MorehNllLossUnreducedBackward {
     int32_t ignore_index;
 
     const MemoryConfig memory_config;
     const CoreRange core_range;  // unused for now
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
@@ -58,7 +58,7 @@ Tensor moreh_nll_loss_unreduced_backward(
     const std::optional<const Tensor> input_grad_tensor,
     const int32_t ignore_index,
     const MemoryConfig &memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 }  // namespace operations

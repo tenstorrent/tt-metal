@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks moreh_mean_w(
     const Tensor &input,
     const Tensor &output,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     const auto shape = input.get_legacy_shape();
     uint32_t W = shape[-1], H = shape[-2];
     uint32_t HW = H * W;

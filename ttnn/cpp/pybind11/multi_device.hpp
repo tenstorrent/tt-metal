@@ -7,8 +7,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/multi_device.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace py = pybind11;
 
@@ -16,8 +16,11 @@ namespace ttnn {
 
 namespace multi_device {
 
+void py_module_types(py::module& module) { py::class_<DeviceMesh>(module, "DeviceMesh"); }
+
 void py_module(py::module& module) {
-    py::class_<DeviceMesh>(module, "DeviceMesh")
+    auto py_device_mesh = static_cast<py::class_<DeviceMesh>>(module.attr("DeviceMesh"));
+    py_device_mesh
         .def(
             py::init<DeviceGrid, std::vector<int>, size_t, size_t, size_t, DispatchCoreType>(),
             py::kw_only(),
@@ -72,15 +75,19 @@ void py_module(py::module& module) {
             Returns:
                 CoreCoord: The compute grid size of the first device in the device mesh.
         )doc")
-        .def("dram_grid_size", &DeviceMesh::dram_grid_size,
-        R"doc(
+        .def(
+            "dram_grid_size",
+            &DeviceMesh::dram_grid_size,
+            R"doc(
             Get the dram grid size (x, y) of the first device in the device mesh.
 
             Returns:
                 CoreCoord: The dram grid size of the first device in the device mesh.
         )doc")
-        .def("arch", &DeviceMesh::arch,
-        R"doc(
+        .def(
+            "arch",
+            &DeviceMesh::arch,
+            R"doc(
             Get the arch of the first device in the device mesh.
 
             Returns:

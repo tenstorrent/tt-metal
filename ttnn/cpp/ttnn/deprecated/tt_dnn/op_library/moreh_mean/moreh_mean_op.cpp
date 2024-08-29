@@ -110,7 +110,7 @@ Tensor moreh_mean_(
     const std::optional<uint32_t> divisor,
     const std::optional<const Tensor> output,
     const std::optional<MemoryConfig> memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
 
     auto device = input.device();
@@ -156,7 +156,7 @@ std::optional<Tensor> moreh_mean(
     const std::optional<uint32_t> divisor,
     const std::optional<const Tensor> output,
     const std::optional<MemoryConfig> memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto rank = input.get_legacy_shape().rank();
     std::vector<int64_t> dims = get_dim(dim, rank);
     std::sort(dims.begin(), dims.end());

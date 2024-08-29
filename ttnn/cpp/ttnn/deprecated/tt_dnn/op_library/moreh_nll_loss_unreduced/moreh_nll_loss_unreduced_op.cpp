@@ -24,7 +24,7 @@ Tensor moreh_nll_loss_unreduced(
     const std::optional<const Tensor> output_tensor,
     const int32_t ignore_index,
     const MemoryConfig& memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     const Tensor& result = moreh_nll_loss_step2(
         input_tensor,
         target_tensor,
