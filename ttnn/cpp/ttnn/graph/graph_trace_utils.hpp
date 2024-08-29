@@ -5,6 +5,7 @@
 #pragma once
 
 #include "third_party/json/json.hpp"
+#include "ttnn/tensor/types.hpp"
 
 #include <vector>
 
