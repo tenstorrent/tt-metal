@@ -15,8 +15,8 @@ namespace ttnn::operations::data_movement {
 
 struct Fold {
     struct operation_attributes_t {
-        uint8_t stride_h;
-        uint8_t stride_w;
+        uint32_t stride_h;
+        uint32_t stride_w;
         bool is_sharded;
     };
 
@@ -47,8 +47,8 @@ struct Fold {
     struct MultiCore {
         struct shared_variables_t {
             KernelHandle writer_kernel_id;
-            uint8_t stride_h;
-            uint8_t stride_w;
+            uint32_t stride_h;
+            uint32_t stride_w;
             uint32_t cb_src0;
             uint32_t cb_dst0;
         };
@@ -74,12 +74,12 @@ struct Fold {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
-        uint8_t stride_h,
-        uint8_t stride_w,
+        uint32_t stride_h,
+        uint32_t stride_w,
         const std::optional<const tt::tt_metal::Shape>& output_shape,
-        uint8_t pad_c,
-        uint8_t pad_h,
-        uint8_t pad_w);
+        uint32_t pad_c,
+        uint32_t pad_h,
+        uint32_t pad_w);
 };
 
 } // namespace ttnn::operations::data_movement

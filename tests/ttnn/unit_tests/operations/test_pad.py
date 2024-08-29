@@ -16,8 +16,8 @@ from models.utility_functions import skip_for_wormhole_b0
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [230])
 @pytest.mark.parametrize("w", [224])
-@pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 26), (0, 32)), (0, 32, 0, 26, 0, 1))])
-@pytest.mark.parametrize("value", [5])
+@pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (3, 25), (32, 32)), (32, 32, 3, 25, 0, 1))])
+@pytest.mark.parametrize("value", [0])
 def test_pad_rm(device, n, c, h, w, padding, torch_padding, value):
     torch.manual_seed(0)
 
@@ -83,8 +83,8 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
     )
 
     n_unpadded = n
-    c_unpadded = c + padding[0][1]
-    h_unpadded = h + padding[1][1]
+    c_unpadded = c + padding[0][1] + padding[0][0]
+    h_unpadded = h + padding[1][1] + padding[1][0]
 
     # shard config
     num_cores_x = 8
@@ -129,7 +129,7 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [224])
 @pytest.mark.parametrize("w", [256])
-@pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 32), (0, 0)), (0, 0, 0, 32, 0, 1))])
+@pytest.mark.parametrize("padding,torch_padding", [(((1, 1), (2, 32), (0, 0)), (0, 0, 2, 32, 1, 1))])
 @pytest.mark.parametrize("value", [8])
 @pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR])
 def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, use_program_cache):
@@ -199,7 +199,7 @@ def test_pad_padding_validation_front_pad_not_supported(device, h, w, padding, t
 
     with pytest.raises(RuntimeError) as e:
         ttnn.pad(input_tensor, padding=padding, value=value)
-    assert "ttnn.pad: on device padding does not support front padding" in str(e.value)
+    assert "ttnn.pad: on device tile padding does not support front padding" in str(e.value)
     return
 
 

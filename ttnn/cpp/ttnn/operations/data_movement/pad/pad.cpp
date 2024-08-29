@@ -80,16 +80,18 @@ static ttnn::Tensor pad_impl(
 
     ShapeType output_padded_shape;
     for(size_t i = 0; i < padding.size(); i++) {
-        output_padded_shape[i] = input_shape_with_tile_padding[i] + padding[i].second;
+        output_padded_shape[i] = padding[i].first + input_shape_with_tile_padding[i] + padding[i].second;
     }
 
     auto pad_front = padding | std::views::transform([](const auto& p) { return p.first; });
     auto pad_back = padding | std::views::transform([](const auto& p) { return p.second; });
 
     const bool front_padding_is_zero = std::accumulate(pad_front.begin(), pad_front.end(), 0) == 0;
-    TT_FATAL(
-        front_padding_is_zero,
-        "ttnn.pad: on device padding does not support front padding");
+    if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
+        TT_FATAL(
+            front_padding_is_zero,
+            "ttnn.pad: on device tile padding does not support front padding");
+    }
 
     if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
         const int target_height = output_padded_shape[padding.size() - 2];

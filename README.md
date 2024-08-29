@@ -24,7 +24,7 @@
 
 | Model                                                      | Batch               | End-to-end throughput [1]    | Device throughput [2]       | Target throughput                             |
 |----------------------------------------------------------  |---------------------|------------------------------|-----------------------------|-------------------------------------|
-| [ResNet-50](./models/demos/resnet) (fps)                   | 20                  | 5,500                        | 7,700                       | 10,000                              |
+| [ResNet-50](./models/demos/resnet) (fps)                   | 20                  | 5,600                        | 7,560                       | 10,000                              |
 | [BERT-Large](./models/demos/bert) (sen/s)                  | 12                  | 370                          | 406                         | 410                                 |
 | [Falcon7B-decode](./models/demos/ttnn_falcon7b) (t/s)      | 32                  | 135                          | 135                         | 140                                 |
 | [ViT](./models/demos/grayskull/vit) (fps)                  | 8                   | 860                          | 1570                        | 2000                                |
@@ -52,7 +52,7 @@
 | [LLaMA-3.1-8B](./models/demos/wormhole/llama31_8b)                                     | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) | 129th              | 1                    | coming soon             | 8.3 t/s/u - 8.3 t/s           | 9.7 t/s/u - 9.7 t/s         | 23             |
 | [BERT-Large](./models/demos/metal_BERT_large_11/) (sen/s) [5]                          |                                                                           | -                   | 8                    | -                       | 270                            | 340                          | 400            |
 | [Stable Diffusion 1.4](./models/demos/wormhole/stable_diffusion) 512x512 (sec/img) [6] |                                                                           | -                   | 1                    | -                       | 6                              | 5                            | 3              |
-| [ResNet-50](./models/demos/ttnn_resnet) (fps)                                          |                                                                           | -                   | 16                   | -                       | 4,300                          | 5,550                        | 7,000          |
+| [ResNet-50](./models/demos/ttnn_resnet) (fps)                                          |                                                                           | -                   | 16                   | -                       | 4,100                          | 5,010                        | 7,000          |
 
 [1] - Observed from the host. Includes dispatch overhead and kernel execution time. For LLMs, token-to-token decode throughput is reported.
 
@@ -75,7 +75,7 @@
 | [LLaMA-3.1-70B](./models/demos/t3000/llama3_70b)   | [v0.51.0-rc36](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc36) | Tensor Parallel    | 129th               |  32                   | coming soon             | 10.4 t/s/u - 333 t/s         |  15.8 t/s/u - 506 t/s        |   20 t/s/u      |
 | [Falcon40B](./models/demos/t3000/falcon40b)        | [v0.51.0-rc35](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc35) | Tensor Parallel    | 129th               |  32                   | coming soon             | 5.3 t/s/u - 168 t/s          |  12.2 t/s/u - 390 t/s        |   36 t/s/u      |
 | [Mixtral7Bx8](./models/demos/t3000/mixtral8x7b)    | [v0.51.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc33) | Tensor Parallel    | 129th               |  32                   | 0.19 s                  | 15.7 t/s/u - 502 t/s         |  21.4 t/s/u - 685 t/s        |   33 t/s/u      |
-| [ResNet-50](./models/demos/ttnn_resnet) (fps)      |                                                                           | Data Parallel      | -                   |  128                  | -                       | 31,700                       |  44,400                      |   56,000        |
+| [ResNet-50](./models/demos/ttnn_resnet) (fps)      |                                                                           | Data Parallel      | -                   |  128                  | -                       | 31,250                       |  40,080                      |   56,000        |
 
 ## Single Galaxy (8x4 mesh of WHs) Models
 
