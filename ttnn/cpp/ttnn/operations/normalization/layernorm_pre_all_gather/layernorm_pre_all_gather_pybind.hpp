@@ -8,6 +8,6 @@
 
 namespace ttnn::operations::normalization::detail {
 
-void bind_normalization_layer_norm_pre_all_gather(pybind11::module& module);
+void bind_normalization_layernorm_pre_all_gather(pybind11::module& module);
 
 }  // namespace ttnn::operations::normalization::detail

@@ -129,7 +129,7 @@ def test_sharded_layernorm(
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 def test_post_allgather_layernorm(
     all_devices,
-    use_program_cache,
+    clear_compile_cache,
     input_width,
     is_rmsnorm,
     input_df,
@@ -228,37 +228,47 @@ def test_post_allgather_layernorm(
     tt_sum_x2_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
         tt_sum_x2_tensor, sharded_mem_config=tt_stats_sharded_config
     )
+    iterations = 200
+    prev_tt_output_torch = None
+    for iter in range(iterations):
+        if is_rmsnorm:
+            tt_output_tensor = ttnn.rmsnorm_post_all_gather(
+                tt_input_tensor,
+                epsilon=eps,
+                weight=tt_weights,
+                program_config=SHARDED_NORM_PRGM_CFG,
+                memory_config=tt_sharded_config,
+                sum_x2=tt_sum_x2_tensor,
+            )
+        else:
+            tt_output_tensor = ttnn.layernorm_post_all_gather(
+                tt_input_tensor,
+                epsilon=eps,
+                weight=tt_weights,
+                program_config=SHARDED_NORM_PRGM_CFG,
+                memory_config=tt_sharded_config,
+                sum_x=tt_sum_x_tensor,
+                sum_x2=tt_sum_x2_tensor,
+            )
+        tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
+        if iter == 0:
+            _, pcc_out = comp_pcc(torch_output_tensor, tt_output_torch, pcc=min_pcc)
+            all_close_passing = torch.allclose(torch_output_tensor, tt_output_torch, atol=max_atol, equal_nan=False)
+            atol_delta = torch.max(torch.abs(torch_output_tensor - tt_output_torch)).item()
+            print(f"PCC: {pcc_out}")
+            print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
+            assert pcc_out >= min_pcc, f"PCC test failed: {pcc_out} (threshold: {min_pcc})"
+            # assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
 
-    if is_rmsnorm:
-        tt_output_tensor = ttnn.rms_norm(
-            tt_input_tensor,
-            epsilon=eps,
-            weight=tt_weights,
-            program_config=SHARDED_NORM_PRGM_CFG,
-            memory_config=tt_sharded_config,
-        )
-    else:
-        tt_output_tensor = ttnn.layernorm_post_all_gather(
-            tt_input_tensor,
-            epsilon=eps,
-            weight=tt_weights,
-            program_config=SHARDED_NORM_PRGM_CFG,
-            memory_config=tt_sharded_config,
-            sum_x=tt_sum_x_tensor,
-            sum_x2=tt_sum_x2_tensor,
-        )
-    tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
-
-    _, pcc_out = comp_pcc(torch_output_tensor, tt_output_torch, pcc=min_pcc)
-    all_close_passing = torch.allclose(torch_output_tensor, tt_output_torch, atol=max_atol, equal_nan=False)
-    atol_delta = torch.max(torch.abs(torch_output_tensor - tt_output_torch)).item()
-    print(f"PCC: {pcc_out}")
-    print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
-    assert pcc_out >= min_pcc, f"PCC test failed: {pcc_out} (threshold: {min_pcc})"
-    # assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
+        else:
+            all_close_passing = torch.allclose(prev_tt_output_torch, tt_output_torch, atol=0, equal_nan=False)
+            atol_delta = torch.max(torch.abs(prev_tt_output_torch - tt_output_torch)).item()
+            print(f"all_close_previous : {all_close_passing}, Max ATOL: {atol_delta}")
+            assert all_close_passing, f"Max Atol exceeded for previous : {atol_delta} (allowed: {0})"
+        prev_tt_output_torch = tt_output_torch
 
 
-@pytest.mark.parametrize("is_rmsnorm", [True])
+@pytest.mark.parametrize("is_rmsnorm", [False])
 @pytest.mark.parametrize("seed", [0])  # Test across 5 different seeds
 @pytest.mark.parametrize(("min_pcc_sumx", "min_pcc_sumx2"), ([0.9997, 0.995],))
 @pytest.mark.parametrize("max_atol", [0.38])
@@ -267,7 +277,6 @@ def test_post_allgather_layernorm(
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 def test_pre_allgather_layernorm(
     device,
-    use_program_cache,
     input_width,
     is_rmsnorm,
     input_df,
@@ -320,37 +329,41 @@ def test_pre_allgather_layernorm(
 
     sum_x2_tensor = torch.sum(torch_input_tensor**2, dim=-1, keepdim=True).to(torch.bfloat16)  # [1, 1, 32, 1]
 
-    if is_rmsnorm:
-        tt_output_tensor = ttnn.rmsnorm_pre_all_gather(
-            tt_input_tensor,
-            program_config=SHARDED_NORM_PRGM_CFG,
-        )
-    else:
-        tt_output_tensor = ttnn.layernorm_pre_all_gather(
-            tt_input_tensor,
-            program_config=SHARDED_NORM_PRGM_CFG,
-        )
-    tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)  # [1, 1, 32, 64]
+    iterations = 200
+    prev_tt_output_torch = None
+    for iter in range(iterations):
+        if is_rmsnorm:
+            tt_output_tensor = ttnn.rmsnorm_pre_all_gather(tt_input_tensor, program_config=SHARDED_NORM_PRGM_CFG)
+        else:
+            tt_output_tensor = ttnn.layernorm_pre_all_gather(tt_input_tensor, program_config=SHARDED_NORM_PRGM_CFG)
+        tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)  # [1, 1, 32, 64]
 
-    if is_rmsnorm:
-        tt_ex2_torch = tt_output_torch[..., :1]
-    else:
-        tt_ex_torch = tt_output_torch[..., :1]
-        tt_ex2_torch = tt_output_torch[..., 32:33]
+        if is_rmsnorm:
+            tt_ex2_torch = tt_output_torch[..., :1]
+        else:
+            tt_ex_torch = tt_output_torch[..., :1]
+            tt_ex2_torch = tt_output_torch[..., 32:33]
 
-    if not is_rmsnorm:
-        _, pcc_out1 = comp_pcc(sum_x_tensor, tt_ex_torch, pcc=min_pcc_sumx)
-        all_close_passing = torch.allclose(sum_x_tensor, tt_ex_torch, atol=max_atol, equal_nan=False)
-        atol_delta = torch.max(torch.abs(sum_x_tensor - tt_ex_torch)).item()
-        print(f"PCC: {pcc_out1}")
-        print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
-        assert pcc_out1 >= min_pcc_sumx, f"PCC of Sum(x) test failed: {pcc_out1} (threshold: {min_pcc_sumx})"
+        if iter == 0:
+            if not is_rmsnorm:
+                _, pcc_out1 = comp_pcc(sum_x_tensor, tt_ex_torch, pcc=min_pcc_sumx)
+                all_close_passing = torch.allclose(sum_x_tensor, tt_ex_torch, atol=max_atol, equal_nan=False)
+                atol_delta = torch.max(torch.abs(sum_x_tensor - tt_ex_torch)).item()
+                print(f"PCC: {pcc_out1}")
+                print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
+                assert pcc_out1 >= min_pcc_sumx, f"PCC of Sum(x) test failed: {pcc_out1} (threshold: {min_pcc_sumx})"
 
-    _, pcc_out2 = comp_pcc(sum_x2_tensor, tt_ex2_torch, pcc=min_pcc_sumx2)
-    all_close_passing = torch.allclose(sum_x2_tensor, tt_ex2_torch, atol=max_atol, equal_nan=False)
-    atol_delta = torch.max(torch.abs(sum_x2_tensor - tt_ex2_torch)).item()
-    print(f"PCC: {pcc_out2}")
-    print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
-    assert pcc_out2 >= min_pcc_sumx2, f"PCC of Sum(x^2) test failed: {pcc_out2} (threshold: {min_pcc_sumx2})"
+            _, pcc_out2 = comp_pcc(sum_x2_tensor, tt_ex2_torch, pcc=min_pcc_sumx2)
+            all_close_passing = torch.allclose(sum_x2_tensor, tt_ex2_torch, atol=max_atol, equal_nan=False)
+            atol_delta = torch.max(torch.abs(sum_x2_tensor - tt_ex2_torch)).item()
+            print(f"PCC: {pcc_out2}")
+            print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
+            assert pcc_out2 >= min_pcc_sumx2, f"PCC of Sum(x^2) test failed: {pcc_out2} (threshold: {min_pcc_sumx2})"
+        else:
+            all_close_passing = torch.allclose(prev_tt_output_torch, tt_output_torch, atol=0, equal_nan=False)
+            atol_delta = torch.max(torch.abs(prev_tt_output_torch - tt_output_torch)).item()
+            print(f"all_close_previous : {all_close_passing}, Max ATOL: {atol_delta}")
+            assert all_close_passing, f"Max Atol exceeded for previous : {atol_delta} (allowed: {0})"
+        prev_tt_output_torch = tt_output_torch
 
     # assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
