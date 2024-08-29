@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
 # SPDX-License-Identifier: Apache-2.0
+
 
 import torch
 import typing
@@ -20,6 +20,11 @@ from ttnn import (
     MeshToTensor,
 )
 from models.utility_functions import nearest_32
+
+from models.demos.t3000.falcon40b.tt.model_utils import (
+    matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
+)
+from models.demos.t3000.llama2_70b.tt.llama_common import ShardTensor2dMesh
 
 
 @pytest.mark.skip("1D device mesh not supported")
@@ -255,6 +260,76 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, mesh_sha
 
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["mesh_device"]
+)
+def test_llama_3_1_galaxy_matmul(
+    mesh_shape,
+    device_mesh,
+    use_program_cache,
+):
+    # use async mode:
+    for device in device_mesh.get_devices():
+        device.enable_async(True)
+    a_shape = (1, 1, 256, 3584)
+    b_shape = (1, 1, 3584, 2048)
+    weights_shape = (1, 1, 3584, 2048)
+
+    weights = torch.randn(weights_shape)
+    acts = torch.randn(a_shape)
+    torch_mm = torch.matmul(acts, weights)
+
+    tt_weights = ttnn.as_tensor(
+        weights,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+
+    tt_acts = ttnn.as_tensor(
+        acts,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+    )
+
+    program_config = get_matmul_2d_config_from_tensor_shapes(
+        (1, 1, 256, 3584),
+        (1, 1, 3584, 2048),
+        grid=ttnn.CoreGrid(x=8, y=4),
+        overwrite_subblock_h=1,
+        overwrite_subblock_w=1,
+    )
+    print(f"Program config: \n\n{program_config}\n\n")
+    init_pcc = 0
+    for i in range(12392913921):
+        print(f"Running iteration {i}")
+        tt_mm = ttnn.matmul(
+            tt_acts,
+            tt_weights,
+            dtype=ttnn.bfloat16,
+            program_config=program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_mms = ttnn.to_torch(tt_mm, mesh_composer=ListMeshToTensor(device_mesh))
+
+        # compare every tensor in tt_mms with torch_mm with comp_pcc
+        for tt_mm in tt_mms:
+            out_pass, out_pcc = comp_pcc(torch_mm, tt_mm, pcc=0.99)
+            if init_pcc == 0:
+                init_mm = tt_mm
+                init_pcc = out_pcc
+            if out_pcc != init_pcc:
+                breakpoint()
+        if i % 100 == 0:
+            logger.info(f"Iteration: {i}")
+            assert out_pass, f"Failed on tensor {tt_mm}"
+
+
+@pytest.mark.parametrize(
+    "mesh_shape, device_mesh", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["device_mesh"]
 )
 @pytest.mark.parametrize(
     "M, N",
