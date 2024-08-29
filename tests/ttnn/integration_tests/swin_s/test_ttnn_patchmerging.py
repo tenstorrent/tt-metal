@@ -6,22 +6,57 @@ import torch
 from torchvision import models
 import pytest
 import ttnn
-from ttnn.model_preprocessing import preprocess_model, preprocess_linear_weight, preprocess_layernorm_parameter
+from ttnn.model_preprocessing import (
+    preprocess_model_parameters,
+    preprocess_linear_weight,
+    preprocess_layernorm_parameter,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_swin_s.reference.patchmerging import PatchMerging
 from models.experimental.functional_swin_s.tt.tt_patchmerging import TtPatchMerging
 
 
+def create_custom_preprocessor(device):
+    def custom_preprocessor(torch_model, name, ttnn_module_args):
+        parameters = {}
+        if isinstance(torch_model, PatchMerging):
+            parameters["reduction"] = {}
+            parameters["reduction"]["weight"] = preprocess_linear_weight(
+                torch_model.reduction.weight, dtype=ttnn.bfloat8_b
+            )
+            parameters["norm"] = {}
+            parameters["norm"]["weight"] = preprocess_layernorm_parameter(torch_model.norm.weight, dtype=ttnn.bfloat8_b)
+            parameters["norm"]["bias"] = preprocess_layernorm_parameter(torch_model.norm.bias, dtype=ttnn.bfloat8_b)
+        return parameters
+
+    return custom_preprocessor
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_patchmerging(device, reset_seeds):
+@pytest.mark.parametrize(
+    "batch_size",
+    [
+        1,
+        8,
+    ],
+)
+@pytest.mark.parametrize(
+    "dim,seq_len,i",
+    [
+        (96, 128, 2),
+        (192, 64, 4),
+        (384, 32, 6),
+    ],
+)
+def test_patchmerging(device, batch_size, dim, seq_len, i, reset_seeds):
     model = models.swin_s(weights="IMAGENET1K_V1")
     state_dict = state_dict = model.state_dict()
-    patchmerging_state_dict = {k: v for k, v in state_dict.items() if (k.startswith("features.2."))}
+    patchmerging_state_dict = {k: v for k, v in state_dict.items() if (k.startswith(f"features.{i}."))}
 
     if not patchmerging_state_dict:
         raise ValueError("No parameters found in resblock_state_dict")
 
-    torch_model = PatchMerging(96)
+    torch_model = PatchMerging(dim)
     for layer in torch_model.children():
         print(layer)
 
@@ -36,24 +71,19 @@ def test_patchmerging(device, reset_seeds):
     torch_model.eval()
 
     # Input tensor for testing
-    torch_input_tensor = torch.randn(8, 128, 128, 96)  # Sample input tensor
+    torch_input_tensor = torch.randn(batch_size, seq_len, seq_len, dim)  # Sample input tensor
     torch_output_tensor = torch_model(torch_input_tensor)
 
-    # Preprocess the model for TTNN
-    reader_patterns_cache = {}
-    parameters = preprocess_model(
-        initialize_model=lambda: torch_model,
-        run_model=lambda model: model(torch_input_tensor),
-        # custom_preprocessor=create_custom_preprocessor(ttnn.device),
-        reader_patterns_cache=reader_patterns_cache,
-        device=device,
+    # Preprocess the model parameters for TTNN
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
     )
 
     # Convert the model to TTNN
-    ttnn_model = TtPatchMerging(device, parameters, 96)
+    ttnn_model = TtPatchMerging(device, parameters, dim)
 
     # Convert input tensor to TTNN format
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
     # Apply TTNN model
     output_tensor = ttnn_model(input_tensor)
