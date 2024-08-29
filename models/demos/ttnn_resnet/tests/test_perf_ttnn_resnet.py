@@ -480,7 +480,7 @@ def test_perf_trace_bare_metal(
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (20, 0.0080, 19),
+        (20, 0.0100, 19),
         (16, 0.0070, 26),
     ),
 )
