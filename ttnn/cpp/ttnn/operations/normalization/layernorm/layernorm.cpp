@@ -16,10 +16,8 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::Tensor>& E_x,
-    const std::optional<const ttnn::Tensor>& E_x2) {
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() :  ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     return operation::run(
                 LayerNorm{
@@ -30,7 +28,7 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
                     .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
                     .compute_kernel_config = kernel_config_val},
                 {input_tensor},
-                {residual_input_tensor, weight, bias, E_x, E_x2}).at(0);
+                {residual_input_tensor, weight, bias, std::nullopt}).at(0);
 }
 
 }  // namespace ttnn::operations::normalization

@@ -85,6 +85,10 @@ void kernel_main() {
         0);
 
     const uint64_t reduce_sender_semaphore_noc_addr = multicast_data_noc | reduce_sender_semaphore_addr;
+    #ifdef RMSNORM
+    constexpr uint32_t stats_tiles = 1;
+    #else
+    constexpr uint32_t stats_tiles = 2;
 
     volatile tt_l1_ptr uint32_t* reduce_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sender_semaphore_addr);
     volatile tt_l1_ptr uint32_t* reduce_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
@@ -120,12 +124,13 @@ void kernel_main() {
         noc_async_write_barrier();
 
     };
-    #ifndef RMSNORM
-    DPRINT << " Before Ex global mcast" << ENDL();
-    cb_reserve_back(cb_ex_global, block_h);
-    global_reduce_sender(cb_ex, cb_ex_global);
-    cb_push_back(cb_ex_global, block_h);
-    #endif
+    // #ifndef RMSNORM
+    // DPRINT << " Before Ex global mcast" << ENDL();
+    // cb_reserve_back(cb_ex_global, block_h);
+    // global_reduce_sender(cb_ex, cb_ex_global);
+    // cb_push_back(cb_ex_global, block_h);
+    // #endif
+
     DPRINT << " Before Ex2 global mcast" << ENDL();
     cb_wait_front(cb_ex2pe, block_h);
     DPRINT << " Before Ex2pe  global mcast" << ENDL();

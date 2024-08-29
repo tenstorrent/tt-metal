@@ -22,7 +22,7 @@ void MAIN {
     constexpr uint32_t is_top_row                     = get_compile_time_arg_val(0);
     constexpr uint32_t do_gamma                       = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta                        = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_first_stage                     = get_compile_time_arg_val(3);
+    constexpr uint32_t num_blocks_first_stage         = get_compile_time_arg_val(3);
     constexpr uint32_t block_w                        = get_compile_time_arg_val(5);
     constexpr uint32_t block_h_const                  = get_compile_time_arg_val(4);
     volatile uint32_t block_h_volatile                = get_compile_time_arg_val(4);
@@ -73,19 +73,21 @@ void MAIN {
     constexpr uint32_t cb_ex = tt::CB::dataflow1; // E[x] global reduce
     constexpr uint32_t cb_ex_external = tt::CB::dataflow2; // E[x] partials recieved from other cores
     constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3; // E[x^2] partial reduce
-    constexpr uint32_t cb_ex2 = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_stats = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5; // E[x^2] partials recieved from other cores
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
     constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x^2] global reduce
     constexpr uint32_t cb_x2 = cb_x; // x^2
-    constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3; // [E[x^2]-E[x]^2]+eps
+    constexpr uint32_t cb_reciprocal = tt::CB::c_intermed3; // [E[x^2]-E[x]^2]+eps
     constexpr uint32_t cb_fusion = tt::CB::c_intermed1; // stream gamma/beta
     constexpr uint32_t cb_out = tt::CB::c_out0;
 
     #ifdef RMSNORM
-    constexpr uint32_t cb_var = cb_ex2;
+    constexpr uint32_t cb_var = cb_stats;
+    constexpr uint32_t stats_tiles = 1;
     #else
     constexpr uint32_t cb_var = tt::CB::c_intermed2; // Var(x)
+    constexpr uint32_t stats_tiles = 2;
     #endif
     constexpr uint32_t cb_ex_sqr = cb_x2;
 
@@ -100,122 +102,82 @@ void MAIN {
     int index_h_offset = 0;
     int index = 0;
 
-    #ifdef FUSE_PRE_ADD
-    #ifdef RMSNORM
-    constexpr uint32_t cb_in = cb_xmm;
-    #else
-    constexpr uint32_t cb_in = cb_xmm;
-    #endif
-    #else
-    constexpr uint32_t cb_in = cb_in0;
-    #endif
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
 
-    // pre-add x + y
-    #ifdef FUSE_PRE_ADD
-    unpack_reconfig_data_format_srcb(cb_in0, cb_in1);
-    add_tiles_init();
-    cb_reserve_back(cb_in, num_tiles_per_block);
-    for (uint32_t i = 0; i < block_h; i++) {
-        index_subblock_w_offset = 0;
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset + index_h_offset;
-                add_tiles(cb_in0, cb_in1, index, index, w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, cb_in);
-            }
-            tile_regs_release();
-            index_subblock_w_offset += subblock_w;
-        }
-        index_h_offset += block_w;
-    }
-    cb_push_back(cb_in, num_tiles_per_block);
-    #ifndef RMSNORM
-    unpack_reconfig_data_format(cb_in0, cb_in, cb_in1, cb_scaler);
-    #else
-    unpack_reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
-    #endif
-    cb_wait_front(cb_in, num_tiles_per_block);
-    #else
-    #ifndef RMSNORM
-    unpack_reconfig_data_format_srcb(cb_in0, cb_scaler);
-    #endif // RMSNORM
-    #endif // FUSE_PRE_ADD
+
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr(is_allgather_worker) {
 
         if (enable_sqrt) {
             #ifndef RMSNORM
+            // copy E(x) to cb_stats2
+            cb_wait_front(cb_stats, stats_tiles); // wait for all stats tiles to be ready
+            cb_reserve_back(cb_stats2, 1);
+            tile_regs_acquire();
+            copy_tile_to_dst_init_short();
+            copy_tile(cb_stats, 0, dst0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(dst0, cb_stats2);
+            cb_push_back(cb_stats2, 1);
+            tile_regs_release();
+
+
             // calculate var = E(x^2) - E(x)^2
-            UNPACK(DPRINT << "Before sqrt" << ENDL());
-            for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-                // E(x)^2
-                unpack_reconfig_data_format(cb_ex_global, cb_ex_global);
-                cb_wait_front(cb_ex_global, 1);
-                UNPACK(DPRINT << "waited for cb_ex_global" << ENDL());
-                cb_reserve_back(cb_ex_sqr, 1);
-                tile_regs_acquire();
-                mul_tiles_init();
-                mul_tiles(cb_ex_global, cb_ex_global, i, i, dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_sqr);
-                cb_push_back(cb_ex_sqr, 1);
-                tile_regs_release();
+            // E(x)^2
+            unpack_reconfig_data_format(cb_stats, cb_stats);
+            UNPACK(DPRINT << "waited for cb_ex_global" << ENDL());
+            cb_reserve_back(cb_ex_sqr, 1);
+            tile_regs_acquire();
+            mul_tiles_init();
+            mul_tiles(cb_stats, cb_stats, 0, 0, dst0);  // first tile in stats is always E(x)
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(dst0, cb_ex_sqr);
+            cb_push_back(cb_ex_sqr, 1);
+            tile_regs_release();
 
 
-                // E(x^2) - E(x)^2
-                unpack_reconfig_data_format(cb_ex_global, cb_ex2, cb_ex_global, cb_ex_sqr);
-                // cb_wait_front(cb_ex2, 1);
-                cb_wait_front(cb_ex_sqr, 1);
-                cb_reserve_back(cb_var, 1);
-                tile_regs_acquire();
-                sub_tiles_init();
-                sub_tiles(cb_ex2, cb_ex_sqr, i, i, dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_var);
-                cb_push_back(cb_var, 1);
-                tile_regs_release();
-
-                UNPACK(DPRINT << "got here 2" << ENDL());
-
-            }
-            // cb_pop_front(cb_ex2, num_tiles_per_allgather_worker);
-            cb_pop_front(cb_ex_sqr, num_tiles_per_allgather_worker);
+            // E(x^2) - E(x)^2
+            unpack_reconfig_data_format_srcb(cb_stats, cb_ex_sqr);
+            cb_wait_front(cb_ex_sqr, 1);
+            cb_reserve_back(cb_var, 1);
+            tile_regs_acquire();
+            sub_tiles_init();
+            sub_tiles(cb_stats, cb_ex_sqr, 1, 0, dst0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(dst0, cb_var);
+            cb_push_back(cb_var, 1);
+            tile_regs_release();
+            cb_pop_front(cb_ex_sqr, 1);
             #endif
+
             UNPACK(DPRINT<< "enable_sqrt" << ENDL());
-            unpack_reconfig_data_format(cb_var, cb_eps);
-            for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-                // 1/[sqrt(Var + eps)],
-                cb_wait_front(cb_var, 1);
-                cb_reserve_back(cb_ex2pe, 1);
-                tile_regs_acquire();
-                add_tiles_init();
-                add_tiles(cb_var, cb_eps, i, 0, dst0);
-                tile_regs_wait();
-                // sqrt(Var + eps)
-                sqrt_tile_init();
-                sqrt_tile(dst0);
-                tile_regs_wait();
-                // 1/[sqrt(Var + eps)]
-                recip_tile_init();
-                recip_tile(dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex2pe);
-                cb_push_back(cb_ex2pe, 1);
-                UNPACK(DPRINT << "After ex2pe pushback" << ENDL());
-                tile_regs_release();
-            }
+            unpack_reconfig_data_format(cb_var, cb_eps);    // cb_var is cb_stats in case of RMS norm
+            // 1/[sqrt(Var + eps)],
+            cb_wait_front(cb_var, 1);
+            cb_reserve_back(cb_stats2, 1);
+            tile_regs_acquire();
+            add_tiles_init();
+            add_tiles(cb_var, cb_eps, 0, 0, dst0);
+            tile_regs_wait();
+            // sqrt(Var + eps)
+            sqrt_tile_init();
+            sqrt_tile(dst0);
+            tile_regs_wait();
+            // 1/[sqrt(Var + eps)]
+            recip_tile_init();
+            recip_tile(dst0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(dst0, cb_stats2, 1);
+            UNPACK(DPRINT << "After ex2pe pushback" << ENDL());
+            tile_regs_release();
             UNPACK(DPRINT << "After reciprocral" << ENDL());
+            cb_pop_front(cb_stats, stats_tiles); // pop the stats tiles we are done and pushed into cb_stats2
         }
     }
 

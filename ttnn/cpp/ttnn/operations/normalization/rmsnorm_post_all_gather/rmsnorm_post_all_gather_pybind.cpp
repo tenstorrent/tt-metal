@@ -32,7 +32,7 @@ void bind_normalization_rmsnorm_post_all_gather(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("sum_x2") = std::nullopt});
+            py::arg("stats") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::normalization::detail
