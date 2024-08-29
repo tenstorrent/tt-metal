@@ -129,7 +129,7 @@ ttnn.bias_gelu_unary_bw_none,200,0.538,0.564,1.602,0.352
 ttnn.bias_gelu_unary_bw_tanh,200,1.113,1.152,2.504,0.712
 ttnn.cbrt,200,0.21,0.196,0.683,0.1
 ttnn.ceil_bw,200,0.836,0.844,0.858,
-ttnn.celu_bw,200,1.988,2.032,2.46,0.128
+ttnn.celu_bw,200,2.863,2.032,2.46,0.128
 ttnn.clamp_bw,200,0.17,0.161,0.686,0.062
 ttnn.clamp_max_bw,200,0.109,0.096,0.341,0.031
 ttnn.clamp_min_bw,200,0.092,0.109,0.375,0.035

@@ -584,7 +584,7 @@ all_binary_ops = [
         "op": ttnn.add,
         "name": "ttnn.complex_add",
         "is_complex": [True, True],
-        # "need_out_mem_cfg": True,
+        "need_out_mem_cfg": True,
     },
     {
         "op": ttnn.sub,
