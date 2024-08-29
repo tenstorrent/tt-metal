@@ -57,6 +57,10 @@ jobs:
       - name: Update submodules
         run: |
           git submodule update --init --recursive
+      - name: Collect Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+        with:
+          theme: dark
       - name: Build tt-metal and libs
         run: |
           nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
