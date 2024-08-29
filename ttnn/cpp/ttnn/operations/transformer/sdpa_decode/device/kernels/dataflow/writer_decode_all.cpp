@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
 #include "debug/dprint.h"
+#include "../../rt_args_common.hpp"
 
 template<uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -261,19 +262,37 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_compile_time_arg_val(7);  // num running cores in total
     uint32_t semaphore_addr   = get_semaphore(get_compile_time_arg_val(8));  // semaphore for reciever
     constexpr bool is_out_sharded = get_compile_time_arg_val(9);
+    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(10);
 
     const uint32_t out_addr  = get_arg_val<uint32_t>(0);
-    const uint32_t cur_pos = get_arg_val<uint32_t>(1);
-    const uint32_t PSt = get_arg_val<uint32_t>(2);  // padded layer length in tiles
-    const uint32_t k_num_chunks = get_arg_val<uint32_t>(3);  // number of chunks in K, where k_num_chunks*Sk_chunk_t = PSt
-    const uint32_t k_chunk_start = get_arg_val<uint32_t>(4);
-    const uint32_t k_chunk_end = get_arg_val<uint32_t>(5);
-    const uint32_t cur_batch = get_arg_val<uint32_t>(6);
-    const uint32_t worker_id = get_arg_val<uint32_t>(7);
-    const bool is_worker = get_arg_val<uint32_t>(8) == 1;
+    const uint32_t cur_batch = get_arg_val<uint32_t>(1);
+    const uint32_t worker_id = get_arg_val<uint32_t>(2);
+    const bool is_worker = get_arg_val<uint32_t>(3) == 1;
+    const uint32_t core_num = get_arg_val<uint32_t>(4);
+    const uint32_t cur_pos_arg = get_arg_val<uint32_t>(5);
 
-    tt_l1_ptr uint32_t * all_reducer_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
-    tt_l1_ptr uint32_t * all_reducer_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(9 + B));
+    // idle core
+    if (out_addr == 0){
+        return;
+    }
+    // Get cur_pos
+    uint32_t cur_pos = 0;
+    // using 4294967295 (end of uint32 range) as a flag to indicate that cur_pos is not provided as a list
+    if (cur_pos_arg!=4294967295){
+        cur_pos = cur_pos_arg;
+    }
+    else {
+        constexpr uint32_t cb_index_id = tt::CB::dataflow0;
+        cb_wait_front(cb_index_id, 1);
+        uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
+        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
+        cur_pos = index_ptr[cur_batch];
+    }
+    // Sequence length assignment
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num, num_cores_per_batch, k_chunk_size);
+
+    tt_l1_ptr uint32_t * all_reducer_noc_x          = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
+    tt_l1_ptr uint32_t * all_reducer_noc_y          = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + B));
 
     uint32_t reduce_core_noc_x = all_reducer_noc_x[cur_batch];
     uint32_t reduce_core_noc_y = all_reducer_noc_y[cur_batch];
@@ -285,8 +304,9 @@ void kernel_main() {
     }
 
     constexpr uint32_t out_chunk_tiles = PNHt * DHt;
-    constexpr uint32_t num_cores_to_wait = num_cores_per_batch-1;
-    constexpr uint32_t num_tiles_to_wait = (out_chunk_tiles+2*PNHt)*num_cores_to_wait;
+    uint32_t num_cores_to_wait = num_cores_per_batch-1;
+    if (num_cores_per_batch>k_num_chunks) num_cores_to_wait = k_num_chunks-1;
+    uint32_t num_tiles_to_wait = (out_chunk_tiles+2*PNHt)*num_cores_to_wait;
 
     constexpr bool is_dram = true;
     constexpr uint32_t cb_out = tt::CB::c_out4;
@@ -306,7 +326,6 @@ void kernel_main() {
     // generate and send scaler to compute
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
-
     if (is_worker) {
         worker_compute<out_chunk_tiles, cb_out_worker, cb_out_m, cb_out_l, cb_intermed_out, PNHt>(in0_sender_semaphore_noc_addr, worker_id, reduce_core_noc_x, reduce_core_noc_y);
         return;
@@ -350,7 +369,7 @@ void kernel_main() {
         constexpr uint32_t ml_read_size = PNHt*tile_bytes_intermed;
         // DPRINT << "[Writer Reducer] Received intermediate chunks from worker cores" << ENDL();
         // DPRINT << "[Writer Reducer] Sending intermediate chunks to compute" << ENDL();
-        for(uint32_t block = 0; block < num_cores_per_batch; ++block) {
+        for(uint32_t block = 0; block < num_cores_to_wait+1; ++block) {
 
             // DPRINT << "[Writer Reducer] Iteration " << block << ENDL();
             cb_reserve_back(cb_out_o, out_chunk_tiles);

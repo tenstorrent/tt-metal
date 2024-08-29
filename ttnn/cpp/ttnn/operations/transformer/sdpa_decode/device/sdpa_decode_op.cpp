@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::transformer {
 
-void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_tensors) const {
+void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");
 
     for (auto& input_tensor : input_tensors) {
@@ -95,10 +95,13 @@ std::vector<Tensor> ScaledDotProductAttentionDecode::create_output_tensors(
 }
 
 operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor>& output_tensors) const {
     auto& input_tensor_q = input_tensors.at(0);
     auto& input_tensor_k = input_tensors.at(1);
     auto& input_tensor_v = input_tensors.at(2);
+
+    auto& cur_pos_tensor = optional_input_tensors.at(0);
+
     auto& output_tensor = output_tensors.at(0);
 
     auto scale = this->scale;
@@ -114,6 +117,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
+        cur_pos_tensor,
         output_tensor,
         this->cur_pos,
         scale,
@@ -122,14 +126,15 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         this->k_chunk_size);
 }
 
-operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     return operation::hash_operation<ScaledDotProductAttentionDecode>(
         this->scale,
         this->output_mem_config,
         this->program_config,
         this->compute_kernel_config,
         this->k_chunk_size,
-        input_tensors);
+        input_tensors,
+        optional_input_tensors);
 }
 
 }  // namespace ttnn::operations::transformer

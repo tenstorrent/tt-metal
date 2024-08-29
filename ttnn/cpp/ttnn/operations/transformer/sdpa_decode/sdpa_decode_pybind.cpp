@@ -22,6 +22,7 @@ void py_bind_sdpa_decode(py::module &module) {
         "K:      [1 x b x   s x dh]"
         "V:      [1 x b x   s x dh]"
         "cur_pos: list of integers of length b"
+        "cur_pos_tensor: [b] tensor of integers of length b"
         "output: [1 x b x pnh x dh]"
 
         "Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension."
@@ -38,6 +39,7 @@ void py_bind_sdpa_decode(py::module &module) {
                const ttnn::Tensor &input_tensor_k,
                const ttnn::Tensor &input_tensor_v,
                const std::vector<uint32_t> cur_pos,
+               const std::optional<const Tensor> cur_pos_tensor,
                std::optional<float> scale,
                const std::optional<MemoryConfig> &memory_config,
                std::optional<SDPAProgramConfig> program_config,
@@ -49,6 +51,7 @@ void py_bind_sdpa_decode(py::module &module) {
                     input_tensor_k,
                     input_tensor_v,
                     cur_pos,
+                    cur_pos_tensor,
                     scale,
                     memory_config,
                     program_config,
@@ -57,8 +60,9 @@ void py_bind_sdpa_decode(py::module &module) {
             py::arg("input_tensor_q").noconvert(),
             py::arg("input_tensor_k").noconvert(),
             py::arg("input_tensor_v").noconvert(),
-            py::arg("cur_pos").noconvert(),
+            py::arg("cur_pos").noconvert() = std::vector<uint32_t>(),
             py::kw_only(),
+            py::arg("cur_pos_tensor").noconvert() = std::nullopt,
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
