@@ -705,39 +705,6 @@ class TestEltwiseUnary:
             "eltwise-unary_fmod", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
         )
 
-    @pytest.mark.parametrize("unary_comp", ["unary_ne"])
-    @pytest.mark.parametrize("scalar", [0.5, 1.0, -1.0, 0.0])
-    def test_run_eltwise_unary_comp(
-        self,
-        unary_comp,
-        input_shapes,
-        scalar,
-        device,
-        function_level_defaults,
-        input_mem_config,
-        output_mem_config,
-    ):
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
-        ]
-        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"scalar": scalar})
-        test_args.update(
-            {
-                "input_mem_config": [input_mem_config],
-                "output_mem_config": output_mem_config,
-            }
-        )
-        comparison_func = comparison_funcs.comp_equal
-        run_single_pytorch_test(
-            f"eltwise-{unary_comp}",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
-        )
-
     @pytest.mark.parametrize("unary_kind", ["add_unary", "sub_unary", "mul_unary", "div_unary"])
     @pytest.mark.parametrize("scalar", [-2.0, 1.0, 2.0, 8.0])
     def test_run_eltwise_binop_to_unary_ops(
@@ -1157,13 +1124,13 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("unary_comp", ["unary_gt", "unary_lt"])
-    @pytest.mark.parametrize("value", [10.5, 1.0, -1.0, 0.0])
+    @pytest.mark.parametrize("unary_comp", ["gt", "lt", "ne", "eq", "lte", "gte"])
+    @pytest.mark.parametrize("scalar", [10.5, 1.0, -1.0, 0.0])
     def test_run_eltwise_unary_comp(
         self,
         unary_comp,
         input_shapes,
-        value,
+        scalar,
         device,
         function_level_defaults,
         input_mem_config,
@@ -1173,7 +1140,7 @@ class TestEltwiseUnary:
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"value": value})
+        test_args.update({"scalar": scalar})
         test_args.update(
             {
                 "input_mem_config": [input_mem_config],
@@ -1182,12 +1149,7 @@ class TestEltwiseUnary:
         )
         comparison_func = comparison_funcs.comp_equal
         run_single_pytorch_test(
-            f"eltwise-{unary_comp}",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
+            f"unary-{unary_comp}", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=True
         )
 
     @skip_for_grayskull("Softplus kernel not currently availible for GS")

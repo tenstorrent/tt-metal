@@ -2610,24 +2610,6 @@ def logical_and(
     return ttnn_tensor_to_torch(t2)
 
 
-def unary_logical_and(
-    x,
-    *args,
-    scalar,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-
-    t1 = ttnn.logical_and(t0, scalar, memory_config=output_mem_config)
-
-    return ttnn_tensor_to_torch(t1)
-
-
 def logical_or(
     x,
     y,
