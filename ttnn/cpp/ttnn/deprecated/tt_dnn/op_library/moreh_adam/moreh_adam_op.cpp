@@ -163,7 +163,7 @@ std::vector<std::optional<Tensor>> moreh_adam(
     const std::optional<const Tensor> exp_avg_sq_out,
     const std::optional<const Tensor> max_exp_avg_sq_out,
     const MemoryConfig& mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     if(amsgrad){
         TT_ASSERT(max_exp_avg_sq_in.has_value());

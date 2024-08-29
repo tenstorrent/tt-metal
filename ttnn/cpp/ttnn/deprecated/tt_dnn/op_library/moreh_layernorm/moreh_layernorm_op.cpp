@@ -55,7 +55,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const std::optional<const Tensor> beta,
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -504,7 +504,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input}, {gamma, beta}))};
 
@@ -582,7 +582,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm(
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input}, {gamma, beta}))};
 

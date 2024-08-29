@@ -7,7 +7,7 @@
 #pragma once
 #include <vector>
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -25,7 +25,7 @@ struct MorehMeanBackward {
     std::optional<Shape> input_grad_shape;
     MemoryConfig memory_config;
     const CoreRange core_range;  // unused for now
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks moreh_mean_backward_impl(
     const Tensor &input_grad,
     const std::vector<int64_t> &dims,
     const bool keepdim,
-    const DeviceComputeKernelConfig &compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig &compute_kernel_config);
 
 Tensor moreh_mean_backward_(
     const Tensor& output_grad,
@@ -61,7 +61,7 @@ Tensor moreh_mean_backward_(
     std::optional<Shape> input_grad_shape,
     const std::optional<const Tensor> input_grad,
     const std::optional<MemoryConfig> memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 
 Tensor moreh_mean_backward(
     const Tensor &output_grad,
@@ -70,7 +70,7 @@ Tensor moreh_mean_backward(
     std::optional<Shape> input_grad_shape = std::nullopt,
     const std::optional<const Tensor> input_grad = std::nullopt,
     const std::optional<MemoryConfig> memory_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 

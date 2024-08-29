@@ -83,7 +83,7 @@ Tensor moreh_mean_backward_(
     std::optional<Shape> input_grad_shape,
     const std::optional<const Tensor> input_grad,
     const std::optional<MemoryConfig> memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto output_grad_rank = output_grad.get_legacy_shape().rank();
     auto input_grad_rank = output_grad_rank;
     if (keepdim == false) {
@@ -140,7 +140,7 @@ Tensor moreh_mean_backward(
     std::optional<Shape> input_grad_shape,
     const std::optional<const Tensor> input_grad,
     const std::optional<MemoryConfig> memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     return moreh_mean_backward_(
         output_grad, dim, keepdim, input_grad_shape, input_grad, memory_config, compute_kernel_config);
 }
