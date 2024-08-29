@@ -51,7 +51,7 @@ std::vector<std::optional<Tensor>> moreh_bmm_backward(
     std::optional<const Tensor> mat2_grad,
     const MemoryConfig &input_grad_mem_config,
     const MemoryConfig &mat2_grad_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<std::optional<Tensor>> outputs(2);
     outputs.reserve(2);
 

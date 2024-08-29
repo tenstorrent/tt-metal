@@ -21,7 +21,7 @@ operation::ProgramWithCallbacks moreh_mean_nc(
     const Tensor &output,
     int64_t dim,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

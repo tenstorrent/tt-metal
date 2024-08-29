@@ -7,6 +7,7 @@
 
 namespace ttnn::graph {
 
+void py_graph_module_types(pybind11::module& m);
 void py_graph_module(pybind11::module& m);
 
 }

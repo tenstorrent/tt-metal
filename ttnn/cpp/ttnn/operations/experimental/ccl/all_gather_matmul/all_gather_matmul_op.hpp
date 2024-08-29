@@ -23,7 +23,7 @@ struct ExecuteAllGatherMatmul {
         const std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const operations::matmul::MatmulProgramConfig> program_config = std::nullopt,
         const std::optional<const std::string>& activation = std::nullopt,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt) {
         return ttnn::operations::experimental::ccl::all_gather_matmul(input_tensor, weight_tensor, dim, all_gather_core_grid_offset, num_links, memory_config, transpose_a, transpose_b, dtype, program_config, activation, compute_kernel_config, core_grid);
     }

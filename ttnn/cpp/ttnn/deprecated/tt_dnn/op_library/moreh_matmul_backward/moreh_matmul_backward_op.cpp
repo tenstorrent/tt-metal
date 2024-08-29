@@ -42,7 +42,7 @@ std::vector<std::optional<Tensor>> moreh_matmul_backward_(
     const std::optional<const Tensor> &input_grad,
     const std::optional<const Tensor> &other_grad,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<std::optional<Tensor>> outputs(2);
     outputs.reserve(2);
 
@@ -91,7 +91,7 @@ std::vector<std::optional<Tensor>> moreh_matmul_backward(
     std::optional<const Tensor> input_grad,
     std::optional<const Tensor> other_grad,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     if (is_dot_backward(output_grad, input, other)) {
         // TODO(seunghwan100): Add the argument "are_required_outputs" to moreh_dot_backward.
         return moreh_dot_backward(output_grad, input, other, input_grad, other_grad, output_mem_config);

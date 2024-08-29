@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <functional>
 #include <optional>
 #include <variant>
@@ -24,7 +24,7 @@ using namespace tt_metal;
 struct MorehLayerNormBackwardInputGrad {
     uint32_t normalized_dims;
     MemoryConfig memory_config;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
@@ -41,7 +41,7 @@ struct MorehLayerNormBackwardInputGrad {
 struct MorehLayerNormBackwardGammaBetaGrad {
     uint32_t normalized_dims;
     MemoryConfig memory_config;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
@@ -59,7 +59,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const Tensor &rstd,
     uint32_t normalized_dims,
     const Tensor &input_grad,
-    const DeviceComputeKernelConfig compute_kernel_config,
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<const Tensor> gamma = std::nullopt);
 
 operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
@@ -68,7 +68,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const Tensor &mean,
     const Tensor &rstd,
     uint32_t normalized_dims,
-    const DeviceComputeKernelConfig compute_kernel_config,
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<const Tensor> gamma_grad = std::nullopt,
     const std::optional<const Tensor> beta_grad = std::nullopt);
 
@@ -81,7 +81,7 @@ Tensor moreh_layernorm_backward_input_grad(
     const std::optional<const Tensor> input_grad = std::nullopt,
     const std::optional<const Tensor> gamma = std::nullopt,
     const std::optional<MemoryConfig> &memory_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
     const Tensor &output_grad,
@@ -92,7 +92,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward_gamma_beta_grad(
     const std::optional<const Tensor> gamma_grad = std::nullopt,
     const std::optional<const Tensor> beta_grad = std::nullopt,
     const std::optional<MemoryConfig> &memory_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 std::vector<std::optional<Tensor>> moreh_layernorm_backward(
     const Tensor &output_grad,
@@ -105,7 +105,7 @@ std::vector<std::optional<Tensor>> moreh_layernorm_backward(
     const std::optional<const Tensor> gamma_grad = std::nullopt,
     const std::optional<const Tensor> beta_grad = std::nullopt,
     const std::optional<MemoryConfig> &memory_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt
     );
 
 }  // namespace primary

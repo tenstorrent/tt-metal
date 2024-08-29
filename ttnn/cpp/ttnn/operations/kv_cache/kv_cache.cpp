@@ -6,7 +6,7 @@
 #include "ttnn/multi_device.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/kv_cache/device/update_cache_op.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 
 namespace ttnn::operations::kv_cache {

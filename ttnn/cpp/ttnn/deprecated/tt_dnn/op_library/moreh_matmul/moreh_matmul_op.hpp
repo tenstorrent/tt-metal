@@ -6,7 +6,7 @@
 
 #pragma once
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 
 #include <optional>
@@ -28,13 +28,13 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     const std::optional<const Tensor> &bias,
     bool transpose_input,
     bool transpose_other,
-    const DeviceComputeKernelConfig &compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig &compute_kernel_config);
 
 struct MorehMatmul {
     const MemoryConfig output_mem_config;
     bool transpose_input;
     bool transpose_other;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -56,7 +56,7 @@ Tensor moreh_matmul(
     const std::optional<const Tensor> output = std::nullopt,
     const std::optional<const Tensor> bias = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 

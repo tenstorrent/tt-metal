@@ -74,7 +74,7 @@ def run_all_gather_matmul_on_t3000_impl(
         fuse_batch=True,
         mcast_in0=True,
     )
-    compute_kernel_config = ttl.tensor.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttl.tensor.MathFidelity.HiFi4,
         math_approx_mode=True,
         fp32_dest_acc_en=True,

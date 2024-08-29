@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/tensor/tensor.hpp"

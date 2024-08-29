@@ -13,8 +13,15 @@ namespace py = pybind11;
 
 namespace ttnn {
 namespace reports {
+void py_module_types(py::module& module) {
+    py::class_<ttnn::reports::BufferInfo>(module, "BufferInfo");
+    py::class_<ttnn::reports::BufferPageInfo>(module, "BufferPageInfo");
+    py::class_<ttnn::reports::DeviceInfo>(module, "DeviceInfo");
+}
+
 void py_module(py::module& module) {
-    py::class_<ttnn::reports::BufferInfo>(module, "BufferInfo")
+    auto py_buffer_info = static_cast<py::class_<ttnn::reports::BufferInfo>>(module.attr("BufferInfo"));
+    py_buffer_info
         .def_property_readonly("device_id", [](const ttnn::reports::BufferInfo& self) { return self.device_id; })
         .def_property_readonly("address", [](const ttnn::reports::BufferInfo& self) { return self.address; })
         .def_property_readonly(
@@ -23,7 +30,8 @@ void py_module(py::module& module) {
 
     module.def("get_buffers", &get_buffers);
 
-    py::class_<ttnn::reports::BufferPageInfo>(module, "BufferPageInfo")
+    auto py_buffer_page_info = static_cast<py::class_<ttnn::reports::BufferPageInfo>>(module.attr("BufferPageInfo"));
+    py_buffer_page_info
         .def_property_readonly("device_id", [](const ttnn::reports::BufferPageInfo& self) { return self.device_id; })
         .def_property_readonly("address", [](const ttnn::reports::BufferPageInfo& self) { return self.address; })
         .def_property_readonly("core_y", [](const ttnn::reports::BufferPageInfo& self) { return self.core_y; })
@@ -38,7 +46,8 @@ void py_module(py::module& module) {
 
     module.def("get_buffer_pages", &get_buffer_pages);
 
-    py::class_<ttnn::reports::DeviceInfo>(module, "DeviceInfo")
+    auto py_device_info = static_cast<py::class_<ttnn::reports::DeviceInfo>>(module.attr("DeviceInfo"));
+    py_device_info
         .def_property_readonly("num_y_cores", [](const ttnn::reports::DeviceInfo& self) { return self.num_y_cores; })
         .def_property_readonly("num_x_cores", [](const ttnn::reports::DeviceInfo& self) { return self.num_x_cores; })
         .def_property_readonly(

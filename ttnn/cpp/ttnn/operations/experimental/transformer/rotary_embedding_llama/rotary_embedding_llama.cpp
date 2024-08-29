@@ -14,7 +14,7 @@ Tensor RotaryEmbeddingLlamaOperation::invoke(
     const Tensor &sin_cache,
     const Tensor& trans_mat,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor, cos_cache, sin_cache, trans_mat}))};
     operation::launch_op(

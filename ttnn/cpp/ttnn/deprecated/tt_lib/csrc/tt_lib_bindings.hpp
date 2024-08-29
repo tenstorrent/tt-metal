@@ -2,15 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include <pybind11/operators.h>
-
-#include "tt_metal/host_api.hpp"
+#include "pybind11/pybind_fwd.hpp"
 
 namespace py = pybind11;
 
 namespace tt {
-void bind_deprecated(py::module m);
 
-}
+namespace tt_metal {
+
+void ProfilerModule(py::module &m_profiler);
+
+}  // namespace tt_metal
+
+}  // namespace tt

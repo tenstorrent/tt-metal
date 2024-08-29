@@ -4,10 +4,10 @@
 
 #include "compute_kernel_config.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
 
 DeviceComputeKernelConfig init_device_compute_kernel_config(
-    ARCH arch,
+    tt::ARCH arch,
     const std::optional<const DeviceComputeKernelConfig>& device_kernel_config,
     const MathFidelity default_fidelity,
     bool default_approx_mode,
@@ -21,7 +21,7 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
             [&](auto&& compute_kernel_config) {
                 using T = std::decay_t<decltype(compute_kernel_config)>;
                 if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                    TT_ASSERT(arch == ARCH::GRAYSKULL, "kernel config is not for graykull");
+                    TT_ASSERT(arch == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
                     MathFidelity math_fidelity = compute_kernel_config.math_fidelity;
                     bool math_approx_mode = compute_kernel_config.math_approx_mode;
                     defaultConfig = GrayskullComputeKernelConfig{
@@ -44,7 +44,7 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
             compute_kernel_config);
         return defaultConfig;
     } else {
-        if (arch == ARCH::GRAYSKULL) {
+        if (arch == tt::ARCH::GRAYSKULL) {
             return GrayskullComputeKernelConfig{
                 .math_fidelity = default_fidelity, .math_approx_mode = default_approx_mode};
         } else {
@@ -76,7 +76,7 @@ bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& comput
 }
 
 std::tuple<MathFidelity, bool, bool, bool> get_compute_kernel_config_args(
-    ARCH arch, const DeviceComputeKernelConfig compute_kernel_config) {
+    tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config) {
 
     MathFidelity math_fidelity;
     bool math_approx_mode;
@@ -87,7 +87,7 @@ std::tuple<MathFidelity, bool, bool, bool> get_compute_kernel_config_args(
         [&](auto&& compute_kernel_config) {
             using T = std::decay_t<decltype(compute_kernel_config)>;
             if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                TT_ASSERT(arch == ARCH::GRAYSKULL, "kernel config is not for graykull");
+                TT_ASSERT(arch == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = false;
@@ -107,4 +107,4 @@ std::tuple<MathFidelity, bool, bool, bool> get_compute_kernel_config_args(
     return std::make_tuple(math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc);
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

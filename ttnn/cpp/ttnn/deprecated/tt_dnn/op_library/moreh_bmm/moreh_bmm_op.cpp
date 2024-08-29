@@ -28,7 +28,7 @@ Tensor moreh_bmm_(
     const Tensor& mat2,
     const std::optional<const Tensor>& output,
     const MemoryConfig& mem_config,
-    const std::optional<const DeviceComputeKernelConfig> &compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig> &compute_kernel_config) {
     moreh_bmm_validate(input, mat2);
     return moreh_matmul(input, mat2, false, false, output, std::nullopt, mem_config, compute_kernel_config);
 }
@@ -39,7 +39,7 @@ Tensor moreh_bmm(
     const Tensor& mat2,
     const std::optional<const Tensor> output,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     return moreh_bmm_(input, mat2, output, output_mem_config, compute_kernel_config);
 }

@@ -17,7 +17,7 @@ ttnn::Tensor FastReduceNCOperation::invoke(
     const std::vector<int32_t>& dims,
     const std::optional<const Tensor> output,
     const ttnn::MemoryConfig memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
         return detail::fast_reduce_nc(queue_id, input, dims, output, memory_config, compute_kernel_config);
 }
 
@@ -26,7 +26,7 @@ ttnn::Tensor FastReduceNCOperation::invoke(
     const std::vector<int32_t>& dims,
     const std::optional<const Tensor> output,
     const ttnn::MemoryConfig memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     return FastReduceNCOperation::invoke(DefaultQueueId, input, dims, output, memory_config, compute_kernel_config);
 }

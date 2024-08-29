@@ -31,7 +31,7 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                 const std::optional<const ttnn::Tensor> update_idxs_tensor,
                 const std::optional<const ttnn::Tensor> page_table,
                 const uint32_t batch_offset,
-                std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+                std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
                     return self(cache_tensor, input_tensor, update_idxs, update_idxs_tensor, page_table, batch_offset, compute_kernel_config);
                 },
             py::arg("cache_tensor").noconvert(),
@@ -60,7 +60,7 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                 const ttnn::Tensor& input_tensor,
                 const ttnn::Tensor& page_table,
                 const uint32_t batch_idx,
-                std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+                std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
                     return self(cache_tensor, input_tensor, page_table, batch_idx, compute_kernel_config);
                 },
             py::arg("cache_tensor").noconvert(),

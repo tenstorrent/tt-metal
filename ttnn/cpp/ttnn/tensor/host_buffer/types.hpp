@@ -15,6 +15,8 @@ namespace borrowed_buffer {
 
 template <typename T>
 struct Buffer {
+    using value_type = T;
+
     explicit Buffer() = default;
     explicit Buffer(T* data_ptr, std::size_t size) : data_ptr_(data_ptr), size_(size) {}
 
@@ -61,6 +63,8 @@ namespace owned_buffer {
 
 template <typename T>
 struct Buffer {
+    using value_type = T;
+
     explicit Buffer() = default;
     explicit Buffer(std::shared_ptr<std::vector<T>>&& shared_vector) :
         shared_vector_(shared_vector),

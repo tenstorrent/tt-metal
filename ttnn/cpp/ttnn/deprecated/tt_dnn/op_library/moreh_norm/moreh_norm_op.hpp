@@ -14,7 +14,7 @@
 #include "ttnn/operation.hpp"
 #include "tt_metal/host_api.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace tt {
 
@@ -26,16 +26,16 @@ using namespace tt_metal;
 
 std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p);
 
-operation::ProgramWithCallbacks moreh_norm_h_impl(const Tensor &input, float p, const Tensor &output, const DeviceComputeKernelConfig compute_kernel_config);
-operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, const Tensor &output, const DeviceComputeKernelConfig compute_kernel_config);
-operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float p, int64_t dim, const Tensor &output, const DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks moreh_norm_h_impl(const Tensor &input, float p, const Tensor &output, const ttnn::DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks moreh_norm_w_impl(const Tensor &input, float p, const Tensor &output, const ttnn::DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks moreh_norm_other_impl(const Tensor &input, float p, int64_t dim, const Tensor &output, const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 struct MorehNorm {
     float p;
     int64_t dim;
     bool keepdim;
     MemoryConfig memory_config;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors,
@@ -62,13 +62,13 @@ Tensor moreh_norm(
     const bool keepdim = false,
     const std::optional<const Tensor> output = std::nullopt,
     const std::optional<MemoryConfig> &memory_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim,
     const bool keepdim = false,
     const std::optional<const Tensor> output = std::nullopt,
     const std::optional<MemoryConfig> &memory_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 

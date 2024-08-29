@@ -4,8 +4,6 @@
 
 #include "tt_lib_bindings.hpp"
 
-#include "operations/module.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
@@ -14,7 +12,6 @@
 #include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "type_caster.hpp"
 
 namespace py = pybind11;
 
@@ -70,26 +67,5 @@ void ProfilerModule(py::module &m_profiler) {
 }
 
 } // end namespace tt_metal
-
-void bind_deprecated(py::module m) {
-    py::module_ m_tensor = m.def_submodule("tensor", "Submodule defining an tt_metal tensor");
-    tt::tt_metal::TensorModule(m_tensor);
-
-    py::module_ m_device = m.def_submodule("device", "Submodule defining a host or device");
-
-    py::module_ m_profiler = m.def_submodule("profiler", "Submodule defining the profiler");
-    tt::tt_metal::ProfilerModule(m_profiler);
-
-    py::module_ m_operations = m.def_submodule("operations", "Submodule for experimental operations");
-    tt::operations::py_module(m_operations);
-
-#if defined(TRACY_ENABLE)
-    py::function tracy_decorator = py::module::import("tracy.ttnn_profiler_wrapper").attr("callable_decorator");
-
-    tracy_decorator(m_device);
-    tracy_decorator(m_tensor);
-    tracy_decorator(m_operations);
-#endif
-}
 
 } // end namespace tt

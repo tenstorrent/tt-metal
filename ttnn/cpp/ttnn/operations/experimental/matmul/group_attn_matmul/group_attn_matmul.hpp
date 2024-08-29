@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn {
 namespace operations::experimental::matmul {
@@ -19,7 +19,7 @@ struct GroupAttnMatmulOperation {
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> output_dtype=std::nullopt,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static ttnn::Tensor invoke(
@@ -28,7 +28,7 @@ struct GroupAttnMatmulOperation {
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> output_dtype=std::nullopt,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 

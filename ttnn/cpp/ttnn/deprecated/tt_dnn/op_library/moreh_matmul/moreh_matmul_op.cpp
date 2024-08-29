@@ -247,7 +247,7 @@ Tensor moreh_matmul_(
     const std::optional<Tensor>& output,
     const std::optional<Tensor>& bias,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     log_debug(LogOp, "{}:{} run matmul {} {}", __func__, __LINE__, transpose_input, transpose_other);
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE);
@@ -286,7 +286,7 @@ Tensor moreh_matmul(
     const std::optional<const Tensor> output,
     const std::optional<const Tensor> bias,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     // TODO(seunghwan100): Add the argument "output_tensor" to moreh_dot.
     if (is_dot_forward(input, other, transpose_input, transpose_other)) {

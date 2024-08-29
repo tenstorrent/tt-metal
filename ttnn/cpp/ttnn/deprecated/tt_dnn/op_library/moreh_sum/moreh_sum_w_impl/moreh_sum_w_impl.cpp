@@ -19,7 +19,7 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &output, const DeviceComputeKernelConfig &compute_kernel_config) {
+operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &output, const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
     tt_metal::ReduceOpMath reduce_op = tt_metal::ReduceOpMath::SUM;
     tt_metal::ReduceOpDim reduce_dim = tt_metal::ReduceOpDim::W;
     float scaler = 1.0f;

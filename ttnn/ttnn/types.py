@@ -44,10 +44,10 @@ Tensor = ttnn._ttnn.deprecated.tensor.Tensor
 
 CoreGrid = ttnn._ttnn.types.CoreGrid
 
-DeviceComputeKernelConfig = ttnn._ttnn.deprecated.tensor.DeviceComputeKernelConfig
-WormholeComputeKernelConfig = ttnn._ttnn.deprecated.tensor.WormholeComputeKernelConfig
+DeviceComputeKernelConfig = ttnn._ttnn.operations.core.DeviceComputeKernelConfig
+WormholeComputeKernelConfig = ttnn._ttnn.operations.core.WormholeComputeKernelConfig
 BlackholeComputeKernelConfig = WormholeComputeKernelConfig
-GrayskullComputeKernelConfig = ttnn._ttnn.deprecated.tensor.GrayskullComputeKernelConfig
+GrayskullComputeKernelConfig = ttnn._ttnn.operations.core.GrayskullComputeKernelConfig
 
 
 @dataclasses.dataclass

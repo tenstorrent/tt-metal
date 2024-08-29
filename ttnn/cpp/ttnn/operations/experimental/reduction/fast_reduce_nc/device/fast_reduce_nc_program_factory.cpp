@@ -40,7 +40,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 
 }
 
-operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, const ttnn::Tensor &output, int64_t dim,const DeviceComputeKernelConfig &compute_kernel_config) {
+operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, const ttnn::Tensor &output, int64_t dim,const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

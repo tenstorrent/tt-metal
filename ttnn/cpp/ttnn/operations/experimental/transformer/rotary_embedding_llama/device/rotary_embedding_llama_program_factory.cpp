@@ -21,7 +21,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     const Tensor &sin,
     const Tensor &trans_mat,
     Tensor &output,
-    DeviceComputeKernelConfig compute_kernel_config
+    ttnn::DeviceComputeKernelConfig compute_kernel_config
 ) {
     Program program{};
 
@@ -54,11 +54,11 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     std::visit([&](auto&& compute_kernel_config) {
         using T = std::decay_t<decltype(compute_kernel_config)>;
-        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+        if constexpr (std::is_same_v<T, ttnn::GrayskullComputeKernelConfig>) {
             TT_ASSERT(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
             math_fidelity = compute_kernel_config.math_fidelity;
             fp32_dest_acc_en = false;
-        } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+        } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
             TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
             math_fidelity = compute_kernel_config.math_fidelity;
             fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;

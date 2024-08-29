@@ -102,7 +102,7 @@ std::vector<Tensor> all_gather_matmul(
     const std::optional<const DataType> dtype = std::nullopt,
     const std::optional<const operations::matmul::MatmulProgramConfig> program_config = std::nullopt,
     const std::optional<const std::string>& activation = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 
 } // namespace ccl

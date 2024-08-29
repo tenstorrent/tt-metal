@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks moreh_mean_backward_impl(
     const Tensor &input_grad,
     const std::vector<int64_t> &dims,
     const bool keepdim,
-    const DeviceComputeKernelConfig &compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

@@ -18,7 +18,7 @@ namespace operations {
 namespace primary {
 
 
-operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const Tensor &output, const DeviceComputeKernelConfig &compute_kernel_config) {
+operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const Tensor &output, const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

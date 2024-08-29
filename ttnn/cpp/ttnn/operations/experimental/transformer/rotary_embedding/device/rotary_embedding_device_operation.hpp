@@ -8,7 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include "ttnn/decorators.hpp"
 
@@ -21,7 +21,7 @@ struct RotaryEmbedding {
     const uint32_t seq_len;
     std::optional<uint32_t> token_idx;
     const MemoryConfig output_mem_config;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     RotaryEmbeddingOpParallelizationStrategy get_parallelization_strategy(
         const std::vector<Tensor> &input_tensors) const;

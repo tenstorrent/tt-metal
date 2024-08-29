@@ -74,7 +74,7 @@ Tensor moreh_norm_backward(
     const bool keepdim,
     const std::optional<const Tensor> input_grad,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config
     ) {
     return moreh_norm_backward_impl(input, output, output_grad, p, dim, keepdim, input_grad, memory_config, compute_kernel_config);
 }
@@ -88,7 +88,7 @@ Tensor moreh_norm_backward_impl(
     const bool keepdim,
     const std::optional<const Tensor> input_grad,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config
     ) {
 
     uint32_t rank = input.get_legacy_shape().rank();

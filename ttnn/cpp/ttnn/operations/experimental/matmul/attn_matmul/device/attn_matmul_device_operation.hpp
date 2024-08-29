@@ -8,11 +8,11 @@
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::matmul {
 
-operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 struct AttnMatmulDeviceOperation {
     std::optional<const uint32_t> num_tokens;
@@ -20,7 +20,7 @@ struct AttnMatmulDeviceOperation {
     CoreCoord compute_with_storage_grid_size;
     MemoryConfig output_mem_config;
     DataType output_dtype;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;

@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_unreduced_backward_impl_2d(
     const Tensor &input_grad,
     const int32_t ignore_index,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     // split work
 
     // input_grad: (N, C)
@@ -155,7 +155,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_unreduced_backward_impl_3d(
     const Tensor &input_grad,
     const int32_t ignore_index,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     // split work
 
     // input_grad: (N, C, W)
@@ -286,7 +286,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_unreduced_backward_impl_4d(
     const Tensor &input_grad,
     const int32_t ignore_index,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     // split work
     auto input_grad_shape = input_grad.get_legacy_shape();
     auto N = input_grad_shape[0];
@@ -420,7 +420,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_unreduced_backward_impl(
     const Tensor &input_grad,
     const int32_t ignore_index,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     // split work
     auto input_grad_shape = input_grad.get_legacy_shape();
     auto input_grad_rank = input_grad_shape.rank();

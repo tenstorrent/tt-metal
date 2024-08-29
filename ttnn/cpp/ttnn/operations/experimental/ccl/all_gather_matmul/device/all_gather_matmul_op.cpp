@@ -84,7 +84,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
     const std::optional<const DataType> dtype,
     const std::optional<const operations::matmul::MatmulProgramConfig> program_config,
     const std::optional<const std::string>& activation,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid
 ) {
 
