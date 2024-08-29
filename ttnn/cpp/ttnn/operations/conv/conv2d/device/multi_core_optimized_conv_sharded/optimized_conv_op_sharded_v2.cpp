@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"

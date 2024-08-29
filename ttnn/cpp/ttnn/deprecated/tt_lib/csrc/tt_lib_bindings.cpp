@@ -5,7 +5,6 @@
 #include "tt_lib_bindings.hpp"
 
 #include "operations/module.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"

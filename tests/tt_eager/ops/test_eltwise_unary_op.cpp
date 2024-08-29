@@ -133,7 +133,7 @@ void test_shape_padding() {
 
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
-    tt::tt_metal::AutoFormat::SetDefaultDevice(device);
+    ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device);
 
     tt::tt_metal::Array4D input_shape = {1, 1, 13, 18};
     tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
