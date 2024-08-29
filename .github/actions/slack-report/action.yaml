@@ -4,7 +4,8 @@ inputs:
   owner:
     description: "The Slack ID of the person to be tagged."
     default: "U014XCQ9CF8" # @Raymond Kim
-  slack_webhook_url: 
+  slack_webhook_url:
+    description: "Webhook URL for the Slack channel to be posted to. Generated via slack app!"
     required: true
 runs:
   using: "composite"
@@ -15,7 +16,7 @@ runs:
       with:
         payload: |
           {
-            "text": "just so you know `${{ github.event.sender.login }}` broke ${{ github.workflow }} with https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}",
+            "text": "just so you know `${{ github.event.sender.login }}` broke ${{ github.workflow }} with https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }} at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
             "owner": "${{ inputs.owner }}"
           }
       env:
