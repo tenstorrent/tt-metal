@@ -114,6 +114,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionGQADecode::create_progr
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
+        std::nullopt,
         output_tensor,
         this->cur_pos,
         scale,

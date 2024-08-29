@@ -31,27 +31,25 @@ def convert_to_layout(tensor, input_memory_layout, output_memory_layout, clone=F
             else:  # reshard
                 tensor = ttnn.sharded_to_interleaved(
                     tensor,
-                    memory_config=ttnn.experimental.tensor.MemoryConfig(
-                        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
-                    ),
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
                 tensor = ttnn.interleaved_to_sharded(tensor, output_memory_layout)
             return tensor
 
 
 def memcfg_1d_width_sharded_from_tensor_shape(shape, grid=ttnn.CoreGrid(x=8, y=8)):
-    start_core_coord = ttnn.experimental.tensor.CoreCoord(0, 0)
-    end_core_coord = ttnn.experimental.tensor.CoreCoord(grid.x - 1, grid.y - 1)
+    start_core_coord = ttnn.CoreCoord(0, 0)
+    end_core_coord = ttnn.CoreCoord(grid.x - 1, grid.y - 1)
     assert shape[3] % (grid.x * grid.y) == 0, f"Tensor width must be divisible by the number of cores"
     shard_width = int(shape[3] / (grid.x * grid.y))
     shard_height = int(shape[0] * shape[1] * shape[2])
-    return ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.experimental.tensor.BufferType.L1,
-        ttnn.experimental.tensor.ShardSpec(
-            ttnn.experimental.tensor.CoreRangeSet(
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
                 {
-                    ttnn.experimental.tensor.CoreRange(
+                    ttnn.CoreRange(
                         start_core_coord,
                         end_core_coord,
                     ),
@@ -61,7 +59,7 @@ def memcfg_1d_width_sharded_from_tensor_shape(shape, grid=ttnn.CoreGrid(x=8, y=8
                 shard_height,
                 shard_width,
             ],
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardOrientation.ROW_MAJOR,
             False,
         ),
     )
@@ -225,9 +223,7 @@ def matmul_2d_config(
 
 
 def get_dram_memcfg():
-    return ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-    )
+    return ttnn.DRAM_MEMORY_CONFIG
 
 
 def falcon_prefill_matmul(
@@ -235,7 +231,7 @@ def falcon_prefill_matmul(
     in1,
     compute_kernel_config,
     output_mem_config=get_dram_memcfg(),
-    output_dtype=ttnn.experimental.tensor.DataType.BFLOAT8_B,
+    output_dtype=ttnn.bfloat8_b,
     grid=ttnn.CoreGrid(x=8, y=8),
     act=None,
     transpose_mcast=False,
@@ -341,8 +337,8 @@ def partial_layernorm(
                 [layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim],
                 num_slices,  # num_slices
                 slice_i,  # slice_index
-                ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
             xs_slice = ttnn.layer_norm(
                 xs_slice,
@@ -441,12 +437,8 @@ def fused_partial_layernorm(
         layernorm_params["layernorm_shard_width_hidden_dim"],
     )
 
-    dram_memcfg = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-    )
-    interleaved_l1_memcfg = ttnn.experimental.tensor.MemoryConfig(
-        ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
-    )
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
+    interleaved_l1_memcfg = ttnn.L1_MEMORY_CONFIG
 
     if seq_len > slice_size:
         assert seq_len % slice_size == 0, "Sequence length must be divisible by layernorm slice size {slice_size}"
@@ -462,8 +454,8 @@ def fused_partial_layernorm(
                 [layernorm_shard_height_hidden_dim, layernorm_shard_width_hidden_dim],
                 num_slices,  # num_slices
                 slice_i,  # slice_index
-                ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
 
             xs_slice = ttnn.layer_norm(

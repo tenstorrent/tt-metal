@@ -35,7 +35,7 @@ def run_falcon_matmul_test(
     device,
 ):
     pcc = 0.99
-    if out_dtype == ttnn.experimental.tensor.DataType.BFLOAT8_B:
+    if out_dtype == ttnn.bfloat8_b:
         pcc = 0.98
 
     if falcon_op == MatmulOpEnum.FALCON_FUSED_QKV_MATMUL:
@@ -51,44 +51,27 @@ def run_falcon_matmul_test(
         b_shape = [1, 1, 18176, 4544]
         expected_output_shape = [1, 1, seq_len, 4544]
 
-        if (seq_len == 1024 and in0_dtype == in1_dtype == out_dtype == ttnn.experimental.tensor.DataType.BFLOAT16) or (
-            seq_len == 2048
-            and (
-                in0_dtype == ttnn.experimental.tensor.DataType.BFLOAT16
-                or in1_dtype == ttnn.experimental.tensor.DataType.BFLOAT16
-                or out_dtype == ttnn.experimental.tensor.DataType.BFLOAT16
-            )
+        if (seq_len == 1024 and in0_dtype == in1_dtype == out_dtype == ttnn.bfloat16) or (
+            seq_len == 2048 and (in0_dtype == ttnn.bfloat16 or in1_dtype == ttnn.bfloat16 or out_dtype == ttnn.bfloat16)
         ):
             logger.warning(
                 f"For seq_len: {seq_len}, in0_dtype: {in0_dtype}, in1_dtype: {in1_dtype}, and out_dtype: {out_dtype}, L1 space is not enough. Running with in0, in1, and out on DRAM instead!"
             )
-            in0_mem_config = ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            )
-            in1_mem_config = ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            )
-            out_mem_config = ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            )
+            in0_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            in1_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            out_mem_config = ttnn.DRAM_MEMORY_CONFIG
     elif falcon_op == MatmulOpEnum.FALCON_DENSE_H_TO_4H_MATMUL:
         a_shape = [1, 1, seq_len, 4544]
         b_shape = [1, 1, 4544, 18176]
         expected_output_shape = [1, 1, seq_len, 18176]
 
-        if seq_len == 2048 and out_dtype == ttnn.experimental.tensor.DataType.BFLOAT16:
+        if seq_len == 2048 and out_dtype == ttnn.bfloat16:
             logger.warning(
                 f"For seq_len: {seq_len}, in0_dtype: {in0_dtype}, in1_dtype: {in1_dtype}, and out_dtype: {out_dtype}, L1 space is not enough. Running with in0, in1, and out on DRAM instead!"
             )
-            in0_mem_config = ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            )
-            in1_mem_config = ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            )
-            out_mem_config = ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            )
+            in0_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            in1_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            out_mem_config = ttnn.DRAM_MEMORY_CONFIG
     elif falcon_op == MatmulOpEnum.FALCON_LM_HEAD_MATMUL:
         a_shape = [1, 1, seq_len, 4544]
         b_shape = [1, 1, 4544, 65024]
@@ -96,26 +79,16 @@ def run_falcon_matmul_test(
 
         if (
             seq_len == 512
-            and (
-                in0_dtype == ttnn.experimental.tensor.DataType.BFLOAT16
-                or in1_dtype == ttnn.experimental.tensor.DataType.BFLOAT16
-                or out_dtype == ttnn.experimental.tensor.DataType.BFLOAT16
-            )
+            and (in0_dtype == ttnn.bfloat16 or in1_dtype == ttnn.bfloat16 or out_dtype == ttnn.bfloat16)
             or seq_len == 1024
             or seq_len == 2048
         ):
             logger.warning(
                 f"For seq_len: {seq_len}, in0_dtype: {in0_dtype}, in1_dtype: {in1_dtype}, and out_dtype: {out_dtype}, L1 space is not enough. Running with in0, in1, and out on DRAM instead!"
             )
-            in0_mem_config = ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            )
-            in1_mem_config = ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            )
-            out_mem_config = ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            )
+            in0_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            in1_mem_config = ttnn.DRAM_MEMORY_CONFIG
+            out_mem_config = ttnn.DRAM_MEMORY_CONFIG
     else:
         raise NotImplementedError(f"falcon matmul op is undefined!")
 
@@ -124,8 +97,8 @@ def run_falcon_matmul_test(
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
 
-    a_t = ttnn.Tensor(A, in0_dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in0_mem_config)
-    b_t = ttnn.Tensor(B, in1_dtype).to(ttnn.experimental.tensor.Layout.TILE).to(device, in1_mem_config)
+    a_t = ttnn.Tensor(A, in0_dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)
+    b_t = ttnn.Tensor(B, in1_dtype).to(ttnn.TILE_LAYOUT).to(device, in1_mem_config)
 
     default_core_grid = get_falcon_default_core_grid(device)
     if falcon_op in (MatmulOpEnum.FALCON_FUSED_QKV_MATMUL, MatmulOpEnum.FALCON_SELFOUT_MATMUL):
@@ -189,32 +162,26 @@ def run_falcon_matmul_test(
     "in0_mem_config, in1_mem_config, out_mem_config",
     (
         (
-            ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
-            ),
-            ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.DRAM
-            ),
-            ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED, ttnn.experimental.tensor.BufferType.L1
-            ),
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.L1_MEMORY_CONFIG,
         ),
     ),
     ids=["weights_DRAM"],
 )
 @pytest.mark.parametrize(
     "out_dtype",
-    (ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT16),
+    (ttnn.bfloat8_b, ttnn.bfloat16),
     ids=["out_BFLOAT8_B", "out_BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "in1_dtype",
-    (ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT16),
+    (ttnn.bfloat8_b, ttnn.bfloat16),
     ids=["in1_BFLOAT8_B", "in1_BFLOAT16"],
 )
 @pytest.mark.parametrize(
     "in0_dtype",
-    (ttnn.experimental.tensor.DataType.BFLOAT8_B, ttnn.experimental.tensor.DataType.BFLOAT16),
+    (ttnn.bfloat8_b, ttnn.bfloat16),
     ids=["in0_BFLOAT8_B", "in0_BFLOAT16"],
 )
 @pytest.mark.parametrize(
@@ -301,14 +268,11 @@ def test_falcon7b_attnention_sliced(
     torch_value_layer = torch.randn(value_layer_shape).bfloat16().float()
     torch_attention_output = torch.randn(attention_output_shape).bfloat16().float()
 
-    dram_interleaved_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
-    )
+    dram_interleaved_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    height_sharded_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
+    height_sharded_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
     # compare output to regular case
@@ -316,35 +280,35 @@ def test_falcon7b_attnention_sliced(
         torch_query_layer,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
     reference_key_layer_transposed = torch2tt_tensor(
         torch_key_layer_transposed,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
     attention_mask = torch2tt_tensor(
         torch_attention_mask,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
     reference_scalar = torch2tt_tensor(
         torch_scalar,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
     reference_value_layer = torch2tt_tensor(
         torch_value_layer,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
 
-    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -357,7 +321,7 @@ def test_falcon7b_attnention_sliced(
         torch_attention_output,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
     tiles_per_shard = math.ceil((((71 * seq_len) / num_cores) / num_slices) / 32)
     mm_activations_height_shard_spec = [tiles_per_shard * 32, 2 * 32]
@@ -370,8 +334,8 @@ def test_falcon7b_attnention_sliced(
             mm_activations_height_shard_spec,
             num_slices,  # num_slices
             i,  # slice_index
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
 
         subblock_h = 1
@@ -395,7 +359,7 @@ def test_falcon7b_attnention_sliced(
             reference_key_layer_transposed,
             program_config=program_config,
             memory_config=height_sharded_memory_config,
-            dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -413,8 +377,8 @@ def test_falcon7b_attnention_sliced(
             mm_output_height_shard_spec,
             num_slices,
             i,
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
 
         mm_slice = ttnn.add(
@@ -422,7 +386,7 @@ def test_falcon7b_attnention_sliced(
             attn_mask_slice,
             fused_activations=None,
             memory_config=height_sharded_memory_config,
-            output_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            output_dtype=ttnn.bfloat16,
             output_tensor=mm_slice,
         )
 
@@ -461,7 +425,7 @@ def test_falcon7b_attnention_sliced(
             reference_value_layer,
             program_config=program_config,
             memory_config=height_sharded_memory_config,
-            dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -560,14 +524,11 @@ def test_falcon7b_attention_softmax_sequence(
     torch_value_layer = torch.randn(value_layer_shape).bfloat16().float()
     torch_attention_output = torch.randn(attention_output_shape).bfloat16().float()
 
-    dram_interleaved_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
-    )
+    dram_interleaved_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    height_sharded_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
+    height_sharded_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
     # compare output to regular case
@@ -575,24 +536,24 @@ def test_falcon7b_attention_softmax_sequence(
         torch_query_layer,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
     reference_key_layer_transposed = torch2tt_tensor(
         torch_key_layer_transposed,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
 
     attention_mask_proper_dim = torch2tt_tensor(
         torch_attention_mask_proper_dim,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT4_B,
+        tt_dtype=ttnn.bfloat4_b,
     )
 
-    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -618,7 +579,7 @@ def test_falcon7b_attention_softmax_sequence(
             torch_attention_mask_per_slice,
             device,
             tt_memory_config=dram_interleaved_memory_config,
-            tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT4_B,
+            tt_dtype=ttnn.bfloat4_b,
         )
         attention_masks_per_slice.append(tt_attention_slice)
         attention_mask_starting_index_per_slice = (
@@ -629,13 +590,13 @@ def test_falcon7b_attention_softmax_sequence(
         torch_scalar,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
     reference_value_layer = torch2tt_tensor(
         torch_value_layer,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
 
     passing = True
@@ -645,7 +606,7 @@ def test_falcon7b_attention_softmax_sequence(
         torch_attention_output,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
     tiles_per_shard = math.ceil((((71 * seq_len) / num_cores) / num_slices) / 32)
     mm_activations_height_shard_spec = [tiles_per_shard * 32, 2 * 32]
@@ -658,8 +619,8 @@ def test_falcon7b_attention_softmax_sequence(
             mm_activations_height_shard_spec,
             num_slices,  # num_slices
             i,  # slice_index
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
 
         subblock_h = 1
@@ -683,7 +644,7 @@ def test_falcon7b_attention_softmax_sequence(
             reference_key_layer_transposed,
             program_config=program_config,
             memory_config=height_sharded_memory_config,
-            dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -728,7 +689,7 @@ def test_falcon7b_attention_softmax_sequence(
             reference_value_layer,
             program_config=program_config,
             memory_config=height_sharded_memory_config,
-            dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=compute_kernel_config,
         )
 
@@ -821,30 +782,27 @@ def test_softmax(device, num_cores, seq_len):
 
     torch_outputs = torch.zeros(input_shape).bfloat16().float()
 
-    dram_interleaved_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.DRAM,
-    )
+    dram_interleaved_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     tt_input = torch2tt_tensor(
         torch_input,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
 
     tt_attention_mask_full = torch2tt_tensor(
         torch_attention_mask_full,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
 
     tt_scalar = torch2tt_tensor(
         torch_scalar,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
 
     tt_attention_masks_per_slice = []
@@ -865,7 +823,7 @@ def test_softmax(device, num_cores, seq_len):
             torch_attention_mask_per_slice,
             device,
             tt_memory_config=dram_interleaved_memory_config,
-            tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            tt_dtype=ttnn.bfloat16,
         )
         tt_attention_masks_per_slice.append(tt_attention_slice)
         attention_mask_starting_index_per_slice = (
@@ -876,15 +834,15 @@ def test_softmax(device, num_cores, seq_len):
         torch_outputs,
         device,
         tt_memory_config=dram_interleaved_memory_config,
-        tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+        tt_dtype=ttnn.bfloat16,
     )
 
     # Sharded softmax
     tiles_per_shard = math.ceil((((head_dim * seq_len) / num_cores) / num_slices) / 32)
     height_shard_spec = [tiles_per_shard * 32, seq_len]
 
-    compute_kernel_config = ttnn.experimental.tensor.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -897,8 +855,8 @@ def test_softmax(device, num_cores, seq_len):
             height_shard_spec,
             num_slices,
             i,
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
 
         softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(

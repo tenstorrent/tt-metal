@@ -11,6 +11,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 
 namespace tt {
 using namespace constants;
@@ -65,12 +66,13 @@ operation::ProgramWithCallbacks moreh_sum_w_impl(const Tensor &a, const Tensor &
     tt_metal::Device *device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_rows = other_dims_product * Ht;
 
+    const CoreRange all_core_range({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1});
+
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_rows);
+        split_work_to_cores(all_core_range, num_rows);
 
     string compute_kernel_name = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_w_impl/kernels/moreh_sum_w.cpp";
 

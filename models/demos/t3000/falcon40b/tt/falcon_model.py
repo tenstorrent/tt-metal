@@ -248,14 +248,14 @@ class TtFalconModelShared:
     @abstractmethod
     def __call__(
         self,
-        input_ids: ttnn.experimental.tensor.Tensor,
+        input_ids: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         input_embeddings = self.embeddings(input_ids)
 
         if llm_mode == "prefill":
@@ -283,14 +283,14 @@ class TtFalconModelShared:
 
     def fwd_prefill(
         self,
-        input_embeddings: ttnn.experimental.tensor.Tensor,
+        input_embeddings: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         layer_output = input_embeddings
         presents = ()
         for idx, layer in enumerate(self.layers):
@@ -341,14 +341,14 @@ class TtFalconModelShared:
 
     def fwd_decode(
         self,
-        input_embeddings: ttnn.experimental.tensor.Tensor,
+        input_embeddings: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         layer_output = input_embeddings
         presents = ()
         for idx, layer in enumerate(self.layers):
@@ -420,14 +420,14 @@ class TtFalconModel(TtFalconModelShared):
 
     def __call__(
         self,
-        input_ids: ttnn.experimental.tensor.Tensor,
+        input_ids: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: ttnn.experimental.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[ttnn.experimental.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> ttnn.experimental.tensor.Tensor:
+    ) -> ttnn.Tensor:
         hidden_states, presents = super().__call__(
             input_ids=input_ids,
             llm_mode=llm_mode,

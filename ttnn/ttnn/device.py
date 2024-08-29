@@ -182,4 +182,52 @@ def is_grayskull(device):
     return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
 
 
+def SetDefaultDevice(device):
+    """
+    Sets the default device to use for operations when inputs aren't on the device. This will be deprecated soon.
+
+    +------------------+------------------------+-----------------------+-------------+----------+
+    | Argument         | Description            | Data type             | Valid range | Required |
+    +==================+========================+=======================+=============+==========+
+    | device           | TT Device to use       | tt_lib.device.Device  |             | Yes      |
+    +------------------+------------------------+-----------------------+-------------+----------+
+    """
+
+    ttnn._ttnn.device.SetDefaultDevice(device)
+
+
+def GetDefaultDevice():
+    """
+    Gets the default device to use for ops when inputs aren't on device. This will be deprecated soon.
+    """
+
+    return ttnn._ttnn.device.GetDefaultDevice()
+
+
+def format_input_tensor(input, device, padded_shape, pad_value, target_layout, target_mem_config=None):
+    """
+    Formats tensor to target layout and pads to padded shape. This will be deprecated soon.
+    """
+
+    return ttnn._ttnn.device.format_input_tensor(
+        input, device, padded_shape, pad_value, target_layout, target_mem_config
+    )
+
+
+def format_output_tensor(output, shape, device, target_layout, target_mem_config=None):
+    """
+    Formats tensor to target layout and unpads to shape. This will be deprecated soon.
+    """
+
+    return ttnn._ttnn.device.format_output_tensor(output, shape, device, target_layout, target_mem_config)
+
+
+def pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w):
+    """
+    Returns shape padded to tile shape. This will be deprecated soon.
+    """
+
+    return ttnn._ttnn.device.pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w)
+
+
 __all__ = []

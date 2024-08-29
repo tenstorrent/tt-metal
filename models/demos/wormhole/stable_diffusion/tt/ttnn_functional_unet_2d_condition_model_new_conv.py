@@ -231,15 +231,9 @@ class UNet2DConditionModel:
         )
 
         if not self.fallback_on_groupnorm:
-            if (
-                self.gn_expected_input_sharded_memory_config.memory_layout
-                == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
-            ):
+            if self.gn_expected_input_sharded_memory_config.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
                 num_cores_across_channel = self.group_norm_core_grid.y
-            elif (
-                self.gn_expected_input_sharded_memory_config.memory_layout
-                == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
-            ):
+            elif self.gn_expected_input_sharded_memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
                 num_cores_across_channel = 1
             else:
                 num_cores_across_channel = int(self.group_norm_core_grid.x * self.group_norm_core_grid.y)
@@ -252,14 +246,14 @@ class UNet2DConditionModel:
             )
             self.parameters.conv_norm_out.weight = ttnn.from_torch(
                 self.parameters.conv_norm_out.weight,
-                dtype=ttnn.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self.parameters.conv_norm_out.bias = ttnn.from_torch(
                 self.parameters.conv_norm_out.bias,
-                dtype=ttnn.DataType.BFLOAT16,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -269,7 +263,7 @@ class UNet2DConditionModel:
             )
             self.norm_input_mask = ttnn.from_torch(
                 self.norm_input_mask_torch_tensor,
-                dtype=ttnn.DataType.BFLOAT8_B,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -392,7 +386,9 @@ class UNet2DConditionModel:
             math_approx_mode_enabled=True,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
-            height_sharding=True if in_channels < 320 else False,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            if self.in_channels < 320
+            else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             input_channels_alignment=32,
             transpose_shards=False,
             reshard_if_not_optimal=True,
@@ -652,7 +648,7 @@ class UNet2DConditionModel:
             weights_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.LoFi,
             activation="",
-            height_sharding=True,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             math_approx_mode_enabled=True,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,

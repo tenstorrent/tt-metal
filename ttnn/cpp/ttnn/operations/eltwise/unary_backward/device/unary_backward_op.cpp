@@ -1443,9 +1443,9 @@ std::vector<Tensor> _repeat_bw(
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
     auto formatted_input_tensor = temp;
     if(formatted_input_tensor.get_layout()==Layout::ROW_MAJOR){
-        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
-        if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
-            formatted_input_tensor = AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
+        auto a_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
+        if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
+            formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
         }
     }
     return formatted_input_tensor;
@@ -1529,7 +1529,7 @@ std::vector<Tensor> _prod_bw(
 
         // put the tensor back on device because permute throws it off device
         // See: Remove auto format within permute_op.cpp #9404
-        tensor_2 = AutoFormat::move_tensor_to_device_and_pad(tensor_2, tensor_1.device(),tensor_1.get_layout(), tensor_1.memory_config());
+        tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device_and_pad(tensor_2, tensor_1.device(),tensor_1.get_layout(), tensor_1.memory_config());
 
         after_permute_dims = {0, 3, 1, 2};
         Tensor result = permute(
@@ -1564,7 +1564,7 @@ std::vector<Tensor> _prod_bw(
 
     // put the tensor back on device because permute throws it off device
     // See: Remove auto format within permute_op.cpp #9404
-    tensor_2 = AutoFormat::move_tensor_to_device_and_pad(tensor_2, tensor_1.device(),tensor_1.get_layout(), tensor_1.memory_config());
+    tensor_2 = ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_device_and_pad(tensor_2, tensor_1.device(),tensor_1.get_layout(), tensor_1.memory_config());
 
     Tensor result = ttnn::permute(
         ttnn::bcast(0, tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),

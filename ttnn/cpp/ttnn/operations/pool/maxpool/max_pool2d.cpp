@@ -36,7 +36,7 @@ Tensor MaxPoolNewOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32
     if (!memory_config.shard_spec.has_value()) {
         // Input is not sharded. Perform sharding.
         parallel_config = conv::conv2d::determine_parallel_config(
-                                            true,
+                                            TensorMemoryLayout::HEIGHT_SHARDED,
                                             batch_size,
                                             0,          // in_channels -- not used
                                             output_shape[1],

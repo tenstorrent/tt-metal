@@ -155,18 +155,14 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
     if x.get_layout() == target_layout:
         return x
     if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT and target_layout == ttnn.TILE_LAYOUT:
-        x_padded_shape = ttnn.experimental.tensor.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
+        x_padded_shape = ttnn.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
         if x.get_legacy_shape() != x_padded_shape:
-            return ttnn.experimental.tensor.format_input_tensor(
-                x, device, x_padded_shape, pad_value, target_layout, output_mem_config
-            )
+            return ttnn.format_input_tensor(x, device, x_padded_shape, pad_value, target_layout, output_mem_config)
         else:
             return ttnn.tilize(x, memory_config=output_mem_config, use_multicore=True)
     elif x.get_layout() == ttnn.TILE_LAYOUT and target_layout == ttnn.ROW_MAJOR_LAYOUT:
         if x.get_legacy_shape() != x.shape_without_padding():
-            return ttnn.experimental.tensor.format_output_tensor(
-                x, x.shape_without_padding(), device, target_layout, output_mem_config
-            )
+            return ttnn.format_output_tensor(x, x.shape_without_padding(), device, target_layout, output_mem_config)
         else:
             return ttnn.untilize(x, memory_config=output_mem_config, use_multicore=True)
     else:
@@ -1388,9 +1384,9 @@ class ResNet(nn.Module):
         self.model_config = model_config
         self.reader_patterns_cache = {}
         if self.storage_in_dram:
-            self.memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+            self.memory_config = ttnn.DRAM_MEMORY_CONFIG
         else:
-            self.memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+            self.memory_config = ttnn.L1_MEMORY_CONFIG
         if sharded:
             self.height_sharded_memory_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1

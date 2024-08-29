@@ -173,22 +173,6 @@ run_ttnn_sweeps_pipeline_tests() {
     ./tests/scripts/run_ttnn_sweeps.sh
 }
 
-run_demos_single_card_n150_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/single_card/run_demos_single_card_n150_tests.sh
-}
-
-run_demos_single_card_n300_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/single_card/run_demos_single_card_n300_tests.sh
-}
-
 ##########################T3000##########################
 # Run t3000 unit tests
 unit_t3000_device() {
@@ -325,10 +309,6 @@ run_pipeline_tests() {
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then
         run_ttnn_sweeps_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "demos_single_card_n150" ]]; then
-        run_demos_single_card_n150_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "demos_single_card_n300" ]]; then
-        run_demos_single_card_n300_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     # T3000 pipelines
     elif [[ $pipeline_type == "unit_t3000_device" ]]; then
         unit_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
