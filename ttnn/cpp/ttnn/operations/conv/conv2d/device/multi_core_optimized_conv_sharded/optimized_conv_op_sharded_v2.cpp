@@ -1048,7 +1048,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
     // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
-    if (weight_size_h >= 1 and weight_size_w >= 1 and (stride_h == 1 or stride_h == 2)) {
+    if (weight_size_h >= 1 and weight_size_w >= 1) {
         if (!is_conv1d and weight_width_sliced) {
             // 2D conv
             assert(read_window_in_inner_loop == true);
