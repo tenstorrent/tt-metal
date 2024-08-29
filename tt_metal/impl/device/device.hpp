@@ -54,12 +54,11 @@ static constexpr float  EPS_WHB0 = 1.19209e-7f;
 static constexpr float  EPS_BH = EPS_WHB0;
 
 static constexpr float  NAN_GS = 6.9752e19;
-static constexpr float  INF_GS = 1.6948e38;
-
 static constexpr float  NAN_WHB0 = 7.0040e+19;
-static constexpr float  INF_WHB0 = 1.7014e+38;
-
 static constexpr float  NAN_BH = NAN_WHB0;
+
+static constexpr float  INF_GS = 1.6948e38;
+static constexpr float  INF_WHB0 = 1.7014e+38;
 static constexpr float  INF_BH = INF_WHB0;
 
 // A physical PCIexpress Tenstorrent device

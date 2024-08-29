@@ -19,11 +19,9 @@ def register_ttnn_cpp_unary_function(unary_function):
         result += 3.434189657547
         return result
 
-    def _golden_function(input_tensor: ttnn.Tensor, *args, device, **kwargs):
+    def _golden_function(input_tensor: ttnn.Tensor, **_):
         name_to_golden_function = {
             "abs": torch.abs,
-            "acos": torch.acos,
-            "asin": torch.asin,
             "atan": torch.atan,
             "cos": torch.cos,
             "erfinv": torch.erfinv,
@@ -50,7 +48,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "ltz": lambda x: torch.lt(x, 0),
             "neg": torch.neg,
             "nez": lambda x: torch.ne(x, 0),
-            "reciprocal": torch.reciprocal,
             "relu": torch.relu,
             "relu6": torch.nn.functional.relu6,
             "sigmoid": torch.sigmoid,
@@ -75,7 +72,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             # Other unaries (composite operations)
             "softplus": torch.nn.functional.softplus,
             "sigmoid_accurate": torch.sigmoid,
-            "acosh": torch.acosh,
             "asinh": torch.asinh,
             "atanh": torch.atanh,
             "cbrt": torch_cbrt,
@@ -105,11 +101,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             )
 
         torch_function = name_to_golden_function[unary_function.__name__.split(".")[-1]]
-        op_name = unary_function.__name__.split(".")[-1]
-        if op_name in ["reciprocal", "asin", "acos", "acosh"]:
-            return torch.nan_to_num(
-                torch_function(input_tensor), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
-            )
         return torch_function(input_tensor)
 
     ttnn.attach_golden_function(unary_function, golden_function=_golden_function)
@@ -117,8 +108,6 @@ def register_ttnn_cpp_unary_function(unary_function):
 
 TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.abs,
-    ttnn.acos,
-    ttnn.asin,
     ttnn.atan,
     ttnn.cos,
     ttnn.erfinv,
@@ -144,7 +133,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.ltz,
     ttnn.neg,
     ttnn.nez,
-    ttnn.reciprocal,
     ttnn.relu,
     ttnn.relu6,
     ttnn.sigmoid,
@@ -171,7 +159,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.softplus,
     ttnn.sigmoid_accurate,
     # Other unaries (composite operations - tt_eager dependency)
-    ttnn.acosh,
     ttnn.asinh,
     ttnn.atanh,
     ttnn.cbrt,
@@ -194,6 +181,50 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
 ]
 for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
+
+
+def _golden_function_asin(input_tensor_a, *args, device, **kwargs):
+    import torch
+
+    return torch.nan_to_num(
+        torch.asin(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+    )
+
+
+ttnn.attach_golden_function(ttnn.asin, golden_function=_golden_function_asin)
+
+
+def _golden_function_acos(input_tensor_a, *args, device, **kwargs):
+    import torch
+
+    return torch.nan_to_num(
+        torch.acos(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+    )
+
+
+ttnn.attach_golden_function(ttnn.acos, golden_function=_golden_function_acos)
+
+
+def _golden_function_acosh(input_tensor_a, *args, device, **kwargs):
+    import torch
+
+    return torch.nan_to_num(
+        torch.acosh(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+    )
+
+
+ttnn.attach_golden_function(ttnn.acosh, golden_function=_golden_function_acosh)
+
+
+def _golden_function_reciprocal(input_tensor_a, *args, device, **kwargs):
+    import torch
+
+    return torch.nan_to_num(
+        torch.reciprocal(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+    )
+
+
+ttnn.attach_golden_function(ttnn.reciprocal, golden_function=_golden_function_reciprocal)
 
 
 def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
