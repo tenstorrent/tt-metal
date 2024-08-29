@@ -919,7 +919,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                 mcast_receiver_set.insert(CoreRange(CoreCoord(1, 0), CoreCoord(num_active_cores_x - 1, 0)));
             }
             if (num_cores_y > 1) {
-                if(num_cores_y > 2) {
+                if(num_active_cores_y_with_full_x >=2) {
                     mcast_receiver_set.insert(
                         CoreRange(CoreCoord(0, 1), CoreCoord(num_active_cores_x - 1, num_active_cores_y_with_full_x - 1)));
                 }

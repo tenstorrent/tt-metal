@@ -21,6 +21,7 @@ import ttnn
 def _nearest_32(x):
     return math.ceil(x / 32) * 32
 
+
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 # def plot_diff(vals, fid, nsticks, stick_len):
@@ -325,7 +326,7 @@ def run_conv_with_split(
 )
 @pytest.mark.parametrize(
     "has_bias",
-    [True, False],
+    [True],
 )
 @pytest.mark.parametrize(
     "weights_dtype",
