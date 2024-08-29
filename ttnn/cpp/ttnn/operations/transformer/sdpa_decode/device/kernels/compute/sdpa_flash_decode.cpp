@@ -105,7 +105,7 @@ void reduce_c() {
     UNPACK(tensix_sync());
 }
 
-void __attribute((noinline)) recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
+void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     copy_tile_to_dst_init_short(in_cb);
