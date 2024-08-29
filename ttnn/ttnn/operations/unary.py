@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn._ttnn.deprecated as ttl
-
 import ttnn
 
 

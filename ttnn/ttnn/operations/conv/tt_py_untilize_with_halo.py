@@ -16,7 +16,6 @@ from ttnn.operations.conv.sliding_window_op_utils import (
     get_sliding_window_op_output_shard_nhw_size,
     calculate_shard_grid,
 )
-import tt_lib as ttl
 import ttnn
 import torch
 import struct
@@ -130,26 +129,20 @@ class TTPyUntilizeWithHalo(TTPyOp):
             shard_grid, shard_layout = calculate_shard_grid(
                 (num_cores_w, num_cores_h), num_cores_nhw, self.transpose_mcast
             )
-            block_sharding = shard_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+            block_sharding = shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
 
-            def get_memory_config(shard_shape, buffer_type=ttl.tensor.BufferType.L1_SMALL):
+            def get_memory_config(shard_shape, buffer_type=ttnn.BufferType.L1_SMALL):
                 shard_orientation = (
-                    ttl.tensor.ShardOrientation.ROW_MAJOR
+                    ttnn.ShardOrientation.ROW_MAJOR
                     if not block_sharding
-                    else (
-                        ttl.tensor.ShardOrientation.COL_MAJOR
-                        if self.transpose_mcast
-                        else ttl.tensor.ShardOrientation.ROW_MAJOR
-                    )
+                    else (ttnn.ShardOrientation.COL_MAJOR if self.transpose_mcast else ttnn.ShardOrientation.ROW_MAJOR)
                 )
                 shard_halo = False
-                shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+                shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
                 mem_layout = (
-                    ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
-                    if block_sharding
-                    else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+                    ttnn.TensorMemoryLayout.BLOCK_SHARDED if block_sharding else ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 )
-                mem_config = ttl.tensor.MemoryConfig(mem_layout, buffer_type, shard_spec)
+                mem_config = ttnn.MemoryConfig(mem_layout, buffer_type, shard_spec)
                 return mem_config
 
             def gen_per_core_gather_data_uint16_tensor(config: list):
@@ -183,11 +176,11 @@ class TTPyUntilizeWithHalo(TTPyOp):
             def core_id_to_physical_coord(core_id):
                 if block_sharding:
                     if self.transpose_mcast:
-                        core_coord = ttl.tensor.CoreCoord(core_id, 0)
+                        core_coord = ttnn.CoreCoord(core_id, 0)
                     else:
-                        core_coord = ttl.tensor.CoreCoord(0, core_id)
+                        core_coord = ttnn.CoreCoord(0, core_id)
                 else:
-                    core_coord = ttl.tensor.CoreCoord(core_id % num_cores_w, core_id // num_cores_w)
+                    core_coord = ttnn.CoreCoord(core_id % num_cores_w, core_id // num_cores_w)
 
                 # HACK: Using first device which may have different harvesting than other chips. Logic should be pushed into op
                 if isinstance(device, ttnn.Device):
@@ -222,7 +215,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 "padding_config": padding_config_tensor,
                 "local_config": local_config_tensor,
                 "remote_config": remote_config_tensor,
-                "out_mem_config": get_memory_config(out_shard_shape, buffer_type=ttl.tensor.BufferType.L1),
+                "out_mem_config": get_memory_config(out_shard_shape, buffer_type=ttnn.BufferType.L1),
                 "remote_read": remote_read,
             }
 

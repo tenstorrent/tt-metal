@@ -5,16 +5,16 @@
 import torch
 from typing import List, Tuple, Union, Optional
 from .conversion_wrapper import convert_tt_tensors_wrapper
-from tt_lib import tensor as ttl_tensor
+import ttnn
 
 # python 3.10 has types.EllipsisType
 EllipsisType = type(Ellipsis)
 
 
 @convert_tt_tensors_wrapper
-def full(size: List[int], fill_value: float) -> ttl_tensor.Tensor:
+def full(size: List[int], fill_value: float) -> ttnn.Tensor:
     """
-    Creates a ``tt_lib.tensor.Tensor`` of shape ``size`` filled with ``fill_value`` value.
+    Creates a ``ttnn.Tensor`` of shape ``size`` filled with ``fill_value`` value.
 
     +------------+-----------------------------------------+-------------+-----------------+----------+
     | Argument   | Description                             | Data type   | Valid range     | Required |
@@ -28,9 +28,9 @@ def full(size: List[int], fill_value: float) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
-def tensor_slice(input: ttl_tensor.Tensor, slices: List[Union[slice, EllipsisType]]) -> ttl_tensor.Tensor:
+def tensor_slice(input: ttnn.Tensor, slices: List[Union[slice, EllipsisType]]) -> ttnn.Tensor:
     """
-    Creates a ``tt_lib.tensor.Tensor`` from ``input`` using ``slices``.
+    Creates a ``ttnn.Tensor`` from ``input`` using ``slices``.
     To use ``...``, pass in ``...`` or ``Ellipsis``.
     To use ``:``, pass in ``slice(None)``.
 
@@ -47,16 +47,16 @@ def tensor_slice(input: ttl_tensor.Tensor, slices: List[Union[slice, EllipsisTyp
 
 @convert_tt_tensors_wrapper
 def reshape(
-    input: ttl_tensor.Tensor,
+    input: ttnn.Tensor,
     N: int,
     C: int,
     H: int,
     W: int,
-    output_layout: Optional[ttl_tensor.Layout] = ttl_tensor.Layout.TILE,
+    output_layout: Optional[ttnn.Layout] = ttnn.TILE_LAYOUT,
     output_on_device: Optional[bool] = True,
-) -> ttl_tensor.Tensor:
+) -> ttnn.Tensor:
     """
-    Returns a new ``tt_lib.tensor.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
+    Returns a new ``ttnn.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
 
     +------------------+-----------------------------------------------+-------------+-----------------+----------+
     | Argument         | Description                                   | Data type   | Valid range     | Required |
@@ -81,13 +81,13 @@ def reshape(
 
 @convert_tt_tensors_wrapper
 def permute(
-    input: ttl_tensor.Tensor,
+    input: ttnn.Tensor,
     dims: Tuple[int],
-    output_layout: Optional[ttl_tensor.Layout] = ttl_tensor.Layout.TILE,
+    output_layout: Optional[ttnn.Layout] = ttnn.TILE_LAYOUT,
     output_on_device: Optional[bool] = True,
-) -> ttl_tensor.Tensor:
+) -> ttnn.Tensor:
     """
-    Returns a new ``tt_lib.tensor.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
+    Returns a new ``ttnn.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
 
     +------------------+-----------------------------------------------+-------------+-----------------+----------+
     | Argument         | Description                                   | Data type   | Valid range     | Required |
@@ -105,9 +105,9 @@ def permute(
 
 
 @convert_tt_tensors_wrapper
-def chunk(input: ttl_tensor.Tensor, chunks: int, dim: int = 0) -> List[ttl_tensor.Tensor]:
+def chunk(input: ttnn.Tensor, chunks: int, dim: int = 0) -> List[ttnn.Tensor]:
     """
-    Attempts to split a ``tt_lib.tensor.Tensor`` into the specified number of chunks. Each chunk is a new copy of part of the input tensor.
+    Attempts to split a ``ttnn.Tensor`` into the specified number of chunks. Each chunk is a new copy of part of the input tensor.
 
     If the tensor size along the given dimension ``dim`` is divisible by ``chunks``, all returned chunks will be the same size.
 
@@ -129,14 +129,14 @@ def chunk(input: ttl_tensor.Tensor, chunks: int, dim: int = 0) -> List[ttl_tenso
 
 @convert_tt_tensors_wrapper
 def conv2d(
-    input: ttl_tensor.Tensor,
-    weight: ttl_tensor.Tensor,
-    bias: Optional[ttl_tensor.Tensor] = None,
+    input: ttnn.Tensor,
+    weight: ttnn.Tensor,
+    bias: Optional[ttnn.Tensor] = None,
     stride: Union[int, Tuple] = 1,
     padding: Union[int, str, Tuple] = 0,
     dilation: Union[int, Tuple] = 1,
     groups: int = 1,
-) -> ttl_tensor.Tensor:
+) -> ttnn.Tensor:
     """
     Applies a 2D convolution over an input image composed of several input planes.
 
@@ -168,12 +168,12 @@ def conv2d(
 
 @convert_tt_tensors_wrapper
 def group_norm(
-    input: ttl_tensor.Tensor,
+    input: ttnn.Tensor,
     num_groups: int,
-    weight: Optional[ttl_tensor.Tensor] = None,
-    bias: Optional[ttl_tensor.Tensor] = None,
+    weight: Optional[ttnn.Tensor] = None,
+    bias: Optional[ttnn.Tensor] = None,
     eps: float = 1e-05,
-) -> ttl_tensor.Tensor:
+) -> ttnn.Tensor:
     r"""
     Applies Group Normalization over a mini-batch of inputs as described in the paper `Group Normalization <https://arxiv.org/abs/1803.08494>`_.
 
@@ -209,12 +209,12 @@ def group_norm(
 
 @convert_tt_tensors_wrapper
 def layer_norm(
-    input: ttl_tensor.Tensor,
+    input: ttnn.Tensor,
     normalized_shape: Union[int, List[int]],
-    weight: Optional[ttl_tensor.Tensor] = None,
-    bias: Optional[ttl_tensor.Tensor] = None,
+    weight: Optional[ttnn.Tensor] = None,
+    bias: Optional[ttnn.Tensor] = None,
     eps: float = 1e-05,
-) -> ttl_tensor.Tensor:
+) -> ttnn.Tensor:
     r"""
     Applies Layer Normalization over a mini-batch of inputs as described in the paper `Layer Normalization <https://arxiv.org/abs/1607.06450>`__
 
@@ -257,13 +257,13 @@ def layer_norm(
 
 @convert_tt_tensors_wrapper
 def pad(
-    input: ttl_tensor.Tensor,
+    input: ttnn.Tensor,
     pad: Tuple[int],
     mode: str = "constant",
     value: Optional[int] = None,
-    output_layout: Optional[ttl_tensor.Layout] = ttl_tensor.Layout.TILE,
+    output_layout: Optional[ttnn.Layout] = ttnn.TILE_LAYOUT,
     output_on_device: Optional[bool] = True,
-) -> ttl_tensor.Tensor:
+) -> ttnn.Tensor:
     r"""
     Pads tensor.
 
@@ -294,14 +294,14 @@ def pad(
 
 @convert_tt_tensors_wrapper
 def interpolate(
-    input: ttl_tensor.Tensor,
+    input: ttnn.Tensor,
     size: Optional[Union[int, Tuple[int]]] = None,
     scale_factor: Optional[Union[float, Tuple[float]]] = None,
     mode: str = "nearest",
     align_corners: Optional[bool] = None,
     recompute_scale_factor: Optional[bool] = None,
     antialias: bool = False,
-) -> ttl_tensor.Tensor:
+) -> ttnn.Tensor:
     r"""
     Down/up samples the input to either the given size or the given scale_factor
 
@@ -338,7 +338,7 @@ def interpolate(
 
 
 @convert_tt_tensors_wrapper
-def repeat(input: ttl_tensor.Tensor, sizes: List[int]) -> ttl_tensor.Tensor:
+def repeat(input: ttnn.Tensor, sizes: List[int]) -> ttnn.Tensor:
     r"""
     Returns the input tensor ``input`` repeated along the specified dims.
 
@@ -355,12 +355,12 @@ def repeat(input: ttl_tensor.Tensor, sizes: List[int]) -> ttl_tensor.Tensor:
 
 @convert_tt_tensors_wrapper
 def repeat_interleave(
-    input: ttl_tensor.Tensor,
-    repeats: Union[ttl_tensor.Tensor, int],
+    input: ttnn.Tensor,
+    repeats: Union[ttnn.Tensor, int],
     dim: Optional[int] = None,
     *,
     output_size: Optional[int] = None,
-) -> ttl_tensor.Tensor:
+) -> ttnn.Tensor:
     r"""
     Returns a tensor with repeated elements of input tensor ``input``.
 
@@ -380,7 +380,7 @@ def repeat_interleave(
 
 
 @convert_tt_tensors_wrapper
-def concat(tensors: List[ttl_tensor.Tensor], dim: int = 0) -> ttl_tensor.Tensor:
+def concat(tensors: List[ttnn.Tensor], dim: int = 0) -> ttnn.Tensor:
     r"""
     Concatenates input tensors in list ``tensors`` on provided dimension ``dim``.
 
@@ -398,7 +398,7 @@ def concat(tensors: List[ttl_tensor.Tensor], dim: int = 0) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
-def silu(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+def silu(input: ttnn.Tensor) -> ttnn.Tensor:
     r"""
     Applies the Sigmoid Linear Unit (SiLU) function, element-wise.
     The SiLU function is also known as the swish function.
@@ -416,7 +416,7 @@ def silu(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
-def softmax(input: ttl_tensor.Tensor, dim: Optional[int] = None) -> ttl_tensor.Tensor:
+def softmax(input: ttnn.Tensor, dim: Optional[int] = None) -> ttnn.Tensor:
     r"""
     Applies a softmax function to input tensor ``input``.
 
@@ -487,8 +487,8 @@ class Conv2d(torch.nn.Module):
     @convert_tt_tensors_wrapper
     def __init__(
         self,
-        weights: ttl_tensor.Tensor,
-        biases: Union[ttl_tensor.Tensor, None],
+        weights: ttnn.Tensor,
+        biases: Union[ttnn.Tensor, None],
         in_channels: int,
         out_channels: int,
         kernel_size: Union[int, Tuple],
@@ -517,7 +517,7 @@ class Conv2d(torch.nn.Module):
         )
 
     @convert_tt_tensors_wrapper
-    def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         return self.pt_fallback(input)
 
 
@@ -559,11 +559,11 @@ class BatchNorm2d(torch.nn.Module):
     @convert_tt_tensors_wrapper
     def __init__(
         self,
-        weights: ttl_tensor.Tensor,
-        biases: ttl_tensor.Tensor,
-        running_mean: ttl_tensor.Tensor,
-        running_var: ttl_tensor.Tensor,
-        num_batches_tracked: ttl_tensor.Tensor,
+        weights: ttnn.Tensor,
+        biases: ttnn.Tensor,
+        running_mean: ttnn.Tensor,
+        running_var: ttnn.Tensor,
+        num_batches_tracked: ttnn.Tensor,
         num_features: int,
         eps: float = 1e-05,
         momentum: Optional[float] = 0.1,
@@ -589,7 +589,7 @@ class BatchNorm2d(torch.nn.Module):
         self.pt_fallback.num_batches_tracked = num_batches_tracked
 
     @convert_tt_tensors_wrapper
-    def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         return self.pt_fallback(input)
 
 
@@ -623,8 +623,8 @@ class GroupNorm(torch.nn.Module):
     @convert_tt_tensors_wrapper
     def __init__(
         self,
-        weights: ttl_tensor.Tensor,
-        biases: ttl_tensor.Tensor,
+        weights: ttnn.Tensor,
+        biases: ttnn.Tensor,
         num_groups: int,
         num_channels: int,
         eps: float = 1e-05,
@@ -642,7 +642,7 @@ class GroupNorm(torch.nn.Module):
         self.pt_fallback.bias = torch.nn.Parameter(biases)
 
     @convert_tt_tensors_wrapper
-    def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         return self.pt_fallback(input)
 
 
@@ -673,8 +673,8 @@ class LayerNorm(torch.nn.Module):
     @convert_tt_tensors_wrapper
     def __init__(
         self,
-        weights: ttl_tensor.Tensor,
-        biases: ttl_tensor.Tensor,
+        weights: ttnn.Tensor,
+        biases: ttnn.Tensor,
         normalized_shape: Union[int, List[int]],
         eps: float = 1e-05,
         elementwise_affine: bool = True,
@@ -690,7 +690,7 @@ class LayerNorm(torch.nn.Module):
         self.pt_fallback.bias = torch.nn.Parameter(biases.reshape(normalized_shape))
 
     @convert_tt_tensors_wrapper
-    def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         return self.pt_fallback(input)
 
 
@@ -744,7 +744,7 @@ class MaxPool2d(torch.nn.Module):
         self.reshape_2d = reshape_2d
 
     @convert_tt_tensors_wrapper
-    def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         output = input
         if self.channels_last:
             output = torch.permute(output, (0, 3, 1, 2))
@@ -782,7 +782,7 @@ class AdaptiveAvgPool2d(torch.nn.Module):
         self.channels_last = channels_last
 
     @convert_tt_tensors_wrapper
-    def forward(self, input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         output = input
         if self.channels_last:
             output = torch.permute(output, (0, 3, 1, 2))
@@ -793,7 +793,7 @@ class AdaptiveAvgPool2d(torch.nn.Module):
 
 
 @convert_tt_tensors_wrapper
-def ceil(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+def ceil(input: ttnn.Tensor) -> ttnn.Tensor:
     """
     Returns a new tensor with the ceil of the elements of ``input``, the smallest integer greater than or equal to each element.
 
@@ -807,7 +807,7 @@ def ceil(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
-def floor(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+def floor(input: ttnn.Tensor) -> ttnn.Tensor:
     """
     Returns a new tensor with the floor of the elements of ``input``, the largest integer less than or equal to each element.
 
@@ -821,7 +821,7 @@ def floor(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
-def trunc(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+def trunc(input: ttnn.Tensor) -> ttnn.Tensor:
     """
     Returns a new tensor with the truncated integer values of the elements of ``input``.
 
@@ -835,7 +835,7 @@ def trunc(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
-def unary_fmod(input: ttl_tensor.Tensor, other: float) -> ttl_tensor.Tensor:
+def unary_fmod(input: ttnn.Tensor, other: float) -> ttnn.Tensor:
     """
     Applies mod operations and the result has the same sign as the dividend ``input`` and
     its absolute value is less than that of ``other``.
@@ -852,7 +852,7 @@ def unary_fmod(input: ttl_tensor.Tensor, other: float) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
-def binary_fmod(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+def binary_fmod(input: ttnn.Tensor, other: ttnn.Tensor) -> ttnn.Tensor:
     """
     Applies mod operations and the result has the same sign as the dividend ``input`` and
     its absolute value is less than that of ``other``.
@@ -869,7 +869,7 @@ def binary_fmod(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tenso
 
 
 @convert_tt_tensors_wrapper
-def bitwise_not(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+def bitwise_not(input: ttnn.Tensor) -> ttnn.Tensor:
     """
     Computes the bitwise NOT of the given ``input`` tensor.
 
@@ -884,7 +884,7 @@ def bitwise_not(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
-def unary_bitwise_or(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
+def unary_bitwise_or(input: ttnn.Tensor, other: int) -> ttnn.Tensor:
     """
     Computes the bitwise OR of ``input`` and ``other``.
 
@@ -900,7 +900,7 @@ def unary_bitwise_or(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
-def unary_bitwise_and(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
+def unary_bitwise_and(input: ttnn.Tensor, other: int) -> ttnn.Tensor:
     """
     Computes the bitwise AND of ``input`` and ``other``.
 
@@ -916,7 +916,7 @@ def unary_bitwise_and(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor
 
 
 @convert_tt_tensors_wrapper
-def unary_bitwise_xor(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
+def unary_bitwise_xor(input: ttnn.Tensor, other: int) -> ttnn.Tensor:
     """
     Computes the bitwise XOR of ``input`` and ``other``.
 
@@ -932,7 +932,7 @@ def unary_bitwise_xor(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor
 
 
 @convert_tt_tensors_wrapper
-def binary_bitwise_or(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+def binary_bitwise_or(input: ttnn.Tensor, other: ttnn.Tensor) -> ttnn.Tensor:
     """
     Computes the bitwise OR of ``input`` and ``other``.
 
@@ -948,7 +948,7 @@ def binary_bitwise_or(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl
 
 
 @convert_tt_tensors_wrapper
-def binary_bitwise_and(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+def binary_bitwise_and(input: ttnn.Tensor, other: ttnn.Tensor) -> ttnn.Tensor:
     """
     Computes the bitwise AND of ``input`` and ``other``.
 
@@ -964,7 +964,7 @@ def binary_bitwise_and(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> tt
 
 
 @convert_tt_tensors_wrapper
-def binary_bitwise_xor(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+def binary_bitwise_xor(input: ttnn.Tensor, other: ttnn.Tensor) -> ttnn.Tensor:
     """
     Computes the bitwise XOR of ``input`` and ``other``.
 
@@ -980,7 +980,7 @@ def binary_bitwise_xor(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> tt
 
 
 @convert_tt_tensors_wrapper
-def unary_bitwise_right_shift(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
+def unary_bitwise_right_shift(input: ttnn.Tensor, other: int) -> ttnn.Tensor:
     """
     Computes the right arithmetic shift of ``input`` by ``other`` bits. The input tensor must be of integral type.
     In any case, if the value of the right operand is negative or is greater or equal to the number of bits in the
@@ -998,7 +998,7 @@ def unary_bitwise_right_shift(input: ttl_tensor.Tensor, other: int) -> ttl_tenso
 
 
 @convert_tt_tensors_wrapper
-def unary_bitwise_left_shift(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
+def unary_bitwise_left_shift(input: ttnn.Tensor, other: int) -> ttnn.Tensor:
     """
     Computes the left arithmetic shift of ``input`` by ``other`` bits. The input tensor must be of integral type.
 
@@ -1014,7 +1014,7 @@ def unary_bitwise_left_shift(input: ttl_tensor.Tensor, other: int) -> ttl_tensor
 
 
 @convert_tt_tensors_wrapper
-def binary_bitwise_right_shift(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+def binary_bitwise_right_shift(input: ttnn.Tensor, other: ttnn.Tensor) -> ttnn.Tensor:
     """
     Computes the right arithmetic shift of ``input`` by ``other`` bits. The input tensor must be of integral type.
     In any case, if the value of the right operand is negative or is greater or equal to the number of bits in the
@@ -1032,7 +1032,7 @@ def binary_bitwise_right_shift(input: ttl_tensor.Tensor, other: ttl_tensor.Tenso
 
 
 @convert_tt_tensors_wrapper
-def binary_bitwise_left_shift(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+def binary_bitwise_left_shift(input: ttnn.Tensor, other: ttnn.Tensor) -> ttnn.Tensor:
     """
     Computes the left arithmetic shift of ``input`` by ``other`` bits. The input tensor must be of integral type.
 
@@ -1048,7 +1048,7 @@ def binary_bitwise_left_shift(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor
 
 
 @convert_tt_tensors_wrapper
-def torch_argmax(input: ttl_tensor.Tensor, dim: int = None, keepdim: bool = False) -> ttl_tensor.Tensor:
+def torch_argmax(input: ttnn.Tensor, dim: int = None, keepdim: bool = False) -> ttnn.Tensor:
     """
     Returns the indices of the maximum values of a tensor along a dimension.
 
@@ -1066,7 +1066,7 @@ def torch_argmax(input: ttl_tensor.Tensor, dim: int = None, keepdim: bool = Fals
 
 
 @convert_tt_tensors_wrapper
-def torch_argmin(input: ttl_tensor.Tensor, dim: int, keepdim: bool) -> ttl_tensor.Tensor:
+def torch_argmin(input: ttnn.Tensor, dim: int, keepdim: bool) -> ttnn.Tensor:
     """
     Returns the indices of the minimum values of a tensor along a dimension.
 
