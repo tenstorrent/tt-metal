@@ -30,26 +30,27 @@ void DeviceProfiler::readRiscProfilerResults(
 
     ZoneScoped;
 
-    std::pair<uint32_t, CoreCoord> deviceCore = {device_id,worker_core};
+    HalProgrammableCoreType CoreType;
+    int riscCount;
+    profiler_msg_t *profiler_msg;
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
-    uint32_t coreFlatID = soc_d.physical_routing_to_profiler_flat_id.at(worker_core);
-    uint32_t startIndex = coreFlatID * PROFILER_RISC_COUNT * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
-
     auto ethCores = soc_d.get_physical_ethernet_cores() ;
-
-    HalProgrammableCoreType CoreType;
-    profiler_msg_t *profiler_msg;
     if (std::find(ethCores.begin(), ethCores.end(), worker_core) == ethCores.end())
     {
         profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::TENSIX, HalMemAddrType::PROFILER);
         CoreType = HalProgrammableCoreType::TENSIX;
+        riscCount = 5;
     }
     else
     {
         profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::PROFILER);
         CoreType = HalProgrammableCoreType::ACTIVE_ETH;
+        riscCount = 1;
     }
+
+    uint32_t coreFlatID = soc_d.physical_routing_to_profiler_flat_id.at(worker_core);
+    uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
         device_id,
@@ -64,7 +65,7 @@ void DeviceProfiler::readRiscProfilerResults(
     }
 
     int riscNum = 0;
-    for (int riscEndIndex = 0; riscEndIndex < PROFILER_RISC_COUNT; riscEndIndex ++ ) {
+    for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex ++ ) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         uint32_t riscType;
         if(CoreType == HalProgrammableCoreType::TENSIX)
