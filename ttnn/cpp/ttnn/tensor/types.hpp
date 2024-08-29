@@ -500,7 +500,8 @@ struct MultiDeviceHostStorage {
             std::lock_guard<std::mutex> lock(mtx);
 
             return std::all_of(buffers.begin(), buffers.end(), [](auto&& buffer) {
-            return std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, buffer);});
+                return std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, buffer);
+            });
         }
     };
 
@@ -634,13 +635,11 @@ struct MultiDeviceHostStorage {
 
         inline bool is_allocated() const {
             std::lock_guard<std::mutex> lock(buffer_mtx);
-            bool is_allocated = true;
-            for (int i = 0; i < ordered_device_ids.size(); ++i) {
-                auto device_id = ordered_device_ids[i];
+
+            return std::all_of(ordered_device_ids.begin(), ordered_device_ids.end(), [&buffers = this->buffers](auto&& device_id) {
                 const auto& buffer = buffers.at(device_id);
-                is_allocated &= buffer && buffer->size() > 0;
-            }
-            return is_allocated;
+                return buffer && buffer->size() > 0;
+            });
         }
     };
 
