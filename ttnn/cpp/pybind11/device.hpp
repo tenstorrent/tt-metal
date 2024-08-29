@@ -6,6 +6,7 @@
 
 #include "pybind11/pybind_fwd.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 namespace py = pybind11;
 

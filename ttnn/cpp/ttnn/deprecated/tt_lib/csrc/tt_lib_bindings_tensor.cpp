@@ -9,7 +9,6 @@
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/auto_format.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_lib_bindings.hpp"
@@ -364,42 +363,6 @@ void TensorModule(py::module& m_tensor) {
         | a        | Input tensor         | Tensor    |             | Yes      |
         +----------+----------------------+-----------+-------------+----------+
     )doc");
-
-    m_tensor.def(
-        "format_input_tensor",
-        &AutoFormat::format_input_tensor,
-        py::arg("input").noconvert(),
-        py::arg("device").noconvert(),
-        py::arg("padded_shape"),
-        py::arg("pad_value"),
-        py::arg("target_layout").noconvert(),
-        py::arg("target_mem_config").noconvert() = std::nullopt,
-        R"doc(
-            Formats tensor to target layout and pads to padded shape
-        )doc");
-    m_tensor.def(
-        "format_output_tensor",
-        &AutoFormat::format_output_tensor,
-        py::arg("output").noconvert(),
-        py::arg("shape"),
-        py::arg("device").noconvert(),
-        py::arg("target_layout").noconvert(),
-        py::arg("target_mem_config").noconvert() = std::nullopt,
-        R"doc(
-            Formats tensor to target layout and unpads to shape
-        )doc");
-    m_tensor.def(
-        "pad_to_tile_shape",
-        [](const std::array<uint32_t, 4>& unpadded_shape,
-           bool pad_c = false,
-           bool pad_n = false,
-           bool pad_h = true,
-           bool pad_w = true) -> Shape {
-            return AutoFormat::pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w);
-        },
-        R"doc(
-            Returns shape padded to tile shape
-        )doc");
 
     m_tensor.def(
         "dump_tensor",

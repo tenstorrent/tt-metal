@@ -4,12 +4,13 @@
 
 #include <algorithm>
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_mean/moreh_mean_op.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_mean/moreh_mean_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 namespace tt {
 using namespace constants;
@@ -17,13 +18,13 @@ namespace operations {
 
 namespace primary {
 
-// TODO: Consolidate into moreh_sum_h
-operation::ProgramWithCallbacks moreh_mean_h(const Tensor &a, const Tensor &output) {
-    tt_metal::ReduceOpMath reduce_op = tt_metal::ReduceOpMath::SUM;
-    tt_metal::ReduceOpDim reduce_dim = tt_metal::ReduceOpDim::H;
-
-    const auto shape = a.get_legacy_shape();
-    uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
+operation::ProgramWithCallbacks moreh_mean_h(
+    const Tensor &input,
+    const Tensor &output,
+    const CoreRange core_range,
+    const DeviceComputeKernelConfig compute_kernel_config) {
+    const auto shape = input.get_legacy_shape();
+    uint32_t W = shape[-1], H = shape[-2];
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
@@ -31,154 +32,128 @@ operation::ProgramWithCallbacks moreh_mean_h(const Tensor &a, const Tensor &outp
 
     // check mask for h-dim
     const auto input_shape_without_padding = shape.without_padding();
-    const auto origin_H = input_shape_without_padding[2];
+    const auto origin_H = input_shape_without_padding[-2];
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
     const auto mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
-    float scaler = 1.0f / origin_H;
+    auto program = tt_metal::CreateProgram();
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto units_to_divide = input.volume() / W / H * Wt;
 
-    tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat scaler_cb_data_format = DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat mask_h_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t mask_h_single_tile_size = tt_metal::detail::TileSize(mask_h_cb_data_format);
-    tt::DataFormat intermed_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t intermed_single_tile_size= tt_metal::detail::TileSize(intermed_cb_data_format);
-    tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
-    uint32_t num_tiles = a.volume() / TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+        split_work_to_cores(core_range, units_to_divide);
 
-    tt_metal::Device *device = a.device();
+    auto arch = input.device()->arch();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+        get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto num_cols = NC * Wt;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_cols);
+    // create circular buffers
+    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
 
-    string compute_kernel_name = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/moreh_mean_h.cpp";
+    auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    uint32_t src0_cb_index = CB::c_in0;
-    CBHandle cb_src0;
-    uint32_t src1_cb_index = CB::c_in1;
-    CBHandle cb_src1 = 0;
     uint32_t num_input_tiles = 2;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
-            .set_page_size(src0_cb_index, src0_single_tile_size);
-    cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
-
-    uint32_t scaler_cb_index = CB::c_in2;
-    tt_metal::CircularBufferConfig cb_scaler_config =
-        tt_metal::CircularBufferConfig(1 * scaler_single_tile_size, {{scaler_cb_index, scaler_cb_data_format}})
-            .set_page_size(scaler_cb_index, scaler_single_tile_size);
-    auto cb_scaler = tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
-
-    tt_metal::CircularBufferConfig cb_mask_h_config =
-        tt_metal::CircularBufferConfig(mask_h_single_tile_size, {{CB::c_in3, mask_h_cb_data_format}})
-            .set_page_size(CB::c_in3, mask_h_single_tile_size);
-    auto cb_mask_h = tt_metal::CreateCircularBuffer(program, all_cores, cb_mask_h_config);
-
-    tt_metal::CircularBufferConfig cb_intermed0_config =
-        tt_metal::CircularBufferConfig(intermed_single_tile_size, {{CB::c_intermed0, intermed_cb_data_format}})
-            .set_page_size(CB::c_intermed0, intermed_single_tile_size);
-    auto cb_intermed0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
-
-    tt_metal::CircularBufferConfig cb_intermed1_config =
-        tt_metal::CircularBufferConfig(intermed_single_tile_size, {{CB::c_intermed1, intermed_cb_data_format}})
-            .set_page_size(CB::c_intermed1, intermed_single_tile_size);
-    auto cb_intermed1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
-
-    uint32_t output_cb_index = CB::c_out0;  // output operands start at index 16
-    CBHandle cb_output;
     uint32_t num_output_tiles = 2;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
-            .set_page_size(output_cb_index, dst_single_tile_size);
-    cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
-    tt_metal::Buffer *src0_buffer = a.buffer();
-    tt_metal::KernelHandle reader_kernel_id;
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        data_format,
+        {
+            {CB::c_in0, num_input_tiles},                        // input
+            {CB::c_in2, 1},                                      // scaler
+            {CB::c_in3, 1},                                      // mask
+            {CB::c_intermed0, 1, fp32_dest_acc_en_data_format},  //
+            {CB::c_intermed1, 1},                                //
+            {CB::c_out0, 1},                                     // output
+        });
+
+    float scaler = 1.0f / origin_H;
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
-    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, Ht, Wt, HtWt, packed_scaler_value};
+    auto packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+    std::vector<uint32_t> reader_compile_time_args = {
+        static_cast<uint32_t>(is_dram(input)), Ht, Wt, HtWt, packed_scaler_value};
 
     std::map<string, string> reader_defines;
     reader_defines["REDUCE_SCALER"] = "1";
     if (do_mask_h) {
         reader_defines["DO_MASK_H"] = "1";
     }
-    reader_kernel_id = tt_metal::CreateKernel(
+    const auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/reader_moreh_mean_h.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+        reader_compile_time_args,
+        reader_defines);
 
-    tt_metal::Buffer *dst_buffer = output.buffer();
-    tt_metal::KernelHandle writer_kernel_id;
+    std::vector<uint32_t> writer_compile_time_args = {
+        static_cast<uint32_t>(CB::c_out0), static_cast<uint32_t>(is_dram(output))};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
-
-    writer_kernel_id = tt_metal::CreateKernel(
+    const auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/writer_moreh_mean_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/"
+        "writer_moreh_mean_unary_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-    std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
-    vector<uint32_t> compute_kernel_args_group_1 = {
-        Ht,                         // Ht
-        num_cols_per_core_group_1,  // Wt
-        1,                          // NC
-        origin_H
-    };
+        writer_compile_time_args);
 
-    auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
+    ////////////////////////////////////////////////////////////////////////////
+    //                      ComputeKernel SetUp
+    ///////////////////////////////////////////////////////////////////////////
+    string compute_kernel_name = "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_mean/kernels/moreh_mean_h.cpp";
+    auto reduce_op = tt_metal::ReduceOpMath::SUM;
+    auto reduce_dim = tt_metal::ReduceOpDim::H;
+    std::map<string, string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = 1;
+    }
+    vector<uint32_t> compute_kernel_args_group_1 = {
+        Ht,                      // Ht
+        units_per_core_group_1,  // Wt
+        1,                       // NC
+        origin_H};
+    vector<uint32_t> compute_kernel_args_group_2 = {
+        Ht,                      // Ht
+        units_per_core_group_2,  // Wt
+        1,                       // NC
+        origin_H};
+
+    auto compute_kernel_ids = CreateComputeKernel(
         program,
         compute_kernel_name,
-        core_group_1,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_1, .defines = reduce_defines});
+        {
+            {core_group_1, units_per_core_group_1, compute_kernel_args_group_1},
+            {core_group_2, units_per_core_group_2, compute_kernel_args_group_2},
+        },
+        ComputeKernelConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            // TODO(hyungsuk): change preserve_fp32_precision from false to fp32_dest_acc_en after fix #10337
+            // .preserve_fp32_precision = fp32_dest_acc_en,
+            .preserve_fp32_precision = false,
+            .math_approx_mode = math_approx_mode,
+            .defines = compute_defines});
 
-    if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
-            Ht,                         // Ht
-            num_cols_per_core_group_2,  // Wt
-            1,                          // NC
-            origin_H
-        };
-
-        auto reduce_compute_kernel_group_2_id = tt_metal::CreateKernel(
-            program,
-            compute_kernel_name,
-            core_group_2,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args_group_2, .defines = reduce_defines});
-    }
-
-    for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_cols_per_core = 0;
+    for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
+        CoreCoord core = {i / core_h, i % core_h};
+        uint32_t units_per_core = 0;
         if (core_group_1.core_coord_in_core_ranges(core)) {
-            num_cols_per_core = num_cols_per_core_group_1;
+            units_per_core = units_per_core_group_1;
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            num_cols_per_core = num_cols_per_core_group_2;
+            units_per_core = units_per_core_group_2;
         } else {
+            std::cout << "i " << i << "\n";
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         tt_metal::SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
-            {a.buffer()->address(),
-             num_cols_read / Wt * HtWt + num_cols_read % Wt,
-             num_cols_read % Wt,
-             num_cols_per_core,
-             mask_h
-             });
+            {input.buffer()->address(),
+             tile_offset / Wt * HtWt + tile_offset % Wt,
+             tile_offset % Wt,
+             units_per_core,
+             mask_h});
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -186,40 +161,36 @@ operation::ProgramWithCallbacks moreh_mean_h(const Tensor &a, const Tensor &outp
             core,
             {
                 output.buffer()->address(),
-                num_cols_per_core,  // number of tiles to write
-                num_cols_read       // output tile start index
+                units_per_core,  // number of tiles to write
+                tile_offset      // output tile start index
             });
-        num_cols_read += num_cols_per_core;
+        tile_offset += units_per_core;
     }
 
-    auto override_runtime_arguments_callback = [reader_kernel_id = reader_kernel_id,
-                                                writer_kernel_id = writer_kernel_id,
-                                                cb_src1 = cb_src1,
-                                                cb_output = cb_output,
-                                                num_cores = num_cores,
-                                                num_cores_y = num_cores_y](
-                                                   const void *operation,
-                                                   Program &program,
-                                                   const std::vector<Tensor> &input_tensors,
-                                                   const std::vector<std::optional<const Tensor>> &,
-                                                   const std::vector<Tensor> &output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        auto dst_buffer = output_tensors.at(0).buffer();
+    auto override_runtime_arguments_callback =
+        [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
+            const void *operation,
+            Program &program,
+            const std::vector<Tensor> &input_tensors,
+            const std::vector<std::optional<const Tensor>> &,
+            const std::vector<Tensor> &output_tensors) {
+            auto src_buffer = input_tensors.at(0).buffer();
+            auto dst_buffer = output_tensors.at(0).buffer();
 
-        for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            for (uint32_t i = 0; i < num_cores; i++) {
+                CoreCoord core = {i / core_h, i % core_h};
 
-            {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
+                {
+                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    runtime_args[0] = src_buffer->address();
+                }
+
+                {
+                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    runtime_args[0] = dst_buffer->address();
+                }
             }
-
-            {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-            }
-        }
-    };
+        };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }

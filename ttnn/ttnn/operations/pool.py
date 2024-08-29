@@ -398,7 +398,7 @@ class TTPyMaxPool(TTPyOp):
         padded_nhw = self.input_sharded_memory_config.shard_spec.shape[0] * self.sliding_window_op_params.num_cores_nhw
         if padded_nhw != act_shape[-2]:
             padded_shape = ttnn.Shape(act_shape, (1, 1, padded_nhw, in_c))
-            act_reshaped = ttl.tensor.format_input_tensor(
+            act_reshaped = ttnn.format_input_tensor(
                 act_reshaped,
                 self.device,
                 padded_shape,

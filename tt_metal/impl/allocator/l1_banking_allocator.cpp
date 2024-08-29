@@ -182,15 +182,13 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     TT_ASSERT(
         (alloc_offset + alloc_config.l1_small_size) <= alloc_config.worker_l1_size,
         "L1 small region extends past L1 size");
-    if (alloc_config.l1_small_size > 0) {
-        allocator.l1_small_manager = BankManager(
-            BufferType::L1_SMALL,
-            small_bank_id_to_bank_offset,
-            alloc_config.l1_small_size,
-            small_interleaved_address_limit,
-            ALLOCATOR_ALIGNMENT,
-            small_alloc_offset);
-    }
+    allocator.l1_small_manager = BankManager(
+        BufferType::L1_SMALL,
+        small_bank_id_to_bank_offset,
+        alloc_config.l1_small_size,
+        small_interleaved_address_limit,
+        ALLOCATOR_ALIGNMENT,
+        small_alloc_offset);
 }
 
 }   // namespace allocator

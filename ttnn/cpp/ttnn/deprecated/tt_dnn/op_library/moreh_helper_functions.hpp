@@ -9,8 +9,8 @@
 #include <optional>
 #include <variant>
 
-#include "ttnn/tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace tt {
 namespace operations {
@@ -28,11 +28,11 @@ inline bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> te
 inline bool is_dram(const Buffer *buffer) { return buffer->buffer_type() == BufferType::DRAM; }
 
 inline bool is_scalar(const Tensor &tensor) {
-    //TODO(dongjin): current impl requires finding a scalar in a 2d shape
+    // TODO(dongjin): current impl requires finding a scalar in a 2d shape
     const auto &shape = tensor.get_legacy_shape().without_padding();
     const uint32_t rank = shape.rank();
 
-    //TODO(dongjin): refactor dot op
+    // TODO(dongjin): refactor dot op
     if (rank == 4) {
         return (shape[0] == 1 && shape[1] == 1 && shape[2] == 1 && shape[3] == 1);
     }
@@ -40,11 +40,11 @@ inline bool is_scalar(const Tensor &tensor) {
 }
 
 inline bool is_1d_tensor(const Tensor &tensor) {
-    //TODO(dongjin): current impl requires finding a 1d in a 2d shape
+    // TODO(dongjin): current impl requires finding a 1d in a 2d shape
     const auto &shape = tensor.get_legacy_shape().without_padding();
     const uint32_t rank = shape.rank();
 
-    //TODO(dongjin): refactor dot op
+    // TODO(dongjin): refactor dot op
     if (rank == 4) {
         return (shape[0] == 1 && shape[1] == 1 && shape[2] == 1);
     }
@@ -83,6 +83,14 @@ struct ComputeKernelArg {
     const std::vector<uint32_t> &compile_args = {};
 };
 
+struct ComputeKernelConfig {
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    bool fp32_dest_acc_en = false;
+    bool preserve_fp32_precision = false;
+    bool math_approx_mode = false;
+    std::map<std::string, std::string> defines;
+};
+
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
     Program &program,
     const std::string &file_name,
@@ -103,6 +111,12 @@ struct ComputeKernelArg {
     bool math_approx_mode = false,
     bool preserve_fp32_precision = false);
 
+[[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
+    Program &program, const std::string &file_name, std::vector<ComputeKernelArg> args, ComputeKernelConfig config);
+
+[[maybe_unused]] KernelHandle CreateComputeKernel(
+    Program &program, const std::string &file_name, ComputeKernelArg arg, ComputeKernelConfig config);
+
 struct CircularBufferArg {
     uint32_t buffer_index;
     uint32_t num_tiles;
@@ -112,8 +126,8 @@ struct CircularBufferArg {
     CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles) : buffer_index(buffer_index), num_tiles(num_tiles) {
         data_format = tt::DataFormat::Invalid;
     }
-    CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles, tt::DataFormat data_format) : buffer_index(buffer_index), num_tiles(num_tiles), data_format(data_format) {
-    }
+    CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles, tt::DataFormat data_format) :
+        buffer_index(buffer_index), num_tiles(num_tiles), data_format(data_format) {}
 };
 
 [[maybe_unused]] std::vector<CBHandle> CreateCircularBuffer(
@@ -129,17 +143,18 @@ struct CircularBufferArg {
     CircularBufferArg arg);
 
 void check_tensor(
-    const Tensor& tensor,
-    const std::string& op_name,
-    const std::string& tensor_name,
+    const Tensor &tensor,
+    const std::string &op_name,
+    const std::string &tensor_name,
     const std::initializer_list<DataType> &data_types = {DataType::BFLOAT16},
     Layout layout = Layout::TILE,
     bool check_dtype = true,
     bool check_layout = true);
 
-void check_tensor(std::optional<Tensor> tensor,
-    const std::string& op_name,
-    const std::string& tensor_name,
+void check_tensor(
+    std::optional<Tensor> tensor,
+    const std::string &op_name,
+    const std::string &tensor_name,
     const std::initializer_list<DataType> &data_types = {DataType::BFLOAT16},
     Layout layout = Layout::TILE,
     bool check_dtype = true,
@@ -241,15 +256,15 @@ template <typename OutputTensors = Tensors>
 auto create_override_addresses_callback(
     KernelHandle reader_kernel_id, KernelHandle writer_kernel_id, uint32_t num_cores, uint32_t core_h) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
-               const Program& program,
-               const std::vector<Buffer*>& input_buffers,
-               const std::vector<Buffer*>& output_buffers) -> void {
+               const Program &program,
+               const std::vector<Buffer *> &input_buffers,
+               const std::vector<Buffer *> &output_buffers) -> void {
         for (uint32_t icore = 0; icore < num_cores; icore++) {
             CoreCoord core = {icore / core_h, icore % core_h};
 
             // readers
             {
-                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 for (uint32_t idx = 0; idx < input_buffers.size(); idx++) {
                     auto buffer = input_buffers.at(idx);
                     if (buffer != nullptr) {
@@ -260,7 +275,7 @@ auto create_override_addresses_callback(
 
             // writer
             {
-                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 for (uint32_t idx = 0; idx < output_buffers.size(); idx++) {
                     auto buffer = output_buffers.at(idx);
                     if (buffer != nullptr) {
@@ -272,14 +287,26 @@ auto create_override_addresses_callback(
     };
 }
 
-
 bool is_hw_dim(uint32_t dim, uint32_t rank);
 
 uint32_t compute_inner(Shape shape, uint32_t dim);
 
 uint32_t compute_outer(Shape shape, uint32_t dim);
 
-void expand_to_max_dim(std::vector<uint32_t> &dim, const Shape& shape);
+void expand_to_max_dim(std::vector<uint32_t> &dim, const Shape &shape);
+
+void validate_input_with_dim(const Tensor &input, const int64_t &dim);
+
+void validate_output_with_keepdim(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &keep_dim);
+
+void initialize_dims_with_range(std::vector<int64_t> &dims, uint32_t input_rank);
+
+std::vector<int64_t> get_dim(
+    const std::optional<std::variant<int64_t, std::vector<int64_t>>> &dim, uint32_t input_rank);
+
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const Shape& shape);
+
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const Shape& shape, uint32_t dim);
 
 }  // namespace primary
 }  // namespace operations

@@ -5,6 +5,7 @@
 import ttnn
 from models.utility_functions import is_wormhole_b0
 import copy
+import pytest
 
 
 TILE_HEIGHT = 32
@@ -132,3 +133,25 @@ def compute_output_shape(input_shape, dim, keepdim=False):
         tt_output_shape = filter_indices_with_last_two(output_shape, dim)
 
     return torch_output_shape, tt_output_shape
+
+
+def check_dim(input_shape, dim, keepdim):
+    if type(dim) == int and dim >= len(input_shape):
+        pytest.skip("dim bigger than input rank")
+
+    if type(dim) == list:
+        for i in dim:
+            if i >= len(input_shape):
+                pytest.skip("dim bigger than input rank")
+
+    if keepdim == False:
+        if dim in [None, []]:
+            pytest.skip("`keepdim == false` don't support last 2-dim")
+
+        if type(dim) == int and len(input_shape) - 2 <= dim:
+            pytest.skip("`keepdim == false` don't support last 2-dim")
+
+        if type(dim) == list:
+            for i in dim:
+                if len(input_shape) - 2 <= i:
+                    pytest.skip("`keepdim == false` don't support last 2-dim")
