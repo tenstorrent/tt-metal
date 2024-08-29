@@ -29,7 +29,6 @@ def test_bw_unary_assign(input_shapes, device):
     assert status
 
 
-@pytest.mark.skip(reason="this test is failing because ttnn.assign_bw doesn't have a corresponding API call")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -49,4 +48,94 @@ def test_bw_binary_assign(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.assign_bw)
     golden_tensor = golden_function(grad_data, in_data, other_data)
     status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("are_required_outputs", [[True], [False]])
+@pytest.mark.parametrize("pass_queue_id", [True, False])
+def test_bw_unary_assign_opt_out_cq_id(input_shapes, device, are_required_outputs, pass_queue_id):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+
+    input_grad = None
+    if are_required_outputs[0]:
+        _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
+
+    cq_id = 0
+    if pass_queue_id:
+        tt_output_tensor_on_device = ttnn.assign_bw(
+            grad_tensor, input_tensor, are_required_outputs=are_required_outputs, input_grad=input_grad, queue_id=cq_id
+        )
+    else:
+        tt_output_tensor_on_device = ttnn.assign_bw(
+            grad_tensor, input_tensor, are_required_outputs=are_required_outputs, input_grad=input_grad
+        )
+
+    golden_function = ttnn.get_golden_function(ttnn.assign_bw)
+    golden_tensor = golden_function(grad_data, in_data)
+
+    status = True
+    if are_required_outputs[0]:
+        status = status & compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True], [False, False]])
+@pytest.mark.parametrize("pass_queue_id", [True, False])
+def test_bw_binary_assign_opt_out_cq_id(input_shapes, device, are_required_outputs, pass_queue_id):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+
+    input_grad = None
+    other_grad = None
+    if are_required_outputs[0]:
+        _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
+    if are_required_outputs[1]:
+        _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
+
+    cq_id = 0
+    if pass_queue_id:
+        tt_output_tensor_on_device = ttnn.assign_bw(
+            grad_tensor,
+            input_tensor,
+            other_tensor,
+            are_required_outputs=are_required_outputs,
+            input_a_grad=input_grad,
+            input_b_grad=other_grad,
+            queue_id=cq_id,
+        )
+    else:
+        tt_output_tensor_on_device = ttnn.assign_bw(
+            grad_tensor,
+            input_tensor,
+            other_tensor,
+            are_required_outputs=are_required_outputs,
+            input_a_grad=input_grad,
+            input_b_grad=other_grad,
+        )
+
+    golden_function = ttnn.get_golden_function(ttnn.assign_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data)
+
+    status = True
+    for i in range(len(are_required_outputs)):
+        if are_required_outputs[i]:
+            status = status & compare_pcc([tt_output_tensor_on_device[i]], [golden_tensor[i]])
     assert status

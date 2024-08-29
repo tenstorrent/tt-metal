@@ -263,6 +263,11 @@ constexpr auto assign_bw = ttnn::register_operation<
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<
         operations::unary_backward::UnaryBackwardOpType::ASSIGN_BW>>();
 
+constexpr auto fmod_bw = ttnn::register_operation<
+    "ttnn::fmod_bw",
+    operations::unary_backward::ExecuteUnaryBackwardFloat<
+        operations::unary_backward::UnaryBackwardOpType::FMOD_BW>>();
+
 constexpr auto multigammaln_bw = ttnn::register_operation<
     "ttnn::multigammaln_bw",
     operations::unary_backward::ExecuteUnaryBackwardWoFloat<

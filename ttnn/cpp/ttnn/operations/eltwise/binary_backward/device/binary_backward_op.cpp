@@ -375,12 +375,54 @@ std::vector<ttnn::Tensor> _eq_bw_inter(
     return output_tensors;
 }
 
-std::vector<Tensor> _assign_bw(
-    const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    grad_tensor.emplace_back(grad);
-    grad_tensor.emplace_back(grad);
-    return grad_tensor;
+std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
+    uint8_t cq_id, const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> result;
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            assign(grad, input_grad.value());
+        } else {
+            input_grad = grad;
+        }
+        result.push_back(input_grad.value());
+    } else {
+        result.push_back(std::nullopt);
+    }
+    if (are_required_outputs.at(1)) {
+        if(other_grad.has_value()){
+            assign(grad, other_grad.value());
+        } else {
+            other_grad = grad;
+        }
+        result.push_back(other_grad.value());
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    return std::move(result);
+}
+
+std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
+    uint8_t cq_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config,
+    const std::vector<bool>& are_required_outputs,
+    std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            assign(grad, input_grad.value());
+        } else {
+            input_grad = grad;
+        }
+        result.push_back(input_grad.value());
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    return std::move(result);
+
 }
 
 std::vector<Tensor> _concat_bw(
