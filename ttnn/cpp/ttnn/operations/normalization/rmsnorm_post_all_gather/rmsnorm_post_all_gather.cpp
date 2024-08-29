@@ -17,7 +17,7 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::Tensor>& sum_x2) {
+    const std::optional<const ttnn::Tensor>& stats) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch() : AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
     return operation::run(
@@ -29,7 +29,7 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
                     .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
                     .compute_kernel_config = kernel_config_val},
                 {input_tensor},
-                {residual_input_tensor, weight, bias, std::nullopt, sum_x2}).at(0);
+                {residual_input_tensor, weight, bias, stats}).at(0);
 }
 
 }  // namespace ttnn::operations::normalization

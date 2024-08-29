@@ -23,7 +23,7 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
                     .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
                     .compute_kernel_config = kernel_config_val},
                 {input_tensor},
-                {std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt}).at(0);
+                {std::nullopt, std::nullopt, std::nullopt, std::nullopt}).at(0);
 }
 
 }  // namespace ttnn::operations::normalization
