@@ -15,11 +15,11 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
-from models.utility_functions import skip_for_wormhole_b0, torch2tt_tensor
+from models.utility_functions import is_wormhole_b0, torch2tt_tensor, is_blackhole
 from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
 
 from models.utility_functions import (
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     torch_random,
@@ -38,7 +38,7 @@ import os
 os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_vit(device, use_program_cache):

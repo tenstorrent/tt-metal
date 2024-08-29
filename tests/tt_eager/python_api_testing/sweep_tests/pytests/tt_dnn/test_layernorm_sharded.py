@@ -20,7 +20,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0, skip_for_grayskull
+from models.utility_functions import is_wormhole_b0, is_wormhole_b0, skip_for_grayskull, is_blackhole
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
 
@@ -36,7 +36,7 @@ seq_lens = [32, 256, 384]
 per_core_ks = [32, 64, 128]
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "grid_size",
     grid_sizes,
@@ -186,7 +186,7 @@ seq_lens = [32, 256, 384]
 per_core_ks = [32, 64, 128]
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "grid_size",
     grid_sizes,

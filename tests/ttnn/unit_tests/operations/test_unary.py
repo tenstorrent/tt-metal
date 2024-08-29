@@ -10,7 +10,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from tests.ttnn.unit_tests.operations.backward.utility_funcs import data_gen_with_range, compare_pcc
-from models.utility_functions import torch_random, skip_for_grayskull, skip_for_wormhole_b0
+from models.utility_functions import torch_random, skip_for_grayskull, is_wormhole_b0, is_blackhole
 
 
 def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):

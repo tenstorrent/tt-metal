@@ -18,7 +18,8 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
+    is_blackhole,
 )
 import ttnn
 from models.experimental.stable_diffusion.tt.unet_2d_condition import (
@@ -93,7 +94,7 @@ def make_tt_unet(state_dict, device):
     return tt_unet
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.skip(reason="Test is failing., see issue #7536")
 def test_unbatched_stable_diffusion(device):
     # 1. Load the autoencoder model which will be used to decode the latents into image space.

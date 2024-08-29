@@ -14,7 +14,7 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
-from models.utility_functions import skip_for_wormhole_b0, torch2tt_tensor
+from models.utility_functions import is_wormhole_b0, torch2tt_tensor, is_blackhole
 from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
 
 import ast
@@ -27,7 +27,7 @@ def get_imagenet_label_dict():
     return class_labels
 
 
-@skip_for_wormhole_b0()
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_vit(device):
     torch.manual_seed(0)
 

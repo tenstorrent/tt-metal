@@ -12,7 +12,7 @@ from models.utility_functions import (
     comp_pcc,
     tt2torch_tensor,
     torch2tt_tensor,
-    skip_for_wormhole_b0,
+    is_wormhole_b0,
     skip_for_grayskull,
 )
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
