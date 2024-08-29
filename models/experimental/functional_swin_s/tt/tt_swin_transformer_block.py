@@ -19,8 +19,6 @@ class TtSwinTransformerBlock(nn.Module):
         window_size,
         shift_size,
         mlp_ratio=4.0,
-        dropout=0.0,
-        attention_dropout=0.0,
     ):
         super().__init__()
         self.device = device
@@ -32,8 +30,6 @@ class TtSwinTransformerBlock(nn.Module):
             window_size,
             shift_size,
             num_heads,
-            attention_dropout=attention_dropout,
-            dropout=dropout,
         )
 
         self.mlp = TtMLP(
@@ -42,7 +38,6 @@ class TtSwinTransformerBlock(nn.Module):
             parameters.mlp,
             activation_layer=ttnn.gelu,
             inplace=None,
-            dropout=dropout,
         )
 
         # for m in self.mlp.modules():
@@ -52,15 +47,10 @@ class TtSwinTransformerBlock(nn.Module):
         #             nn.init.normal_(m.bias, std=1e-6)
 
     def __call__(self, x):
-        x = x.to(self.device)
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         norm1 = ttnn.layer_norm(x, weight=self.parameters.norm1.weight, bias=self.parameters.norm1.bias)
-        norm1 = ttnn.to_layout(norm1, ttnn.ROW_MAJOR_LAYOUT)
         attn = self.attn(norm1)
-        attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT)
         x = x + attn
         norm2 = ttnn.layer_norm(x, weight=self.parameters.norm2.weight, bias=self.parameters.norm2.bias)
         mlp = self.mlp(norm2)
-        mlp = mlp.to(self.device)
         x = x + mlp
-        return ttnn.from_device(x)
+        return x
