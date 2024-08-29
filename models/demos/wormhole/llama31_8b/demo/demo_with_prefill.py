@@ -469,24 +469,23 @@ def run_llama_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
 
         # When running in CI, check the output against the expected output to avoid accuracy regressions
         # TODO Extend the expected output validation to further batches
-        # FIXME Issue #11850: Token validation is disabled for now
-        # if is_ci_env and batch_idx == 0:  # Only check output of batch 0
-        #     expected_output = "models/demos/wormhole/llama31_8b/demo/expected_outputs_prefill_128.json"
-        #     with open(expected_output, "r") as f:
-        #         expected_out = json.load(f)
-        #     # assert (
-        #     #     len(expected_out) >= batch_size * 2
-        #     # ), f"expected_outputs.json should have {batch_size * 2} outputs: {batch_size} for general weights and {batch_size} for instruct weights!"
+        if is_ci_env and batch_idx == 0:  # Only check output of batch 0
+            expected_output = "models/demos/wormhole/llama31_8b/demo/expected_outputs_prefill_128.json"
+            with open(expected_output, "r") as f:
+                expected_out = json.load(f)
+            # assert (
+            #     len(expected_out) >= batch_size * 2
+            # ), f"expected_outputs.json should have {batch_size * 2} outputs: {batch_size} for general weights and {batch_size} for instruct weights!"
 
-        #     for i in range(batch_size):
-        #         user_output = "".join(tokenizer.decode(all_outputs[i]))
-        #         if instruct_mode:  # The instruct outputs are at the end of the expected outputs file
-        #             user_expect = expected_out[i + batch_size]["output_instruct"]
-        #         else:
-        #             user_expect = expected_out[i]["output_general"]
+            for i in range(batch_size):
+                user_output = "".join(tokenizer.decode(all_outputs[i]))
+                if instruct_mode:  # The instruct outputs are at the end of the expected outputs file
+                    user_expect = expected_out[i + batch_size]["output_instruct"]
+                else:
+                    user_expect = expected_out[i]["output_general"]
 
-        #         assert user_output == user_expect, f"Output for user {i} does not match expected output!"
-        #     logger.info("[CI-Only] Output token validation passed!")
+                assert user_output == user_expect, f"Output for user {i} does not match expected output!"
+            logger.info("[CI-Only] Output token validation passed!")
 
     # Finish profiling at the end of all batches
     profiler.end("run")
