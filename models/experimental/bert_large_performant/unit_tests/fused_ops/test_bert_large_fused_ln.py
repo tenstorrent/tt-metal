@@ -6,7 +6,6 @@ from loguru import logger
 
 import torch
 
-import tt_lib as ttl
 
 from tt_lib.utils import (
     pad_weight,
@@ -20,8 +19,6 @@ import ttnn
 
 def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
-
-    tensor = ttl.tensor
 
     epsf = 1e-2
 
@@ -40,22 +37,22 @@ def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_c
             if test_id >= 1:
                 gamma = torch.rand(1, 1, 1, W) * 2 - 1
                 gammah32 = gamma.reshape([1, 1, -1, 32])
-                ttgamma = tensor.Tensor(
+                ttgamma = ttnn.Tensor(
                     gammah32.reshape(-1).tolist(),
                     gammah32.shape,
                     dtype,
-                    tensor.Layout.ROW_MAJOR,
+                    ttnn.ROW_MAJOR_LAYOUT,
                     device,
                     in0_mem_config,
                 )
             if test_id >= 2:
                 beta = torch.rand(1, 1, 1, W) * 2.0 - 1.1
                 betah32 = beta.reshape([1, 1, -1, 32])
-                ttbeta = tensor.Tensor(
+                ttbeta = ttnn.Tensor(
                     betah32.reshape(-1).tolist(),
                     betah32.shape,
                     dtype,
-                    tensor.Layout.ROW_MAJOR,
+                    ttnn.ROW_MAJOR_LAYOUT,
                     device,
                     in0_mem_config,
                 )
@@ -66,19 +63,19 @@ def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_c
             if test_id < 3:
                 y *= 0.0  # zero out the y to exclude x+y from reference calculation
 
-            ttx = tensor.Tensor(
+            ttx = ttnn.Tensor(
                 tilize_to_list(x),
                 [N, C, H, W],
                 dtype,
-                tensor.Layout.TILE,
+                ttnn.TILE_LAYOUT,
                 device,
                 in0_mem_config,
             )
-            tty = tensor.Tensor(
+            tty = ttnn.Tensor(
                 tilize_to_list(y),
                 [N, C, H, W],
                 dtype,
-                tensor.Layout.TILE,
+                ttnn.TILE_LAYOUT,
                 device,
                 in0_mem_config,
             )
@@ -129,22 +126,22 @@ import pytest
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
     ids=["BFLOAT16"],
 )
 @pytest.mark.parametrize(

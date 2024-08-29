@@ -560,7 +560,7 @@ def custom_preprocessor(torch_model, name):
         preprocessed_weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, 0, pad_value))
         preprocessed_weight = torch.permute(preprocessed_weight, (2, 3, 1, 0))
         preprocessed_weight = torch.reshape(
-            preprocessed_weight, int(three_times_hidden_size * (4 / c)), three_times_hidden_size
+            preprocessed_weight, (int(three_times_hidden_size * (4 / c)), three_times_hidden_size)
         )
 
         parameters = {"patch_embeddings": {}}
