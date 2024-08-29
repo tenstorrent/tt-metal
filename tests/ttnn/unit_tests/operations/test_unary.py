@@ -244,7 +244,6 @@ def test_cosh(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_wormhole_b0("Issue #6991: Failing on wormhole_b0 PCC issue")
 def test_acosh(device, h, w):
     run_unary_test(device, h, w, ttnn.acosh)
 
@@ -319,14 +318,13 @@ def run_unary_test_with_float(device, h, w, scalar, ttnn_function, pcc=0.9999):
 @pytest.mark.parametrize("scalar", [1, 2])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@skip_for_wormhole_b0("Issue #6991: Failing on wormhole_b0 PCC issue")
 def test_logit(device, h, w, scalar):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
 
     golden_function = ttnn.get_golden_function(ttnn.logit)
-    torch_output_tensor = golden_function(torch_input_tensor_a, eps=scalar)
+    torch_output_tensor = golden_function(torch_input_tensor_a, eps=scalar, device=device)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
 

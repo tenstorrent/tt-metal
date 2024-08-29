@@ -106,7 +106,7 @@ def register_ttnn_cpp_unary_function(unary_function):
 
         torch_function = name_to_golden_function[unary_function.__name__.split(".")[-1]]
         op_name = unary_function.__name__.split(".")[-1]
-        if op_name in ["reciprocal", "asin", "acos"]:
+        if op_name in ["reciprocal", "asin", "acos", "acosh"]:
             return torch.nan_to_num(
                 torch_function(input_tensor), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
             )
@@ -454,10 +454,15 @@ def _golden_function_softshrink(input_tensor_a, *args, lambd=0.5, **kwargs):
 ttnn.attach_golden_function(ttnn.softshrink, golden_function=_golden_function_softshrink)
 
 
-def _golden_function_logit(input_tensor_a, *args, eps=None, **kwargs):
+def _golden_function_logit(input_tensor_a, *args, eps=None, device, **kwargs):
     import torch
 
-    return torch.special.logit(input_tensor_a, eps=eps)
+    return torch.nan_to_num(
+        torch.special.logit(input_tensor_a, eps=eps),
+        nan=device.sfpu_nan(),
+        posinf=device.sfpu_inf(),
+        neginf=-device.sfpu_inf(),
+    )
 
 
 ttnn.attach_golden_function(ttnn.logit, golden_function=_golden_function_logit)
