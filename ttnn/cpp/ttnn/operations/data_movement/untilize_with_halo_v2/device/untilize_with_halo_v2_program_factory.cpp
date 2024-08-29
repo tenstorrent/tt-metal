@@ -164,6 +164,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
 
     bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
@@ -180,6 +181,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_block_sharded,
         remote_read,
         (uint32_t)(transpose_mcast ? 1 : 0),
+        is_width_sharded
     };
 
     reader_ct_args[0] = 0;

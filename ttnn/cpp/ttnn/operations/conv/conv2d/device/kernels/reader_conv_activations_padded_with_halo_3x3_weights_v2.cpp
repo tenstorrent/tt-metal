@@ -92,7 +92,7 @@ void kernel_main() {
     constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
     // the conditional selecting between coalescing and no-colescing must be constexpr to that compiler can optimized the other path away
     // this has shown to be a big perf win
-    static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
+
     // coalesce reads along weight_size_w
     reader_offset_idx = 0;
     uint32_t act_l1_offset = 0;

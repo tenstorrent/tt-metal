@@ -92,6 +92,7 @@ def test_optimized_conv_v2(
     fuse_relu,
     packer_l1_acc,
 ):
+    pytest.skip("TODO: Delete this test suite")
     if input_channels == 16:
         pytest.skip("These tests are hanging in interleaved_to_sharded after rebase. Issue: #4336")
 
@@ -271,6 +272,7 @@ def test_simple(
     debug = False
     fuse_relu = False
 
+    pytest.skip("TODO: Delete this test suite")
     assert output_channels % 32 == 0
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]

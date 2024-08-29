@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sliding_window.hpp"
+#include <vector>
 
 namespace ttnn::operations::sliding_window{
 std::size_t SlidingWindowConfig::get_hash() const {
@@ -421,6 +422,15 @@ Tensor construct_on_host_config_tensor(const std::vector<std::vector<uint16_t>>&
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
         log_debug(tt::LogOp, "config_shape: ({}, {})", config_shape[0], config_shape[1]);
         return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
+    } else if(p_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+            uint32_t repeat_factor = p_config.grid.num_cores();
+            std::vector<uint16_t> repeat_config;
+            for (uint32_t i = 0; i < repeat_factor; ++ i) {
+                repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
+            }
+            auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
+            config_shape = Shape(std::vector<uint32_t>{config_shape[0] * repeat_factor, config_shape[1]});
+            return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
     } else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
         // NOTE: it is assumed that the range start is always (0, 0)

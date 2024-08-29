@@ -9,7 +9,6 @@
 #include <fmt/core.h>
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "utils.hpp"
 
 namespace ttnn::operations::sliding_window {
 
