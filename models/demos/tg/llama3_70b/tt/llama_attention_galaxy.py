@@ -37,6 +37,7 @@ class TtLlamaAttention_galaxy:
         cache_path=None,
         read_cache=False,
     ):
+        self.saved_tensors = {}
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.num_devices = mesh_device.get_num_devices()
@@ -200,6 +201,7 @@ class TtLlamaAttention_galaxy:
             self.FUSED_QKV_MM_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
                 (1, 1, 256, 2048),
                 (1, 1, 2048, 1280),
+                grid=ttnn.CoreGrid(x=4, y=1),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
             )
@@ -207,6 +209,7 @@ class TtLlamaAttention_galaxy:
             self.SELFOUT_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
                 (1, 1, 256, 1024),
                 (1, 1, 1024, 2048),
+                grid=ttnn.CoreGrid(x=4, y=1),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
             )
@@ -525,6 +528,7 @@ class TtLlamaAttention_galaxy:
         xs,
         rot_mats,
     ):
+        # self.saved_tensors[f"{self.layer_name}.attn_qkv.xs"] = xs
         assert xs.shape[1] == 1, "batch must be 1"
         assert xs.shape[2] % 128 == 0 and xs.shape[2] > 0, "Seqlen must be divisible by 128"
         _, _, seq_len, _ = xs.shape
@@ -547,10 +551,11 @@ class TtLlamaAttention_galaxy:
         fused_query_key_value = tt_all_reduce(
             fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
+        # self.saved_tensors[f"{self.layer_name}.attn_qkv.fused_query_key_value"] = fused_query_key_value
 
         fused_query_key_value = ttnn.reshape(fused_query_key_value, (1, 1, seq_len, -1))
 
-        xs.deallocate(True)
+        # xs.deallocate(True)
 
         (
             query_layer,  # [bsz, n_local_heads, seq_len, head_dim]
@@ -564,7 +569,11 @@ class TtLlamaAttention_galaxy:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        fused_query_key_value.deallocate(True)
+        # self.saved_tensors[f"{self.layer_name}.attn_qkv.query_layer"] = query_layer
+        # self.saved_tensors[f"{self.layer_name}.attn_qkv.key_layer"] = key_layer
+        # self.saved_tensors[f"{self.layer_name}.attn_qkv.value_layer"] = value_layer
+
+        # fused_query_key_value.deallocate(True)
 
         # ROTARY EMBEDDINGS
         # Q Rotary Embeddings
@@ -572,14 +581,16 @@ class TtLlamaAttention_galaxy:
         query_layer_ret = ttnn.experimental.rotary_embedding_llama(
             query_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
-        query_layer.deallocate(True)
+        # query_layer.deallocate(True)
+        # self.saved_tensors[f"{self.layer_name}.attn_qkv.query_layer_ret"] = query_layer_ret
 
         # K Rotary Embeddings
         # key_layer: ttnn.Shape([1, 1, seq_len, 128]) -> [bsz, n_local_kv_heads, seq_len, head_dim]
         key_layer_ret = ttnn.experimental.rotary_embedding_llama(
             key_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
-        key_layer.deallocate(True)
+        # key_layer.deallocate(True)
+        # self.saved_tensors[f"{self.layer_name}.attn_qkv.key_layer_ret"] = key_layer_ret
 
         return query_layer_ret, key_layer_ret, value_layer
 
@@ -642,10 +653,12 @@ class TtLlamaAttention_galaxy:
             scale=self.scale,
         )
 
+        # self.saved_tensors[f"{self.layer_name}.attn_mqa.attn_output"] = attn_output
+
         # deallocate keys and values
-        query_layer.deallocate(True)
-        key_layer.deallocate(True)
-        value_layer.deallocate(True)
+        # query_layer.deallocate(True)
+        # key_layer.deallocate(True)
+        # value_layer.deallocate(True)
 
         return attn_output
 
@@ -655,6 +668,7 @@ class TtLlamaAttention_galaxy:
             attn_output,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # bsz, 1, seqlen, hidden_size
+        # self.saved_tensors[f"{self.layer_name}.attn_selfout.attn_output"] = attn_output
 
         _, _, seq_len, _ = attn_output.shape
 
@@ -670,6 +684,7 @@ class TtLlamaAttention_galaxy:
             program_config=self.SELFOUT_PROGCFG,
         )  # bsz, 1, seqlen, hidden_size
 
+        # self.saved_tensors[f"{self.layer_name}.attn_selfout.attn_output_2"] = attn_output
         attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, -1))
 
         # Call all reduce here
@@ -680,5 +695,7 @@ class TtLlamaAttention_galaxy:
             num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        # self.saved_tensors[f"{self.layer_name}.attn_selfout.attn_output_3"] = attn_output
 
         return attn_output

@@ -32,7 +32,7 @@ class TtLlamaDecoder_galaxy:
         read_cache=False,
     ):
         super().__init__()
-
+        self.saved_tensors = {}
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.num_devices = mesh_device.get_num_devices()
@@ -293,8 +293,10 @@ class TtLlamaDecoder_galaxy:
             epsilon=self.norm_eps,
             gamma=self.attn_norm_sharded,
         )
+        self.saved_tensors[f"{self.layer_name}.attn_norm_out"] = attn_norm_out
         logger.info("attention start")
         attn_outs = self.attention(attn_norm_out, rot_mats, 0, attn_masks, user_id)
+        self.saved_tensors[f"{self.layer_name}.attn_outs"] = attn_outs
         attn_outs = ttnn.to_memory_config(attn_outs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         logger.info("add start")
         output = xs
@@ -303,8 +305,9 @@ class TtLlamaDecoder_galaxy:
             attn_outs,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self.saved_tensors[f"{self.layer_name}.output"] = output
 
-        attn_outs.deallocate(True)
+        # attn_outs.deallocate(True)
 
         output_interleaved = ttnn.to_memory_config(output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         logger.info("rms_norm start")
@@ -313,8 +316,10 @@ class TtLlamaDecoder_galaxy:
             epsilon=self.norm_eps,
             gamma=self.ffn_norm_sharded,
         )
+        self.saved_tensors[f"{self.layer_name}.ffn_norm_out"] = ffn_norm_out
         logger.info("mlp start")
         ffn_out = self.mlp(ffn_norm_out)
+        self.saved_tensors[f"{self.layer_name}.ffn_out"] = ffn_out
         logger.info("add start")
         # residual add
         output = ttnn.add(

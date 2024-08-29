@@ -347,12 +347,6 @@ def run_test_LlamaAttention_inference(
         attention_input, start_pos, rot_mat, attn_mask = tt_llama_attention_prepare_inputs(
             tt_LlamaAttention_model, tt_input, start_pos, configuration.rope_theta
         )
-        tt_out = tt_LlamaAttention_model(
-            attention_input,
-            rot_mat,
-            start_pos,
-            attn_mask,
-        )
 
         # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(mesh_device))[0]
 
@@ -362,9 +356,6 @@ def run_test_LlamaAttention_inference(
         tt_out = tt_out[:, 0:1, :, :]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
 
-        # check outputs ----------------------------------------------------------------------
-        does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
-        logger.info(f"Output: {output_pcc}")
         all_pccs.append(extract_pcc_from_log(output_pcc))
 
         if does_pass:

@@ -54,7 +54,8 @@ class PytorchLlamaModel(torch.nn.Module):
 
         return: (batch, seq, hidden_dim)
         """
-        return self.model(x, start_pos)
+        with torch.no_grad():
+            return self.model(x, start_pos)
 
 
 def run_test_LlamaModel_inference(
@@ -151,14 +152,15 @@ def run_test_LlamaModel_inference(
 
         # TT hardware execution -------------------------------------------------------------
         tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
-
+        # for n in range(1000):
+        logger.info(f"Running inference on TT hardware, iteration {n}")
         tt_out = tt_model(
             tt_inp_emb,
             rot_mat,
             start_pos,
             attn_mask,
         )
-        del tt_inp_emb, rot_mat, attn_mask
+        # del tt_inp_emb, rot_mat, attn_mask
 
         tt_out = ttnn.to_torch(
             tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 3), cluster_shape=cluster_shape)
@@ -173,6 +175,59 @@ def run_test_LlamaModel_inference(
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
         logger.info(f"Output: {output_pcc}")
+
+        def save_tensors_from_model(model, path):
+            os.makedirs(path, exist_ok=True)
+            # model
+            # model.layers[0]
+            # model.layers[0].mlp
+            # model.layers[0].attn
+
+            def save_tensor_dict(d):
+                for k, v in d.items():
+                    # k is name, v is multidevice tensor
+                    v_pt = ttnn.to_torch(
+                        v, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 0), cluster_shape=cluster_shape)
+                    )
+                    pt_tensor = torch.tensor(v_pt)
+                    torch.save(pt_tensor, f"{path}/{k}.pt")
+
+            save_tensor_dict(model.saved_tensors)
+            for layer in model.layers:
+                save_tensor_dict(layer.saved_tensors)
+                save_tensor_dict(layer.attention.saved_tensors)
+                save_tensor_dict(layer.mlp.saved_tensors)
+
+        # if n == 0:
+        #     expect_pcc = output_pcc
+        #     tt_expect = tt_out
+        #     save_tensors_from_model(tt_model, f"/proj_sw/user_dev/divanovic/tt_model_iter_{n}")
+        # else:
+        #     if output_pcc != expect_pcc:
+        #         logger.info(f'PCC value is not consistent with the first iteration: {output_pcc} vs {expect_pcc}')
+        #         save_tensors_from_model(tt_model, f"/proj_sw/user_dev/divanovic/tt_model_iter_{n}")
+        #         breakpoint()
+
+        def del_device_tensors(model):
+            # model
+            # model.layers[0]
+            # model.layers[0].mlp
+            # model.layers[0].attn
+
+            def dealloc(d):
+                for k, v in d.items():
+                    v.deallocate(True)
+
+                d.clear()
+
+            dealloc(model.saved_tensors)
+            for layer in model.layers:
+                dealloc(layer.saved_tensors)
+                dealloc(layer.attention.saved_tensors)
+                dealloc(layer.mlp.saved_tensors)
+
+        # del_device_tensors(tt_model)
+
         all_pccs.append(extract_pcc_from_log(output_pcc))
 
         kl_divs = scipy.stats.entropy(
@@ -256,10 +311,11 @@ def run_test_LlamaModel_inference(
     [
         (0.995, 1),
         (0.993, 2),
+        (0.993, 4),
         (0.993, 8),
         (0.99, 80),
     ],
-    ids=("1L", "2L", "8L", "80L"),
+    ids=("1L", "2L", "4L", "8L", "80L"),
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
