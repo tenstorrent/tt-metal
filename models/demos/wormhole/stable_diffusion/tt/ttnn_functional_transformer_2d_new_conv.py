@@ -244,7 +244,7 @@ class transformer_2d_model:
             weights_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.LoFi,
             activation="",
-            height_sharding=False,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             input_channels_alignment=32,
             fp32_dest_acc_enabled=self.compute_kernel_config.fp32_dest_acc_en,
             transpose_shards=False,
