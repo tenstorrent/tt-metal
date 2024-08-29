@@ -7,57 +7,74 @@ from torchvision import models
 import pytest
 import ttnn
 from ttnn.model_preprocessing import (
-    preprocess_model,
+    preprocess_model_parameters,
     preprocess_linear_weight,
     preprocess_layernorm_parameter,
     preprocess_linear_bias,
-    preprocess_conv2d,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_swin_s.reference.swin_transformer import SwinTransformer
 from models.experimental.functional_swin_s.tt.tt_swin_transformer import TtSwinTransformer
-from calflops import calculate_flops
-
-
-def update_ttnn_module_args(ttnn_module_args):
-    # ttnn_module_args["dtype"] = ttnn.bfloat8_b
-    ttnn_module_args["math_fidelity"] = ttnn.MathFidelity.LoFi
-    # ttnn_module_args["weights_dtype"] = ttnn.bfloat8_b
-    ttnn_module_args["deallocate_activation"] = True
+from tests.ttnn.integration_tests.swin_s.test_ttnn_swin_transformer_block import (
+    create_custom_preprocessor as create_custom_preprocessor_transformer_block,
+)
+from tests.ttnn.integration_tests.swin_s.test_ttnn_patchmerging import (
+    create_custom_preprocessor as create_custom_preprocessor_patch_merging,
+)
 
 
 def create_custom_preprocessor(device):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
-        # print("Arguments:", ttnn_module_args)
         parameters = {}
-        if isinstance(torch_model, torch.nn.Conv2d):
-            print("TT Arguments:", ttnn_module_args)
-            print("torch model: ", torch_model)
-            # ttnn_module_args["conv2d"] = ttnn_module_args#.features["0"]["0"]
-            # update_ttnn_module_args(ttnn_module_args)
-            # ttnn_module_args["use_1d_systolic_array"] = True
-            # ttnn_module_args["conv_blocking_and_parallelization_config_override"] = {
-            #     "act_block_h": 16 * 32
-            # }
-            # ttnn_module_args["use_shallow_conv_variant"] = True
-            # print("Arguments:", ttnn_module_args)
-            parameters["conv2d"] = preprocess_conv2d(torch_model.weight, torch_model.bias, ttnn_module_args)
+        if isinstance(torch_model, SwinTransformer):
+            parameters["features"] = {}
+            parameters["features"][0] = {}
+            parameters["features"][0][0] = {}
+            parameters["features"][0][2] = {}
+            parameters["features"][0][0]["weight"] = ttnn.from_torch(
+                torch_model.features[0][0].weight, dtype=ttnn.bfloat16
+            )
+            parameters["features"][0][0]["bias"] = ttnn.from_torch(
+                torch.reshape(torch_model.features[0][0].bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
+            )
+            parameters["features"][0][2]["weight"] = preprocess_layernorm_parameter(
+                torch_model.features[0][2].weight, dtype=ttnn.bfloat8_b
+            )
+            parameters["features"][0][2]["bias"] = preprocess_layernorm_parameter(
+                torch_model.features[0][2].bias, dtype=ttnn.bfloat8_b
+            )
 
-        # if isinstance(torch_model,torch.nn.Linear):
-        #     print("torch model: ", torch_model)
-        #     print("TT Arguments:", ttnn_module_args)
-        #     parameters["weight"] = preprocess_linear_weight(torch_model.weight, dtype=ttnn.bfloat16)
-        #     parameters["bias"] = preprocess_linear_bias(torch_model.bias, dtype=ttnn.bfloat16)
-        # if isinstance(torch_model, torch.nn.LayerNorm):
-        #     parameters["norm_weight"] = preprocess_layernorm_parameter(torch_model.weight, dtype=ttnn.bfloat16)
-        #     parameters["norm_bias"] = preprocess_layernorm_parameter(torch_model.bias, dtype=ttnn.bfloat16)
+            tranformer_block_preprocessor = create_custom_preprocessor_transformer_block(device)
+            patch_merging_preprocessor = create_custom_preprocessor_patch_merging(device)
+            depths_list = [2, 2, 18, 2]
+            for i_stage in range(len(depths_list)):
+                index_list = [1, 3, 5, 7]
+                parameters["features"][index_list[i_stage]] = {}
+                for i_layer in range(depths_list[i_stage]):
+                    parameters["features"][index_list[i_stage]][i_layer] = {}
+                    parameters["features"][index_list[i_stage]][i_layer] = tranformer_block_preprocessor(
+                        torch_model.features[index_list[i_stage]][i_layer], None, None
+                    )
+            for i_patch_merging in range(2, 7, 2):
+                parameters["features"][i_patch_merging] = {}
+                parameters["features"][i_patch_merging] = patch_merging_preprocessor(
+                    torch_model.features[i_patch_merging], None, None
+                )
+
+            parameters["norm"] = {}
+            parameters["head"] = {}
+            parameters["norm"]["weight"] = preprocess_layernorm_parameter(torch_model.norm.weight, dtype=ttnn.bfloat8_b)
+            parameters["norm"]["bias"] = preprocess_layernorm_parameter(torch_model.norm.bias, dtype=ttnn.bfloat8_b)
+            parameters["head"]["weight"] = preprocess_linear_weight(torch_model.head.weight, dtype=ttnn.bfloat8_b)
+            parameters["head"]["bias"] = preprocess_linear_bias(torch_model.head.bias, dtype=ttnn.bfloat8_b)
+
         return parameters
 
     return custom_preprocessor
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_patchmerging(device, reset_seeds):
+def test_swin_s_transformer(device, reset_seeds):
     model = models.swin_s(weights="IMAGENET1K_V1")
     state_dict = model.state_dict()
 
@@ -69,27 +86,16 @@ def test_patchmerging(device, reset_seeds):
     torch_model.eval()
 
     # Input tensor for testing
-    torch_input_tensor = torch.randn(8, 3, 512, 512)  # Sample input tensor
+    torch_input_tensor = torch.randn(1, 3, 512, 512)  # Sample input tensor
     torch_output_tensor = torch_model(torch_input_tensor)
 
-    input_shape = (8, 3, 512, 512)
-    flops, macs, params = calculate_flops(
-        model=torch_model, input_shape=input_shape, output_as_string=True, output_precision=4
-    )
-    print("Swin Transformer FLOPs:%s   MACs:%s   Params:%s \n" % (flops, macs, params))
-
-    reader_patterns_cache = {}
-    parameters = preprocess_model(
-        initialize_model=lambda: torch_model,
-        run_model=lambda model: model(torch_input_tensor),
-        custom_preprocessor=create_custom_preprocessor(device),
-        reader_patterns_cache=reader_patterns_cache,
-        device=device,
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
     )
 
     # Convert the model to TTNN
     ttnn_model = TtSwinTransformer(
-        ttnn.device,
+        device,
         parameters,
         patch_size=[4, 4],
         embed_dim=96,
@@ -99,12 +105,13 @@ def test_patchmerging(device, reset_seeds):
     )
 
     # Convert input tensor to TTNN format
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Apply TTNN model
     output_tensor = ttnn_model(input_tensor)
 
     # Convert output tensor back to Torch format
+    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
