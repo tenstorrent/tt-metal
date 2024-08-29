@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
     const bool reduction_mean,
     const uint32_t channel_size,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config) {
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     auto target_shape = target.get_legacy_shape();
     auto N = target_shape[1];
 

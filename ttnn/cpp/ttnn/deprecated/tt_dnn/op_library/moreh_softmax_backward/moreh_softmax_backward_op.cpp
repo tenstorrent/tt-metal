@@ -156,7 +156,7 @@ Tensor moreh_softmax_backward(
     std::optional<Tensor> input_grad_tensor,
     const MorehSoftmaxBackwardOpParallelizationStrategy strategy,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = output_grad_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
@@ -199,7 +199,7 @@ Tensor moreh_softmin_backward(
     std::optional<Tensor> input_grad_tensor,
     const MorehSoftmaxBackwardOpParallelizationStrategy strategy,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = output_grad_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
@@ -242,7 +242,7 @@ Tensor moreh_logsoftmax_backward(
     std::optional<Tensor> input_grad_tensor,
     const MorehSoftmaxBackwardOpParallelizationStrategy strategy,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = output_grad_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});

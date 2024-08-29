@@ -111,7 +111,7 @@ Tensor moreh_sum_backward(
     const bool keep_batch_dim,
     const std::optional<const Tensor> input_grad,
     const MemoryConfig &input_grad_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     TT_FATAL((input.has_value() || input_grad.has_value()), "either input or input_grad must have a value");
     uint32_t rank = input.has_value() ? input->get_legacy_shape().rank() : input_grad->get_legacy_shape().rank();

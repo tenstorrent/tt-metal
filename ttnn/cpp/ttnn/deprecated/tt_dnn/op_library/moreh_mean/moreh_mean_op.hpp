@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -27,7 +27,7 @@ struct MorehMean {
     const std::optional<uint32_t> divisor;
     MemoryConfig memory_config;
     const CoreRange core_range;  // unused for now
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
@@ -54,18 +54,18 @@ operation::ProgramWithCallbacks moreh_mean_nc(
     const Tensor &output,
     int64_t dim,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 // revised from reduce_op
 operation::ProgramWithCallbacks moreh_mean_w(
     const Tensor &input,
     const Tensor &output,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks moreh_mean_h(
     const Tensor &input,
     const Tensor &output,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 Tensor moreh_mean_(
     const Tensor &input,
@@ -74,7 +74,7 @@ Tensor moreh_mean_(
     const std::optional<uint32_t> divisor = std::nullopt,
     const std::optional<const Tensor> output = std::nullopt,
     const std::optional<MemoryConfig> memory_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 std::optional<Tensor> moreh_mean(
     const Tensor &input,
@@ -83,7 +83,7 @@ std::optional<Tensor> moreh_mean(
     const std::optional<uint32_t> divisor = std::nullopt,
     const std::optional<const Tensor> output = std::nullopt,
     const std::optional<MemoryConfig> memory_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 

@@ -18,7 +18,7 @@ Tensor _fast_reduce_nc(
     const int32_t& dim,
     const std::optional<const ttnn::Tensor>& output,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE);
@@ -104,7 +104,7 @@ Tensor fast_reduce_nc(
     const std::vector<int32_t>& dims,
     const std::optional<const ttnn::Tensor> output,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     std::vector<int32_t> sorted_dims = dims;
     std::sort(sorted_dims.begin(), sorted_dims.end());

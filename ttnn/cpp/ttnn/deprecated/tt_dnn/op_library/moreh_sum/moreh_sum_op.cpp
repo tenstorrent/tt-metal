@@ -27,7 +27,7 @@ Tensor _moreh_sum(
     const bool& keep_batch_dim,
     const std::optional<const Tensor>& output,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint8_t queue_id = ttnn::DefaultQueueId) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
 
@@ -166,7 +166,7 @@ Tensor moreh_sum(
     const bool keep_batch_dim,
     const std::optional<const Tensor> output,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     uint8_t queue_id) {
     std::vector<int64_t> dims = get_dim(dim, input.get_legacy_shape().rank());
     std::sort(dims.begin(), dims.end());

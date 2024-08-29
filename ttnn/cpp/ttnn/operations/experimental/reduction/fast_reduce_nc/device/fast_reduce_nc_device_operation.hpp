@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::reduction::detail {
 struct FastReduceNCDeviceOperation {
     int32_t dim;
     MemoryConfig output_mem_config;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     void validate_with_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -32,6 +32,6 @@ Tensor fast_reduce_nc(
     const std::vector<int32_t> &dims,
     const std::optional<const ttnn::Tensor> output = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::reduction::detail

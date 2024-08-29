@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::kv_cache {
 
@@ -19,7 +19,7 @@ enum class UpdateCacheOpType {
     FILL, UPDATE
 };
 
-operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset, DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t update_idx, const uint32_t batch_offset, ttnn::DeviceComputeKernelConfig compute_kernel_config);
 operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, const uint32_t batch_idx, const uint32_t update_idx);
 
 struct UpdateCache {
@@ -27,7 +27,7 @@ struct UpdateCache {
     const uint32_t update_idx;
     const uint32_t batch_offset;
     const UpdateCacheOpType op_type;
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     UpdateCacheOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
 
@@ -55,7 +55,7 @@ inline Tensor fill_cache_impl(const Tensor& cache_tensor, const Tensor& input_te
     return cache_tensor;
 }
 
-inline Tensor update_cache_impl(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t update_idx, const uint32_t batch_offset, std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
+inline Tensor update_cache_impl(const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t update_idx, const uint32_t batch_offset, std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt) {
     std::vector<Tensor> dummy_output_tensors = {Tensor(operation::get_workers_for_op_output({cache_tensor, input_tensor}))};
     operation::launch_op(
         [update_idx, batch_offset, compute_kernel_config] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
