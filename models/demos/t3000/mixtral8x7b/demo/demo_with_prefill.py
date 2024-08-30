@@ -39,7 +39,7 @@ class Emb(torch.nn.Module):
 
 
 @torch.no_grad()
-def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_prefill_len, is_ci_env):
+def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_prefill_len, is_ci_env):
     # Set Mixtral flags for CI
     if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
         os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/"
@@ -123,7 +123,6 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
         device_mesh,
         max_generated_tokens,
         is_ci_env,
-        max_prefill_len=max_prefill_len,
     )
     profiler.end("preprocess_prefill_inputs")
 
@@ -362,10 +361,10 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
 
     if is_ci_env:
         # When running in CI, check the output against the expected output to avoid accuracy regressions
-        if max_prefill_len == 128:
+        if test_prefill_len == 128:
             expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
-        else:  # max_prefill_len == 16k
-            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_16k.json"
+        else:  # test_prefill_len == 32k
+            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_32k.json"
 
         with open(expected_output, "r") as f:
             expected_out = json.load(f)
@@ -461,7 +460,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
 
 
 @pytest.mark.parametrize(
-    "input_prompts, max_prefill_len, instruct_weights",
+    "input_prompts, prefill_len, instruct_weights",
     [
         # General weights
         ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", 128, False),
@@ -489,21 +488,19 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
         "32k-instruct",
     ],
 )
-def test_mixtral8x7b_demo(
-    t3k_device_mesh, use_program_cache, input_prompts, instruct_weights, max_prefill_len, is_ci_env
-):
+def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights, prefill_len, is_ci_env):
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights with max prefill length of 32k to reduce CI pipeline load")
 
-    if is_ci_env and max_prefill_len != 32 * 1024 and max_prefill_len != 128:
+    if is_ci_env and prefill_len != 32 * 1024 and prefill_len != 128:
         pytest.skip("CI demo test only runs instruct weights with max prefill length of 32k to reduce CI pipeline load")
 
     # Adjust the batch size based on the max prefill length
-    if max_prefill_len >= 16 * 1024:
+    if prefill_len >= 16 * 1024:
         batch_size = 4
-    elif max_prefill_len >= 8 * 1024:
+    elif prefill_len >= 8 * 1024:
         batch_size = 8
-    elif max_prefill_len >= 4 * 1024:
+    elif prefill_len >= 4 * 1024:
         batch_size = 16
     else:
         batch_size = 32
@@ -516,6 +513,6 @@ def test_mixtral8x7b_demo(
         batch_size=batch_size,
         device_mesh=t3k_device_mesh,
         instruct_mode=instruct_weights,
-        max_prefill_len=max_prefill_len,
+        test_prefill_len=prefill_len,
         is_ci_env=is_ci_env,
     )

@@ -103,9 +103,7 @@ def preprocess_inputs_prefill(
     # The large input demo we provide contains more tokens than the maximum (32k tokens)
     # To avoid running out of memory, clip to max_prefill_len
     if min_prompt_len > max_prefill_len:
-        logger.info(
-            f"Clipping prompts to {max_prefill_len} tokens to avoid running out of memory. Also avoids `prefill-as-decode` mode for the entire demo (since it only computes 120 iterations)"
-        )
+        logger.info(f"Clipping prompts to {max_prefill_len}")
         if instruct:  # When clipping, make sure to add the ` [/INST]` token at the end (4 tokens)
             encoded_prompts = [encod[: max_prefill_len - 4] for encod in encoded_prompts]
             dec_prompts = [tokenizer.decode(encod) + " [/INST]" for encod in encoded_prompts]
