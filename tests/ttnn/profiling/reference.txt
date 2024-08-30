@@ -12,9 +12,9 @@ ttnn.experimental.operations.primary.moreh_mean_backward,800,0.027,0.031,0.11,0.
 ttnn.experimental.operations.primary.moreh_mean_dims_0,800,0.024,0.026,0.107,0.009
 ttnn.experimental.operations.primary.moreh_mean_dims_01,800,0.045,0.049,0.122,0.018
 ttnn.experimental.operations.primary.moreh_mean_dims_012,800,0.06,0.066,0.11,0.024
-ttnn.experimental.operations.primary.moreh_mean_dims_0123,800,0.074,0.078,0.105,0.026
+ttnn.experimental.operations.primary.moreh_mean_dims_0123,800,0.09,0.078,0.105,0.026
 ttnn.experimental.operations.primary.moreh_mean_dims_013,800,0.07,0.088,0.094,0.028
-ttnn.experimental.operations.primary.moreh_mean_dims_023,800,0.056,0.077,0.098,0.024
+ttnn.experimental.operations.primary.moreh_mean_dims_023,800,0.068,0.077,0.098,0.024
 ttnn.experimental.operations.primary.moreh_mean_dims_1,800,0.024,0.026,0.085,0.009
 ttnn.experimental.operations.primary.moreh_mean_dims_12,800,0.042,0.045,0.097,0.016
 ttnn.experimental.operations.primary.moreh_mean_dims_123,800,0.059,0.064,0.093,0.021
@@ -76,7 +76,7 @@ ttnn.glu_dim_2,200,0.108,0.115,0.261,0.036
 ttnn.glu_dim_3,200,0.145,0.128,0.266,0.054
 ttnn.imag,200,0.025,0.027,0.058,0.011
 ttnn.imag_bw,200,0.918,0.932,0.955
-ttnn.mac,200,0.075,0.068,0.279,0.027
+ttnn.mac,200,0.09,0.068,0.279,0.027
 ttnn.mean,200,0.783,0.793,0.777,0.427
 tt_lib.tensor.mean_hw,200,0.71,0.029,0.08,0.012
 tt_lib.tensor.moreh_norm_backward,200,0.036,0.038,0.667,0.017
@@ -266,7 +266,7 @@ ttnn.min_dim_23,200,0.109,0.075,0.184,0.027
 ttnn.min_dim_3,200,0.113,0.07,0.167,0.023
 ttnn.min,200,0.838,0.848,0.867,0.455
 ttnn.mish,200,0.09,0.097,0.578,0.034
-ttnn.mul,200,0.035,0.036,0.143,0.014
+ttnn.mul,200,0.04,0.036,0.143,0.014
 ttnn.mul_bcast_h,200,0.052,0.045,0.186,0.05
 ttnn.mul_bcast_w,200,0.058,0.045,0.188,0.051
 ttnn.mul_bcast_hw,200,0.045,0.045,0.201,0.019
@@ -368,7 +368,7 @@ ttnn.untilize_with_unpadding,200,0.062,0.027,3.608,0.007
 ttnn.where,200,0.142,0.147,0.616,0.055
 ttnn.where_binary_x_const_y,200,0.208,0.184,0.596,0.098
 ttnn.where_binary_x_y_const,200,0.249,0.179,0.594,0.093
-ttnn.where_bw,200,0.316,0.327,1.182,0.179
+ttnn.where_bw,200,0.365,0.327,1.182,0.179
 ttnn.where_x_const_const,200,0.202,0.204,0.559,0.124
 ttnn.xlogy,200,1.683,1.131,1.82,0.112
 ttnn.xlogy_bw,200,2.066,2.09,5.443,0.571
