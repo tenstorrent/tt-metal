@@ -3,8 +3,6 @@
 set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/sharding_utilities.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_helper_functions.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adam/moreh_adam.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adam/moreh_adam_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adamw/moreh_adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adamw/moreh_adamw_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_arange/moreh_arange_op.cpp

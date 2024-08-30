@@ -25,8 +25,8 @@ PYBIND11_MODULE(_ttnn, module) {
     /*
     We have to make sure every class and enum is bound before any function that uses it as an argument or a return type.
     So we split the binding calls into two parts: one for classes and enums, and one for functions.
-    Another issue to be aware of is that we have to define each shared submodule only once. Therefore, all def_submodule calls
-    have to be put in here.
+    Another issue to be aware of is that we have to define each shared submodule only once. Therefore, all def_submodule
+    calls have to be put in here.
     */
 
     // MODULES
