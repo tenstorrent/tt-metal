@@ -9,14 +9,11 @@ import torch.nn as nn
 from loguru import logger
 from transformers import WhisperModel, WhisperForAudioClassification
 
-import tt_lib
+import ttnn
 
 from models.experimental.whisper.tt.whisper_attention import TtWhisperAttention
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    comp_pcc
-)
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, comp_pcc
+
 
 class PytorchWhisperAttention(nn.Module):
     def __init__(self, hf_reference_module):
@@ -43,13 +40,9 @@ class PytorchWhisperAttention(nn.Module):
         return result
 
 
-def run_whisper_attention(
-    decoder, layer, device, for_audio_classification, is_self_attn=True
-):
+def run_whisper_attention(decoder, layer, device, for_audio_classification, is_self_attn=True):
     if for_audio_classification:
-        model = WhisperForAudioClassification.from_pretrained(
-            "sanchit-gandhi/whisper-medium-fleurs-lang-id"
-        )
+        model = WhisperForAudioClassification.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
         logger.info("Using WhisperForAudioClassification model")
     else:
         model = WhisperModel.from_pretrained("openai/whisper-tiny.en")
@@ -92,31 +85,23 @@ def run_whisper_attention(
         # Encoder inputs
         logger.info("Making inputs ready for encoder")
         hidden_state_input_tensor = torch.rand(1, BATCH, embd_dim)
-        ttm_tensor_hidden_state = torch2tt_tensor(
-            hidden_state_input_tensor, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
     else:
         # Decoder inputs
         hidden_state_input_tensor = torch.rand(1, 32, embd_dim)
-        ttm_tensor_hidden_state = torch2tt_tensor(
-            hidden_state_input_tensor, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
         if not is_self_attn:
             key_value_states = torch.rand(1, BATCH, embd_dim)
-            ttm_tensor_key_value_states = torch2tt_tensor(
-                key_value_states, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-            )
+            ttm_tensor_key_value_states = torch2tt_tensor(key_value_states, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
     if decoder and is_self_attn:
         # Decoder self attention
-        attention_mask_input_tensor = (
-            torch.rand(size=(1, 1, 32, 32)) < 0.25
-        ).int().float() * -3.4028e38
+        attention_mask_input_tensor = (torch.rand(size=(1, 1, 32, 32)) < 0.25).int().float() * -3.4028e38
         ttm_tensor_attention_mask = torch2tt_tensor(
             attention_mask_input_tensor,
             device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
     else:
         # Decoder encoder attention
@@ -186,9 +171,7 @@ def run_whisper_attention(
         logger.debug(attn_weights_reshaped.size())
         logger.debug(tt_attn_weights_to_torch.size())
 
-        does_pass, pcc_message = comp_pcc(
-            attn_weights_reshaped, tt_attn_weights_to_torch, 0.98
-        )
+        does_pass, pcc_message = comp_pcc(attn_weights_reshaped, tt_attn_weights_to_torch, 0.98)
         logger.info(pcc_message)
 
         assert does_pass
@@ -201,9 +184,7 @@ def run_whisper_attention(
         if DECODER:
             tt_past_key_value_to_torch = tt2torch_tensor(tt_past_key_value[0])
 
-            does_pass, pcc_message = comp_pcc(
-                past_key_value[0], tt_past_key_value_to_torch, 0.98
-            )
+            does_pass, pcc_message = comp_pcc(past_key_value[0], tt_past_key_value_to_torch, 0.98)
             logger.info(pcc_message)
 
             assert does_pass
@@ -215,9 +196,7 @@ def run_whisper_attention(
 
             tt_past_key_value_to_torch = tt2torch_tensor(tt_past_key_value[1])
 
-            does_pass, pcc_message = comp_pcc(
-                past_key_value[1], tt_past_key_value_to_torch, 0.98
-            )
+            does_pass, pcc_message = comp_pcc(past_key_value[1], tt_past_key_value_to_torch, 0.98)
             logger.info(pcc_message)
 
             if does_pass:
@@ -231,9 +210,7 @@ def run_whisper_attention(
 def test_WhisperEncoderAttention_inference(device):
     torch.manual_seed(1234)
 
-    run_whisper_attention(
-        decoder=False, layer=0, device=device, for_audio_classification=False
-    )
+    run_whisper_attention(decoder=False, layer=0, device=device, for_audio_classification=False)
 
 
 def test_WhisperDecoderEncoderAttention_inference(device):
@@ -263,6 +240,4 @@ def test_WhisperDecoderSelfAttention_inference(device):
 def test_WhisperEncoderForAudioClassificationAttention_inference(device):
     torch.manual_seed(1234)
 
-    run_whisper_attention(
-        decoder=False, layer=0, device=device, for_audio_classification=True
-    )
+    run_whisper_attention(decoder=False, layer=0, device=device, for_audio_classification=True)

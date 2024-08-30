@@ -63,10 +63,7 @@ def vit_embeddings(
     # cls_token = parameters.cls_token
     # position_embeddings = parameters.position_embeddings
 
-    l1_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
-    )
+    l1_memory_config = ttnn.L1_MEMORY_CONFIG
 
     patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters=parameters.patch_embeddings)
 

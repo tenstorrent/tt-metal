@@ -48,27 +48,25 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
     patch_size = 16
     torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
     N, H, W, C = torch_pixel_values.shape
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+    shard_grid = ttnn.CoreRangeSet(
         {
-            ttnn.experimental.tensor.CoreRange(
-                ttnn.experimental.tensor.CoreCoord(0, 0),
-                ttnn.experimental.tensor.CoreCoord(7, 0),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 0),
             ),
         }
     )
     n_cores = 8
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
-        shard_grid, [N * H * W // n_cores, C], ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
-    )
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
 
     pixel_values = ttnn.from_torch(
         torch_pixel_values,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
             shard_spec,
         ),
     )
@@ -137,27 +135,25 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     patch_size = 16
     torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
     N, H, W, C = torch_pixel_values.shape
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+    shard_grid = ttnn.CoreRangeSet(
         {
-            ttnn.experimental.tensor.CoreRange(
-                ttnn.experimental.tensor.CoreCoord(0, 0),
-                ttnn.experimental.tensor.CoreCoord(7, 0),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 0),
             ),
         }
     )
     n_cores = 8
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
-        shard_grid, [N * H * W // n_cores, C], ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
-    )
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
 
     pixel_values = ttnn.from_torch(
         torch_pixel_values,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
             shard_spec,
         ),
     )
@@ -490,27 +486,25 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     patch_size = 16
     torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
     N, H, W, C = torch_pixel_values.shape
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+    shard_grid = ttnn.CoreRangeSet(
         {
-            ttnn.experimental.tensor.CoreRange(
-                ttnn.experimental.tensor.CoreCoord(0, 0),
-                ttnn.experimental.tensor.CoreCoord(7, 0),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 0),
             ),
         }
     )
     n_cores = 8
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
-        shard_grid, [N * H * W // n_cores, C], ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
-    )
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
 
     pixel_values = ttnn.from_torch(
         torch_pixel_values,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
             shard_spec,
         ),
     )

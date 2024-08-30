@@ -33,24 +33,24 @@ from models.demos.ttnn_resnet.tt.ttnn_functional_resnet import resnet_basic_bloc
 def create_core_range_set_from_ncores(ncores: int, bb_ncores_w: int, bb_ncores_h: int):
     bb_ncores = bb_ncores_w * bb_ncores_h  ## total cores in the bounding box grid
     if ncores == bb_ncores:  ## no last partial core row
-        return ttnn.experimental.tensor.CoreRangeSet(
+        return ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(bb_ncores_w - 1, bb_ncores_h - 1),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(bb_ncores_w - 1, bb_ncores_h - 1),
                 )
             }
         )
     elif ncores < bb_ncores:  ## with last partial core row
-        return ttnn.experimental.tensor.CoreRangeSet(
+        return ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(bb_ncores_w - 1, bb_ncores_h - 2),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(bb_ncores_w - 1, bb_ncores_h - 2),
                 ),
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, bb_ncores_h - 1),
-                    ttnn.experimental.tensor.CoreCoord(ncores % bb_ncores_w - 1, bb_ncores_h - 1),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, bb_ncores_h - 1),
+                    ttnn.CoreCoord(ncores % bb_ncores_w - 1, bb_ncores_h - 1),
                 ),
             }
         )

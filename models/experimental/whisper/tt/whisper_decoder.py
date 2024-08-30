@@ -4,7 +4,6 @@
 
 import math
 from functools import partial
-import tt_lib
 import torch
 import torch.nn as nn
 
@@ -41,11 +40,11 @@ class TtWhisperDecoderOutput:
     that may also contain a past key/values (to speed up sequential decoding).
     """
 
-    last_hidden_state: tt_lib.tensor.Tensor = None
-    past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    cross_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    last_hidden_state: ttnn.Tensor = None
+    past_key_values: Optional[Tuple[Tuple[ttnn.Tensor]]] = None
+    hidden_states: Optional[Tuple[ttnn.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.Tensor]] = None
+    cross_attentions: Optional[Tuple[ttnn.Tensor]] = None
 
 
 class TtWhisperDecoder(nn.Module):
@@ -55,7 +54,7 @@ class TtWhisperDecoder(nn.Module):
 
     Args:
         reference_model: WhisperModel
-        device: device: tt_lib.device.Device
+        device: device: ttnn.Device
         config: WhisperConfig
     """
 
@@ -106,12 +105,12 @@ class TtWhisperDecoder(nn.Module):
         gamma = torch2tt_tensor(
             self.state_dict[f"{base_address}.layer_norm.weight"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
         beta = torch2tt_tensor(
             self.state_dict[f"{base_address}.layer_norm.bias"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
         self.layer_norm = partial(ttnn.layer_norm, weight=gamma, bias=beta, epsilon=1e-05)
 
@@ -227,16 +226,16 @@ class TtWhisperDecoder(nn.Module):
         self,
         input_ids: torch.Tensor = None,
         attention_mask: torch.Tensor = None,
-        encoder_hidden_states: tt_lib.tensor.Tensor = None,
+        encoder_hidden_states: ttnn.Tensor = None,
         head_mask: torch.Tensor = None,
         cross_attn_head_mask: torch.Tensor = None,
-        past_key_values: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
+        past_key_values: Optional[Tuple[ttnn.Tensor]] = None,
         inputs_embeds: torch.Tensor = None,
         use_cache: bool = None,
         output_attentions: bool = None,
         output_hidden_states: bool = None,
         return_dict: bool = None,
-    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtWhisperDecoderOutput]:
+    ) -> Union[Tuple[ttnn.Tensor], TtWhisperDecoderOutput]:
         """
         Args:
             input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
@@ -335,8 +334,8 @@ class TtWhisperDecoder(nn.Module):
 
         """TT implementation"""
 
-        hidden_states = torch2tt_tensor(hidden_states, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
-        attention_mask = torch2tt_tensor(attention_mask, self.device, tt_lib.tensor.Layout.ROW_MAJOR)
+        hidden_states = torch2tt_tensor(hidden_states, self.device, ttnn.ROW_MAJOR_LAYOUT)
+        attention_mask = torch2tt_tensor(attention_mask, self.device, ttnn.ROW_MAJOR_LAYOUT)
 
         # TODO: Dropout not supported for not
         # hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)

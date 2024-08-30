@@ -71,16 +71,16 @@ def run_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_config
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
@@ -106,14 +106,14 @@ def test_nlp_create_qkv_heads_falcon7b_test(batch, seq_len, dtype, in0_mem_confi
 
 def test_nlp_create_qkv_heads_falcon7b_with_program_cache(device, use_program_cache):
     dtype = ttnn.bfloat8_b
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    mem_config = ttnn.DRAM_MEMORY_CONFIG
     for _ in range(2):
         run_nlp_create_qkv_heads_falcon7b_test(1, 32, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    mem_config = ttnn.L1_MEMORY_CONFIG
     for _ in range(2):
         run_nlp_create_qkv_heads_falcon7b_test(1, 32, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
@@ -226,16 +226,16 @@ def run_nlp_create_qkv_heads_test(
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in_mem_config",
     (
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
     ids=["in_DRAM", "in_L1"],
 )
@@ -268,11 +268,7 @@ def test_nlp_create_qkv_heads_test(
 ):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
-    if (
-        dtype == ttnn.float32
-        and (batch == 111 or batch == 5)
-        and in_mem_config == ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
-    ):
+    if dtype == ttnn.float32 and (batch == 111 or batch == 5) and in_mem_config == ttnn.L1_MEMORY_CONFIG:
         logger.warning("fp32 tensor too large to fit L1")
     else:
         run_nlp_create_qkv_heads_test(
@@ -292,7 +288,7 @@ def test_nlp_create_qkv_heads_test(
 
 def test_nlp_create_qkv_heads_with_program_cache(device, use_program_cache):
     dtype = ttnn.bfloat8_b
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    mem_config = ttnn.L1_MEMORY_CONFIG
     for _ in range(2):
         run_nlp_create_qkv_heads_test(5, 1024, 64, 4, 2, True, False, dtype, mem_config, mem_config, device)
         # Same in0_shape to make sure cache misses if we have additional optional tensor works
@@ -464,7 +460,7 @@ def test_sharded_nlp_create_qkv_heads_test(
 
 def test_sharded_nlp_create_qkv_heads_with_program_cache(device, use_program_cache):
     dtype = ttnn.bfloat8_b
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+    mem_config = ttnn.L1_MEMORY_CONFIG
     for _ in range(2):
         run_sharded_nlp_create_qkv_heads_test(32, 1, 64, 16, 8, False, dtype, device)
         # Same in0_shape to make sure cache misses if we have additional optional tensor works

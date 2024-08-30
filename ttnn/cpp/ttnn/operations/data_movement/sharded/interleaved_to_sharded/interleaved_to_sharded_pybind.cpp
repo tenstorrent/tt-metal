@@ -90,10 +90,10 @@ void py_bind_interleaved_to_sharded(pybind11::module& module) {
 
         Example 2 (using sharded memory config):
             >>> sharded_memory_config_dict = dict(
-                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                core_grid=ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)
                         ),
                     }
                 ),

@@ -891,7 +891,7 @@ def run_test_sdpa_decode_single_iter(
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     mesh_shape = ttnn.CoreRangeSet({num_to_corerange(b)})
     shard_spec = ttnn.ShardSpec(mesh_shape, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)

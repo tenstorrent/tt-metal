@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import ttnn
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
@@ -25,9 +25,7 @@ from models.experimental.whisper.tt.whisper_common import linear
 from models.experimental.whisper.tt.whisper_model import TtWhisperModel
 
 
-def shift_tokens_right(
-    input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int
-):
+def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int):
     """
     Shift input ids one token to the right.
     """
@@ -46,14 +44,14 @@ def shift_tokens_right(
 @dataclass
 class TtWhisperLMOutput:
     loss: Optional[torch.FloatTensor] = None
-    logits: tt_lib.tensor.Tensor = None
-    past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None
-    decoder_hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    decoder_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    cross_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    encoder_last_hidden_state: Optional[tt_lib.tensor.Tensor] = None
-    encoder_hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    encoder_attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    logits: ttnn.Tensor = None
+    past_key_values: Optional[Tuple[Tuple[ttnn.Tensor]]] = None
+    decoder_hidden_states: Optional[Tuple[ttnn.Tensor]] = None
+    decoder_attentions: Optional[Tuple[ttnn.Tensor]] = None
+    cross_attentions: Optional[Tuple[ttnn.Tensor]] = None
+    encoder_last_hidden_state: Optional[ttnn.Tensor] = None
+    encoder_hidden_states: Optional[Tuple[ttnn.Tensor]] = None
+    encoder_attentions: Optional[Tuple[ttnn.Tensor]] = None
 
 
 class TtWhisperForConditionalGeneration(nn.Module):
@@ -71,9 +69,7 @@ class TtWhisperForConditionalGeneration(nn.Module):
             config=self.config,
         )
 
-        self.proj_out_weight = torch2tt_tensor(
-            state_dict[f"proj_out.weight"], self.device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        self.proj_out_weight = torch2tt_tensor(state_dict[f"proj_out.weight"], self.device, ttnn.ROW_MAJOR_LAYOUT)
 
     def get_encoder(self):
         return self.model.get_encoder()
@@ -106,22 +102,22 @@ class TtWhisperForConditionalGeneration(nn.Module):
 
     def forward(
         self,
-        input_features: Optional[tt_lib.tensor.Tensor] = None,
+        input_features: Optional[ttnn.Tensor] = None,
         attention_mask: Optional[torch.LongTensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.Tensor] = None,
         decoder_head_mask: Optional[torch.Tensor] = None,
         cross_attn_head_mask: Optional[torch.Tensor] = None,
-        encoder_outputs: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
-        past_key_values: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        encoder_outputs: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
+        past_key_values: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         decoder_inputs_embeds: Optional[Tuple[torch.FloatTensor]] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtWhisperLMOutput]:
+    ) -> Union[Tuple[ttnn.Tensor], TtWhisperLMOutput]:
         """
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for computing the language modeling loss. Indices should either be in `[0, ..., config.vocab_size]`
@@ -151,9 +147,7 @@ class TtWhisperForConditionalGeneration(nn.Module):
         >>> transcription
         ' Mr. Quilter is the apostle of the middle classes, and we are glad to welcome his gospel.'
         ```"""
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         """TODO: Used in training mode"""
         if labels is not None:
@@ -185,9 +179,7 @@ class TtWhisperForConditionalGeneration(nn.Module):
         if labels is not None:
             # TODO: Not supporting Training in TTM for the moment
             loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(
-                logits_to_torch.view(-1, self.config.vocab_size), labels.reshape(-1)
-            )
+            loss = loss_fct(logits_to_torch.view(-1, self.config.vocab_size), labels.reshape(-1))
 
         if not return_dict:
             output = (logits_to_torch,) + outputs[1:]
@@ -230,9 +222,5 @@ class TtWhisperForConditionalGeneration(nn.Module):
     def _reorder_cache(past_key_values, beam_idx):
         reordered_past = ()
         for layer_past in past_key_values:
-            reordered_past += (
-                tuple(
-                    past_state.index_select(0, beam_idx) for past_state in layer_past
-                ),
-            )
+            reordered_past += (tuple(past_state.index_select(0, beam_idx) for past_state in layer_past),)
         return reordered_past

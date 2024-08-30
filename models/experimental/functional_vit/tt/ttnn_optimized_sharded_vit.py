@@ -18,15 +18,15 @@ def update_model_config(config, batch_size):
     core_grid = ttnn.CoreGrid(y=8, x=12)
 
     program_configs = {
-        "fold_output_program_config": ttnn.experimental.tensor.MemoryConfig(
-            ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-            ttnn.experimental.tensor.BufferType.L1,
-            ttnn.experimental.tensor.ShardSpec(
-                ttnn.experimental.tensor.CoreRangeSet(
+        "fold_output_program_config": ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0),
-                            ttnn.experimental.tensor.CoreCoord(12, 7),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(12, 7),
                         ),
                     }
                 ),
@@ -34,7 +34,7 @@ def update_model_config(config, batch_size):
                     224,
                     192,
                 ],
-                ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             ),
         ),
@@ -119,8 +119,8 @@ def update_model_config(config, batch_size):
             subblock_w=2,
             block_h=7,
             block_w=2,
-            # math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
-            # im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
+            # math_fidelity=ttnn.MathFidelity.HiFi4,
+            # im_data_format=ttnn.bfloat16,
             # out_data_format=ttnn.bfloat8_b,
             inplace=False,
         ),
@@ -129,8 +129,8 @@ def update_model_config(config, batch_size):
             subblock_w=2,
             block_h=7,
             block_w=2,
-            # math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
-            # im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
+            # math_fidelity=ttnn.MathFidelity.HiFi4,
+            # im_data_format=ttnn.bfloat16,
             # out_data_format=ttnn.bfloat8_b,
             inplace=False,
         ),
@@ -139,8 +139,8 @@ def update_model_config(config, batch_size):
             subblock_w=7,
             block_h=7,
             block_w=7,
-            # math_fidelity=ttnn.experimental.tensor.MathFidelity.HiFi4,
-            # im_data_format=ttnn.experimental.tensor.DataType.BFLOAT16,
+            # math_fidelity=ttnn.MathFidelity.HiFi4,
+            # im_data_format=ttnn.bfloat16,
         ),
     }
 
@@ -176,18 +176,18 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
 
     #### Exp 2 of resharding after Fold and before Matmul
     # pixel_values = ttnn.pad(pixel_values, ((0, 0), (0, 0), (0, 224), (0, 128)), 0)
-    # post_fold_config = ttnn.experimental.tensor.MemoryConfig(
-    #     ttnn.experimental.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-    #     ttnn.experimental.tensor.BufferType.L1,
-    #     ttnn.experimental.tensor.ShardSpec(
-    #         ttnn.experimental.tensor.CoreRangeSet(
-    #             {ttnn.experimental.tensor.CoreRange(
-    #                     ttnn.experimental.tensor.CoreCoord(0, 0),
-    #                     ttnn.experimental.tensor.CoreCoord(11, 7),
+    # post_fold_config = ttnn.MemoryConfig(
+    #     ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    #     ttnn.BufferType.L1,
+    #     ttnn.ShardSpec(
+    #         ttnn.CoreRangeSet(
+    #             {ttnn.CoreRange(
+    #                     ttnn.CoreCoord(0, 0),
+    #                     ttnn.CoreCoord(11, 7),
     #             ),},
     #         ),
     #         [224,192],
-    #         ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+    #         ttnn.ShardOrientation.ROW_MAJOR,
     #         False,
     #     ),
     # )
@@ -225,10 +225,7 @@ def vit_embeddings(
 ):
     parameters = parameters.vit.embeddings
 
-    l1_memory_config = ttnn.experimental.tensor.MemoryConfig(
-        memory_layout=ttnn.experimental.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttnn.experimental.tensor.BufferType.L1,
-    )
+    l1_memory_config = ttnn.L1_MEMORY_CONFIG
 
     patch_embeddings = vit_patch_embeddings(config, pixel_values, parameters=parameters.patch_embeddings)
     embedding_output = ttnn.concat([cls_token, patch_embeddings], -2, memory_config=l1_memory_config)

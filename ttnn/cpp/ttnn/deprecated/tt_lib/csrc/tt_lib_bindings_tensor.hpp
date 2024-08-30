@@ -9,7 +9,6 @@
 namespace tt::tt_metal {
 
 namespace detail{
-    void TensorModulePyTensor( py::module & m_tensor);
 
 void TensorModulePyTensorTypes(py::module &m_tensor);
 void TensorModulePyTensor(py::module &m_tensor);

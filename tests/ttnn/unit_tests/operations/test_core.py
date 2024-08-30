@@ -203,21 +203,17 @@ from enum import Enum
             128,
             ttnn.TILE_LAYOUT,
             dict(
-                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                core_grid=ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
-                        ),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
                     }
                 ),
                 strategy=ttnn.ShardStrategy.HEIGHT,
             ),
             dict(
-                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                core_grid=ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
-                        ),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
                     }
                 ),
                 strategy=ttnn.ShardStrategy.BLOCK,
@@ -230,21 +226,17 @@ from enum import Enum
             128,
             ttnn.TILE_LAYOUT,
             dict(
-                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                core_grid=ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
-                        ),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
                     }
                 ),
                 strategy=ttnn.ShardStrategy.HEIGHT,
             ),
             dict(
-                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                core_grid=ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
-                        ),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
                     }
                 ),
                 strategy=ttnn.ShardStrategy.BLOCK,
@@ -257,21 +249,17 @@ from enum import Enum
             128,
             ttnn.TILE_LAYOUT,
             dict(
-                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                core_grid=ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 2)
-                        ),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 2)),
                     }
                 ),
                 strategy=ttnn.ShardStrategy.HEIGHT,
             ),
             dict(
-                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                core_grid=ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(1, 1)
-                        ),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
                     }
                 ),
                 strategy=ttnn.ShardStrategy.BLOCK,
@@ -353,11 +341,9 @@ class DirectReadWriteType(Enum):
             [1, 1, 32, 1024],
             [32, 256],
             dict(
-                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                core_grid=ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 3)
-                        ),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3)),
                     }
                 ),
                 strategy=ttnn.ShardStrategy.WIDTH,
@@ -367,17 +353,11 @@ class DirectReadWriteType(Enum):
             [1, 1, 32, 1024],
             [32, 128],
             dict(
-                core_grid=ttnn.experimental.tensor.CoreRangeSet(
+                core_grid=ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
-                        ),
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 2), ttnn.experimental.tensor.CoreCoord(0, 3)
-                        ),
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, 4), ttnn.experimental.tensor.CoreCoord(0, 7)
-                        ),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 2), ttnn.CoreCoord(0, 3)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 7)),
                     }
                 ),
                 strategy=ttnn.ShardStrategy.WIDTH,

@@ -42,13 +42,7 @@ def test_concat(device, height, width, dim, async_mode):
             (1, 1, 16, 16),
             (8, 16),
             (8, 32),
-            ttnn.experimental.tensor.CoreRangeSet(
-                {
-                    ttnn.experimental.tensor.CoreRange(
-                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
-                    )
-                }
-            ),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ),
         (
             (1, 1, 160, 32),
@@ -56,13 +50,7 @@ def test_concat(device, height, width, dim, async_mode):
             (1, 1, 160, 32),
             (80, 32),
             (80, 64),
-            ttnn.experimental.tensor.CoreRangeSet(
-                {
-                    ttnn.experimental.tensor.CoreRange(
-                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
-                    )
-                }
-            ),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ),
         (
             (1, 1, 160, 32),
@@ -70,13 +58,7 @@ def test_concat(device, height, width, dim, async_mode):
             (1, 1, 160, 16),
             (80, 16),
             (80, 48),
-            ttnn.experimental.tensor.CoreRangeSet(
-                {
-                    ttnn.experimental.tensor.CoreRange(
-                        ttnn.experimental.tensor.CoreCoord(0, 0), ttnn.experimental.tensor.CoreCoord(0, 1)
-                    )
-                }
-            ),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ),
     ),
 )
