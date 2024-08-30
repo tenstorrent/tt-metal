@@ -94,12 +94,12 @@ ttnn/**/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @yan-zaretskiy
 ttnn/cpp/ttnn/tensor/ @arakhmati @patrickroberts @yan-zaretskiy @eyonland @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/ccl/ @SeanNijjar
 ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/program_cache.*pp @arakhmati @eyonland @cfjchu @xanderchin
-ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na
+ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @TT-BrianLiu @tt-aho @mywoodstock @eyonland @ayerofieiev-tt @razorback3 @dongjin-na
 ttnn/cpp/ttnn/deprecated/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp @arakhmati @eyonland @cfjchu @xanderchin
 ttnn/cpp/ttnn/deprecated/tt_lib/fallback_ops @tt-aho
 
-ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na
+ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu
 ttnn/cpp/ttnn/operations/pool/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/conv/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic @bbradelTT
