@@ -20,25 +20,27 @@ namespace operations::data_movement {
 struct FoldOperation {
     static ttnn::Tensor invoke(
         const ttnn::Tensor &input_tensor,
-        uint8_t stride_h,
-        uint8_t stride_w,
+        uint32_t stride_h,
+        uint32_t stride_w,
         bool use_transpose_as_fold = false,
         const std::optional<const tt::tt_metal::Shape> &output_shape = std::nullopt,
-        uint8_t pad_c = 0,
-        uint8_t pad_h = 0,
-        uint8_t pad_w = 0,
-        const std::optional<CoreCoord> grid_size = std::nullopt);
+        uint32_t pad_c = 0,
+        uint32_t pad_h = 0,
+        uint32_t pad_w = 0,
+        const std::optional<CoreCoord> grid_size = std::nullopt,
+        const std::optional<MemoryConfig> override_memory_config = std::nullopt);
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor,
-        uint8_t stride_h,
-        uint8_t stride_w,
+        uint32_t stride_h,
+        uint32_t stride_w,
         bool use_transpose_as_fold = false,
         const std::optional<const tt::tt_metal::Shape> &output_shape = std::nullopt,
-        uint8_t pad_c = 0,
-        uint8_t pad_h = 0,
-        uint8_t pad_w = 0,
-        const std::optional<CoreCoord> grid_size = std::nullopt);
+        uint32_t pad_c = 0,
+        uint32_t pad_h = 0,
+        uint32_t pad_w = 0,
+        const std::optional<CoreCoord> grid_size = std::nullopt,
+        const std::optional<MemoryConfig> override_memory_config = std::nullopt);
 
 };
 

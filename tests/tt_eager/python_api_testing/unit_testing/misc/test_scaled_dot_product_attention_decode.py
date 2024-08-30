@@ -42,9 +42,9 @@ def num_to_corerange(x):
     num_x = min(x, 8)
     num_y = x // num_x
     assert num_x * num_y == x
-    return ttnn.experimental.tensor.CoreRange(
-        ttnn.experimental.tensor.CoreCoord(0, 0),
-        ttnn.experimental.tensor.CoreCoord(num_x - 1, num_y - 1),
+    return ttnn.CoreRange(
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(num_x - 1, num_y - 1),
     )
 
 
@@ -198,16 +198,12 @@ def run_test_sdpa_decode_multi_pos(
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    dram_memcfg = ttnn.types.MemoryConfig(ttnn.types.TensorMemoryLayout.INTERLEAVED, ttnn.types.BufferType.DRAM)
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet({num_to_corerange(b)})
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
-        shard_grid, (padded_num_heads, d), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
-    )
+    shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
 
-    height_sharded_memcfg = ttnn.types.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
+    height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
     K = fa_rand(nkv, b, s, d)
     V = fa_rand(nkv, b, s, d)
@@ -335,16 +331,12 @@ def run_test_sdpa_decode_single_iter(
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    dram_memcfg = ttnn.types.MemoryConfig(ttnn.types.TensorMemoryLayout.INTERLEAVED, ttnn.types.BufferType.DRAM)
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
-    shard_grid = ttnn.experimental.tensor.CoreRangeSet({num_to_corerange(b)})
-    shard_spec = ttnn.experimental.tensor.ShardSpec(
-        shard_grid, (padded_num_heads, d), ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
-    )
+    shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
+    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
 
-    height_sharded_memcfg = ttnn.types.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
+    height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
     K = fa_rand(nkv, b, s, d)
     V = fa_rand(nkv, b, s, d)
@@ -578,9 +570,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
                 device=device,
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.types.MemoryConfig(
-                    ttnn.types.TensorMemoryLayout.INTERLEAVED, ttnn.types.BufferType.DRAM
-                ),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         )
         dummy_tensors.append(
@@ -589,13 +579,13 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
                 device=device,
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.types.MemoryConfig(
-                    ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
-                    ttnn.types.BufferType.L1,
-                    ttnn.experimental.tensor.ShardSpec(
-                        ttnn.experimental.tensor.CoreRangeSet({num_to_corerange(32)}),
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(
+                        ttnn.CoreRangeSet({num_to_corerange(32)}),
                         (32, 32),
-                        ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR,
+                        ttnn.ShardOrientation.ROW_MAJOR,
                         False,
                     ),
                 ),
@@ -675,7 +665,7 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    dram_memcfg = ttnn.types.MemoryConfig(ttnn.types.TensorMemoryLayout.INTERLEAVED, ttnn.types.BufferType.DRAM)
+    dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     K = fa_rand(nkv, b, s, d)
     V = fa_rand(nkv, b, s, d)

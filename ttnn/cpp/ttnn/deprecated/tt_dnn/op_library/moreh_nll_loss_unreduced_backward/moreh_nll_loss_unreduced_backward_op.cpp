@@ -133,7 +133,7 @@ Tensor moreh_nll_loss_unreduced_backward(
     const std::optional<const Tensor> input_grad_tensor,
     const int32_t ignore_index,
     const MemoryConfig& memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto device = output_grad_tensor.device();
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});

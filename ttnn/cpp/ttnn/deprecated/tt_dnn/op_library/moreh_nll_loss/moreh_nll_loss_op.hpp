@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "ttnn/deprecated/tt_dnn/op_library/compute_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
     const bool reduction_mean,
     const uint32_t channel_size,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 operation::ProgramWithCallbacks moreh_nll_loss_step2_impl(
     const Tensor &input,
@@ -35,7 +35,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step2_impl(
     const int32_t ignore_index,
     const bool reduction_mean,
     const CoreRange core_range,
-    const DeviceComputeKernelConfig compute_kernel_config);
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 struct MorehNllLossStep1 {
     int32_t ignore_index;
@@ -45,7 +45,7 @@ struct MorehNllLossStep1 {
 
     const MemoryConfig output_mem_config;
     const CoreRange core_range;  // unused for now
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate(
         const std::vector<Tensor> &input_tensors,
@@ -75,7 +75,7 @@ struct MorehNllLossStep2 {
 
     const MemoryConfig output_mem_config;
     const CoreRange core_range;  // unused for now
-    const DeviceComputeKernelConfig compute_kernel_config;
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config;
 
     void validate(
         const std::vector<Tensor> &input_tensors,
@@ -105,7 +105,7 @@ Tensor moreh_nll_loss_step1(
     const DataType output_dtype,
     const uint32_t channel_size,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 Tensor moreh_nll_loss_step2(
     const Tensor &input_tensor,
@@ -115,7 +115,7 @@ Tensor moreh_nll_loss_step2(
     const int32_t ignore_index,
     const bool reduction_mean,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 Tensor moreh_nll_loss(
     const Tensor &input_tensor,
@@ -126,7 +126,7 @@ Tensor moreh_nll_loss(
     const int32_t ignore_index,
     const bool reduction_mean,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace primary
 }  // namespace operations

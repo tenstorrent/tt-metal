@@ -81,7 +81,7 @@ Shape get_output_grad_shape(const Tensor &output_grad, const Tensor &input_grad,
 }  // namespace
 
 operation::ProgramWithCallbacks moreh_norm_backward_(
-    const Tensor &input, const Tensor &output, const Tensor &output_grad, float p, const std::vector<int64_t> &dims, const bool &keep_batch_dim, const Tensor &input_grad, const DeviceComputeKernelConfig compute_kernel_config) {
+    const Tensor &input, const Tensor &output, const Tensor &output_grad, float p, const std::vector<int64_t> &dims, const bool &keep_batch_dim, const Tensor &input_grad, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

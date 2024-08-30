@@ -17,7 +17,7 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
     const Tensor& sin_cache,
     const std::optional<uint32_t> token_index,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
     TT_FATAL(input_tensor.get_legacy_shape()[-1] % (TILE_WIDTH * 2) == 0,
             fmt::format("Input X dimension ({}) must be divisible by {} for tiling.",

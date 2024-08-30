@@ -9,7 +9,7 @@ from datasets import load_dataset
 from loguru import logger
 from transformers import WhisperModel, AutoFeatureExtractor
 
-import tt_lib
+import ttnn
 
 from models.experimental.whisper.tt.whisper_model import TtWhisperModel
 from models.utility_functions import (
@@ -74,7 +74,7 @@ def run_whisper_model(device):
     tt_whisper.eval()
 
     with torch.no_grad():
-        input_features = torch2tt_tensor(input_features, device, tt_lib.tensor.Layout.ROW_MAJOR)
+        input_features = torch2tt_tensor(input_features, device, ttnn.ROW_MAJOR_LAYOUT)
         logger.info("Running tt whisper model")
 
         ttm_output = tt_whisper(input_features=input_features, decoder_input_ids=decoder_input_ids)

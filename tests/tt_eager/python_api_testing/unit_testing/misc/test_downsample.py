@@ -94,10 +94,7 @@ def test_run_downsample(
     A_cl_host = A_cl_host.pad(input_shape, (0, 0, 0, 0), 0.0)
     A_interleaved = A_cl_host.to(ttnn.TILE_LAYOUT).to(
         device,
-        ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttnn.BufferType.L1,
-        ),
+        ttnn.L1_MEMORY_CONFIG,
     )
     assert A_interleaved.get_legacy_shape()[0] == 1 and A_interleaved.get_legacy_shape()[1] == 1
 
@@ -142,7 +139,7 @@ def test_run_downsample(
     A_downampled_sharded = ttnn.downsample(A_sharded, downsample_params, dtype=dtype)
     A_downsampled = ttnn.sharded_to_interleaved(
         A_downampled_sharded,
-        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ttnn.L1_MEMORY_CONFIG,
     )
     out = A_downsampled
     out_shape = [1, 1, _nearest_y(batch_size * output_height * output_width, 32), input_channels]

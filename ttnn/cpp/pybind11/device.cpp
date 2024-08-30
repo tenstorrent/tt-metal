@@ -29,6 +29,7 @@ namespace {
 namespace ttnn {
 namespace device {
 namespace detail {
+
 void ttnn_device(py::module& module) {
     module.def(
         "open_device",
@@ -52,7 +53,9 @@ void ttnn_device(py::module& module) {
     )doc");
 }
 
-void device_module(py::module &m_device) {
+}  // namespace detail
+
+void py_device_module_types(py::module &m_device) {
     py::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
         .value("GRAYSKULL", tt::ARCH::GRAYSKULL)
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0)
@@ -62,7 +65,12 @@ void device_module(py::module &m_device) {
         .value("WORKER", tt::tt_metal::DispatchCoreType::WORKER)
         .value("ETH", tt::tt_metal::DispatchCoreType::ETH);
 
-    auto pyDevice = py::class_<Device, std::unique_ptr<Device, py::nodelete>>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
+    py::class_<Device, std::unique_ptr<Device, py::nodelete>>(m_device, "Device", "Class describing a Tenstorrent accelerator device.");
+}
+
+void device_module(py::module &m_device) {
+
+    auto pyDevice = static_cast<py::class_<Device, std::unique_ptr<Device, py::nodelete>>>(m_device.attr("Device"));
     pyDevice
         .def(
             py::init<>([](int device_id, size_t l1_small_size, size_t trace_region_size) { return Device(device_id, 1, l1_small_size, trace_region_size); }),
@@ -291,11 +299,11 @@ void device_module(py::module &m_device) {
     m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);
 }
 
-}  // namespace detail
 
-void py_module(py::module& module) {
+void py_device_module(py::module& module) {
    detail::ttnn_device(module);
-   detail::device_module(module);
+   device_module(module);
 }
+
 }  // namespace device
 }  // namespace ttnn

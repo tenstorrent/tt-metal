@@ -8,7 +8,7 @@ from loguru import logger
 
 import numpy as np
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     comp_pcc,
 )
@@ -34,35 +34,35 @@ def run_bert_large_selfout_matmul_test(device, dtype, in0_mem_config, in1_mem_co
     BIAS = torch.randint(-20, 20, bias_shape, dtype=torch.float)
 
     a_t = (
-        ttl.tensor.Tensor(
+        ttnn.Tensor(
             A.flatten().tolist(),
             a_shape,
             dtype,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.TILE_LAYOUT)
         .to(device, in0_mem_config)
     )
     b_t = (
-        ttl.tensor.Tensor(
+        ttnn.Tensor(
             B.flatten().tolist(),
             b_shape,
             dtype,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.TILE_LAYOUT)
         .to(device, in1_mem_config)
     )
     if bias_mem_config is not None:
         bias_t = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 BIAS.flatten().tolist(),
                 bias_shape,
                 dtype,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
             .pad(bias_pad_shape, [0, 0, 0, 0], 0)
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device, bias_mem_config)
         )
     else:
@@ -83,7 +83,7 @@ def run_bert_large_selfout_matmul_test(device, dtype, in0_mem_config, in1_mem_co
     logger.debug(f"out is on: {t2.memory_config().buffer_type}")
 
     assert t2.get_legacy_shape() == [9, 1, 384, 1024]
-    tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_host_rm = t2.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     pyt_got_back_rm = tt_host_rm.to_torch()
 
     ref_bmm = torch.matmul(A, B)
@@ -99,16 +99,16 @@ def run_bert_large_selfout_matmul_test(device, dtype, in0_mem_config, in1_mem_co
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "bias_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
         None,
     ),
     ids=["bias_DRAM", "bias_L1", "bias_None"],
@@ -116,22 +116,22 @@ def run_bert_large_selfout_matmul_test(device, dtype, in0_mem_config, in1_mem_co
 @pytest.mark.parametrize(
     "in1_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
     ids=["in1_DRAM", "in1_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.L1_MEMORY_CONFIG,
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
+    (ttnn.bfloat8_b, ttnn.bfloat16),
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
 def test_bert_large_selfout_matmul_test(
@@ -147,8 +147,8 @@ def test_bert_large_selfout_matmul_test(
 
 
 def test_bert_large_selfout_matmul_with_program_cache(device, use_program_cache):
-    dtype = ttl.tensor.DataType.BFLOAT8_B
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    dtype = ttnn.bfloat8_b
+    mem_config = ttnn.DRAM_MEMORY_CONFIG
     for _ in range(2):
         run_bert_large_selfout_matmul_test(
             device,
@@ -160,9 +160,9 @@ def test_bert_large_selfout_matmul_with_program_cache(device, use_program_cache)
         )
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
+        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
-    mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    mem_config = ttnn.L1_MEMORY_CONFIG
     for _ in range(2):
         run_bert_large_selfout_matmul_test(
             device,
@@ -174,6 +174,6 @@ def test_bert_large_selfout_matmul_with_program_cache(device, use_program_cache)
         )
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttl.tensor.Tensor(py_dummy_tensor, dtype).to(ttl.tensor.Layout.TILE).to(device, mem_config)
+        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 2

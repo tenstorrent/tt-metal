@@ -5,8 +5,6 @@
 import torch
 import torch.nn as nn
 import ttnn
-import tt_lib
-import ttnn
 from typing import Optional, Tuple, Union
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
@@ -58,47 +56,47 @@ class TtWhisperAttention(nn.Module):
         self.v_proj_bias = torch2tt_tensor(
             state_dict[f"{base_address}.v_proj.bias"],
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.q_proj_weight = torch2tt_tensor(
             state_dict[f"{base_address}.q_proj.weight"],
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.q_proj_bias = torch2tt_tensor(
             state_dict[f"{base_address}.q_proj.bias"],
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.out_proj_weight = torch2tt_tensor(
             state_dict[f"{base_address}.out_proj.weight"],
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.out_proj_bias = torch2tt_tensor(
             state_dict[f"{base_address}.out_proj.bias"],
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
         self.cached_q_proj_shape = None
         self.q_proj_mul_const = None
 
     # Copied from transformers.models.bart.modeling_bart.BartAttention._shape with BART->whisper
-    def _shape(self, tt_tensor: tt_lib.tensor.Tensor, seq_len: int, bsz: int):
+    def _shape(self, tt_tensor: ttnn.Tensor, seq_len: int, bsz: int):
         tt_tensor = fallback_ops.reshape(tt_tensor, bsz, seq_len, self.num_heads, self.head_dim)
         tt_tensor = ttnn.transpose(tt_tensor, 1, -2)
         return tt_tensor
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        key_value_states: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_value: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
+        hidden_states: ttnn.Tensor,
+        key_value_states: Optional[ttnn.Tensor] = None,
+        past_key_value: Optional[Tuple[ttnn.Tensor]] = None,
+        attention_mask: Optional[ttnn.Tensor] = None,
         layer_head_mask: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[tt_lib.tensor.Tensor], Optional[Tuple[tt_lib.tensor.Tensor]],]:
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor], Optional[Tuple[ttnn.Tensor]],]:
         # if key_value_states are provided this layer is used as a cross-attention layer for the decoder
         is_cross_attention = key_value_states is not None
 

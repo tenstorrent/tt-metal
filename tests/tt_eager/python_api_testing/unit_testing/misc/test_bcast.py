@@ -45,7 +45,7 @@ from tt_lib.utils import (
 @pytest.mark.parametrize("in0_batch_size", [1, 2])
 @pytest.mark.parametrize(
     "orientation",
-    [ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, ttnn.experimental.tensor.ShardOrientation.COL_MAJOR],
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
 )
 def test_bcast(
     device,
@@ -67,12 +67,12 @@ def test_bcast(
         if shard_strategy == ttnn.ShardStrategy.BLOCK:
             shard_grid = (
                 (shard_grid[0], 4)
-                if shard_grid[1] == 8 and orientation == ttnn.experimental.tensor.ShardOrientation.COL_MAJOR
+                if shard_grid[1] == 8 and orientation == ttnn.ShardOrientation.COL_MAJOR
                 else shard_grid
             )
             shard_grid = (
                 (4, shard_grid[1])
-                if shard_grid[0] == 8 and orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
+                if shard_grid[0] == 8 and orientation == ttnn.ShardOrientation.ROW_MAJOR
                 else shard_grid
             )
     input_shape = [in0_batch_size, 1, input_height, input_width]
@@ -92,7 +92,7 @@ def test_bcast(
         shard_orientation = orientation
         core_grid = (
             ttnn.CoreGrid(y=shard_grid[0], x=shard_grid[1])
-            if shard_orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
+            if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR
             else ttnn.CoreGrid(y=shard_grid[1], x=shard_grid[0])
         )
     else:
@@ -108,7 +108,7 @@ def test_bcast(
     in_sharded_mem_config = ttnn.create_sharded_memory_config(
         shape=(
             (shard_height, shard_width)
-            if shard_orientation == ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
+            if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR
             else (shard_width, shard_height)
         ),
         core_grid=core_grid,

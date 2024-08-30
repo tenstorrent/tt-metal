@@ -204,7 +204,7 @@ Tensor moreh_norm(
     const bool keepdim,
     const std::optional<const Tensor> output,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     if (dim == std::nullopt) {
         std::vector<int64_t> dims(input.get_legacy_shape().rank());
         std::iota(dims.begin(), dims.end(), 0);
@@ -250,7 +250,7 @@ Tensor moreh_norm_impl(const Tensor &input, float p, int64_t dim,
     const bool keepdim,
     const std::optional<const Tensor> output,
     const std::optional<MemoryConfig> &memory_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config
 ) {
     auto device = input.device();
 
