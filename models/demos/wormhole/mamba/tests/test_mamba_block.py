@@ -29,6 +29,15 @@ class PytorchMambaBlock(torch.nn.Module):
         return result
 
 
+@pytest.mark.parametrize("layer", [0])
+@pytest.mark.parametrize(
+    "use_pretrained_weights",
+    [True, False],
+    ids=[
+        "pretrained_weight_true",
+        "pretrained_weight_false",
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "model_version, mode, batch, seq_len, pcc",
@@ -38,45 +47,45 @@ class PytorchMambaBlock(torch.nn.Module):
             ModelMode.PREFILL,
             1,
             128,
-            0.98,
+            0.985,
         ),
         (
             "state-spaces/mamba-2.8b",
             ModelMode.DECODE,
             32,
             1,
-            0.97,
+            0.975,
         ),
     ),
 )
 def test_mamba_block_inference(
-    device: ttnn.Device,
-    use_program_cache,
     model_version: MambaPretrainedModelName,
     mode: ModelMode,
     batch: int,
     seq_len: int,
     pcc: float,
+    use_pretrained_weights: bool,
+    layer: int,
+    device: ttnn.Device,
+    use_program_cache,
+    reset_seeds,
 ):
-    torch.manual_seed(0)
-
-    LAYER_NUM = 0
-
-    reference_model = Mamba.from_pretrained(model_version, batch_size=batch)
+    load_reference_model = Mamba.from_pretrained if use_pretrained_weights else Mamba.from_random
+    reference_model = load_reference_model(model_version, batch_size=batch)
     reference_model.args.mode = mode
 
     d_model = reference_model.args.d_model
     input = torch.rand(batch, seq_len, d_model)
 
-    reference_output = PytorchMambaBlock(reference_model, LAYER_NUM)(input)
+    reference_output = PytorchMambaBlock(reference_model, layer)(input)
 
     config = model_config.create_model_config(batch, reference_model.args.d_model, mode=mode, seq_len=seq_len)
 
     loader = TtTensorLoader(reference_model.state_dict(), device)
 
-    logger.info(f"Initalizing Mamba block from layer {LAYER_NUM}")
+    logger.info(f"Initalizing Mamba block from layer {layer}")
     start = time.time()
-    model = TtMambaBlock(reference_model.args, device, config, loader.get_tensor_loader(LAYER_NUM))
+    model = TtMambaBlock(reference_model.args, device, config, loader.get_tensor_loader(layer))
     logger.info(f"Finished initializing Mamba block (took {time.time() - start:.3f} sec)")
 
     tt_input = input.view(1, 1, config["outer_dim"], d_model)
