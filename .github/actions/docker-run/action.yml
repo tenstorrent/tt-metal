@@ -59,7 +59,7 @@ runs:
         registry: ghcr.io
         image: ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}:${{ env.IMAGE_TAG }}
         options: |
-          -v ${{ github.workspace }}:/usr/app
+          -v ${{ github.workspace }}:/github_workspace:ro
           --net=host
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
@@ -67,6 +67,6 @@ runs:
           -e ARCH_NAME=${{ inputs.docker_image_arch }}
           ${{ inputs.device }}
         run: |
-          cd /usr/app
+          cp -r /github_workspace/* /usr/app/
           rm -rf tt_metal tt_eager
           ${{ inputs.run_args }}
