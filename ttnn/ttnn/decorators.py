@@ -159,8 +159,7 @@ def set_tensor_id(tensor, force=False):
     if isinstance(tensor, (ttnn.Tensor, torch.Tensor)):
         if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
             return
-        tensor.tensor_id = ttnn._ttnn.get_tensor_id()
-        ttnn._ttnn.increment_tensor_id()
+        tensor.tensor_id = ttnn._ttnn.fetch_and_increment_tensor_id()
     elif isinstance(tensor, (list, tuple)):
         for element in tensor:
             set_tensor_id(element, force)
@@ -600,7 +599,7 @@ class Operation:
     def __call__(self, *function_args, **function_kwargs):
         try:
             if not OPERATION_CALL_STACK:
-                ttnn._ttnn.increment_python_operation_id()
+                ttnn._ttnn.fetch_and_increment_python_operation_id()
             OPERATION_CALL_STACK.append(self.python_fully_qualified_name)
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:

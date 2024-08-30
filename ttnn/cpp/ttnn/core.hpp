@@ -71,21 +71,32 @@ using core::has_storage_type_of;
 using core::pad_to_multiple_of_tile_size;
 using core::set_printoptions;
 
+class CoreIDs{
+    public:
+        static CoreIDs& instance() {
+            static CoreIDs instance;
+            return instance;
+        }
 
-extern std::atomic<std::int64_t> TENSOR_ID;
-extern std::atomic<std::int64_t> PYTHON_OPERATION_ID;
-extern std::atomic<std::int64_t> DEVICE_OPERATION_ID;
+        std::int64_t get_python_operation_id();
+        void set_python_operation_id(std::int64_t operation_id);
+        std::int64_t fetch_and_increment_python_operation_id();
 
-std::int64_t get_python_operation_id();
-void set_python_operation_id(std::int64_t operation_id);
-void increment_python_operation_id();
+        std::int64_t get_tensor_id();
+        void set_tensor_id(std::int64_t tensor_id);
+        std::int64_t fetch_and_increment_tensor_id();
 
-std::int64_t get_tensor_id();
-void set_tensor_id(std::int64_t tensor_id);
-void increment_tensor_id();
+        std::int64_t get_device_operation_id();
+        void set_device_operation_id(std::int64_t device_operation_id);
+        std::int64_t fetch_and_increment_device_operation_id();
 
-std::int64_t get_device_operation_id();
-void set_device_operation_id(std::int64_t device_operation_id);
-std::int64_t fetch_and_increment_device_operation_id();
+    private:
+        CoreIDs() = default;
+        ~CoreIDs() = default;
+        std::atomic<std::int64_t> tensor_id;
+        std::atomic<std::int64_t> python_operation_id;
+        std::atomic<std::int64_t> device_operation_id;
+};
+
 
 }  // namespace ttnn
