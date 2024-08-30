@@ -10,7 +10,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 // #include "tools/profiler/kernel_profiler.hpp"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
 #define dump(a) \
     do { DPRINT_MATH(DPRINT << "max pool compute: "<< #a " = " << a << ENDL();); } while(false)
