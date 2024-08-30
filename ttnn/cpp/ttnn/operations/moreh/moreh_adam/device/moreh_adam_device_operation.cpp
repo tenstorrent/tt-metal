@@ -84,37 +84,34 @@ MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tens
     auto device = tensor_args.param_in.device();
 
     std::vector<std::optional<Tensor>> ret;
+    auto output_mem_config = operation_attributes.output_mem_config.value_or(tensor_args.param_in.memory_config());
 
     auto idx = uint32_t{0};
     if (tensor_args.output_tensors.at(idx).has_value()) {
         ret.push_back(tensor_args.output_tensors.at(idx).value());
     } else {
-        ret.push_back(create_device_tensor(
-            output_shapes.at(idx).value(), dtype, layout, device, operation_attributes.output_mem_config));
+        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, output_mem_config));
     }
     ++idx;
 
     if (tensor_args.output_tensors.at(idx).has_value()) {
         ret.push_back(tensor_args.output_tensors.at(idx).value());
     } else {
-        ret.push_back(create_device_tensor(
-            output_shapes.at(idx).value(), dtype, layout, device, operation_attributes.output_mem_config));
+        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, output_mem_config));
     }
     ++idx;
 
     if (tensor_args.output_tensors.at(idx).has_value()) {
         ret.push_back(tensor_args.output_tensors.at(idx).value());
     } else {
-        ret.push_back(create_device_tensor(
-            output_shapes.at(idx).value(), dtype, layout, device, operation_attributes.output_mem_config));
+        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, output_mem_config));
     }
     ++idx;
 
     if (tensor_args.output_tensors.at(idx).has_value()) {
         ret.push_back(tensor_args.output_tensors.at(idx).value());
     } else if (operation_attributes.amsgrad) {
-        ret.push_back(create_device_tensor(
-            output_shapes.at(idx).value(), dtype, layout, device, operation_attributes.output_mem_config));
+        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, output_mem_config));
     }
 
     return std::move(ret);
@@ -137,7 +134,7 @@ std::tuple<MorehAdamOperation::operation_attributes_t, MorehAdamOperation::tenso
     const std::optional<const Tensor> exp_avg_out,
     const std::optional<const Tensor> exp_avg_sq_out,
     const std::optional<const Tensor> max_exp_avg_sq_out,
-    const MemoryConfig& memory_config,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
     const DeviceComputeKernelConfig compute_kernel_config) {
     return {
         operation_attributes_t{

@@ -103,11 +103,11 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
         weight_decay,
         step,
         amsgrad,
-        dev_max_exp_avg_sq,
-        dev_param_out,
-        dev_exp_avg_out,
-        dev_exp_avg_sq_out,
-        dev_max_exp_avg_sq_out,
+        max_exp_avg_sq_in=dev_max_exp_avg_sq,
+        param_out=dev_param_out,
+        exp_avg_out=dev_exp_avg_out,
+        exp_avg_sq_out=dev_exp_avg_sq_out,
+        max_exp_avg_sq_out=dev_max_exp_avg_sq_out,
         compute_kernel_config=compute_kernel_config,
     )
 

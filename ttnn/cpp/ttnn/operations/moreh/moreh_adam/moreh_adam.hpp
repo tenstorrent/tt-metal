@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_adam/device/moreh_adam_device_operation.hpp"
 
@@ -28,7 +26,7 @@ struct MorehAdam {
         const std::optional<const Tensor> exp_avg_out,
         const std::optional<const Tensor> exp_avg_sq_out,
         const std::optional<const Tensor> max_exp_avg_sq_out,
-        const MemoryConfig& memory_config,
+        const std::optional<ttnn::MemoryConfig>& memory_config,
         const DeviceComputeKernelConfig compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_adam

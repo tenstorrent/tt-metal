@@ -133,7 +133,7 @@ void py_module(py::module& module) {
     experimental::py_module(m_experimental);
 
     auto m_moreh = module.def_submodule("moreh", "moreh operations");
-    moreh::py_module(m_moreh);
+    moreh::bind_moreh_operations(m_moreh);
 }
 
 }  // namespace operations

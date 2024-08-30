@@ -21,8 +21,8 @@ struct MorehAdamOperation {
         uint32_t step;
         bool amsgrad;
 
-        MemoryConfig output_mem_config;
-        DeviceComputeKernelConfig compute_kernel_config;
+        const std::optional<MemoryConfig>& output_mem_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
     };
 
     struct tensor_args_t {
@@ -88,7 +88,7 @@ struct MorehAdamOperation {
         const std::optional<const Tensor> exp_avg_sq_out,
         const std::optional<const Tensor> max_exp_avg_sq_out,
 
-        const MemoryConfig& memory_config,
+        const std::optional<ttnn::MemoryConfig>& memory_config,
         const DeviceComputeKernelConfig compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_adam
