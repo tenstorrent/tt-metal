@@ -413,10 +413,14 @@ def prepare_inputs_ttnn_prefill(x_bsh, device_mesh, num_tokens=None):
         attn_mask_torch[num_tokens:, num_tokens:] = torch.finfo(torch.float32).min
     attn_mask = attn_mask_torch.view(1, 1, seq_len, seq_len)
 
+    if seq_len == 128:
+        attn_mask_dtype = ttnn.bfloat16
+    else:
+        attn_mask_dtype = ttnn.bfloat8_b
     attn_mask = ttnn.from_torch(
         attn_mask,
         device=device_mesh,
-        dtype=ttnn.bfloat16,
+        dtype=attn_mask_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(device_mesh),

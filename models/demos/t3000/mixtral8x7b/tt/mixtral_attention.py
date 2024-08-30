@@ -354,6 +354,10 @@ class TtMixtralAttention(LightweightModule):
         keys_11SD = self.layer_past[0]
         values_11SD = self.layer_past[1]
 
+        if seq_len > 128:
+            k_heads_11SD = ttnn.typecast(k_heads_11SD, dtype=ttnn.bfloat8_b)
+            v_heads_11SD = ttnn.typecast(v_heads_11SD, dtype=ttnn.bfloat8_b)
+            q_heads_14SD = ttnn.typecast(q_heads_14SD, dtype=ttnn.bfloat8_b)
         ttnn.kv_cache.fill_cache_for_user_(keys_11SD, ttnn.typecast(k_heads_11SD, dtype=ttnn.bfloat8_b), user_id)
         ttnn.kv_cache.fill_cache_for_user_(values_11SD, ttnn.typecast(v_heads_11SD, dtype=ttnn.bfloat8_b), user_id)
 

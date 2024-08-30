@@ -249,8 +249,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, max_pre
     pt_decode_input = embd(pt_out_batched).view(batch_size, 1, -1)
 
     # Keep track of generated outputs to print out every iteration
-    all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
-    all_outputs = [[] for _ in range(batch_size)]
+    all_outputs = [encoded_prompts[b][: decoding_pos[b]] for b in range(batch_size)]
     for user in range(batch_size):
         user_tok = int(pt_out_batched[0, 0, user].item())
         all_outputs[user].append(user_tok)
