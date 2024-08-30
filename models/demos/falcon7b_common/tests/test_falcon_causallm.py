@@ -44,7 +44,7 @@ class PytorchFalconCausalLM(torch.nn.Module):
 
 
 def run_test_FalconCausalLM_inference(
-    device_mesh,
+    mesh_device,
     model_version,
     llm_mode,
     batch,
@@ -56,7 +56,7 @@ def run_test_FalconCausalLM_inference(
     tt_cache_path,
     model_location_generator,
 ):
-    num_devices = get_num_devices(device_mesh)
+    num_devices = get_num_devices(mesh_device)
     global_batch = batch * num_devices
 
     hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
@@ -85,7 +85,7 @@ def run_test_FalconCausalLM_inference(
         seq_len,
         batch,
         kv_cache_len,
-        device_mesh,
+        mesh_device,
         global_batch,
         head_dim,
         max_position_embeddings,
@@ -102,7 +102,7 @@ def run_test_FalconCausalLM_inference(
     )
 
     tt_FalconCausalLM = TtFalconCausalLM(
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         num_layers,
@@ -135,7 +135,7 @@ def run_test_FalconCausalLM_inference(
                 use_cache=use_cache,
             )
             # Get outputs from all devices
-            tt_outs[user_id::batch] = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=0).squeeze(1)
+            tt_outs[user_id::batch] = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=0).squeeze(1)
         tt_out = tt_outs
 
     elif llm_mode == "decode":
@@ -150,7 +150,7 @@ def run_test_FalconCausalLM_inference(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        tt_out = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=2).squeeze(1).transpose(0, 1)
+        tt_out = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=2).squeeze(1).transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -159,14 +159,14 @@ def run_test_FalconCausalLM_inference(
     for i in range(num_layers):
         if llm_mode == "prefill":
             pytorch_layer_pres = (pytorch_layer_present[i][0].squeeze(1), pytorch_layer_present[i][1].squeeze(1))
-            tt_layer_pres = concat_device_out_layer_present(device_mesh, tt_layer_present[i], kv_len)
+            tt_layer_pres = concat_device_out_layer_present(mesh_device, tt_layer_present[i], kv_len)
         elif llm_mode == "decode":
             pytorch_layer_pres = (
                 pytorch_layer_present[i][0].squeeze(1)[:, kv_cache_len, :],
                 pytorch_layer_present[i][1].squeeze(1)[:, kv_cache_len, :],
             )
             tt_layer_pres = concat_device_out_layer_present(
-                device_mesh, tt_layer_present[i], kv_cache_len, end_idx_only=True
+                mesh_device, tt_layer_present[i], kv_cache_len, end_idx_only=True
             )
 
         does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[0], tt_layer_pres[0], pcc)
@@ -186,7 +186,7 @@ def run_test_FalconCausalLM_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@pytest.mark.parametrize("device_mesh", (1, 2, 4, (8, 4)), indirect=True, ids=["1chip", "2chip", "4chip", "32chipTG"])
+@pytest.mark.parametrize("mesh_device", (1, 2, 4, (8, 4)), indirect=True, ids=["1chip", "2chip", "4chip", "32chipTG"])
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
@@ -221,7 +221,7 @@ def test_FalconCausalLM_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    device_mesh,
+    mesh_device,
     enable_async_mode,
 ):
     if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
@@ -233,7 +233,7 @@ def test_FalconCausalLM_inference(
     )
 
     run_test_FalconCausalLM_inference(
-        device_mesh,
+        mesh_device,
         model_version,
         llm_mode,
         batch,

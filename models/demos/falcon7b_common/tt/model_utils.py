@@ -10,7 +10,7 @@ from models.utility_functions import is_wormhole_b0
 
 
 def get_weights_cached(
-    device_mesh,
+    mesh_device,
     model_config,
     tt_cache_path,
     weight_cache_str,
@@ -48,9 +48,9 @@ def get_weights_cached(
             weights_to_cache,
             dtype=model_config[f"{weight_config_str}_DTYPE"],
             layout=tt_layout,
-            device=device_mesh,
+            device=mesh_device,
             memory_config=model_config[f"{weight_config_str}_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(device_mesh) if type(device_mesh) == ttnn.DeviceMesh else None,
+            mesh_mapper=ReplicateTensorToMesh(mesh_device) if type(mesh_device) == ttnn.MeshDevice else None,
             cache_file_name=str(path),
             preprocess=preprocess_weights,
         )

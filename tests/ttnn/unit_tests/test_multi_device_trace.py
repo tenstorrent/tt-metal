@@ -22,18 +22,18 @@ NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("enable_multi_cq", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 60000, "num_command_queues": 2}], indirect=True)
-def test_multi_device_single_trace(t3k_device_mesh, shape, use_all_gather, enable_async, enable_multi_cq):
-    if t3k_device_mesh.get_num_devices() <= 1:
+def test_multi_device_single_trace(t3k_mesh_device, shape, use_all_gather, enable_async, enable_multi_cq):
+    if t3k_mesh_device.get_num_devices() <= 1:
         pytest.skip("This test requires multiple devices")
 
     # Trace requires program cache to be enabled
-    for device_id in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device_id).enable_async(enable_async)
-        t3k_device_mesh.get_device(device_id).enable_program_cache()
+    for device_id in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device_id).enable_async(enable_async)
+        t3k_mesh_device.get_device(device_id).enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
-    input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_device_mesh)
-    input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_device_mesh)
+    input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)
+    input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)
 
     # Op chains to be traced
     def run_op_chain(input_0, input_1):
@@ -63,20 +63,20 @@ def test_multi_device_single_trace(t3k_device_mesh, shape, use_all_gather, enabl
     # Capture Trace
     logger.info("Capture Trace")
 
-    tid = ttnn.begin_trace_capture(t3k_device_mesh, cq_id=trace_cq)
+    tid = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=trace_cq)
     output_tensor = run_op_chain(input_0_dev, input_1_dev)
-    ttnn.end_trace_capture(t3k_device_mesh, tid, cq_id=trace_cq)
+    ttnn.end_trace_capture(t3k_mesh_device, tid, cq_id=trace_cq)
     logger.info("Done Trace Capture")
 
     for i in range(NUM_TRACE_LOOPS):
-        write_event = ttnn.create_event(t3k_device_mesh)
-        trace_event = ttnn.create_event(t3k_device_mesh)
+        write_event = ttnn.create_event(t3k_mesh_device)
+        trace_event = ttnn.create_event(t3k_mesh_device)
         # Create torch inputs
         torch_input_tensor_0 = torch.rand(
-            (t3k_device_mesh.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
+            (t3k_mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
         )
         torch_input_tensor_1 = torch.rand(
-            (t3k_device_mesh.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
+            (t3k_mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
         )
         # Compute PT Golden
         torch_output_golden = torch.neg(
@@ -87,10 +87,10 @@ def test_multi_device_single_trace(t3k_device_mesh, shape, use_all_gather, enabl
         )
         # Convert torch tensors to TTNN Multi-Device Host Tensors
         ttnn_input_tensor_0 = ttnn.from_torch(
-            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=0)
+            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=0)
         )
         ttnn_input_tensor_1 = ttnn.from_torch(
-            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=0)
+            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=0)
         )
 
         # Copy TTNN host tensors into preallocated Mult-Device tensors
@@ -100,7 +100,7 @@ def test_multi_device_single_trace(t3k_device_mesh, shape, use_all_gather, enabl
         event_sync(write_event, data_movement_cq, trace_cq)
         logger.info("Execute Trace")
         # Execute trace
-        ttnn.execute_trace(t3k_device_mesh, tid, cq_id=trace_cq, blocking=False)
+        ttnn.execute_trace(t3k_mesh_device, tid, cq_id=trace_cq, blocking=False)
         event_sync(trace_event, trace_cq, data_movement_cq)
         if use_all_gather:
             # Device All-Gather: Iterate through tensors on all devices. Ensure they match the full tensor
@@ -115,17 +115,17 @@ def test_multi_device_single_trace(t3k_device_mesh, shape, use_all_gather, enabl
             logger.info("Read Back Trace Outputs")
             ttnn_torch_output_tensor = ttnn.to_torch(
                 output_tensor,
-                mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0),
-                device=t3k_device_mesh,
+                mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0),
+                device=t3k_mesh_device,
                 cq_id=data_movement_cq,
             )
             assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.96)
 
     # Release trace buffer once workload is complete
-    ttnn.release_trace(t3k_device_mesh, tid)
+    ttnn.release_trace(t3k_mesh_device, tid)
 
-    for device_id in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device_id).enable_async(False)
+    for device_id in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device_id).enable_async(False)
 
 
 @pytest.mark.parametrize(
@@ -136,20 +136,20 @@ def test_multi_device_single_trace(t3k_device_mesh, shape, use_all_gather, enabl
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("enable_multi_cq", [True, False])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000, "num_command_queues": 2}], indirect=True)
-def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable_async, enable_multi_cq):
+def test_multi_device_multi_trace(t3k_mesh_device, shape, use_all_gather, enable_async, enable_multi_cq):
     torch.manual_seed(0)
-    if t3k_device_mesh.get_num_devices() <= 1:
+    if t3k_mesh_device.get_num_devices() <= 1:
         pytest.skip("This test requires multiple devices")
 
     # Trace requires program cache to be enabled
-    for device_id in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device_id).enable_async(enable_async)
-        t3k_device_mesh.get_device(device_id).enable_program_cache()
+    for device_id in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device_id).enable_async(enable_async)
+        t3k_mesh_device.get_device(device_id).enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
-    input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_device_mesh)
-    input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_device_mesh)
-    weight_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_device_mesh)
+    input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)
+    input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)
+    weight_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)
 
     # Op chains to be traced
     def run_op_chain(input_0, input_1, weight):
@@ -194,21 +194,21 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
 
     # Capture Trace 0
     logger.info("Capture Trace 0")
-    tid = ttnn.begin_trace_capture(t3k_device_mesh, cq_id=trace_cq)
+    tid = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=trace_cq)
     output_tensor = run_op_chain(input_0_dev, input_1_dev, weight_dev)
-    ttnn.end_trace_capture(t3k_device_mesh, tid, cq_id=trace_cq)
+    ttnn.end_trace_capture(t3k_mesh_device, tid, cq_id=trace_cq)
 
     # Capture Trace 1
     logger.info("Capture Trace 1")
-    tid_1 = ttnn.begin_trace_capture(t3k_device_mesh, cq_id=trace_cq)
+    tid_1 = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=trace_cq)
     output_tensor_1 = run_op_chain_1(input_0_dev, input_1_dev, weight_dev)
-    ttnn.end_trace_capture(t3k_device_mesh, tid_1, cq_id=trace_cq)
+    ttnn.end_trace_capture(t3k_mesh_device, tid_1, cq_id=trace_cq)
 
     # Capture Trace 1
     logger.info("Capture Trace 2")
-    tid_2 = ttnn.begin_trace_capture(t3k_device_mesh, cq_id=trace_cq)
+    tid_2 = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=trace_cq)
     output_tensor_2 = run_op_chain_2(input_0_dev, input_1_dev, weight_dev)
-    ttnn.end_trace_capture(t3k_device_mesh, tid_2, cq_id=trace_cq)
+    ttnn.end_trace_capture(t3k_mesh_device, tid_2, cq_id=trace_cq)
 
     # Execute and verify trace against pytorch
     torch_silu = torch.nn.SiLU()
@@ -219,14 +219,14 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
         num_trace_loops = 5
 
     for i in range(num_trace_loops):
-        write_event = ttnn.create_event(t3k_device_mesh)
-        trace_event = ttnn.create_event(t3k_device_mesh)
+        write_event = ttnn.create_event(t3k_mesh_device)
+        trace_event = ttnn.create_event(t3k_mesh_device)
         # Create torch inputs
         torch_input_tensor_0 = torch.rand(
-            (t3k_device_mesh.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
+            (t3k_mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
         )
         torch_input_tensor_1 = torch.rand(
-            (t3k_device_mesh.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
+            (t3k_mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
         )
         torch_weight = torch.rand(shape, dtype=torch.bfloat16)
         # Compute PT Golden
@@ -247,13 +247,13 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
 
         # Convert torch tensors to TTNN Multi-Device Host Tensors
         ttnn_input_tensor_0 = ttnn.from_torch(
-            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=0)
+            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=0)
         )
         ttnn_input_tensor_1 = ttnn.from_torch(
-            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=0)
+            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=0)
         )
         ttnn_weight = ttnn.from_torch(
-            torch_weight, layout=ttnn.TILE_LAYOUT, mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh)
+            torch_weight, layout=ttnn.TILE_LAYOUT, mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device)
         )
 
         # Copy TTNN host tensors into preallocated Mult-Device tensors
@@ -264,11 +264,11 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
         event_sync(write_event, data_movement_cq, trace_cq)
         # Execute trace
         logger.info("Execute Trace 0")
-        ttnn.execute_trace(t3k_device_mesh, tid, cq_id=trace_cq, blocking=False)
+        ttnn.execute_trace(t3k_mesh_device, tid, cq_id=trace_cq, blocking=False)
         logger.info("Execute Trace 1")
-        ttnn.execute_trace(t3k_device_mesh, tid_1, cq_id=trace_cq, blocking=False)
+        ttnn.execute_trace(t3k_mesh_device, tid_1, cq_id=trace_cq, blocking=False)
         logger.info("Execute Trace 2")
-        ttnn.execute_trace(t3k_device_mesh, tid_2, cq_id=trace_cq, blocking=False)
+        ttnn.execute_trace(t3k_mesh_device, tid_2, cq_id=trace_cq, blocking=False)
         event_sync(trace_event, trace_cq, data_movement_cq)
         if use_all_gather:
             # Device All-Gather: Iterate through tensors on all devices. Ensure they match the full tensor
@@ -294,8 +294,8 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
             logger.info("Read Back Trace 0 Outputs")
             ttnn_torch_output_tensor = ttnn.to_torch(
                 output_tensor,
-                mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0),
-                device=t3k_device_mesh,
+                mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0),
+                device=t3k_mesh_device,
                 cq_id=data_movement_cq,
             )
             assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.96)
@@ -303,8 +303,8 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
             logger.info("Read Back Trace 1 Outputs")
             ttnn_torch_output_tensor = ttnn.to_torch(
                 output_tensor_1,
-                mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0),
-                device=t3k_device_mesh,
+                mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0),
+                device=t3k_mesh_device,
                 cq_id=data_movement_cq,
             )
             assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden_1, pcc=0.96)
@@ -312,16 +312,16 @@ def test_multi_device_multi_trace(t3k_device_mesh, shape, use_all_gather, enable
             logger.info("Read Back Trace 1 Outputs")
             ttnn_torch_output_tensor = ttnn.to_torch(
                 output_tensor_2,
-                mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0),
-                device=t3k_device_mesh,
+                mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0),
+                device=t3k_mesh_device,
                 cq_id=data_movement_cq,
             )
             assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden_2, pcc=0.96)
 
     # Release trace buffer once workload is complete
-    ttnn.release_trace(t3k_device_mesh, tid)
-    ttnn.release_trace(t3k_device_mesh, tid_1)
-    ttnn.release_trace(t3k_device_mesh, tid_2)
+    ttnn.release_trace(t3k_mesh_device, tid)
+    ttnn.release_trace(t3k_mesh_device, tid_1)
+    ttnn.release_trace(t3k_mesh_device, tid_2)
 
-    for device_id in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device_id).enable_async(False)
+    for device_id in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device_id).enable_async(False)

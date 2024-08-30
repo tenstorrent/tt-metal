@@ -50,7 +50,7 @@ def torch_model():
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 @pytest.mark.parametrize(
-    "device_mesh",
+    "mesh_device",
     [
         1,
         2,
@@ -62,7 +62,7 @@ def torch_model():
     [True, False],
 )
 def test_falcon_mlp(
-    device_mesh,
+    mesh_device,
     model_name,
     batch,
     seq_len,
@@ -71,25 +71,25 @@ def test_falcon_mlp(
     torch_model,
     enable_async,
 ):
-    for device in device_mesh.get_device_ids():
-        device_mesh.get_device(device).enable_async(enable_async)
+    for device in mesh_device.get_device_ids():
+        mesh_device.get_device(device).enable_async(enable_async)
 
     torch.manual_seed(0)
 
     configuration = transformers.FalconConfig.from_pretrained(PRETRAINED_MODEL_NAME)
-    torch_input = (torch.rand(batch * device_mesh.get_num_devices(), 1, seq_len, configuration.hidden_size) * 2) - 1
+    torch_input = (torch.rand(batch * mesh_device.get_num_devices(), 1, seq_len, configuration.hidden_size) * 2) - 1
     torch_output = torch_model(torch_input)
 
     model_config = get_model_config(model_config_str)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        device=device_mesh,
+        device=mesh_device,
         custom_preprocessor=create_custom_preprocessor(
             model_config,
             tt_cache_path=get_tt_cache_path(f"{model_name}"),
-            device=device_mesh,
+            device=mesh_device,
             base_file_name=get_model_prefix(),
-            weights_mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            weights_mesh_mapper=ReplicateTensorToMesh(mesh_device),
         ),
     )
 
@@ -97,20 +97,20 @@ def test_falcon_mlp(
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=model_config["DEFAULT_DTYPE"],
-        device=device_mesh,
+        device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
     )
     ttnn_output = ttnn_model(ttnn_input)
 
     passed, pcc = assert_with_pcc(
         torch_output,
-        ttnn.to_torch(ttnn_output, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0), device=device_mesh).to(
+        ttnn.to_torch(ttnn_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0), device=mesh_device).to(
             torch_output.dtype
         ),
         expected_pcc,
     )
     logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
 
-    for device in device_mesh.get_device_ids():
-        device_mesh.get_device(device).enable_async(False)
+    for device in mesh_device.get_device_ids():
+        mesh_device.get_device(device).enable_async(False)

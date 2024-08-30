@@ -15,9 +15,9 @@
 
 namespace tt::tt_metal {
 
-// Forward declaration of DeviceMesh
-class DeviceMesh;
-using DeviceGrid = std::pair<size_t, size_t>;
+// Forward declaration of MeshDevice
+class MeshDevice;
+using MeshShape = std::pair<size_t, size_t>;
 
 struct Coordinate {
     std::size_t row;
@@ -38,22 +38,22 @@ struct Coordinate {
 };
 
 /**
- * @brief The DeviceMeshView class provides a view of a specific sub-region within the DeviceMesh.
+ * @brief The MeshDeviceView class provides a view of a specific sub-region within the MeshDevice.
  *
- * Once a DeviceMesh is initialized, DeviceMeshView allows the creation of multiple "views" on the
- * DeviceMesh, enabling more granular control over a cluster of initialized devices. This approach
- * differs from simply creating a new DeviceMesh on a subset of devices.
+ * Once a MeshDevice is initialized, MeshDeviceView allows the creation of multiple "views" on the
+ * MeshDevice, enabling more granular control over a cluster of initialized devices. This approach
+ * differs from simply creating a new MeshDevice on a subset of devices.
  *
- * DeviceMeshView serves two primary purposes:
+ * MeshDeviceView serves two primary purposes:
  *
  * 1. It facilitates the creation of abstractions that define parallelization strategies, such as
- *    tensor-parallel or pipeline-parallel, by assigning views of the DeviceMesh.
+ *    tensor-parallel or pipeline-parallel, by assigning views of the MeshDevice.
  *
- * 2. It acts as a query interface for the DeviceMesh, allowing the retrieval of devices based on
+ * 2. It acts as a query interface for the MeshDevice, allowing the retrieval of devices based on
  *    specific sub-regions. This is particularly useful for collective communication operations
  *    (CCL-ops), such as line all-gather, which require column or row views of the device mesh.
  */
-class DeviceMeshView {
+class MeshDeviceView {
 public:
     using device_pointer = Device*;
     using const_device_pointer = const Device*;
@@ -61,9 +61,9 @@ public:
     using DeviceViews = std::vector<std::vector<device_pointer>>;
     using CoordinateMapper = std::function<std::optional<Coordinate>(int device_id)>;
 
-    DeviceMeshView(const DeviceMesh& mesh);
-    DeviceMeshView(const DeviceMesh& mesh, Coordinate top_left, Coordinate bottom_right);
-    DeviceMeshView(std::vector<device_pointer> devices, CoordinateMapper mapper);
+    MeshDeviceView(const MeshDevice& mesh);
+    MeshDeviceView(const MeshDevice& mesh, Coordinate top_left, Coordinate bottom_right);
+    MeshDeviceView(std::vector<device_pointer> devices, CoordinateMapper mapper);
 
     [[nodiscard]] device_pointer get_device(size_t row, size_t col);
     [[nodiscard]] const_device_pointer get_device(size_t row, size_t col) const;
@@ -73,7 +73,7 @@ public:
     // Get devices spanning the rectangular region defined by the top-left and bottom-right coordinates
     // devices are returned in row-major order with start/end coordinates inclusive
     [[nodiscard]] DeviceView get_devices(const Coordinate& start, const Coordinate& end);
-    [[nodiscard]] DeviceView get_devices(const DeviceGrid& shape);
+    [[nodiscard]] DeviceView get_devices(const MeshShape& shape);
 
     [[nodiscard]] DeviceView get_devices_on_row(size_t row) const;
     [[nodiscard]] DeviceView get_devices_on_column(size_t col) const;
@@ -82,7 +82,7 @@ public:
     [[nodiscard]] DeviceViews get_column_views() const;
 
     template<typename Pred>
-    [[nodiscard]] DeviceMeshView subview(Pred&& predicate) const;
+    [[nodiscard]] MeshDeviceView subview(Pred&& predicate) const;
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] size_t size() const noexcept;
@@ -90,7 +90,7 @@ public:
     [[nodiscard]] bool contains(const Coordinate& coord) const noexcept;
     [[nodiscard]] const_device_pointer at(const Coordinate& coord) const noexcept;
 
-    bool operator==(const DeviceMeshView& other) const;
+    bool operator==(const MeshDeviceView& other) const;
 
     auto begin() const { return devices_.begin(); }
     auto end() const { return devices_.end(); }
@@ -112,9 +112,9 @@ private:
     void validate_coordinates() const;
 };
 
-// Helper function to create a DeviceMeshView
-inline DeviceMeshView make_device_mesh_view(std::vector<Device*> devices, DeviceMeshView::CoordinateMapper mapper) {
-    return DeviceMeshView(std::move(devices), std::move(mapper));
+// Helper function to create a MeshDeviceView
+inline MeshDeviceView make_mesh_device_view(std::vector<Device*> devices, MeshDeviceView::CoordinateMapper mapper) {
+    return MeshDeviceView(std::move(devices), std::move(mapper));
 }
 
 } // namespace tt::tt_metal

@@ -5,15 +5,15 @@ import torch
 import ttnn
 
 log = []
-tlog_device_mesh = None
+tlog_mesh_device = None
 
 
 def tlog(name, tensor, gather_dim=0, log_filename="tlog.pt"):
     if isinstance(tensor, ttnn.Tensor):
         if gather_dim is None:
-            tensor = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(tlog_device_mesh, dim=0))[0]
+            tensor = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(tlog_mesh_device, dim=0))[0]
         else:
-            tensor = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(tlog_device_mesh, dim=gather_dim))
+            tensor = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(tlog_mesh_device, dim=gather_dim))
     log.append((name, tensor.detach()))
     torch.save(log, log_filename)
 

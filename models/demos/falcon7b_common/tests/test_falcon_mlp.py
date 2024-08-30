@@ -28,7 +28,7 @@ class PytorchFalconMLPModel(torch.nn.Module):
 
 
 def run_test_FalconMLP_inference(
-    device_mesh,
+    mesh_device,
     model_version,
     llm_mode,
     batch,
@@ -39,7 +39,7 @@ def run_test_FalconMLP_inference(
     model_location_generator,
     max_seq_len=2048,
 ):
-    num_devices = get_num_devices(device_mesh)
+    num_devices = get_num_devices(mesh_device)
 
     hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
     configuration = hugging_face_reference_model.config
@@ -64,7 +64,7 @@ def run_test_FalconMLP_inference(
 
     # TT hardware execution -------------------------------------------------------------
     tt_FalconMLP_model = ttFalconMLP(
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -77,13 +77,13 @@ def run_test_FalconMLP_inference(
     tt_mlp_input = tt_from_torch(
         mlp_input,
         dtype=model_config["DEFAULT_DTYPE"],
-        device=device_mesh,
+        device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
     )
 
     tt_out = tt_FalconMLP_model(tt_mlp_input)
-    tt_out = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=0).to(pytorch_out.dtype)
+    tt_out = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=0).to(pytorch_out.dtype)
 
     # check outputs ----------------------------------------------------------------------
     logger.info(comp_allclose(pytorch_out, tt_out))
@@ -98,7 +98,7 @@ def run_test_FalconMLP_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@pytest.mark.parametrize("device_mesh", (1, 2, 4, (8, 4)), indirect=True, ids=["1chip", "2chip", "4chip", "32chipTG"])
+@pytest.mark.parametrize("mesh_device", (1, 2, 4, (8, 4)), indirect=True, ids=["1chip", "2chip", "4chip", "32chipTG"])
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize(
     "model_version, llm_mode, batch, seq_len, pcc",
@@ -144,7 +144,7 @@ def test_FalconMLP_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    device_mesh,
+    mesh_device,
     enable_async_mode,
 ):
     model_config = get_model_config(model_config_str, seq_len, batch)
@@ -153,7 +153,7 @@ def test_FalconMLP_inference(
     )
 
     run_test_FalconMLP_inference(
-        device_mesh,
+        mesh_device,
         model_version,
         llm_mode,
         batch,

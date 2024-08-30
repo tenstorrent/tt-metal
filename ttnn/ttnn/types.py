@@ -57,7 +57,7 @@ class CoreRange:
 
 
 @dataclasses.dataclass
-class DeviceGrid:
+class MeshShape:
     y: int
     x: int
 

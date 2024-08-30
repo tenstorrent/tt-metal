@@ -28,7 +28,7 @@ Tensor create_host_multi_device_tensor(const Tensor& tensor, const ReplicateTens
 }
 
 TEST_F(T3kMultiDeviceFixture, TestGetTensorsFromMultiDeviceStorage) {
-    DeviceMesh* device_mesh = this->device_mesh_.get();
+    MeshDevice* mesh_device = this->mesh_device_.get();
     const auto input_tensor = ttnn::ones(ttnn::Shape(std::array<uint32_t, 2>{32, 32}), ttnn::bfloat16);
     const auto replicated_tensor = create_host_multi_device_tensor(input_tensor, ReplicateTensor(8));
     const auto device_tensors = get_tensors_from_multi_device_storage(replicated_tensor);
@@ -37,7 +37,7 @@ TEST_F(T3kMultiDeviceFixture, TestGetTensorsFromMultiDeviceStorage) {
 }
 
 TEST_F(T3kMultiDeviceFixture, TestGetDistributedTensorConfigFromMultiDeviceStorage) {
-    DeviceMesh* device_mesh = this->device_mesh_.get();
+    MeshDevice* mesh_device = this->mesh_device_.get();
     const auto input_tensor = ttnn::ones(ttnn::Shape(std::array<uint32_t, 2>{32, 32}), ttnn::bfloat16);
     const auto replicated_tensor = create_host_multi_device_tensor(input_tensor, ReplicateTensor(8));
     const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(replicated_tensor);

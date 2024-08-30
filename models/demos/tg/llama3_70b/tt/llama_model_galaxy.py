@@ -30,7 +30,7 @@ from models.demos.tg.llama3_70b.tt.llama_common import (
 class TtLlamaModel_galaxy:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         cluster_shape,
         state_dict,
         base_url,
@@ -41,8 +41,8 @@ class TtLlamaModel_galaxy:
         read_cache=False,
     ):
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = device_mesh.get_num_devices()
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         self.model_config = model_config
         self.read_cache = read_cache
         self.cluster_shape = cluster_shape
@@ -65,15 +65,15 @@ class TtLlamaModel_galaxy:
             transformation_mat_torch,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=device_mesh,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
         logger.info("Creating Layers")
         self.layers = [
             TtLlamaDecoder_galaxy(
-                device_mesh,
+                mesh_device,
                 cluster_shape,
                 state_dict,
                 base_url,
@@ -93,7 +93,7 @@ class TtLlamaModel_galaxy:
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
         # Embedding
         self.tt_embd = TtLlamaEmbedding_galaxy(
-            device_mesh,
+            mesh_device,
             cluster_shape,
             state_dict,
             cache_path,
@@ -152,9 +152,9 @@ class TtLlamaModel_galaxy:
             padded_lm_head,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / lm_head_cache_str,
         )
 
@@ -162,9 +162,9 @@ class TtLlamaModel_galaxy:
             pt_norm_weight,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, (2, None), self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, (2, None), self.cluster_shape),
             cache_file_name=self.cache_path / norm_sharded_cache_str,
         )
 
@@ -172,9 +172,9 @@ class TtLlamaModel_galaxy:
         #     pt_norm_weight,
         #     dtype=ttnn.bfloat16,
         #     layout=ttnn.ROW_MAJOR_LAYOUT,
-        #     device=self.device_mesh,
+        #     device=self.mesh_device,
         #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+        #     mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         #     cache_file_name=self.cache_path / norm_str,
         # )
 
@@ -193,9 +193,9 @@ class TtLlamaModel_galaxy:
             inp_ids,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
 
         xs = self.tt_embd(x)
@@ -236,10 +236,10 @@ class TtLlamaModel_galaxy:
                 rot_mat,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                device=self.device_mesh,
+                device=self.mesh_device,
                 cache_file_name=cache_name(f"rot_mat_decode_galaxy_{start_pos}"),
                 memory_config=ROT_MAT_MEMCFG,
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
             attn_masks = None
@@ -275,7 +275,7 @@ class TtLlamaModel_galaxy:
         )  # TODO: Figure out why we need this
         tt_stats = tt_all_gather(
             tt_stats,
-            device_mesh=self.device_mesh,
+            mesh_device=self.mesh_device,
             dim=3,
             cluster_axis=1,
             num_links=1,
@@ -329,7 +329,7 @@ class TtLlamaModel_galaxy:
 
         lm_head_out = tt_all_reduce(
             lm_head_out,
-            device_mesh=self.device_mesh,
+            mesh_device=self.mesh_device,
             cluster_axis=1,
             dim=0,
             num_links=2,

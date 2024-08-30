@@ -58,7 +58,7 @@ Tensor line_all_gather(
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t cluster_axis,
-    const DeviceMesh& device_mesh,
+    const MeshDevice& mesh_device,
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 

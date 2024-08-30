@@ -38,7 +38,7 @@ def get_username():
 
 def get_devices(test_module):
     try:
-        return test_module.device_mesh_fixture()
+        return test_module.mesh_device_fixture()
     except:
         return default_device()
 
@@ -69,7 +69,7 @@ def run(test_module, input_queue, output_queue):
             output_queue.put([status, message, e2e_perf])
     except Empty as e:
         try:
-            # Run teardown in device_mesh_fixture
+            # Run teardown in mesh_device_fixture
             next(device_generator)
         except StopIteration:
             print(f"SWEEPS: Closed device configuration, {device_name}.")

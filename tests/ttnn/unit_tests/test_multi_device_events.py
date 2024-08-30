@@ -15,18 +15,18 @@ from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, L
 
 @pytest.mark.parametrize("shape", [(1, 1, 512, 512)])
 @pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
-def test_multi_device_events(t3k_device_mesh, shape):
-    if t3k_device_mesh.get_num_devices() <= 1:
+def test_multi_device_events(t3k_mesh_device, shape):
+    if t3k_mesh_device.get_num_devices() <= 1:
         pytest.skip("This test requires multiple devices")
 
     # Enable Program Cache and Async Mode
-    for device_id in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device_id).enable_async(True)
-        t3k_device_mesh.get_device(device_id).enable_program_cache()
+    for device_id in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device_id).enable_async(True)
+        t3k_mesh_device.get_device(device_id).enable_program_cache()
 
     # Preallocate activation tensors.
-    input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_device_mesh)
-    input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_device_mesh)
+    input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)
+    input_1_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)
 
     # Send workload/ops on CQ 0 and Data on CQ 1. Use events for synchronization
     workload_cq = 0
@@ -38,14 +38,14 @@ def test_multi_device_events(t3k_device_mesh, shape):
 
     for i in range(10):
         # Create events to synchronize data movement with workload execution.
-        write_event = ttnn.create_event(t3k_device_mesh)
-        workload_event = ttnn.create_event(t3k_device_mesh)
+        write_event = ttnn.create_event(t3k_mesh_device)
+        workload_event = ttnn.create_event(t3k_mesh_device)
         # Create torch inputs, for validation
         torch_input_tensor_0 = torch.rand(
-            (t3k_device_mesh.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
+            (t3k_mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
         )
         torch_input_tensor_1 = torch.rand(
-            (t3k_device_mesh.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
+            (t3k_mesh_device.get_num_devices(), shape[1], shape[2], shape[3]), dtype=torch.bfloat16
         )
         # Compute torch golden for validation
         torch_output_golden = torch.neg(
@@ -56,10 +56,10 @@ def test_multi_device_events(t3k_device_mesh, shape):
         )
         # Convert torch tensors to TTNN Multi-Device Host Tensors
         ttnn_input_tensor_0 = ttnn.from_torch(
-            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=0)
+            torch_input_tensor_0, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=0)
         )
         ttnn_input_tensor_1 = ttnn.from_torch(
-            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=0)
+            torch_input_tensor_1, layout=ttnn.TILE_LAYOUT, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=0)
         )
 
         # Copy TTNN host tensors into preallocated Mult-Device tensors, using data-movement CQ
@@ -79,11 +79,11 @@ def test_multi_device_events(t3k_device_mesh, shape):
         # Read device outputs and validate
         ttnn_torch_output_tensor = ttnn.to_torch(
             ttnn_output,
-            mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0),
-            device=t3k_device_mesh,
+            mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0),
+            device=t3k_mesh_device,
             cq_id=data_movement_cq,
         )
         assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.96)
 
-    for device_id in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device_id).enable_async(False)
+    for device_id in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device_id).enable_async(False)

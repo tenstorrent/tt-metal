@@ -54,13 +54,13 @@ void py_module(py::module& module) {
     // Multi Device APIs
     module.def(
         "create_event",
-        py::overload_cast<DeviceMesh*>(&create_event),
-        py::arg("device_mesh"),
+        py::overload_cast<MeshDevice*>(&create_event),
+        py::arg("mesh_device"),
         R"doc(
             Create an Event Object on a mesh of devices.
 
             Args:
-                device_mesh (DeviceMesh): The mesh on which this event will be used for synchronization.
+                mesh_device (MeshDevice): The mesh on which this event will be used for synchronization.
             )doc");
 
     module.def(

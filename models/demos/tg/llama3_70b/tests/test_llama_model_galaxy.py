@@ -18,7 +18,7 @@ from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     extract_pcc_from_log,
     MAX_SEQ_LEN,
     MAX_SEQ_LEN_LLAMA3,
@@ -58,7 +58,7 @@ class PytorchLlamaModel(torch.nn.Module):
 
 
 def run_test_LlamaModel_inference(
-    device_mesh,
+    mesh_device,
     cluster_shape,
     batch,
     seq_len,
@@ -101,7 +101,7 @@ def run_test_LlamaModel_inference(
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
     # TT model -------------------------------------------------------------------------
     tt_model = TtLlamaModel_galaxy(
-        device_mesh,
+        mesh_device,
         cluster_shape,
         state_dict,
         BASE_URL,
@@ -161,7 +161,7 @@ def run_test_LlamaModel_inference(
         del tt_inp_emb, rot_mat, attn_mask
 
         tt_out = ttnn.to_torch(
-            tt_out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 3), cluster_shape=cluster_shape)
+            tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 3), cluster_shape=cluster_shape)
         )
         tt_out = tt_out[:, 0:1, :, : configuration.vocab_size]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
@@ -218,7 +218,7 @@ def run_test_LlamaModel_inference(
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
     tt_layer_present_all = [
         ttnn.to_torch(
-            lp, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 0), cluster_shape=cluster_shape)
+            lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 0), cluster_shape=cluster_shape)
         ).transpose(0, 1)[:batch, ...]
         for lp in tt_layer_present_all
     ]
@@ -243,7 +243,7 @@ def run_test_LlamaModel_inference(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, mesh_device", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "llama_version",
@@ -284,7 +284,7 @@ def test_LlamaModel_inference(
     seq_len,
     pcc,
     n_layers,
-    device_mesh,
+    mesh_device,
     max_batch_size,
     max_context_len,
     llama_version,
@@ -309,10 +309,10 @@ def test_LlamaModel_inference(
         max_context_len=max_context_len,
     )
 
-    check_device_mesh(device_mesh, model_config)
+    check_mesh_device(mesh_device, model_config)
 
     run_test_LlamaModel_inference(
-        device_mesh,
+        mesh_device,
         cluster_shape,
         batch,
         seq_len,

@@ -14,7 +14,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     extract_pcc_from_log,
     generate_rot_emb,
     get_rotation_mat,
@@ -124,10 +124,10 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             x,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=llama_decoder_model.device_mesh,
+            device=llama_decoder_model.mesh_device,
             memory_config=ACT_MEMCFG,
             mesh_mapper=ShardTensor2dMesh(
-                llama_decoder_model.device_mesh, dims=(3, None), cluster_shape=llama_decoder_model.cluster_shape
+                llama_decoder_model.mesh_device, dims=(3, None), cluster_shape=llama_decoder_model.cluster_shape
             ),
         )
 
@@ -156,8 +156,8 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ROT_MAT_MEMCFG,
-            device=llama_decoder_model.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.device_mesh),
+            device=llama_decoder_model.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
         )
 
         attn_masks = None
@@ -170,7 +170,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
 
 
 def run_test_LlamaDecoder_inference(
-    device_mesh,
+    mesh_device,
     cluster_shape,
     batch,
     seq_len,
@@ -209,13 +209,13 @@ def run_test_LlamaDecoder_inference(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device_mesh,
+        device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     tt_LlamaDecoder_model = TtLlamaDecoder_galaxy(
-        device_mesh,
+        mesh_device,
         cluster_shape,
         state_dict,
         BASE_URL,
@@ -268,7 +268,7 @@ def run_test_LlamaDecoder_inference(
         )
 
         tt_out = ttnn.to_torch(
-            tt_out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(3, 1), cluster_shape=cluster_shape)
+            tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)
         )
 
         tt_out = tt_out[:, 0:1, :, :]
@@ -303,7 +303,7 @@ def run_test_LlamaDecoder_inference(
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaDecoder_model.attention.layer_past]
     tt_layer_present_all = [
         ttnn.to_torch(
-            lp, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 0), cluster_shape=cluster_shape)
+            lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 0), cluster_shape=cluster_shape)
         ).transpose(0, 1)[:batch, ...]
         for lp in tt_layer_present_all
     ]
@@ -329,7 +329,7 @@ def run_test_LlamaDecoder_inference(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, mesh_device", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "llama_version",
@@ -355,7 +355,7 @@ def test_LlamaDecoder_inference(
     batch,
     seq_len,
     pcc,
-    device_mesh,
+    mesh_device,
     max_batch_size,
     max_context_len,
     llama_version,
@@ -379,9 +379,9 @@ def test_LlamaDecoder_inference(
         max_context_len=max_context_len,
     )
 
-    check_device_mesh(device_mesh, model_config)
+    check_mesh_device(mesh_device, model_config)
     run_test_LlamaDecoder_inference(
-        device_mesh,
+        mesh_device,
         cluster_shape,
         batch,
         seq_len,

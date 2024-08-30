@@ -42,23 +42,23 @@ def test_unet_bottleneck(batch, groups, device, reset_seeds):
 @pytest.mark.parametrize("batch", [2])
 @pytest.mark.parametrize("groups", [1])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_unet_bottleneck_multi_device(batch, groups, device_mesh, reset_seeds):
-    if not is_n300_with_eth_dispatch_cores(device_mesh):
+def test_unet_bottleneck_multi_device(batch, groups, mesh_device, reset_seeds):
+    if not is_n300_with_eth_dispatch_cores(mesh_device):
         pytest.skip("Test is only valid for N300")
 
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(device_mesh, dim=0)
-    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device_mesh)
-    output_mesh_composer = ttnn.ConcatMeshToTensor(device_mesh, dim=0)
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(device_mesh, batch, groups, pad_input=False)
+    torch_input, ttnn_input = create_unet_input_tensors(mesh_device, batch, groups, pad_input=False)
     model = unet_shallow_torch.UNet.from_random_weights(groups=1)
 
-    parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device_mesh)
-    ttnn_model = unet_shallow_ttnn.UNet(parameters, device_mesh, mesh_mapper=weights_mesh_mapper)
+    parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=mesh_device)
+    ttnn_model = unet_shallow_ttnn.UNet(parameters, mesh_device, mesh_mapper=weights_mesh_mapper)
 
-    num_devices = len(device_mesh.get_device_ids())
+    num_devices = len(mesh_device.get_device_ids())
     torch_input, ttnn_input = create_unet_input_tensors(
-        device_mesh,
+        mesh_device,
         num_devices * batch,
         groups,
         pad_input=True,
@@ -69,11 +69,11 @@ def test_unet_bottleneck_multi_device(batch, groups, device_mesh, reset_seeds):
     )
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
     logger.info(
-        f"Created multi-device input tensors: shape={list(ttnn_input.shape)} on devices={device_mesh.get_device_ids()}"
+        f"Created multi-device input tensors: shape={list(ttnn_input.shape)} on devices={mesh_device.get_device_ids()}"
     )
     torch_output = model.bottleneck(torch_input)
 
-    ttnn_input = ttnn_input.to(device_mesh)
+    ttnn_input = ttnn_input.to(mesh_device)
     ttnn_output = ttnn_model.bottleneck(ttnn_input)
 
     assert len(ttnn_output.devices()) == 2, "Expected output tensor to be sharded across 2 devices"

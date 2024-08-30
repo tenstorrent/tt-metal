@@ -40,7 +40,7 @@ from transformers import AutoTokenizer
     ),
 )
 def test_grok_model_perf(
-    t3k_device_mesh,
+    t3k_mesh_device,
     generation_start_pos,
     expected_compile_time,
     expected_inference_time,
@@ -48,11 +48,11 @@ def test_grok_model_perf(
     reset_seeds,
 ):
     dtype = ttnn.bfloat8_b
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=False)
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False)
     model_args.n_layers = 1
 
     # Clear global profiler state before starting measurements
@@ -79,7 +79,7 @@ def test_grok_model_perf(
 
     # Load TTNN model
     tt_model = TtTransformer(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -89,7 +89,7 @@ def test_grok_model_perf(
     rot_mat = prepare_rotation_mat_ttnn(
         tt_model.args.head_dim,
         tt_model.args.max_seq_len,
-        tt_model.device_mesh,
+        tt_model.mesh_device,
     )
     profiler.end("model_setup")
 
@@ -102,8 +102,8 @@ def test_grok_model_perf(
     profiler.print(units="ms")
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
-    for device_id in t3k_device_mesh.get_device_ids():
-        ttnn.DumpDeviceProfiler(t3k_device_mesh.get_device(device_id))
+    for device_id in t3k_mesh_device.get_device_ids():
+        ttnn.DumpDeviceProfiler(t3k_mesh_device.get_device(device_id))
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
@@ -145,7 +145,7 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
             pt_decode_input,
             tt_model.args.dim,
             current_pos,
-            tt_model.device_mesh,
+            tt_model.mesh_device,
         )
         profiler.end(f"prepare_inputs_for_inference_{i}")
 
@@ -158,7 +158,7 @@ def run_inference(tt_model, embd, encoded_prompts, generation_start_pos, generat
         # Convert ttnn tensor to torch tensor
         profiler.start(f"result_wait_for_inference_{i}")
         tt_output_torch = (
-            ttnn.to_torch(tt_multidevice_out, mesh_composer=ConcatMeshToTensor(tt_model.device_mesh, dim=-1))
+            ttnn.to_torch(tt_multidevice_out, mesh_composer=ConcatMeshToTensor(tt_model.mesh_device, dim=-1))
             .squeeze(1)
             .view(batch, seqlen, -1)
             .detach()

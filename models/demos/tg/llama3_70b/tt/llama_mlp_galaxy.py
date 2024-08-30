@@ -15,7 +15,7 @@ from models.demos.tg.llama3_70b.tt.llama_common import tt_all_reduce
 class TtLlamaMLP_galaxy:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         cluster_shape,
         state_dict,
         base_url,
@@ -26,8 +26,8 @@ class TtLlamaMLP_galaxy:
         read_cache=False,
     ):
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = device_mesh.get_num_devices()
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         assert self.num_devices == 32, "Only 32 devices supported for TG"
         self.model_config = model_config
         self.read_cache = read_cache
@@ -52,8 +52,8 @@ class TtLlamaMLP_galaxy:
                     ttnn.CoreRange(
                         ttnn.CoreCoord(0, 0),
                         ttnn.CoreCoord(
-                            self.device_mesh.get_device(0).dram_grid_size().x - 1,
-                            self.device_mesh.get_device(0).dram_grid_size().y - 1,
+                            self.mesh_device.get_device(0).dram_grid_size().x - 1,
+                            self.mesh_device.get_device(0).dram_grid_size().y - 1,
                         ),
                     )
                 }
@@ -171,10 +171,10 @@ class TtLlamaMLP_galaxy:
             w1,
             dtype=w1_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             # memory_config=self.w1_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w1_cache_str,
         )
 
@@ -182,10 +182,10 @@ class TtLlamaMLP_galaxy:
             w3,
             dtype=w3_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             # memory_config=self.w1_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w3_cache_str,
         )
 
@@ -193,10 +193,10 @@ class TtLlamaMLP_galaxy:
             w2,
             dtype=w2_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             # memory_config=self.w2_mem_config,  # TODO: Reenable when DRAM-SHARDED PCC issues resolves
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(3, 2), cluster_shape=self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(3, 2), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / w2_cache_str,
         )
 
@@ -232,10 +232,10 @@ class TtLlamaMLP_galaxy:
         x.deallocate(True)
 
         w1_out = tt_all_reduce(
-            w1_out, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            w1_out, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
         w3_out = tt_all_reduce(
-            w3_out, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            w3_out, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
 
         w1_out = ttnn.to_memory_config(w1_out, self.FULL_GRID_MEMCFG)
@@ -264,7 +264,7 @@ class TtLlamaMLP_galaxy:
 
         hidden_states = tt_all_reduce(
             hidden_states,
-            self.device_mesh,
+            self.mesh_device,
             cluster_axis=0,
             num_links=2,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -289,13 +289,13 @@ class TtLlamaMLP_galaxy:
 
         w1_out = tt_all_reduce(
             w1_out,
-            self.device_mesh,
+            self.mesh_device,
             cluster_axis=1,
             num_links=2,
         )
         w3_out = tt_all_reduce(
             w3_out,
-            self.device_mesh,
+            self.mesh_device,
             cluster_axis=1,
             num_links=2,
         )
@@ -326,7 +326,7 @@ class TtLlamaMLP_galaxy:
 
         hidden_states = tt_all_reduce(
             hidden_states,
-            self.device_mesh,
+            self.mesh_device,
             cluster_axis=0,
             num_links=2,
             # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,

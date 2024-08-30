@@ -32,7 +32,7 @@ from models.utility_functions import is_wormhole_b0
         "default_mode_1024_stochastic",
     ],
 )
-@pytest.mark.parametrize("device_mesh", (1,), indirect=True)
+@pytest.mark.parametrize("mesh_device", (1,), indirect=True)
 def test_demo(
     perf_mode,  # Option to measure perf using max seq length (with invalid outputs) and expected perf (t/s)
     max_seq_len,
@@ -42,7 +42,7 @@ def test_demo(
     user_input,
     model_location_generator,
     get_tt_cache_path,
-    device_mesh,
+    mesh_device,
     use_program_cache,
     is_ci_env,
 ):
@@ -69,7 +69,7 @@ def test_demo(
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        device_mesh=device_mesh,
+        mesh_device=mesh_device,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,
         expected_perf_metrics=expected_perf_metrics,

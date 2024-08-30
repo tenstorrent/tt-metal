@@ -105,7 +105,7 @@ DECODE_CONFIG_TO_PCC = {
 
 
 def run_test_FalconCausalLM_end_to_end(
-    device_mesh,  # can be ttnn.Device or ttnn.DeviceMesh
+    mesh_device,  # can be ttnn.Device or ttnn.MeshDevice
     model_version,
     llm_mode,
     batch,
@@ -135,7 +135,7 @@ def run_test_FalconCausalLM_end_to_end(
     else:
         profiler.disable()
 
-    num_devices = get_num_devices(device_mesh)
+    num_devices = get_num_devices(mesh_device)
     global_batch = batch * num_devices
 
     profiler.start("hugging_face_model_setup")
@@ -159,7 +159,7 @@ def run_test_FalconCausalLM_end_to_end(
 
     profiler.start("TtFalcon_model_setup")
     tt_FalconCausalLM = TtFalconCausalLM(
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         num_layers,
@@ -181,7 +181,7 @@ def run_test_FalconCausalLM_end_to_end(
         seq_len,
         batch,
         kv_cache_len,
-        device_mesh,
+        mesh_device,
         global_batch,
         head_dim,
         max_position_embeddings,
@@ -235,11 +235,11 @@ def run_test_FalconCausalLM_end_to_end(
                 layer_past_len=kv_cache_len,
                 use_cache=use_cache,
             )
-        synchronize_devices(device_mesh)
+        synchronize_devices(mesh_device)
         profiler.end("first_model_run_with_compile", force_enable=e2e_perf)
 
         # Dump device profiler data before second run to avoid exceeding profiler memory limits when using tracy
-        dump_device_profiler(device_mesh)
+        dump_device_profiler(mesh_device)
 
         del tt_out
         del tt_layer_past
@@ -257,7 +257,7 @@ def run_test_FalconCausalLM_end_to_end(
         seq_len,
         batch,
         kv_cache_len,
-        device_mesh,
+        mesh_device,
         global_batch,
         head_dim,
         max_position_embeddings,
@@ -319,17 +319,17 @@ def run_test_FalconCausalLM_end_to_end(
             use_cache=use_cache,
             device_perf_run=device_perf,
         )
-    synchronize_devices(device_mesh)
+    synchronize_devices(mesh_device)
     profiler.end(f"model_run_for_inference")
 
     if llm_mode == "prefill":
         tt_out_tmp = torch.zeros(global_batch, seq_len, configuration.vocab_size)  # Output tensor to overwrite
         for user_id, tt_out in enumerate(tt_outs):
             # Get outputs from all devices
-            tt_out_tmp[user_id::batch] = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=0).squeeze(1)
+            tt_out_tmp[user_id::batch] = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=0).squeeze(1)
         tt_out = tt_out_tmp
     elif llm_mode == "decode":
-        tt_out = tt_tensors_to_torch_tensors(tt_out, device_mesh, concat_dim=2).squeeze(1).transpose(0, 1)
+        tt_out = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=2).squeeze(1).transpose(0, 1)
 
     if device_perf:
         signpost("stop")  # stop device perf measurement
@@ -359,14 +359,14 @@ def run_test_FalconCausalLM_end_to_end(
     for i in range(num_layers):
         if llm_mode == "prefill":
             pytorch_layer_pres = (pytorch_layer_present[i][0].squeeze(1), pytorch_layer_present[i][1].squeeze(1))
-            tt_layer_pres = concat_device_out_layer_present(device_mesh, tt_layer_present[i], kv_len)
+            tt_layer_pres = concat_device_out_layer_present(mesh_device, tt_layer_present[i], kv_len)
         elif llm_mode == "decode":
             pytorch_layer_pres = (
                 pytorch_layer_present[i][0].squeeze(1)[:, kv_cache_len, :],
                 pytorch_layer_present[i][1].squeeze(1)[:, kv_cache_len, :],
             )
             tt_layer_pres = concat_device_out_layer_present(
-                device_mesh, tt_layer_present[i], kv_cache_len, end_idx_only=True
+                mesh_device, tt_layer_present[i], kv_cache_len, end_idx_only=True
             )
         tt_layer_pres_0 = tt_layer_pres[0].type(pytorch_layer_pres[0].dtype)
         _, _, device_pcc, pcc_str = get_atol_rtol_pcc(pytorch_layer_pres[0], tt_layer_pres_0)

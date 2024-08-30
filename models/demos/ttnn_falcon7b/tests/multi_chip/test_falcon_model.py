@@ -61,14 +61,14 @@ def get_model_prefix(layer_index: int = 0):
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 @pytest.mark.parametrize(
-    "device_mesh",
+    "mesh_device",
     [
         2,
     ],
     indirect=True,
 )
 def test_falcon_model(
-    device_mesh,
+    mesh_device,
     use_program_cache,
     model_version,
     llm_mode,
@@ -80,7 +80,7 @@ def test_falcon_model(
     model_config_str,
 ):
     torch.manual_seed(0)
-    batch = device_batch_size * device_mesh.get_num_devices()
+    batch = device_batch_size * mesh_device.get_num_devices()
     if llm_mode == "decode":
         shard_dim = 2
     else:
@@ -113,8 +113,8 @@ def test_falcon_model(
                 batch,
                 kv_cache_len,
                 configuration,
-                device_mesh,
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+                mesh_device,
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
             )
             tt_layer_past += (tt_current_layer_past,)
         attention_mask = None
@@ -129,8 +129,8 @@ def test_falcon_model(
                 batch,
                 kv_cache_len,
                 configuration,
-                device_mesh,
-                mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+                mesh_device,
+                mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
             )
             past_key_values += (current_layer_past,)
             tt_layer_past += (tt_current_layer_past,)
@@ -151,18 +151,18 @@ def test_falcon_model(
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        device=device_mesh,
+        device=mesh_device,
         custom_preprocessor=create_custom_preprocessor(
             model_config,
             tt_cache_path=get_tt_cache_path(f"{model_version}"),
-            device=device_mesh,
+            device=mesh_device,
             base_file_name=get_model_prefix(),
-            weights_mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            weights_mesh_mapper=ReplicateTensorToMesh(mesh_device),
         ),
         convert_to_ttnn=convert_to_ttnn,
     )
     tt_FalconModel = TtFalconModel(
-        device_mesh,
+        mesh_device,
         num_layers,
         configuration,
         configuration.max_position_embeddings,
@@ -185,7 +185,7 @@ def test_falcon_model(
             layer_past_len=kv_cache_len,
             use_cache=True,
         )
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim)).squeeze(1)
+        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=shard_dim)).squeeze(1)
 
     elif llm_mode == "decode":
         tt_embeddings, tt_attention_mask = tt_FalconModel.model_preprocessing(
@@ -199,15 +199,15 @@ def test_falcon_model(
             layer_past_len=kv_cache_len,
             use_cache=True,
         )
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim)).squeeze(1)
+        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=shard_dim)).squeeze(1)
         tt_out = tt_out.transpose(0, 1)
 
     assert_with_pcc(pytorch_out, tt_out.to(pytorch_out.dtype), expected_pcc)
 
     for i in range(num_layers):
         tt_layer_pres = (
-            ttnn.to_torch(tt_layer_present[i][0], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)),
-            ttnn.to_torch(tt_layer_present[i][1], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)),
+            ttnn.to_torch(tt_layer_present[i][0], mesh_composer=ConcatMeshToTensor(mesh_device, dim=0)),
+            ttnn.to_torch(tt_layer_present[i][1], mesh_composer=ConcatMeshToTensor(mesh_device, dim=0)),
         )
         if llm_mode == "prefill":
             pytorch_layer_pres = pytorch_layer_present[i]

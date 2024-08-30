@@ -45,7 +45,7 @@ def print_tile_corners_of_tensor(t):
 
 
 def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
-    device_mesh,
+    mesh_device,
     num_devices_per_line,
     input_shape_per_all_gather,
     dim,
@@ -60,9 +60,9 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     num_iters=1,
     cluster_axis=0,
 ):
-    if len(device_mesh.get_devices()) != 32:
+    if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
-    for device in device_mesh.get_devices():
+    for device in mesh_device.get_devices():
         device.enable_async(enable_async)
 
     input_shape_per_chip = list(input_shape_per_all_gather)
@@ -124,23 +124,23 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     ttnn_tensor = ttnn.from_torch(
         full_tensor,
         dtype=input_dtype,
-        device=device_mesh,
+        device=mesh_device,
         layout=layout,
         memory_config=mem_config,
-        mesh_mapper=ShardTensor2dMesh(device_mesh, mesh_shape=mesh_shape, dims=shard_dims),
+        mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
     )
-    ttnn_tensor = ttnn.to_device(ttnn_tensor, device_mesh)
+    ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
 
-    # ttnn.visualize_device_mesh(device_mesh, tensor=ttnn_tensor)
+    # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
     for _ in range(num_iters):
         ttnn_tensor_out = ttnn.line_all_gather(
-            ttnn_tensor, dim=dim, cluster_axis=cluster_axis, device_mesh=device_mesh, num_links=num_links
+            ttnn_tensor, dim=dim, cluster_axis=cluster_axis, mesh_device=mesh_device, num_links=num_links
         )
 
     concat_dims = (3, 2) if cluster_axis == 0 else (2, 3)
     if debug:
         readback_input_tensor = ttnn.to_torch(
-            ttnn_tensor, mesh_composer=ConcatMesh2dToTensor(device_mesh, mesh_shape=mesh_shape, dims=concat_dims)
+            ttnn_tensor, mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=concat_dims)
         )
         print(f"readback_input_tensor")
         print_tile_corners_of_tensor(readback_input_tensor)
@@ -156,10 +156,10 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
             print(f"OUTPUT TENSOR {i}")
             print_tile_corners_of_tensor(t)
 
-    # ttnn.visualize_device_mesh(device_mesh, tensor=ttnn_tensor_out)
+    # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor_out)
     logger.info(f"concat_dims: {concat_dims}")
     tt_output_tensor = ttnn.to_torch(
-        ttnn_tensor_out, mesh_composer=ConcatMesh2dToTensor(device_mesh, mesh_shape=mesh_shape, dims=concat_dims)
+        ttnn_tensor_out, mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=concat_dims)
     )
     logger.info(f"tt_output_tensor.shape: {tt_output_tensor.shape}")
 
@@ -207,9 +207,9 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 )
 @pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_line_all_gather_on_TG_rows_post_commit(
-    device_mesh,
+    mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -224,7 +224,7 @@ def test_line_all_gather_on_TG_rows_post_commit(
     num_iters=1,
 ):
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
-        device_mesh,
+        mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -267,9 +267,9 @@ def test_line_all_gather_on_TG_rows_post_commit(
 )
 @pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("replication_factor", [4])  # 1, 4])
-@pytest.mark.parametrize("device_mesh", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_line_all_gather_on_TG_cols_post_commit(
-    device_mesh,
+    mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -284,7 +284,7 @@ def test_line_all_gather_on_TG_cols_post_commit(
     num_iters=1,
 ):
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
-        device_mesh,
+        mesh_device,
         num_devices,
         input_shape,
         dim,

@@ -12,19 +12,19 @@ import torch
 
 
 class TtTransformer(LightweightModule):
-    def __init__(self, device_mesh, state_dict, args, dtype, layers, start_pos=0, rotary_on_host=False):
+    def __init__(self, mesh_device, state_dict, args, dtype, layers, start_pos=0, rotary_on_host=False):
         super().__init__()
         self.args = args
         self.vocab_size = args.vocab_size
         self.n_layers = args.n_layers
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.model_config = args.get_model_config()
         self.rotary_on_host = rotary_on_host
         assert self.vocab_size > 0
 
         self.layers = [
             TtTransformerBlock(
-                device_mesh=device_mesh,
+                mesh_device=mesh_device,
                 state_dict=state_dict,
                 args=args,
                 dtype=dtype,
@@ -33,7 +33,7 @@ class TtTransformer(LightweightModule):
             for i in layers
         ]
         self.norm = RMSNorm(
-            device=device_mesh,
+            device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
             layer_num=None,
@@ -50,12 +50,12 @@ class TtTransformer(LightweightModule):
 
         self.output_weight = ttnn.as_tensor(
             self.state_dict["output.weight"].permute(1, 0).unsqueeze(0).unsqueeze(0),
-            device=device_mesh,
+            device=mesh_device,
             layout=self.model_config["OUTPUT_W_LAYOUT_TILE"],
             dtype=dtype,
             memory_config=self.model_config["OUTPUT_WEIGHTS_MEMCFG"],
             cache_file_name=output_cache_name,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
         self.compute_kernel = self.args.get_compute_kernel_config()
@@ -63,7 +63,7 @@ class TtTransformer(LightweightModule):
         if self.rotary_on_host:
             self.current_rot_mat, self.rot_matrix = get_single_rot_mat_torch(self.args.head_dim, start_pos)
         else:
-            self.current_rot_mat, self.rot_matrix = get_single_rot_mat(self.args.head_dim, device_mesh, start_pos)
+            self.current_rot_mat, self.rot_matrix = get_single_rot_mat(self.args.head_dim, mesh_device, start_pos)
 
     def forward(
         self,
@@ -81,10 +81,10 @@ class TtTransformer(LightweightModule):
                 if self.rotary_on_host:
                     rot_mats = ttnn.from_torch(
                         self.current_rot_mat,  # 1,1,head_dim,head_dim
-                        device=self.device_mesh,
+                        device=self.mesh_device,
                         dtype=ttnn.bfloat16,
                         layout=ttnn.TILE_LAYOUT,
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.device_mesh),
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     )
                 else:
                     rot_mats = self.current_rot_mat
@@ -113,7 +113,7 @@ class TtTransformer(LightweightModule):
             if (start_pos + 1) % 32 == 0:
                 # generate new rotmat to avoid numerical instability every 32 tokens
                 self.current_rot_mat, self.rot_matrix = get_single_rot_mat(
-                    self.args.head_dim, self.device_mesh, start_pos + 1
+                    self.args.head_dim, self.mesh_device, start_pos + 1
                 )
             else:
                 # assigning to a new variable to explictly deallocate since matmul creates a new buffer for the output

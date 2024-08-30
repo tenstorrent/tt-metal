@@ -80,7 +80,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     memcfg,
     model_location_generator,
     get_tt_cache_path,
-    t3k_device_mesh,
+    t3k_mesh_device,
     use_program_cache,
     async_mode,
 ):
@@ -97,7 +97,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = t3k_device_mesh.get_devices()
+    devices = t3k_mesh_device.get_devices()
     for device in devices:
         device.enable_async(async_mode)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
@@ -112,7 +112,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     disable_compilation_reports()
 
     run_test_FalconCausalLM_end_to_end(
-        t3k_device_mesh,
+        t3k_mesh_device,
         model_version,
         llm_mode,
         batch,

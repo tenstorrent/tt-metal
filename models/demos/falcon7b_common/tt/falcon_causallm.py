@@ -57,7 +57,7 @@ def falcon_lm_head_matmul(
 class TtFalconCausalLM(TtFalconModelShared):
     def __init__(
         self,
-        device_mesh,  # can be ttnn.Device or ttnn.DeviceMesh
+        mesh_device,  # can be ttnn.Device or ttnn.MeshDevice
         state_dict,
         base_url,
         num_layers,
@@ -69,7 +69,7 @@ class TtFalconCausalLM(TtFalconModelShared):
     ):
         assert base_url == "", "base_url should be empty at the root of the model!"
         super().__init__(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=f"transformer",
             num_layers=num_layers,
@@ -96,7 +96,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             # Cache sliced weights for lm_head with different seq_len
             self.lm_head_sliced_weights = [
                 get_weights_cached(
-                    device_mesh,
+                    mesh_device,
                     model_config,
                     tt_cache_path,
                     f"lm_head.weight_slice_{i}_of_{self.num_slices}",
@@ -110,14 +110,14 @@ class TtFalconCausalLM(TtFalconModelShared):
             self.lm_head_padding = tt_from_torch(
                 padding,
                 dtype=self.model_config["LM_HEAD_MM_INPUT_DTYPE"],
-                device=self.device_mesh,
+                device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=self.model_config["LM_HEAD_MM_INPUT_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
         self.lm_head_weights = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             f"lm_head.weight",

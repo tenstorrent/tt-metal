@@ -12,7 +12,7 @@ from models.common.lightweightmodule import LightweightModule
 class TtTransformerBlock(LightweightModule):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         args,
         layer_num,
@@ -21,13 +21,13 @@ class TtTransformerBlock(LightweightModule):
         super().__init__()
 
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
 
         self.args = args
 
         self.layer_num = layer_num
         self.attention = TtMixtralAttention(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             args=args,
             layer_num=layer_num,
@@ -35,10 +35,10 @@ class TtTransformerBlock(LightweightModule):
         )
 
         self.feed_forward = TtMoeLayer(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             experts=TtMixtralMLP(
-                device_mesh=device_mesh,
+                mesh_device=mesh_device,
                 state_dict=state_dict,
                 args=args,
                 layer_num=layer_num,
@@ -53,7 +53,7 @@ class TtTransformerBlock(LightweightModule):
             dtype=dtype,
         )
         self.attention_norm = RMSNorm(
-            device=device_mesh,
+            device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
             layer_num=layer_num,
@@ -62,7 +62,7 @@ class TtTransformerBlock(LightweightModule):
         )
 
         self.ffn_norm = RMSNorm(
-            device=device_mesh,
+            device=mesh_device,
             dim=args.dim,
             state_dict=state_dict,
             layer_num=layer_num,

@@ -37,7 +37,7 @@ struct ToLayout {
         const ttnn::Layout layout,
         const std::optional<ttnn::DataType>& dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        DeviceMesh* device = nullptr);
+        MeshDevice* device = nullptr);
 };
 
 }  // namespace core

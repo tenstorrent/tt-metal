@@ -39,7 +39,7 @@ class PytorchFalconDecoderModel(torch.nn.Module):
 
 
 def run_test_FalconDecoder_inference(
-    device_mesh,
+    mesh_device,
     model_version,
     llm_mode,
     batch,
@@ -51,7 +51,7 @@ def run_test_FalconDecoder_inference(
     tt_cache_path,
     model_location_generator,
 ):
-    num_devices = get_num_devices(device_mesh)
+    num_devices = get_num_devices(mesh_device)
     global_batch = batch * num_devices
 
     hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
@@ -79,7 +79,7 @@ def run_test_FalconDecoder_inference(
         seq_len,
         batch,
         kv_cache_len,
-        device_mesh,
+        mesh_device,
         global_batch,
         head_dim,
         max_position_embeddings,
@@ -103,7 +103,7 @@ def run_test_FalconDecoder_inference(
 
     # TT hardware execution =================================================================
     tt_FalconDecoder_model = TtFalconDecoderLayer(
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -123,7 +123,7 @@ def run_test_FalconDecoder_inference(
         layer_past_len=kv_cache_len,
         use_cache=use_cache,
     )
-    tt_out, tt_layer_present = concat_device_outputs(device_mesh, tt_out, llm_mode, tt_layer_present, kv_len)
+    tt_out, tt_layer_present = concat_device_outputs(mesh_device, tt_out, llm_mode, tt_layer_present, kv_len)
 
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -146,7 +146,7 @@ def run_test_FalconDecoder_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@pytest.mark.parametrize("device_mesh", (1, 2, 4, (8, 4)), indirect=True, ids=["1chip", "2chip", "4chip", "32chipTG"])
+@pytest.mark.parametrize("mesh_device", (1, 2, 4, (8, 4)), indirect=True, ids=["1chip", "2chip", "4chip", "32chipTG"])
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
@@ -174,7 +174,7 @@ def test_FalconDecoder_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    device_mesh,
+    mesh_device,
     enable_async_mode,
 ):
     if model_config_str == "BFLOAT16-L1_SHARDED" and llm_mode == "prefill":
@@ -186,7 +186,7 @@ def test_FalconDecoder_inference(
     )
 
     run_test_FalconDecoder_inference(
-        device_mesh,
+        mesh_device,
         model_version,
         llm_mode,
         batch,

@@ -10,7 +10,7 @@ from models.experimental.grok.tt.grok_common import LightweightModule
 class TtRMSNorm(LightweightModule):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         args,
         dtype,
@@ -19,7 +19,7 @@ class TtRMSNorm(LightweightModule):
         eps: float = 1e-05,
     ):
         super().__init__()
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.eps = eps
         self.state_dict = state_dict
         self.model_config = args.get_model_config()
@@ -38,12 +38,12 @@ class TtRMSNorm(LightweightModule):
 
         self.weight = ttnn.as_tensor(
             torch_weight,
-            device=self.device_mesh,
+            device=self.mesh_device,
             dtype=dtype,
             layout=self.model_config["NORM_W_LAYOUT_TILE"],
             memory_config=self.model_config["NORM_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -54,7 +54,7 @@ class TtRMSNorm(LightweightModule):
 class TtRMSNormSharded(LightweightModule):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         args,
         dtype,
@@ -63,7 +63,7 @@ class TtRMSNormSharded(LightweightModule):
         eps: float = 1e-05,
     ):
         super().__init__()
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.eps = eps
         self.state_dict = state_dict
         self.model_config = args.get_model_config()
@@ -83,12 +83,12 @@ class TtRMSNormSharded(LightweightModule):
 
         self.weight = ttnn.as_tensor(
             torch_weight,
-            device=self.device_mesh,
+            device=self.mesh_device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.model_config["NORM_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
     def forward(self, x: ttnn.Tensor, out_sharded=False) -> ttnn.Tensor:

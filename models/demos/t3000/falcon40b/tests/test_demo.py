@@ -11,7 +11,7 @@ from models.demos.t3000.falcon40b.demo.demo import run_falcon_demo_kv
 
 @pytest.mark.parametrize("max_seq_len", (128,))
 def test_demo_generate_reference_output(
-    max_seq_len, model_location_generator, get_tt_cache_path, t3k_device_mesh, use_program_cache, is_ci_env
+    max_seq_len, model_location_generator, get_tt_cache_path, t3k_mesh_device, use_program_cache, is_ci_env
 ):
     if is_ci_env:
         pytest.skip("Skip generating reference output in CI")
@@ -28,7 +28,7 @@ def test_demo_generate_reference_output(
         max_seq_len=max_seq_len,
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         prefill_on_host=False,
         perf_mode=False,
         greedy_sampling=True,
@@ -44,12 +44,12 @@ def test_demo(
     max_seq_len,
     model_location_generator,
     get_tt_cache_path,
-    t3k_device_mesh,
+    t3k_mesh_device,
     use_program_cache,
 ):
     input_file = "models/demos/t3000/falcon40b/demo/input_data.json"
     # Enable async mode
-    for device in t3k_device_mesh.get_devices():
+    for device in t3k_mesh_device.get_devices():
         device.enable_async(True)
 
     generated_text, measurements = run_falcon_demo_kv(
@@ -62,7 +62,7 @@ def test_demo(
         max_seq_len=max_seq_len,
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         prefill_on_host=False,
         perf_mode=False,
         greedy_sampling=True,

@@ -19,7 +19,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import load_llama_state_dict
 from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     string_similarity_score,
 )
 
@@ -39,7 +39,7 @@ class ModelArgs:
 
 @dataclass
 class TTArgs:
-    device_mesh: object = None
+    mesh_device: object = None
     n_devices: int = 8
     emulated: bool = False
     cache_path: str = None
@@ -406,7 +406,7 @@ def test_LlamaModel_demo(
     temperature,
     chat,
     # TT args
-    t3k_device_mesh,
+    t3k_mesh_device,
     n_devices,
     decode_only,
     llama_version,
@@ -422,10 +422,10 @@ def test_LlamaModel_demo(
         llama_version=llama_version,
     )
 
-    check_device_mesh(t3k_device_mesh, model_config)
+    check_mesh_device(t3k_mesh_device, model_config)
 
-    for i in t3k_device_mesh.get_device_ids():
-        device = t3k_device_mesh.get_device(i)
+    for i in t3k_mesh_device.get_device_ids():
+        device = t3k_mesh_device.get_device(i)
         device.enable_async(True)
 
     args = construct_arg(
@@ -444,7 +444,7 @@ def test_LlamaModel_demo(
         top_k=top_k,
         temperature=temperature,
         chat=chat,
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         n_devices=n_devices,
         cache_path=cache_path,
         decode_only=decode_only,

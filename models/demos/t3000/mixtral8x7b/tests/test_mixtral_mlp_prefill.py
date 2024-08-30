@@ -27,9 +27,9 @@ from models.utility_functions import (
         1024 * 32,
     ),
 )
-def test_mixtral_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds, seq_len):
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+def test_mixtral_mlp_inference(t3k_mesh_device, use_program_cache, reset_seeds, seq_len):
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     # Specify different dtypes for each feedForward weights
     dtypes = {
@@ -38,12 +38,12 @@ def test_mixtral_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
         "w3": ttnn.bfloat8_b,
     }
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
     state_dict = model_args.load_state_dict()
 
     # Load ttnn MLP
     tt_model = TtMixtralMLP(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         args=model_args,
         layer_num=0,
@@ -70,20 +70,20 @@ def test_mixtral_mlp_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
 
     tt_input = ttnn.from_torch(
         torch_input,
-        device=t3k_device_mesh,
+        device=t3k_mesh_device,
         dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
     )
-    tt_input = ttnn.to_device(tt_input, t3k_device_mesh)
+    tt_input = ttnn.to_device(tt_input, t3k_mesh_device)
 
     # Run reference MLP
     reference_output = reference_model(torch_input)
 
     # Run ttnn MLP
     tt_output = tt_model.forward(tt_input, mode="prefill")
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
 
     # Validate PCC
     pcc = 0.98

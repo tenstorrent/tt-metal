@@ -389,7 +389,7 @@ def determine_tensor_deallocation(layernorm_slice_size, seq_len):
     return seq_len <= layernorm_slice_size
 
 
-def generate_layernorm_persistent_tensors(seq_len, slice_size, ln_output_tensors_dict, device_mesh, hidden_size, dtype):
+def generate_layernorm_persistent_tensors(seq_len, slice_size, ln_output_tensors_dict, mesh_device, hidden_size, dtype):
     if seq_len <= slice_size:
         return
 
@@ -399,9 +399,9 @@ def generate_layernorm_persistent_tensors(seq_len, slice_size, ln_output_tensors
             tensor=tensor,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=device_mesh,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         if name in ln_output_tensors_dict and ln_output_tensors_dict[name] is not None:
             ln_output_tensors_dict[name].update({seq_len: output_tensor})

@@ -92,7 +92,7 @@ OwnedStorage load_owned_storage(std::ifstream& input_stream) {
 }
 
 template<typename T>
-MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_stream, DeviceMesh* device_mesh) {
+MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_stream, MeshDevice* mesh_device) {
     std::size_t num_buffers = 0;
     DistributedTensorConfig strategy;
     input_stream.read(reinterpret_cast<char*>(&num_buffers), sizeof(std::size_t));
@@ -110,7 +110,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_strea
         buffers.push_back(buffer);
         shapes.push_back(shape);
 
-        for (std::size_t i = 1; i < device_mesh->num_devices(); ++i) {
+        for (std::size_t i = 1; i < mesh_device->num_devices(); ++i) {
             buffers.push_back(owned_buffer::Buffer<T>{buffer.get_ptr()});
             shapes.push_back(shape);
         }
@@ -161,19 +161,19 @@ OwnedStorage load_owned_storage(std::ifstream& input_stream, DataType data_type)
 }
 
 
-MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_stream, DataType data_type, DeviceMesh *device_mesh) {
+MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_stream, DataType data_type, MeshDevice *mesh_device) {
     if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
         using T = std::uint32_t;
-        return load_multi_device_host_storage<T>(input_stream, device_mesh);
+        return load_multi_device_host_storage<T>(input_stream, mesh_device);
     } else if (data_type == DataType::UINT16) {
         using T = std::uint16_t;
-        return load_multi_device_host_storage<T>(input_stream, device_mesh);
+        return load_multi_device_host_storage<T>(input_stream, mesh_device);
     } else if (data_type == DataType::FLOAT32) {
         using T = float;
-        return load_multi_device_host_storage<T>(input_stream, device_mesh);
+        return load_multi_device_host_storage<T>(input_stream, mesh_device);
     } else if (data_type == DataType::BFLOAT16) {
         using T = bfloat16;
-        return load_multi_device_host_storage<T>(input_stream, device_mesh);
+        return load_multi_device_host_storage<T>(input_stream, mesh_device);
     } else {
         TT_THROW("Unsupported DataType");
     }
@@ -182,10 +182,10 @@ MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_strea
 template <typename T>
 Storage load_storage(std::ifstream& input_stream, DataType data_type, StorageType storage_type, T device) {
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::MULTI_DEVICE) {
-        if constexpr (std::is_same_v<T, DeviceMesh*>) {
+        if constexpr (std::is_same_v<T, MeshDevice*>) {
             return load_multi_device_host_storage(input_stream, data_type, device);
         } else {
-            TT_THROW("DeviceMesh is required for MULTI_DEVICE_HOST storage");
+            TT_THROW("MeshDevice is required for MULTI_DEVICE_HOST storage");
         }
     } else {
         return load_owned_storage(input_stream, data_type);
@@ -321,7 +321,7 @@ Tensor load_tensor(const std::string& file_name, T device) {
 
 // Explicit instantiations
 template Tensor load_tensor<Device*>(const std::string&, Device*);
-template Tensor load_tensor<DeviceMesh*>(const std::string&, DeviceMesh*);
+template Tensor load_tensor<MeshDevice*>(const std::string&, MeshDevice*);
 
 }  // namespace tt_metal
 

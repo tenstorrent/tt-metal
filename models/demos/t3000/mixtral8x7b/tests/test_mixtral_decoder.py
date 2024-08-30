@@ -22,14 +22,14 @@ from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
         16,
     ),
 )
-def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_seeds, batch):
+def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_seeds, batch):
     """
     b: batch
     s: sequence length
     h: hidden size
     """
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     pcc = 0.99
     dtype = ttnn.bfloat8_b
@@ -43,7 +43,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
     else:
         raise ValueError(f"Batch size {batch} not supported")
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0), max_seq_len=max_seq_len, max_batch_size=batch)
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0), max_seq_len=max_seq_len, max_batch_size=batch)
     state_dict = model_args.load_state_dict()
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith("layers.0."))}
     reference_model = TransformerBlock(args=model_args)
@@ -51,7 +51,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
 
     # Initialize TT model
     tt_model = TtTransformerBlock(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         args=model_args,
         layer_num=0,
@@ -60,7 +60,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
 
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        tt_model.device_mesh,
+        tt_model.mesh_device,
     )
 
     generation_length = 10
@@ -80,14 +80,14 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
             model_args.dim,
             start_pos,
             model_args,
-            tt_model.device_mesh,
+            tt_model.mesh_device,
         )
 
         # Run TT model
         tt_out_b1sh = tt_model(decode_input_b1sh, start_pos, current_pos, None, current_rot_mat)
 
         tt_output_torch_b1h = (
-            ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
             .squeeze(1)
             .view(32, 1, -1)
         )[:batch, ...]

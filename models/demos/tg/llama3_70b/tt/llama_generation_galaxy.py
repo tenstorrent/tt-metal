@@ -25,7 +25,7 @@ class TtLlamaModelForGeneration:
         self.max_batch_size = model_args.max_batch_size
         self.max_kv_context_len = model_args.max_kv_context_len
 
-        self.device_mesh = tt_args.device_mesh
+        self.mesh_device = tt_args.mesh_device
         self.cluster_shape = tt_args.cluster_shape
 
         # Initial model_config is set in decode mode
@@ -39,7 +39,7 @@ class TtLlamaModelForGeneration:
 
         # TT model -------------------------------------------------------------
         self.tt_model = TtLlamaModel(
-            self.device_mesh,
+            self.mesh_device,
             self.cluster_shape,
             state_dict,
             BASE_URL,
@@ -84,7 +84,7 @@ class TtLlamaModelForGeneration:
     def _process_logits(self, tt_logits):
         logits = ttnn.to_torch(
             tt_logits,
-            mesh_composer=ConcatMesh2DToTensor(self.device_mesh, dims=(1, 3), cluster_shape=self.cluster_shape),
+            mesh_composer=ConcatMesh2DToTensor(self.mesh_device, dims=(1, 3), cluster_shape=self.cluster_shape),
         )
         return logits[:, 0:1, :, : self.params.vocab_size].float()
 

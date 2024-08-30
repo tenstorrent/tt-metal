@@ -19,13 +19,13 @@ from models.utility_functions import (
 )
 
 
-def test_mixtral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds):
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+def test_mixtral_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -34,7 +34,7 @@ def test_mixtral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_se
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = TtRMSNorm(
-        device=t3k_device_mesh,
+        device=t3k_mesh_device,
         dim=model_args.dim,
         state_dict=state_dict,
         layer_num=0,
@@ -48,14 +48,14 @@ def test_mixtral_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_se
 
     tt_input = ttnn.from_torch(
         input,
-        device=t3k_device_mesh,
+        device=t3k_mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
     )
 
     tt_output = tt_model(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

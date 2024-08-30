@@ -20,7 +20,7 @@ from models.demos.tg.llama3_70b.tt.llama_common import tt_all_gather
 class TtLlamaDecoder_galaxy:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         cluster_shape,
         state_dict,
         base_url,
@@ -34,8 +34,8 @@ class TtLlamaDecoder_galaxy:
         super().__init__()
 
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = device_mesh.get_num_devices()
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         self.model_config = model_config
         self.read_cache = read_cache
         self.cluster_shape = cluster_shape
@@ -55,7 +55,7 @@ class TtLlamaDecoder_galaxy:
         self.cache_path = cache_path
 
         self.attention = TtLlamaAttention_galaxy(
-            device_mesh,
+            mesh_device,
             cluster_shape,
             state_dict,
             base_url,
@@ -68,7 +68,7 @@ class TtLlamaDecoder_galaxy:
         )
 
         self.mlp = TtLlamaMLP_galaxy(
-            device_mesh,
+            mesh_device,
             cluster_shape,
             state_dict,
             base_url,
@@ -166,9 +166,9 @@ class TtLlamaDecoder_galaxy:
         #     pt_attn_norm,
         #     dtype=ttnn.bfloat16,
         #     layout=ttnn.ROW_MAJOR_LAYOUT,
-        #     device=self.device_mesh,
+        #     device=self.mesh_device,
         #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+        #     mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         #     cache_file_name=self.cache_path / attn_norm_cache_str,
         # )
 
@@ -176,9 +176,9 @@ class TtLlamaDecoder_galaxy:
             pt_attn_norm,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, (2, None), self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, (2, None), self.cluster_shape),
             cache_file_name=self.cache_path / attn_norm_sharded_str,
         )
 
@@ -186,9 +186,9 @@ class TtLlamaDecoder_galaxy:
         #     pt_ffn_norm,
         #     dtype=ttnn.bfloat16,
         #     layout=ttnn.ROW_MAJOR_LAYOUT,
-        #     device=self.device_mesh,
+        #     device=self.mesh_device,
         #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+        #     mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         #     cache_file_name=self.cache_path / ffn_norm_cache_str,
         # )
 
@@ -196,9 +196,9 @@ class TtLlamaDecoder_galaxy:
             pt_ffn_norm,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, (2, None), self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, (2, None), self.cluster_shape),
             cache_file_name=self.cache_path / ffn_norm_sharded_str,
         )
 
@@ -227,7 +227,7 @@ class TtLlamaDecoder_galaxy:
 
         tt_stats = tt_all_gather(
             tt_stats,
-            device_mesh=self.device_mesh,
+            mesh_device=self.mesh_device,
             dim=3,
             cluster_axis=1,
             num_links=1,

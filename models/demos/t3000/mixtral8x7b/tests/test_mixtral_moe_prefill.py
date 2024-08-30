@@ -29,15 +29,15 @@ from models.utility_functions import (
         1024 * 32,
     ),
 )
-def test_mixtral_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds, seq_len):
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+def test_mixtral_moe_inference(t3k_mesh_device, use_program_cache, reset_seeds, seq_len):
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     pcc = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
     state_dict = model_args.load_state_dict()
     batch = 1
 
@@ -59,7 +59,7 @@ def test_mixtral_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
 
     # Initialize TT models
     experts = TtMixtralMLP(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         args=model_args,
         layer_num=0,
@@ -71,7 +71,7 @@ def test_mixtral_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
     )
 
     tt_model = TtMoeLayer(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         experts=experts,
         args=model_args,
@@ -88,16 +88,16 @@ def test_mixtral_moe_inference(t3k_device_mesh, use_program_cache, reset_seeds, 
         pt_decode_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_decode_input = ttnn.from_torch(
             pt_decode_input.clone().unsqueeze(1).view(1, 1, seq_len, 4096),
-            device=t3k_device_mesh,
+            device=t3k_mesh_device,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
         )
 
         # Run TT model
         tt_out = tt_model(tt_decode_input, mode="prefill")
-        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0].view(
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0].view(
             batch, seq_len, -1
         )
 

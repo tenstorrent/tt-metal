@@ -63,7 +63,7 @@ import itertools
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_reduce_scatter_nightly(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
     scatter_dim,
@@ -78,7 +78,7 @@ def test_reduce_scatter_nightly(
     num_iters=1,
 ):
     run_reduce_scatter_test(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
         scatter_dim,

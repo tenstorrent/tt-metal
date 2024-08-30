@@ -194,7 +194,7 @@ def torch2tt_tensor(
 
 
 def tt_tensors_to_torch_tensors(
-    tt_tensors_device: ttnn.Tensor, device_mesh: Union[ttnn.DeviceMesh, ttnn.Device], concat_dim: int = 0
+    tt_tensors_device: ttnn.Tensor, mesh_device: Union[ttnn.MeshDevice, ttnn.Device], concat_dim: int = 0
 ):
     # Convert tensors to interleaved
     if tt_tensors_device.is_sharded():
@@ -211,7 +211,7 @@ def tt_tensors_to_torch_tensors(
         tt_tensors_device = ttnn.untilize(tt_tensors_device, use_multicore=False)
 
     tt_tensors_device = ttnn.to_torch(
-        tt_tensors_device, mesh_composer=ttnn.ConcatMeshToTensor(device_mesh, dim=concat_dim), device=device_mesh
+        tt_tensors_device, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=concat_dim), device=mesh_device
     )
 
     return tt_tensors_device

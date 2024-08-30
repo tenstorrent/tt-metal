@@ -46,7 +46,7 @@ class Emb(torch.nn.Module):
     ),
 )
 def test_mixtral_model_perf(
-    t3k_device_mesh,
+    t3k_mesh_device,
     generation_start_pos,
     expected_compile_time,
     expected_inference_time,
@@ -54,8 +54,8 @@ def test_mixtral_model_perf(
     reset_seeds,
     is_ci_env,
 ):
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         from tracy import signpost
@@ -63,7 +63,7 @@ def test_mixtral_model_perf(
     dtype = ttnn.bfloat8_b
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=False)
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False)
     model_args.n_layers = 32
 
     profiler = BenchmarkProfiler()
@@ -88,7 +88,7 @@ def test_mixtral_model_perf(
     profiler.start("Mixtral_model_setup")
     # Load TTNN model
     tt_model = TtTransformer(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -149,7 +149,7 @@ def test_mixtral_model_perf(
     ],
 )
 def test_mixtral_model_with_prefill_perf(
-    t3k_device_mesh,
+    t3k_mesh_device,
     prefill_seqlen,
     target_compile_t,
     target_inference_t,
@@ -160,8 +160,8 @@ def test_mixtral_model_with_prefill_perf(
     reset_seeds,
     is_ci_env,
 ):
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         from tracy import signpost
@@ -170,7 +170,7 @@ def test_mixtral_model_with_prefill_perf(
     batch_size = 32
 
     # Can use dummy_weights=True correctness is not tested, but it is much slower
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=False)
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=False)
     model_args.n_layers = 32
 
     profiler = BenchmarkProfiler()
@@ -202,7 +202,7 @@ def test_mixtral_model_with_prefill_perf(
         input_mask_pt,
         prefill_seq_len,
         encoded_prompts,
-    ) = preprocess_inputs_prefill(prompts, tokenizer, model_args, dtype, False, t3k_device_mesh)
+    ) = preprocess_inputs_prefill(prompts, tokenizer, model_args, dtype, False, t3k_mesh_device)
     profiler.end("preprocessing_inputs")
 
     assert (
@@ -215,7 +215,7 @@ def test_mixtral_model_with_prefill_perf(
     profiler.start("Mixtral_model_setup")
     # Load TTNN model
     tt_model = TtTransformer(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -228,7 +228,7 @@ def test_mixtral_model_with_prefill_perf(
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         signpost("prefill warmup")
     profiler.start(f"compile_prefill")
-    run_inference_prefill(profiler, tt_model, model_args, prefill_seq_len, t3k_device_mesh, pt_prefill_input, 1)
+    run_inference_prefill(profiler, tt_model, model_args, prefill_seq_len, t3k_mesh_device, pt_prefill_input, 1)
     profiler.end(f"compile_prefill")
     prefill_warmup_time = profiler.get_duration("compile_prefill")
 
@@ -237,7 +237,7 @@ def test_mixtral_model_with_prefill_perf(
     profiler.start(f"inference_prefill")
     # Prefill a single user, as this will be the real-world usage
     prefill_out = run_inference_prefill(
-        profiler, tt_model, model_args, prefill_seq_len, t3k_device_mesh, pt_prefill_input, 1
+        profiler, tt_model, model_args, prefill_seq_len, t3k_mesh_device, pt_prefill_input, 1
     )
     profiler.end(f"inference_prefill")
     prefill_time = profiler.get_duration("inference_prefill")
@@ -315,11 +315,11 @@ def test_mixtral_model_with_prefill_perf(
     )
 
 
-def run_inference_prefill(profiler, tt_model, model_args, prefill_seq_len, device_mesh, pt_prefill_input, batch_size):
+def run_inference_prefill(profiler, tt_model, model_args, prefill_seq_len, mesh_device, pt_prefill_input, batch_size):
     # Get rotary matrix
     profiler.start("prefill_prepare_rot_matrices")
     rot_mats_prefill = get_prefill_rot_mat(
-        model_args.head_dim, model_args.max_seq_len, device_mesh, seq_len=prefill_seq_len
+        model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seq_len
     )
 
     head_dim = model_args.dim // model_args.n_heads
@@ -328,9 +328,9 @@ def run_inference_prefill(profiler, tt_model, model_args, prefill_seq_len, devic
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device_mesh,
+        device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
     profiler.end("prefill_prepare_rot_matrices")
 
@@ -339,7 +339,7 @@ def run_inference_prefill(profiler, tt_model, model_args, prefill_seq_len, devic
         profiler.start(f"e2e_prefill_prepare_inputs_{batch_id}")
         prefill_input, attn_mask, _ = prepare_inputs_ttnn_prefill(
             pt_prefill_input[batch_id],
-            device_mesh,
+            mesh_device,
         )
         profiler.end(f"e2e_prefill_prepare_inputs_{batch_id}")
 
@@ -358,7 +358,7 @@ def run_inference_prefill(profiler, tt_model, model_args, prefill_seq_len, devic
 
         # Device sync to get proper e2e timing
         profiler.start(f"e2e_prefill_inference_get_output_{batch_id}")
-        devices = device_mesh.get_devices()
+        devices = mesh_device.get_devices()
         for device in devices:
             ttnn.synchronize_device(device)
         profiler.end(f"e2e_prefill_inference_get_output_{batch_id}")
@@ -384,7 +384,7 @@ def run_inference_decode(profiler, tt_model, embd, encoded_prompts, generation_s
             tt_model.args.dim,
             start_pos,
             tt_model.args,
-            tt_model.device_mesh,
+            tt_model.mesh_device,
         )
         profiler.end(f"Decode_prepare_inputs_{i}")
 
@@ -397,7 +397,7 @@ def run_inference_decode(profiler, tt_model, embd, encoded_prompts, generation_s
         # Convert ttnn tensor to torch tensor
         profiler.start(f"python_wait_for_inference_out_{i}")
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(tt_model.device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(tt_model.mesh_device, dim=0))[0]
             .squeeze(1)
             .view(32, seqlen, -1)
             .detach()
