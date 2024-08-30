@@ -118,29 +118,27 @@ def test_accuracy(
         patch_size = 16
         torch_pixel_values = torch_pixel_values.reshape(batch_size, img_h, img_w // patch_size, 4 * patch_size)
         N, H, W, C = torch_pixel_values.shape
-        shard_grid = ttnn.experimental.tensor.CoreRangeSet(
+        shard_grid = ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(7, 0),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 0),
                 ),
             }
         )
         n_cores = 8
-        shard_spec = ttnn.experimental.tensor.ShardSpec(
-            shard_grid, [N * H * W // n_cores, C], ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR, False
-        )
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
 
         tt_inputs = torch2tt_tensor(
             torch_pixel_values,
             device,
-            ttnn.experimental.tensor.Layout.ROW_MAJOR,
-            tt_memory_config=ttnn.experimental.tensor.MemoryConfig(
-                ttnn.experimental.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.experimental.tensor.BufferType.L1,
+            ttnn.ROW_MAJOR_LAYOUT,
+            tt_memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
                 shard_spec,
             ),
-            tt_dtype=ttnn.experimental.tensor.DataType.BFLOAT16,
+            tt_dtype=ttnn.bfloat16,
         )
 
         if torch_attention_mask is not None:

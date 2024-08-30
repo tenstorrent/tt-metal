@@ -55,7 +55,7 @@ def test_attn_matmul(num_loops, enable_async, in0_dtype, in1_dtype, out_dtype, d
                 tt_input_tensor_a,
                 tt_input_tensor_b,
                 compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
-                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=out_dtype,
             )
             tt_input_tensor_a.deallocate()
@@ -101,7 +101,7 @@ def test_attn_matmul_fp32(num_loops, enable_async, in_dtype, device):
                 tt_input_tensor_a,
                 tt_input_tensor_b,
                 compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
-                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=in_dtype,
                 compute_kernel_config=compute_kernel_config,
             )
@@ -141,7 +141,7 @@ def test_attn_matmul_with_program_cache(
                 tt_input_tensor_a,
                 tt_input_tensor_b,
                 compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
-                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=out_dtype,
             )
             tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
@@ -201,7 +201,7 @@ def test_group_attn_matmul(
 
     compute_grid_size = device.compute_with_storage_grid_size()
 
-    interleaved_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    interleaved_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     # NOTE: Mixed precision is supported as well; but might not have enough space for larger seq_len with BFLOAT16
     in0_dtype = ttnn.bfloat8_b
@@ -291,7 +291,7 @@ def test_group_attn_matmul_with_program_cache(
 
     compute_grid_size = device.compute_with_storage_grid_size()
 
-    interleaved_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    interleaved_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     shard_orientation = ttnn.ShardOrientation.COL_MAJOR  # Only used if sharded
 
@@ -419,7 +419,7 @@ def test_group_attn_matmul_fp32(
 
     compute_grid_size = device.compute_with_storage_grid_size()
 
-    interleaved_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    interleaved_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
     # NOTE: Mixed precision is supported as well; but might not have enough space for larger seq_len with BFLOAT16
     in0_dtype = in_dtype

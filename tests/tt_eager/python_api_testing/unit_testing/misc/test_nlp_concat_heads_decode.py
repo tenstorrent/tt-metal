@@ -27,9 +27,9 @@ def num_to_corerange(x):
     num_x = min(x, 8)
     num_y = x // num_x
     assert num_x * num_y == x
-    return ttnn.experimental.tensor.CoreRange(
-        ttnn.experimental.tensor.CoreCoord(0, 0),
-        ttnn.experimental.tensor.CoreCoord(num_x - 1, num_y - 1),
+    return ttnn.CoreRange(
+        ttnn.CoreCoord(0, 0),
+        ttnn.CoreCoord(num_x - 1, num_y - 1),
     )
 
 

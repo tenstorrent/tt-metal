@@ -78,12 +78,12 @@ def test_silu_multi_core(device, input_shape, shard_strategy):
         ncores = (nshards_h, nshards_w)
 
     shard_grid = get_shard_grid_from_num_cores(ncores, device)
-    shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
 
     if shard_strategy == ttnn.ShardStrategy.BLOCK:
-        tensor_memory_layout = ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
+        tensor_memory_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
     elif shard_strategy == ttnn.ShardStrategy.HEIGHT:
-        tensor_memory_layout = ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
+        tensor_memory_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 
     ## input shard
     if shard_strategy == ttnn.ShardStrategy.BLOCK:
@@ -97,8 +97,8 @@ def test_silu_multi_core(device, input_shape, shard_strategy):
         pytest.skip("Shard sizes that are not multiples of 1024 are not supported.")
     shard_shape = (shard_height, shard_width)
     logger.debug(f"shard_shape={shard_shape}")
-    shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
-    in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
+    in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
 
     logger.debug(f"in_shard_mem_config: {in_sharded_mem_config}")
     logger.debug(f"ncore --> {ncores}")

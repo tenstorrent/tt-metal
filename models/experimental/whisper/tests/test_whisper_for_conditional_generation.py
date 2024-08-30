@@ -37,7 +37,7 @@ from transformers.generation.logits_process import (
     TypicalLogitsWarper,
 )
 
-import tt_lib
+import ttnn
 
 from models.experimental.whisper.tt.whisper_for_conditional_generation import (
     TtWhisperForConditionalGeneration,
@@ -333,7 +333,7 @@ def run_generate(sample, device):
         tt_model_kwargs["output_hidden_states"] = generation_config.output_hidden_states
         tt_model_kwargs["use_cache"] = generation_config.use_cache
 
-        tt_input_features = torch2tt_tensor(input_features, device, tt_lib.tensor.Layout.ROW_MAJOR)
+        tt_input_features = torch2tt_tensor(input_features, device, ttnn.ROW_MAJOR_LAYOUT)
         # Prepare model args for tt model
         tt_model_kwargs = _prepare_encoder_decoder_kwargs_for_generation(
             tt_model, tt_input_features, tt_model_kwargs, "input_features"

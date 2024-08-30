@@ -72,7 +72,7 @@ def run(
         memory_config=out_tensor_memory_config,
     )
 
-    ttnn.experimental.tensor.logaddexp(input_tensor_a, input_tensor_b, output_tensor=output_tensor)
+    ttnn.logaddexp(input_tensor_a, input_tensor_b, output_tensor=output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     return check_with_pcc(torch_output_tensor, output_tensor, 0.999)

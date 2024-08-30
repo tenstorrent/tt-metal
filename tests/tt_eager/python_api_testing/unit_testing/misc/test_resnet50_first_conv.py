@@ -142,7 +142,7 @@ def test_resnet50_first_conv(
             extra_pad_w_right=1 + extra_padding_for_32B_alignment,
         )
         print("A_cl_host shape", A_cl_host.get_legacy_shape())
-        memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+        memory_config = ttnn.L1_MEMORY_CONFIG
 
         # save original shape (N, H, W, C)
         original_A_cl_host_shape = A_cl_host.get_legacy_shape()
