@@ -428,6 +428,16 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
             8,
             ttnn.bfloat8_b,
         ),
+        (
+            8,
+            1,
+            [1, 1, 32, 1024 * 8],
+            3,
+            ttl.tensor.Layout.TILE,
+            1024,
+            32,
+            ttnn.bfloat8_b,
+        ),
     ],
 )
 @pytest.mark.parametrize(

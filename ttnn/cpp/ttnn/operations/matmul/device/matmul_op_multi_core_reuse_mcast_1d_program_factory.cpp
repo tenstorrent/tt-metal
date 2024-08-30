@@ -54,8 +54,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     bool output_is_sharded,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
-    // tt_metal::Program program{};
-
     bool fuse_op = fused_op_signaler.has_value();
 
     uint32_t num_blocks = K / in0_block_w;
@@ -643,7 +641,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
             if (i < num_cores_with_work) {
                 if (fuse_op) {
-                    fused_op_signaler->emit_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+                    fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
                 }
 
                 tt_metal::SetRuntimeArgs(
@@ -682,7 +680,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             };
 
             if (fuse_op) {
-                fused_op_signaler->emit_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
 
             tt_metal::SetRuntimeArgs(
@@ -755,7 +753,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             }
 
             if (fuse_op) {
-                fused_op_signaler->emit_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
+                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
             }
 
             tt_metal::SetRuntimeArgs(

@@ -5,14 +5,9 @@
 #include "common/core_coord.h"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
-
 #include "tt_metal/host_api.hpp"
-
 #include "ttnn/tensor/tensor_utils.hpp"
-
 #include "eth_l1_address_map.h"
-
-
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 
 /* All Gather Matmul fusion includes */
@@ -27,11 +22,36 @@ void AllGatherMatmul::validate(const std::vector<Tensor> &input_tensors, const s
 
     TT_ASSERT(input_tensors.size() == 4, "AllGatherMatmul requires 4 input tensors: [input, weight, all_gather_output, datacopy_output]");
 
+    auto& input_tensor = input_tensors[0];
+    auto& all_gather_output_tensor = input_tensors[1];
+    auto& weight_tensor = input_tensors[2];
+
     // All Gather validate
-    this->all_gather_struct.validate({input_tensors[0]});
+    this->all_gather_struct.validate({input_tensor});
 
     // Matmul validate.
-    this->matmul_struct.validate({input_tensors[1], input_tensors[2]}, optional_input_tensors);
+    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors);
+
+    // All Gather Matmul validate
+    TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
+    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1 && input_tensor.get_legacy_shape()[1] == 1, "AllGatherMatmul requires input tensor to have batch size of 1.");
+    std::visit([&] (const auto& config) {
+        using ProgramConfigType = std::decay_t<decltype(config)>;
+        if (not (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> || std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>)) {
+            TT_FATAL("Unsupported MatmulProgramConfig type for AllGatherMatmul.");
+        }
+    }, this->matmul_struct.program_config.value());
+
+
+    const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
+    if (all_gather_output_tensor_shard_spec.has_value()) {
+
+        auto const& shard_grid = all_gather_output_tensor_shard_spec->grid.bounding_box();
+        auto const& shard_grid_start = shard_grid.start_coord;
+        auto const& shard_grid_end = shard_grid.end_coord;
+        const uint32_t num_all_gather_output_shards = (shard_grid_end.y - shard_grid_start.y + 1) * (shard_grid_end.x - shard_grid_start.x + 1);
+        TT_FATAL(this->all_gather_struct.ring_size == num_all_gather_output_shards, "AllGatherMatmul requires number of tensor slices to equal the number of output shards of the all_gather.");
+    }
 }
 
 std::vector<tt::tt_metal::Shape> AllGatherMatmul::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

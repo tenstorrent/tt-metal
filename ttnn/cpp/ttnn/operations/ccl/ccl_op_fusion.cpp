@@ -39,8 +39,8 @@ void AllGatherFusedOpSignaler::init_all_gather(
     initialized_all_gather = true;
 }
 
-void AllGatherFusedOpSignaler::emit_all_gather_fused_op_rt_args(
-    std::vector<uint32_t>& rt_args,
+void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
+    std::vector<uint32_t>& out_rt_args,
 
     uint32_t num_workers_to_sync,
     uint32_t curr_worker_index,
@@ -49,27 +49,27 @@ void AllGatherFusedOpSignaler::emit_all_gather_fused_op_rt_args(
 ) {
     TT_ASSERT(initialized_fused_op && initialized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
 
-    rt_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
-    rt_args.push_back(static_cast<uint32_t>(curr_worker_index));
-    rt_args.push_back(static_cast<uint32_t>(this->all_gather_worker_sync_semaphore));
+    out_rt_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
+    out_rt_args.push_back(static_cast<uint32_t>(curr_worker_index));
+    out_rt_args.push_back(static_cast<uint32_t>(this->all_gather_worker_sync_semaphore));
 
     // Push the worker core noc coords
     for (const auto& core : this->all_gather_worker_cores_noc) {
-        rt_args.push_back(static_cast<uint32_t>(core.x));
-        rt_args.push_back(static_cast<uint32_t>(core.y));
+        out_rt_args.push_back(static_cast<uint32_t>(core.x));
+        out_rt_args.push_back(static_cast<uint32_t>(core.y));
     }
 
     // Push the number of fused op cores to signal
-    rt_args.push_back(static_cast<uint32_t>(this->num_fused_op_cores_to_signal));
+    out_rt_args.push_back(static_cast<uint32_t>(this->num_fused_op_cores_to_signal));
 
     // Push the fused op receiver core noc coords
     for (const auto& core : this->fused_op_receiver_cores_noc) {
-        rt_args.push_back(static_cast<uint32_t>(core.x));
-        rt_args.push_back(static_cast<uint32_t>(core.y));
+        out_rt_args.push_back(static_cast<uint32_t>(core.x));
+        out_rt_args.push_back(static_cast<uint32_t>(core.y));
     }
 
     // Push the fused op signal semaphore addrs. Direction 0: clockwise, Direction 1: counter-clockwise
-    rt_args.push_back(
+    out_rt_args.push_back(
         static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[all_gather_direction])
     );
 
@@ -77,13 +77,13 @@ void AllGatherFusedOpSignaler::emit_all_gather_fused_op_rt_args(
     bool wait_for_start_signal = !start_signal_core_sem_pair.has_value() && all_gather_direction == 1;
     bool send_start_signal = start_signal_core_sem_pair.has_value() && all_gather_direction == 1;
 
-    rt_args.push_back(static_cast<uint32_t>(wait_for_start_signal));
-    rt_args.push_back(static_cast<uint32_t>(send_start_signal));
+    out_rt_args.push_back(static_cast<uint32_t>(wait_for_start_signal));
+    out_rt_args.push_back(static_cast<uint32_t>(send_start_signal));
 
     if (send_start_signal) {
-        rt_args.push_back(static_cast<uint32_t>(start_signal_core_sem_pair->core.x));
-        rt_args.push_back(static_cast<uint32_t>(start_signal_core_sem_pair->core.y));
-        rt_args.push_back(static_cast<uint32_t>(start_signal_core_sem_pair->sem_id));
+        out_rt_args.push_back(static_cast<uint32_t>(start_signal_core_sem_pair->core.x));
+        out_rt_args.push_back(static_cast<uint32_t>(start_signal_core_sem_pair->core.y));
+        out_rt_args.push_back(static_cast<uint32_t>(start_signal_core_sem_pair->sem_id));
     }
 
 }
@@ -150,26 +150,26 @@ void MatmulFusedOpSignaler::init_fused_op(
     initialized_fused_op = true;
 }
 
-void MatmulFusedOpSignaler::emit_matmul_fused_op_rt_args(
-    std::vector<uint32_t>& rt_args,
+void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
+    std::vector<uint32_t>& out_rt_args,
     bool use_in1_offset
 ) {
     TT_ASSERT(initialized_all_gather && initialized_fused_op, "MatmulFusedOpSignaler not initialized fully.");
 
-    rt_args.push_back(static_cast<uint32_t>(this->num_transfers));
-    rt_args.push_back(static_cast<uint32_t>(this->ring_size));
-    rt_args.push_back(static_cast<uint32_t>(this->start_ring_index));
-    rt_args.push_back(static_cast<uint32_t>(this->tensor_slice_shape_width));
+    out_rt_args.push_back(static_cast<uint32_t>(this->num_transfers));
+    out_rt_args.push_back(static_cast<uint32_t>(this->ring_size));
+    out_rt_args.push_back(static_cast<uint32_t>(this->start_ring_index));
+    out_rt_args.push_back(static_cast<uint32_t>(this->tensor_slice_shape_width));
     if (use_in1_offset) {
-        rt_args.push_back(static_cast<uint32_t>(this->weight_output_page_offset));
-        rt_args.push_back(static_cast<uint32_t>((this->ring_size - 1) * this->weight_output_page_offset));
+        out_rt_args.push_back(static_cast<uint32_t>(this->weight_output_page_offset));
+        out_rt_args.push_back(static_cast<uint32_t>((this->ring_size - 1) * this->weight_output_page_offset));
     } else {
-        rt_args.push_back(static_cast<uint32_t>(this->output_page_offset));
-        rt_args.push_back(static_cast<uint32_t>((this->ring_size - 1) * this->output_page_offset));
+        out_rt_args.push_back(static_cast<uint32_t>(this->output_page_offset));
+        out_rt_args.push_back(static_cast<uint32_t>((this->ring_size - 1) * this->output_page_offset));
     }
-    rt_args.push_back(static_cast<uint32_t>(this->is_clockwise_dir));
-    rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
-    rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
+    out_rt_args.push_back(static_cast<uint32_t>(this->is_clockwise_dir));
+    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
+    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
 }
 
 

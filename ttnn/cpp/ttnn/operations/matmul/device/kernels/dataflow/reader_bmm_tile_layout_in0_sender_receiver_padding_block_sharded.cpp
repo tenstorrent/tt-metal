@@ -31,18 +31,18 @@ void kernel_main() {
     constexpr uint32_t batch = get_compile_time_arg_val(15);
     constexpr bool fuse_op = (bool)get_compile_time_arg_val(16);
 
-    const uint32_t sender_id = get_arg_val<uint32_t>(0);
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(1);
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(2);
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(3);
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(4);
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_x));
+    uint32_t rt_args_idx = 0;
+    const uint32_t sender_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(rt_args_idx++);
+    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_x)));
+    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_y)));
 
 
     MatmulOpReceiver fused_op_receiver;
     if constexpr (fuse_op) {
-        uint32_t rt_args_idx = 5 + num_x + num_y;
         fused_op_receiver = MatmulOpReceiver(
             true, /* wait_for_op_signal */
             rt_args_idx,

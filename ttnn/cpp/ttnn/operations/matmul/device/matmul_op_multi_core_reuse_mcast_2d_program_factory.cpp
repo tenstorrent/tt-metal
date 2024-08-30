@@ -52,11 +52,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::DataFormat output_data_format,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
-
     bool fuse_op = fused_op_signaler.has_value();
 
     TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
-    // tt_metal::Program program{};
 
     uint32_t num_blocks = K / in0_block_w;
 
@@ -917,7 +915,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             }
 
             if (fuse_op) {
-                fused_op_signaler->emit_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
 
             tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_0_default
@@ -1057,7 +1055,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 19, num_iter);
                 }
                 if (fuse_op) {
-                    fused_op_signaler->emit_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
+                    fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
                 }
                 tt_metal::SetRuntimeArgs(
                     program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_1_default

@@ -6,8 +6,6 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-
-#include "debug/dprint.h"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {

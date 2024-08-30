@@ -295,6 +295,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
 
 
     // Datacopy
+    const CoreCoord datacopy_core_coord = {0, 7}; // Pick a location that doesn't overlap with all_gather/matmul
     DatacopyParams datacopy_params;
     if (use_datacopy) {
         datacopy_params = setup_datacopy(
@@ -307,7 +308,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
             ring_size,
             ring_index,
             topology,
-            {0, 7},
+            datacopy_core_coord,
             matmul_fused_op_signaler.value()
         );
     }

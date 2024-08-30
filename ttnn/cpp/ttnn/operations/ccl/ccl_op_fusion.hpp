@@ -12,8 +12,8 @@ namespace experimental {
 namespace ccl {
 
 struct CoreSemPair{
-    CoreCoord core;
-    uint32_t sem_id;
+    CoreCoord core = {0, 0};
+    uint32_t sem_id = 0;
 
     CoreSemPair() {}
     CoreSemPair(CoreCoord core, uint32_t sem_id) : core(core), sem_id(sem_id) {}
@@ -46,8 +46,8 @@ struct AllGatherFusedOpSignaler {
         std::vector<CoreCoord>& all_gather_worker_cores
     );
 
-    void emit_all_gather_fused_op_rt_args(
-        std::vector<uint32_t>& rt_args,
+    void push_all_gather_fused_op_rt_args(
+        std::vector<uint32_t>& out_rt_args,
 
         uint32_t num_workers_to_sync,
         uint32_t curr_worker_index,
@@ -96,8 +96,8 @@ struct MatmulFusedOpSignaler {
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal
     );
 
-    void emit_matmul_fused_op_rt_args(
-        std::vector<uint32_t>& rt_args,
+    void push_matmul_fused_op_rt_args(
+        std::vector<uint32_t>& out_rt_args,
         bool use_in1_offset
     );
 };

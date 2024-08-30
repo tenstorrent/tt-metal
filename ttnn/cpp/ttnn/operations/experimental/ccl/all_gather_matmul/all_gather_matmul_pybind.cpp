@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::ccl {

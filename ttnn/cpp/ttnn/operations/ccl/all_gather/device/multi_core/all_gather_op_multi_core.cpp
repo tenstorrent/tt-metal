@@ -785,7 +785,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                         }
 
                         if (fuse_op && direction == 1) {
-                            fused_op_signaler_sender_workers->emit_all_gather_fused_op_rt_args(
+                            fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
                                 worker_writer_sender_rt_args,
                                 global_num_workers_per_direction,
                                 b,
@@ -1007,7 +1007,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
                         /* All Gather fusion */
                         if (fuse_op) {
-                            fused_op_signaler->emit_all_gather_fused_op_rt_args(
+                            fused_op_signaler->push_all_gather_fused_op_rt_args(
                                 worker_writer_receiver_rt_args,
                                 global_num_workers_per_direction,
                                 b,
