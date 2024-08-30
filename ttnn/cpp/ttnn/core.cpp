@@ -9,7 +9,7 @@ namespace ttnn {
 
 std::atomic<std::int64_t> TENSOR_ID = -1;
 std::atomic<std::int64_t> PYTHON_OPERATION_ID = -1;
-std::atomic<std::int64_t> DEVICE_OPERATION_ID = -1;
+std::atomic<std::int64_t> DEVICE_OPERATION_ID = 0;
 
 std::int64_t get_python_operation_id() {
     return PYTHON_OPERATION_ID.load();
@@ -37,8 +37,8 @@ std::int64_t get_device_operation_id() {
 void set_device_operation_id(std::int64_t device_operation_id) {
     DEVICE_OPERATION_ID = device_operation_id;
 }
-void increment_device_operation_id() {
-    DEVICE_OPERATION_ID++;
+std::int64_t fetch_and_increment_device_operation_id() {
+    return DEVICE_OPERATION_ID.fetch_add(1);
 }
 
 }  // namespace ttnn

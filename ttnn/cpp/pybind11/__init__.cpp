@@ -101,5 +101,5 @@ PYBIND11_MODULE(_ttnn, module) {
 
     module.def("get_device_operation_id", ttnn::get_device_operation_id, "Get device operation id");
     module.def("set_device_operation_id", ttnn::set_device_operation_id, "Set device operation id");
-    module.def("increment_device_operation_id", ttnn::increment_device_operation_id, "Increment device operation id");
+    module.def("fetch_and_increment_device_operation_id", ttnn::fetch_and_increment_device_operation_id, "Increment device operation id and fetch the previously held id");
 }

@@ -86,6 +86,6 @@ void increment_tensor_id();
 
 std::int64_t get_device_operation_id();
 void set_device_operation_id(std::int64_t device_operation_id);
-void increment_device_operation_id();
+std::int64_t fetch_and_increment_device_operation_id();
 
 }  // namespace ttnn
