@@ -15,7 +15,7 @@ from tests.ttnn.unit_tests.operations.test_all_gather import is_unsupported_case
 
 
 def run_all_gather_matmul_on_t3000_impl(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -34,7 +34,7 @@ def run_all_gather_matmul_on_t3000_impl(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    devices = t3k_device_mesh.get_devices()
+    devices = t3k_mesh_device.get_devices()
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
@@ -54,9 +54,9 @@ def run_all_gather_matmul_on_t3000_impl(
         weights_tensor,
         dtype=input_dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_device_mesh,
+        device=t3k_mesh_device,
         memory_config=mem_config,
-        mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=3),
+        mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=3),
     )
 
     # torch matmul output
@@ -204,7 +204,7 @@ def run_all_gather_matmul_on_t3000_impl(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_all_gather_matmul_on_t3000_post_commit(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -218,7 +218,7 @@ def test_all_gather_matmul_on_t3000_post_commit(
     enable_async,
 ):
     run_all_gather_matmul_on_t3000_impl(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,

@@ -24,12 +24,12 @@ from models.utility_functions import (
 )
 
 
-def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seeds):
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+def test_grok_attention_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
     pcc = 0.99
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=os.getenv("CI") == "true")
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -50,12 +50,12 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
     batch = 32
     seq_len = 1  # length to generate
 
-    tt_model = TtGrokAttention(t3k_device_mesh, state_dict, args=model_args, layer_num=0, dtype=dtype)
+    tt_model = TtGrokAttention(t3k_mesh_device, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
     rot_mat = prepare_rotation_mat_ttnn(
         model_args.head_dim,
         model_args.max_seq_len,
-        tt_model.device_mesh,
+        tt_model.mesh_device,
     )
 
     generation_start_pos = 0  # Ref model can only start from pos 0
@@ -73,7 +73,7 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
             # tt_model.hidden_size,
             model_args.dim,
             current_pos,
-            tt_model.device_mesh,
+            tt_model.mesh_device,
         )
 
         tt_out = tt_model(
@@ -85,7 +85,7 @@ def test_grok_attention_inference(t3k_device_mesh, use_program_cache, reset_seed
         # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
         del attention_input, attn_mask
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
             .squeeze(2)
             .view(batch, 1, -1)
         )  # [ batch, seq, hidden_dim]

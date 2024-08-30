@@ -10,13 +10,13 @@ from ttnn import ShardTensorToMesh
 class TtLlamaEmbedding:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         cache_path,
     ):
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = device_mesh.get_num_devices()
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
 
         base_name = "tok_embeddings.weight"
         # torch_weights = [
@@ -42,12 +42,12 @@ class TtLlamaEmbedding:
             self.state_dict[base_name].unsqueeze(0).unsqueeze(0),
             dtype=ttnn.bfloat16,  # row_major has to be bfloat16 for now
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device_mesh,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensorToMesh(device_mesh, dim=3),
+            mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
             cache_file_name=cache_path / base_name,
         )
-        self.emb_weights = ttnn.to_device(embd_weights_ttn, device_mesh)
+        self.emb_weights = ttnn.to_device(embd_weights_ttn, mesh_device)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = ttnn.embedding(

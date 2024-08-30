@@ -952,8 +952,8 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 )doc")
             .def(
                 "to",
-                py::overload_cast<DeviceMesh *, const MemoryConfig &>(&Tensor::to, py::const_),
-                py::arg("device_mesh").noconvert(),
+                py::overload_cast<MeshDevice *, const MemoryConfig &>(&Tensor::to, py::const_),
+                py::arg("mesh_device").noconvert(),
                 py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
                 py::keep_alive<0, 2>(),
                 R"doc(
@@ -966,7 +966,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
                 | Argument  | Description                                     | Data type                  | Valid range           | Required |
                 +===========+=================================================+============================+=======================+==========+
-                | arg0      | DeviceMesh to which tensor will be moved        | tt_lib.device.DeviceMesh   | TT accelerator device | Yes      |
+                | arg0      | MeshDevice to which tensor will be moved        | tt_lib.device.MeshDevice   | TT accelerator device | Yes      |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
                 | arg1      | MemoryConfig of tensor of TT accelerator device | tt_lib.tensor.MemoryConfig |                       | No       |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
@@ -1066,9 +1066,9 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             )doc")
             .def(
                 "to",
-                py::overload_cast<Layout, DeviceMesh*>(&Tensor::to, py::const_),
+                py::overload_cast<Layout, MeshDevice*>(&Tensor::to, py::const_),
                 py::arg("target_layout").noconvert(),
-                py::arg("device_mesh") = nullptr,
+                py::arg("mesh_device") = nullptr,
                 R"doc(
                 Convert TT Tensor to provided memory layout. Available layouts conversions are:
                 * ROW_MAJOR to TILE
@@ -1084,7 +1084,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
                 .. code-block:: python
 
-                    tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE, device_mesh)
+                    tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE, mesh_device)
             )doc")
             .def(
                 "pad",

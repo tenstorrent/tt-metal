@@ -10,11 +10,11 @@ from models.experimental.grok.tt.grok_common import LightweightModule
 
 
 class TtGrokAttention(LightweightModule):
-    def __init__(self, device_mesh, state_dict, args, layer_num, dtype):
+    def __init__(self, mesh_device, state_dict, args, layer_num, dtype):
         super().__init__()
         self.num_devices = 8
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.model_args = args
 
         self.hidden_size = args.hidden_size
@@ -74,8 +74,8 @@ class TtGrokAttention(LightweightModule):
             )
             .unsqueeze(0)
             .unsqueeze(0),
-            device=self.device_mesh,
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=-1),
+            device=self.mesh_device,
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-1),
             dtype=self.dtype,
             memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
             layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -90,8 +90,8 @@ class TtGrokAttention(LightweightModule):
             )
             .unsqueeze(0)
             .unsqueeze(0),
-            device=self.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            device=self.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             dtype=self.dtype,
             memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
             layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -118,8 +118,8 @@ class TtGrokAttention(LightweightModule):
         self.layer_past = [
             ttnn.as_tensor(
                 lp,
-                device=self.device_mesh,
-                mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
+                device=self.mesh_device,
+                mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
                 dtype=ttnn.bfloat8_b,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 memory_config=self.model_config["ATTN_CACHE_WEIGHTS_MEMCFG"],
@@ -189,7 +189,7 @@ class TtGrokAttention(LightweightModule):
             memory_config=self.model_config["HEIGHT_SHARDED_MEMCFG"],
         )
         xqkv_fused.deallocate(True)
-        # new_key_states = ttnn.to_torch(k_heads_1B1D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))
+        # new_key_states = ttnn.to_torch(k_heads_1B1D, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))
 
         ###
         # Rotary embeddings
@@ -214,8 +214,8 @@ class TtGrokAttention(LightweightModule):
             memory_config=self.k_mem_config,
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
         )
-        # rotmat_key_states = ttnn.to_torch(k_heads_1B1D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))
-        # rotmat = ttnn.to_torch(rot_mat, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
+        # rotmat_key_states = ttnn.to_torch(k_heads_1B1D, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))
+        # rotmat = ttnn.to_torch(rot_mat, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))[0]
 
         ###
         # KV update
@@ -232,8 +232,8 @@ class TtGrokAttention(LightweightModule):
             keys_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
         )
 
-        # query_states = ttnn.to_torch(q_heads_1B4D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))
-        # key_states = ttnn.to_torch(keys_1BPD, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))
+        # query_states = ttnn.to_torch(q_heads_1B4D, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-2))
+        # key_states = ttnn.to_torch(keys_1BPD, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))
 
         ###
         # Attention
@@ -274,15 +274,15 @@ class TtGrokAttention(LightweightModule):
             program_config=self.model_config["ATTN_BATCHED_SOFTMAX_PROGCFG"](padded_layer_past_len),
             is_causal_mask=True,
         )
-        # post_softmax = ttnn.to_torch(attn_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=-2))[0]
+        # post_softmax = ttnn.to_torch(attn_1B4P, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-2))[0]
 
         # values matmul
         values_1BPD = ttnn.experimental.nlp_kv_cache_load_slice(
             values_1BPD, seq_len_start=0, seq_len_end=padded_layer_past_len
         )
 
-        # value_states = ttnn.to_torch(values_1BPD, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))
-        # x = ttnn.to_torch(x_11BH, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
+        # value_states = ttnn.to_torch(values_1BPD, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))
+        # x = ttnn.to_torch(x_11BH, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))[0]
         attn_output_1B4D = ttnn.matmul(
             attn_1B4P,
             values_1BPD,
@@ -294,7 +294,7 @@ class TtGrokAttention(LightweightModule):
         attn_1B4P.deallocate(True)
         values_1BPD.deallocate(True)
 
-        # value_output = ttnn.to_torch(attn_output_1B4D, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
+        # value_output = ttnn.to_torch(attn_output_1B4D, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))[0]
 
         attn_output_11BH = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_1B4D,
@@ -321,8 +321,8 @@ class TtGrokAttention(LightweightModule):
             dtype=ttnn.bfloat8_b,
         )
 
-        # attn_output = ttnn.to_torch(dense_outputs_11BH, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
-        # attn_mask = ttnn.to_torch(attn_mask_1B4P, mesh_composer=ConcatMeshToTensor(self.device_mesh, dim=0))[0]
+        # attn_output = ttnn.to_torch(dense_outputs_11BH, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))[0]
+        # attn_mask = ttnn.to_torch(attn_mask_1B4P, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))[0]
 
         # torch.save({'x': x,
         #             'query_states': query_states,

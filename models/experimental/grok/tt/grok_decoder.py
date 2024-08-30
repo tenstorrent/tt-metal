@@ -7,13 +7,13 @@ from models.experimental.grok.tt.grok_mlp import TtGrokMLP
 from models.experimental.grok.tt.grok_rms_norm import TtRMSNormSharded, TtRMSNorm
 from models.experimental.grok.tt.grok_moe import TtMoeLayer
 from models.experimental.grok.tt.grok_common import LightweightModule
-from models.experimental.grok.scripts.tlog import tlog, tlog_device_mesh
+from models.experimental.grok.scripts.tlog import tlog, tlog_mesh_device
 
 
 class TtTransformerBlock(LightweightModule):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         args,
         layer_num,
@@ -22,14 +22,14 @@ class TtTransformerBlock(LightweightModule):
         super().__init__()
 
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        tlog_device_mesh = device_mesh
+        self.mesh_device = mesh_device
+        tlog_mesh_device = mesh_device
 
         self.args = args
 
         self.layer_num = layer_num
         self.attention = TtGrokAttention(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             args=args,
             layer_num=layer_num,
@@ -37,10 +37,10 @@ class TtTransformerBlock(LightweightModule):
         )
 
         self.feed_forward = TtMoeLayer(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             experts=TtGrokMLP(
-                device_mesh=device_mesh,
+                mesh_device=mesh_device,
                 state_dict=state_dict,
                 args=args,
                 layer_num=layer_num,
@@ -55,7 +55,7 @@ class TtTransformerBlock(LightweightModule):
             dtype=dtype,
         )
         make_norm = lambda name: TtRMSNormSharded(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             args=args,
             dtype=ttnn.bfloat16,
