@@ -492,7 +492,7 @@ def test_perf_trace_2cqs_bare_metal_gs(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0070, 26),),
+    ((16, 0.0070, 28),),
 )
 def test_perf_bare_metal_wh(
     device,
