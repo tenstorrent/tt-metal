@@ -230,8 +230,19 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
     if (input_tensor_a.memory_config().is_sharded()) {
         // If conv_reader_indices is passed in, use v2 where we don't generate indices locally
         if (conv_reader_indices.has_value()) {
-            TT_FATAL(0," Conv Sharded v2 only supported via the new ttnn.conv2d API. ");
-            // return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, sliding_window_config, output_channels, untilize_out, has_bias, fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, this->use_shallow_conv_variant, transpose_mcast, output_tensor, this->compute_kernel_config, this->enable_act_double_buffer, this->enable_split_reader, this->enable_subblock_padding);
+            const auto& input_tensor_a_shape = this->input_tensor_shape;
+            auto sliding_window_config = sliding_window::SlidingWindowConfig(
+                input_tensor_a_shape[0],
+                input_tensor_a_shape[1],
+                input_tensor_a_shape[2],
+                conv_params[0], //filter_h
+                conv_params[1], //filter_w
+                conv_params[2], //stride_h
+                conv_params[3], //stride_w
+                conv_params[4], //pad_h
+                conv_params[5] //pad_w
+            );
+            return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, sliding_window_config, output_channels, untilize_out, has_bias, fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, this->use_shallow_conv_variant, transpose_mcast, output_tensor, this->compute_kernel_config, this->enable_act_double_buffer, this->enable_split_reader, this->enable_subblock_padding);
         } else {
             return multi_core_optimized_conv_sharded_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor);
         }
