@@ -505,7 +505,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::ParallelConfig>::format(co
 }
 
 auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::format(const ttnn::operations::sliding_window::SlidingWindowConfig& t, format_context& ctx) const -> format_context::iterator {
-        std::string str = fmt::format("SlidingWindowConfig(batch_size_={}, input_hw_=({},{}), window_hw_=({},{}), stride_hw_=({},{}), pad_hw_=({},{}), dilation_hw_=({},{}), num_cores_nhw_={}, core_range_set_={})",
+        std::string str = fmt::format("SlidingWindowConfig(batch_size_={}, input_hw_=({},{}), window_hw_=({},{}), stride_hw_=({},{}), pad_hw_=({},{}), dilation_hw_=({},{}), groups={}, num_cores_nhw_={}, core_range_set_={})",
             t.batch_size_,
             t.input_hw_.first,
             t.input_hw_.second,
@@ -517,6 +517,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
             t.pad_hw_.second,
             t.dilation_hw_.first,
             t.dilation_hw_.second,
+            t.groups,
             t.num_cores_nhw_,
             t.core_range_set_.str());
         return fmt::format_to(ctx.out(), "{}", str);

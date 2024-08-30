@@ -82,6 +82,7 @@ Tensor MaxPoolNewOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32
                                             padding.at(1),
                                             dilation.at(0),
                                             dilation.at(1),
+                                            1, //groups
                                             num_cores_nhw,
                                             parallel_config.grid,
                                             false);
