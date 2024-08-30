@@ -186,6 +186,26 @@ class Mamba(nn.Module):
 
         return model
 
+    @staticmethod
+    def from_random(pretrained_model_name: MambaPretrainedModelName, batch_size: int = 1):
+        from transformers.utils import CONFIG_NAME
+        from transformers.utils.hub import cached_file
+
+        def load_config_hf(model_name):
+            resolved_archive_file = cached_file(model_name, CONFIG_NAME, _raise_exceptions_for_missing_entries=False)
+            if not resolved_archive_file:
+                raise RuntimeError("Unable to load Mamba archive file from HF")
+            return json.load(open(resolved_archive_file))
+
+        config_data = load_config_hf(pretrained_model_name)
+        args = ModelArgs(
+            d_model=config_data["d_model"],
+            n_layer=config_data["n_layer"],
+            vocab_size=config_data["vocab_size"],
+            batch_size=batch_size,
+        )
+        return Mamba(args)
+
 
 class ResidualBlock(nn.Module):
     def __init__(self, args: ModelArgs):
