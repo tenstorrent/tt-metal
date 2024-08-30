@@ -21,6 +21,20 @@ def test_as_tensor(device, height, width):
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
 
 
+@pytest.mark.parametrize("height", [2**15])
+@pytest.mark.parametrize("width", [2**16])
+def test_allocate_large_tensor(device, height, width):
+    memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    reshard_out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, height, width]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        memory_config,
+    )
+
+
 @pytest.mark.parametrize("height", [32])
 @pytest.mark.parametrize("width", [32])
 def test_as_tensor_with_device_tilizer(device, height, width):
