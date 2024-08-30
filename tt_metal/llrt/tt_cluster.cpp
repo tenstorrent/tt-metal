@@ -96,10 +96,10 @@ void Cluster::detect_arch_and_target() {
 std::filesystem::path get_cluster_desc_yaml() {
     namespace fs = std::filesystem;
 
-    // RK: We eventually need to take out the create-ethernet-map binary and use it
-    // as a binary in the environment
+    // TODO: The interface into create-ethernet-map should be through an API rather a
+    // subprocess call to the binary
     const fs::path tt_metal_dir = fs::path(tt::llrt::OptionsG.get_root_dir()) / "tt_metal";
-    const fs::path umd_path = tt_metal_dir / ".umd";
+    const fs::path umd_path = fs::path(tt::llrt::OptionsG.get_root_dir()) / ".umd";
     fs::create_directory(umd_path);
     const fs::path cluster_desc_path = umd_path / "cluster_desc.yaml";
     if (!fs::exists(cluster_desc_path)) {
