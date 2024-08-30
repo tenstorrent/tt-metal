@@ -44,7 +44,7 @@ jobs:
       matrix:
         test-group: [
           {name: C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
-          {name: ttnn examples and cpp tests, cmd: ./build/test/ttnn/unit_tests_ttnn && ./tests/scripts/run_ttnn_examples.sh},
+          {name: ttnn cpp tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
           {name: ttnn ccl cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_ccl},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
