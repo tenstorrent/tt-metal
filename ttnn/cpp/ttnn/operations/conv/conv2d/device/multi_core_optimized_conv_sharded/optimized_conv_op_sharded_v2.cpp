@@ -1764,12 +1764,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     bool enable_split_reader,
     bool enable_subblock_padding) {
     tt_metal::Program program = tt_metal::CreateProgram();
-    // TODO: conv params need to be cleaned up and replaced with sliding window config
+
     ttnn::operations::sliding_window::ParallelConfig parallel_config;
     parallel_config.grid = a.shard_spec().value().grid;
     parallel_config.shard_scheme = a.memory_config().memory_layout;
     parallel_config.shard_orientation = a.shard_spec().value().orientation;
-    // TODO: pass sliding window config to the function instead of conv params
+
 
     // create conv config tensors
     auto pad_metadata = ttnn::operations::sliding_window::generate_pad_metadata(sliding_window_config);
