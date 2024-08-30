@@ -140,6 +140,7 @@ def matmul_2d_config_from_tensor_shapes(
     is_fp32_accumulate=False,
     overwrite_subblock_h=None,
     overwrite_subblock_w=None,
+    fuse_batch=True,
 ):
     m, k, n = in0_shape[0] * in0_shape[1] * in0_shape[2], in0_shape[3], in1_shape[3]
     return matmul_2d_config(
@@ -151,6 +152,7 @@ def matmul_2d_config_from_tensor_shapes(
         is_fp32_accumulate,
         overwrite_subblock_h=overwrite_subblock_h,
         overwrite_subblock_w=overwrite_subblock_w,
+        fuse_batch=fuse_batch,
     )
 
 

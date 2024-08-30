@@ -28,7 +28,6 @@ class TtLlamaMLP_galaxy:
         cache_path=None,
         read_cache=False,
     ):
-        self.saved_tensors = {}
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.num_devices = mesh_device.get_num_devices()
@@ -141,20 +140,23 @@ class TtLlamaMLP_galaxy:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+
         elif self.model_config["LLM_MODE"] == "prefill":
             self.FF1_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
-                (1, 1, 256, 2048),
+                (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 2048),
                 (1, 1, 2048, 3584),  # 3.5 *1024 = 3584
-                grid=ttnn.CoreGrid(x=4, y=1),
+                # grid=ttnn.CoreGrid(x=4, y=1),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
+                fuse_batch=False,
             )
             self.FF2_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
-                (1, 1, 256, 3584),
+                (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 3584),
                 (1, 1, 3584, 2048),
-                grid=ttnn.CoreGrid(x=4, y=1),
+                # grid=ttnn.CoreGrid(x=4, y=1),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
+                fuse_batch=False,
             )
 
     def load_weights(self):
@@ -294,7 +296,11 @@ class TtLlamaMLP_galaxy:
         return hidden_states
 
     def prefill_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
-        # self.saved_tensors[f"{self.layer_name}.input"] = x
+        _, _, seq_len, _ = x.shape
+        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+        x = ttnn.reshape(x, (1, batch_dim, seq_len // batch_dim, -1))
+
         w1_out = ttnn.matmul(
             x,
             self.w1,
@@ -302,7 +308,6 @@ class TtLlamaMLP_galaxy:
             program_config=self.FF1_PROGCFG,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # self.saved_tensors[f"{self.layer_name}.w1_out"] = w1_out
         w3_out = ttnn.matmul(
             x,
             self.w3,
@@ -310,56 +315,56 @@ class TtLlamaMLP_galaxy:
             program_config=self.FF1_PROGCFG,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # self.saved_tensors[f"{self.layer_name}.w3_out"] = w3_out
-        # x.deallocate(True)
+        x.deallocate(True)
 
-        w1_out = tt_all_reduce(
+        w1_out = ttnn.reshape(w1_out, (1, 1, seq_len, -1))
+
+        w1_out_reduced = tt_all_reduce(
             w1_out,
             self.mesh_device,
             cluster_axis=1,
             num_links=2,
         )
-        # self.saved_tensors[f"{self.layer_name}.w1_out_allreduced"] = w1_out
-        w3_out = tt_all_reduce(
+        w1_out.deallocate(True)
+
+        w3_out = ttnn.reshape(w3_out, (1, 1, seq_len, -1))
+        w3_out_reduced = tt_all_reduce(
             w3_out,
             self.mesh_device,
             cluster_axis=1,
             num_links=2,
         )
-        # self.saved_tensors[f"{self.layer_name}.w3_out_allreduced"] = w3_out
-
-        # w1_out = ttnn.to_memory_config(w1_out, self.FULL_GRID_MEMCFG)
-        # w3_out = ttnn.to_memory_config(w3_out, self.FULL_GRID_MEMCFG)
+        w3_out.deallocate(True)
 
         hidden_states = ttnn.mul(
-            w1_out,
-            w3_out,
-            # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            w1_out_reduced,
+            w3_out_reduced,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat16,
         )
-        # self.saved_tensors[f"{self.layer_name}.hidden_states_mul"] = hidden_states
-        # w1_out.deallocate(True)
-        # w3_out.deallocate(True)
+
+        w1_out_reduced.deallocate(True)
+        w3_out_reduced.deallocate(True)
 
         # hidden_states = ttnn.to_memory_config(hidden_states, self.FF2_ACT_MEMCFG)
-        hidden_states = ttnn.matmul(
+        hidden_states = ttnn.reshape(hidden_states, (1, batch_dim, seq_len // batch_dim, -1))
+        hidden_states_out = ttnn.matmul(
             hidden_states,
             self.w2,
             dtype=ttnn.bfloat16,
             program_config=self.FF2_PROGCFG,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # self.saved_tensors[f"{self.layer_name}.hidden_states_w2"] = hidden_states
 
-        hidden_states = tt_all_reduce(
-            hidden_states,
+        hidden_states.deallocate(True)
+        hidden_states_out = ttnn.reshape(hidden_states_out, (1, 1, seq_len, -1))
+
+        hidden_states_out_reduced = tt_all_reduce(
+            hidden_states_out,
             self.mesh_device,
             cluster_axis=0,
             num_links=2,
         )
-        # self.saved_tensors[f"{self.layer_name}.hidden_states_allreduced"] = hidden_states
+        hidden_states_out.deallocate(True)
 
-        # hidden_states = ttnn.to_memory_config(hidden_states, self.FF1_ACT_MEMCFG)
-
-        return hidden_states
+        return hidden_states_out_reduced

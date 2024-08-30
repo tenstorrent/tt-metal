@@ -20,8 +20,8 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
     check_mesh_device,
     extract_pcc_from_log,
-    MAX_SEQ_LEN,
     MAX_SEQ_LEN_LLAMA3,
+    MAX_SEQ_LEN_LLAMA3_1,
     BASE_URL,
     UNIT_TEST_START_POS,
     UNIT_TEST_GENERATION_LENGTH,
@@ -86,7 +86,7 @@ def run_test_LlamaModel_inference(
     hugging_face_reference = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=MAX_SEQ_LEN if llama_version == "llama2" else MAX_SEQ_LEN_LLAMA3,
+        max_seq_len=MAX_SEQ_LEN_LLAMA3 if llama_version == "llama3-tg" else MAX_SEQ_LEN_LLAMA3_1,
         max_batch_size=batch,
         n_layers=n_layers,
         skip_model_load=skip_model_load,
@@ -144,16 +144,16 @@ def run_test_LlamaModel_inference(
 
         start_pos = generation_start_pos + i
 
-        # PyTorch output --------------------------------------------------------------------
+        # # PyTorch output --------------------------------------------------------------------
+        logger.info(f"Running inference on PyTorch")
         pytorch_out = pytorch_model(
             pt_inp_ids,
             start_pos,
         )
+        logger.info(f"Finished PyTorch inference")
 
         # TT hardware execution -------------------------------------------------------------
         tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
-        # for n in range(1000):
-        logger.info(f"Running inference on TT hardware, iteration {n}")
         tt_out = tt_model(
             tt_inp_emb,
             rot_mat,
@@ -175,58 +175,6 @@ def run_test_LlamaModel_inference(
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
         logger.info(f"Output: {output_pcc}")
-
-        def save_tensors_from_model(model, path):
-            os.makedirs(path, exist_ok=True)
-            # model
-            # model.layers[0]
-            # model.layers[0].mlp
-            # model.layers[0].attn
-
-            def save_tensor_dict(d):
-                for k, v in d.items():
-                    # k is name, v is multidevice tensor
-                    v_pt = ttnn.to_torch(
-                        v, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 0), cluster_shape=cluster_shape)
-                    )
-                    pt_tensor = torch.tensor(v_pt)
-                    torch.save(pt_tensor, f"{path}/{k}.pt")
-
-            save_tensor_dict(model.saved_tensors)
-            for layer in model.layers:
-                save_tensor_dict(layer.saved_tensors)
-                save_tensor_dict(layer.attention.saved_tensors)
-                save_tensor_dict(layer.mlp.saved_tensors)
-
-        # if n == 0:
-        #     expect_pcc = output_pcc
-        #     tt_expect = tt_out
-        #     save_tensors_from_model(tt_model, f"/proj_sw/user_dev/divanovic/tt_model_iter_{n}")
-        # else:
-        #     if output_pcc != expect_pcc:
-        #         logger.info(f'PCC value is not consistent with the first iteration: {output_pcc} vs {expect_pcc}')
-        #         save_tensors_from_model(tt_model, f"/proj_sw/user_dev/divanovic/tt_model_iter_{n}")
-        #         breakpoint()
-
-        def del_device_tensors(model):
-            # model
-            # model.layers[0]
-            # model.layers[0].mlp
-            # model.layers[0].attn
-
-            def dealloc(d):
-                for k, v in d.items():
-                    v.deallocate(True)
-
-                d.clear()
-
-            dealloc(model.saved_tensors)
-            for layer in model.layers:
-                dealloc(layer.saved_tensors)
-                dealloc(layer.attention.saved_tensors)
-                dealloc(layer.mlp.saved_tensors)
-
-        # del_device_tensors(tt_model)
 
         all_pccs.append(extract_pcc_from_log(output_pcc))
 
@@ -302,10 +250,7 @@ def run_test_LlamaModel_inference(
 @pytest.mark.parametrize(
     "cluster_shape, mesh_device", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize(
-    "llama_version",
-    (("llama3-tg"),),
-)
+@pytest.mark.parametrize("llama_version", ("llama3-tg", "llama3_1-tg"))
 @pytest.mark.parametrize(
     "pcc,n_layers",
     [
@@ -319,18 +264,17 @@ def run_test_LlamaModel_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    [(32, 1), (1, 256)],
-    ids=["decode", "prefill"],
+    [(32, 1), (1, 256), (1, 8192), (1, 32768), (1, 128 * 1024)],
+    ids=["decode", "prefill", "prefill_8k", "prefill_32k", "prefill_128k"],
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
-    (
-        (32, 2048),
-        # (16, 8192),
-    ),
+    ((32, 2048), (16, 8192), (16, 32 * 1024), (16, 128 * 1024)),
     ids=(
         "short_context",
-        # "long_context",
+        "long_context",
+        "mid_long_context",
+        "super_long_context",
     ),
 )
 @pytest.mark.parametrize(
@@ -356,9 +300,6 @@ def test_LlamaModel_inference(
 
     if batch == 1 and seq_len > max_context_len:
         pytest.skip(f"Prefill with seq_len={seq_len} is not supported with short context")
-
-    if llama_version == "llama2" and seq_len > 2048:
-        pytest.skip(f"Llama2 with seq_len={seq_len} is not supported (max 2048)")
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,

@@ -298,13 +298,13 @@ def test_llama_3_1_galaxy_matmul(
     program_config = get_matmul_2d_config_from_tensor_shapes(
         (1, 1, 256, 3584),
         (1, 1, 3584, 2048),
-        grid=ttnn.CoreGrid(x=8, y=4),
+        grid=ttnn.CoreGrid(x=8, y=1),
         overwrite_subblock_h=1,
         overwrite_subblock_w=1,
     )
     print(f"Program config: \n\n{program_config}\n\n")
     init_pcc = 0
-    for i in range(12392913921):
+    for i in range(1000):
         print(f"Running iteration {i}")
         tt_mm = ttnn.matmul(
             tt_acts,
