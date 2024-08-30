@@ -23,38 +23,55 @@ TIMEOUT = 30
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
+
+input_shapes = []
+
+for batch_size in range(1, 10):  # Increment by 1
+    for channels in range(1, 10):  # Increment by 1
+        for height in range(32, 128, 32):  # Increment by 32
+            for width in range(32, 1024, 32):  # Increment by 32
+                input_shapes.append([batch_size, channels, height, width])
+
 parameters = {
-    "all_gather": {
+    "line_all_gather": {
         "num_devices": [4, 8],
         "num_links": [1, 2],
-        "input_shape": [
-            # [1, 1, 32, 32], # throwing python segmentation fault
-            [1, 1, 32, 1024],
-            [4, 1, 32, 128],
-            [8, 1, 32, 1024],
-            [4, 1, 32, 32],
-            [1, 8, 32, 1024],
-        ],
+        "input_shape": input_shapes,
         "input_shard_shape": [
             [32, 1024],
             [32, 128],
             [32, 32],
+            [128, 32],
+            [64, 64],
+            [64, 32],
+            [32, 64],
+            [128, 128],
         ],
         "shard_grid": [
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 7))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
         ],
         "dim": [0, 1, 2, 3],
         "tensor_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "orientation": [ttnn.ShardOrientation.ROW_MAJOR],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
         "tensor_mem_layout": [
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            ttnn.TensorMemoryLayout.INTERLEAVED,
-            ttnn.TensorMemoryLayout.SINGLE_BANK,
         ],
+        "all_gather_operation": ["all_gather", "line_all_gather"],
     },
 }
 
@@ -66,8 +83,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     unchunked_input_shape[test_vector["dim"]] *= test_vector["num_devices"]
     if test_vector["num_devices"] < 2:
         return True, f"Requires multiple devices to run"
-    elif test_vector["num_devices"] == 2 and test_vector["num_links"] == 2:
-        return True, f"Not enough links to run"
 
     if unchunked_input_shape[test_vector["dim"]] % test_vector["num_devices"] != 0 or (
         test_vector["dim"] == 3 and unchunked_input_shape[test_vector["dim"]] // test_vector["num_devices"] % 32 != 0
@@ -75,18 +90,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         return True, f"Unsupported test case"
     if test_vector["tensor_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_dtype"] == ttnn.bfloat8_b:
         return True, f"bfloat8_b/4_b only supports TILE layout"
-    if test_vector["tensor_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, f"ROW_MAJOR_LAYOUT not supported"
-    if test_vector["tensor_mem_layout"] == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        return True, f"Output mismatch"
     if test_vector["num_links"] == 2 and test_vector["num_devices"] == 8:
-        return True, f"8 devices and 2 links are not supported"
-    if test_vector["input_shard_shape"][1] != test_vector["input_shape"][-1]:
-        return True, f"Shard width must be equal to last dim of shape"
-    if test_vector["tensor_mem_layout"] != ttnn.TensorMemoryLayout.BLOCK_SHARDED and test_vector["dim"] != 3:
-        return True, "BLOCK_SHARDED is only supported for dim = 3"
-    if test_vector["tensor_mem_layout"] == ttnn.TensorMemoryLayout.SINGLE_BANK:
-        return True, f"SINGLE_BANK is not supported"
+        return True, f"8 devices and 2 links are not supported on t3000 devices"
     return False, None
 
 
@@ -125,6 +130,7 @@ def run(
     tensor_layout,
     tensor_mem_layout,
     # num_cores,
+    all_gather_operation,
     *,
     device,
 ):
@@ -205,8 +211,10 @@ def run(
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
     ## Run the actual allgather operation
+    gather_function = ttnn.all_gather if all_gather_operation == "all_gather" else ttnn.line_all_gather
+
     start_time = start_measuring_time()
-    tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config)
+    tt_out_tensor = gather_function(input_tensor_mesh, dim, num_links=num_links, memory_config=output_mem_config)
     e2e_perf = stop_measuring_time(start_time)
 
     torch.set_printoptions(sci_mode=False)
