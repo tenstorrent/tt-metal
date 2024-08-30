@@ -73,7 +73,8 @@ void MAIN {
     constexpr uint32_t cb_ex = tt::CB::dataflow1; // E[x] global reduce
     constexpr uint32_t cb_ex_external = tt::CB::dataflow2; // E[x] partials recieved from other cores
     constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3; // E[x^2] partial reduce
-    constexpr uint32_t cb_stats = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_stats = tt::CB::c_in7; // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_stats2 = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5; // E[x^2] partials recieved from other cores
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
     constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x^2] global reduce
@@ -92,7 +93,7 @@ void MAIN {
     constexpr uint32_t cb_ex_sqr = cb_x2;
 
 
-    binary_op_init_common(cb_in0, cb_in0, cb_x);
+    binary_op_init_common(cb_stats, cb_stats, cb_ex_sqr);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
@@ -109,26 +110,23 @@ void MAIN {
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr(is_allgather_worker) {
-
+        cb_reserve_back(cb_stats2, stats_tiles);
         if (enable_sqrt) {
             #ifndef RMSNORM
-            // copy E(x) to cb_stats2
-            cb_wait_front(cb_stats, stats_tiles); // wait for all stats tiles to be ready
-            cb_reserve_back(cb_stats2, 1);
+            //copy E(x) to cb_stats2
+
             tile_regs_acquire();
             copy_tile_to_dst_init_short();
             copy_tile(cb_stats, 0, dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_stats2);
-            cb_push_back(cb_stats2, 1);
+            //cb_push_back(cb_stats2, 1);
             tile_regs_release();
-
 
             // calculate var = E(x^2) - E(x)^2
             // E(x)^2
-            unpack_reconfig_data_format(cb_stats, cb_stats);
-            UNPACK(DPRINT << "waited for cb_ex_global" << ENDL());
+            // unpack_reconfig_data_format(cb_stats, cb_stats);
             cb_reserve_back(cb_ex_sqr, 1);
             tile_regs_acquire();
             mul_tiles_init();
@@ -142,6 +140,7 @@ void MAIN {
 
             // E(x^2) - E(x)^2
             unpack_reconfig_data_format_srcb(cb_stats, cb_ex_sqr);
+            pack_reconfig_data_format(cb_var);
             cb_wait_front(cb_ex_sqr, 1);
             cb_reserve_back(cb_var, 1);
             tile_regs_acquire();
@@ -152,50 +151,67 @@ void MAIN {
             pack_tile(dst0, cb_var);
             cb_push_back(cb_var, 1);
             tile_regs_release();
+            // UNPACK(DPRINT << " cb_var : "<<TSLICE(cb_var, 0, SliceRange::h0_w0_32()) << ENDL());
             cb_pop_front(cb_ex_sqr, 1);
             #endif
 
-            UNPACK(DPRINT<< "enable_sqrt" << ENDL());
-            unpack_reconfig_data_format(cb_var, cb_eps);    // cb_var is cb_stats in case of RMS norm
+
             // 1/[sqrt(Var + eps)],
+            unpack_reconfig_data_format(cb_var, cb_eps);    // cb_var is cb_stats in case of RMS norm
+            pack_reconfig_data_format(cb_stats2);
+            #ifndef RMSNORM
             cb_wait_front(cb_var, 1);
-            cb_reserve_back(cb_stats2, 1);
-            tile_regs_acquire();
+            #endif
+            cb_wait_front(cb_eps, 1);
+
+            // UNPACK(DPRINT << "cb_var : "<<TSLICE(cb_var, 0, SliceRange::h0_w0_32()) << ENDL());
+            // UNPACK(DPRINT << "cb_eps : "<<TSLICE(cb_eps, 0, SliceRange::h0_w0_32()) << ENDL());
+            //cb_reserve_back(cb_stats2, 1);
             add_tiles_init();
+            tile_regs_acquire();
             add_tiles(cb_var, cb_eps, 0, 0, dst0);
             tile_regs_wait();
             // sqrt(Var + eps)
             sqrt_tile_init();
             sqrt_tile(dst0);
-            tile_regs_wait();
+            // tile_regs_wait();
             // 1/[sqrt(Var + eps)]
             recip_tile_init();
             recip_tile(dst0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_stats2, 1);
-            UNPACK(DPRINT << "After ex2pe pushback" << ENDL());
+            pack_tile(dst0, cb_stats2);
+
+            //cb_pop_front(cb_stats, stats_tiles); // pop the stats tiles we are done and pushed into cb_stats2
+            // PACK(DPRINT << " cb_stats E[x] : "<<TSLICE(cb_stats, 0, SliceRange::h0_w0_32()) << ENDL());
+            // PACK(DPRINT << "pack cb_stats Reci : "<<TSLICE(cb_ex, 0, SliceRange::h0_w0_32()) << ENDL());
+            // UNPACK(DPRINT << "unpack cb_stats Reci : "<<TSLICE(cb_ex, 0, SliceRange::h0_w0_32()) << ENDL());
+            cb_pop_front(cb_var, 1);
+            cb_pop_front(cb_eps, 1);
+            cb_push_back(cb_stats2, stats_tiles);
             tile_regs_release();
-            UNPACK(DPRINT << "After reciprocral" << ENDL());
-            cb_pop_front(cb_stats, stats_tiles); // pop the stats tiles we are done and pushed into cb_stats2
+
+            // cb_wait_front(cb_stats2, 2); //TODO remove
+            // UNPACK(DPRINT << "EX : "<<TSLICE(cb_stats2, 0, SliceRange::h0_w0_32()) << ENDL());
+            // UNPACK(DPRINT << "EX2 : "<<TSLICE(cb_stats2, 1, SliceRange::h0_w0_32()) << ENDL());
         }
     }
 
     #ifndef RMSNORM
-    UNPACK(DPRINT << "Here 3" << ENDL());
     // x - E[x]
-    unpack_reconfig_data_format(cb_in, cb_ex_global);
+    unpack_reconfig_data_format(cb_in0, cb_ex2_global);
+    pack_reconfig_data_format(cb_xmm);
     index_h_offset = 0;
     sub_bcast_cols_init_short();
     cb_reserve_back(cb_xmm, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
-        cb_wait_front(cb_ex_global, 1);
+        cb_wait_front(cb_ex2_global, 1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
-                sub_tiles_bcast_cols(cb_in, cb_ex_global, index, 0, w);
+                sub_tiles_bcast_cols(cb_in0, cb_ex2_global, index, 0, w);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -205,12 +221,12 @@ void MAIN {
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
-        cb_pop_front(cb_ex_global, 1);
-        cb_pop_front(cb_in, block_w);
+        cb_pop_front(cb_ex2_global, 1);
+        cb_pop_front(cb_in0, block_w);
     }
     cb_push_back(cb_xmm, num_tiles_per_block);
+    // UNPACK(DPRINT << " cb_xmm X-E[x] : "<<TSLICE(cb_xmm, 0, SliceRange::h0_w0_32()) << ENDL());
     #endif
-    UNPACK(DPRINT << "Here 4" << ENDL());
 
     if constexpr(do_gamma == 0 && do_beta == 0) {
         pack_reconfig_data_format(cb_out);
@@ -224,6 +240,7 @@ void MAIN {
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
         cb_wait_front(cb_ex2_global, 1);
+        //UNPACK(DPRINT << " cb_ex2_global Reci : "<<TSLICE(cb_ex2_global, 0, SliceRange::h0_w0_32()) << ENDL());
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
@@ -245,7 +262,6 @@ void MAIN {
     }
     cb_push_back(cb_im, num_tiles_per_block);
 
-    UNPACK(DPRINT << "Here 5" << ENDL());
     cb_pop_front(cb_xmm, num_tiles_per_block);
     cb_wait_front(cb_im, num_tiles_per_block);
 
@@ -280,13 +296,11 @@ void MAIN {
         cb_pop_front(cb_im, num_tiles_per_block);
         cb_wait_front(cb_outgamma, num_tiles_per_block);
     }
-    UNPACK(DPRINT << "here 6" << ENDL());
 
     if constexpr(do_beta) {
         unpack_reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
         add_bcast_rows_init_short();
-        UNPACK(DPRINT << "here 7" << ENDL());
         cb_wait_front(cb_beta, block_w);
         index_h_offset = 0;
         cb_reserve_back(cb_out, num_tiles_per_block);
@@ -312,9 +326,6 @@ void MAIN {
         cb_pop_front(cb_fusion, num_tiles_per_block);
         cb_wait_front(cb_out, num_tiles_per_block);
     }
-
-    UNPACK(DPRINT << "compute done" << ENDL());
-
 }
 
 }
