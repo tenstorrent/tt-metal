@@ -47,6 +47,13 @@ def main():
         action="callback",
         callback=split_comma_list,
     )
+    parser.add_option(
+        "--process-logs-only",
+        dest="processLogsOnly",
+        action="store_true",
+        help="Only process the logs avaialble in the default logs folder",
+        default=False,
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -56,6 +63,10 @@ def main():
 
     (options, args) = parser.parse_args()
     sys.argv[:] = args
+
+    if options.processLogsOnly:
+        generate_report("generated/profiler/.log/", "", None)
+        sys.exit(0)
 
     if options.port:
         port = options.port
