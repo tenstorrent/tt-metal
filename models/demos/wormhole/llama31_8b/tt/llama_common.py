@@ -375,6 +375,8 @@ def get_single_rot_mat(dhead, device, start_pos=0, theta: float = 500000.0, use_
     current_rot_mat[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
     current_rot_mat[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
 
+    if device == "cpu":
+        return current_rot_mat.T.unsqueeze(0).unsqueeze(0), rot_matrix.unsqueeze(0).unsqueeze(0)
     return ttnn.from_torch(
         current_rot_mat.T.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
         device=device,
