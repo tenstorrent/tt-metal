@@ -42,7 +42,8 @@ void kernel_main() {
     constexpr uint32_t cb_ex = tt::CB::dataflow1;
     constexpr uint32_t cb_ex_external = tt::CB::dataflow2;
     constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3;
-    constexpr uint32_t cb_ex2 = tt::CB::dataflow4;
+    constexpr uint32_t cb_stats = tt::CB::c_in7;
+    constexpr uint32_t cb_stats2 = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5;
     constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3;
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
@@ -89,6 +90,7 @@ void kernel_main() {
     constexpr uint32_t stats_tiles = 1;
     #else
     constexpr uint32_t stats_tiles = 2;
+    #endif
 
     volatile tt_l1_ptr uint32_t* reduce_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sender_semaphore_addr);
     volatile tt_l1_ptr uint32_t* reduce_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
@@ -117,26 +119,22 @@ void kernel_main() {
         noc_async_write_multicast_loopback_src(
                             l1_read_addr_ex,
                             multicast_data_noc | l1_read_addr_ex_global,
-                            num_tiles_per_worker_bytes,
+                            stats_tiles*num_tiles_per_worker_bytes,
                             num_blocks,
                             false,
                             false);
         noc_async_write_barrier();
 
     };
-    // #ifndef RMSNORM
-    // DPRINT << " Before Ex global mcast" << ENDL();
-    // cb_reserve_back(cb_ex_global, block_h);
-    // global_reduce_sender(cb_ex, cb_ex_global);
-    // cb_push_back(cb_ex_global, block_h);
-    // #endif
+
 
     DPRINT << " Before Ex2 global mcast" << ENDL();
-    cb_wait_front(cb_ex2pe, block_h);
+    cb_wait_front(cb_stats2, stats_tiles*block_h);
     DPRINT << " Before Ex2pe  global mcast" << ENDL();
     cb_reserve_back(cb_ex2_global, block_h);
-    global_reduce_sender(cb_ex2pe, cb_ex2_global);
-    cb_push_back(cb_ex2_global, block_h);
+    global_reduce_sender(cb_stats2, cb_ex2_global);
+    cb_push_back(cb_ex2_global, stats_tiles*block_h);
+    cb_pop_front(cb_stats2, stats_tiles*block_h);
     global_semaphore_set();
     DPRINT << "Sender core 0,0 done" << ENDL();
 
