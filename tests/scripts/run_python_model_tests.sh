@@ -56,4 +56,7 @@ if [ "$ARCH_NAME" != "wormhole_b0" ]; then
     pytest $TT_METAL_HOME/tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50_new.py -k "pretrained_weight_false"
 
     SLOW_MATMULS=1 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest $TT_METAL_HOME/tests/ttnn/integration_tests/stable_diffusion/test_unet_2d_condition_model.py -k 512 --timeout=420
+
+    # Unet Shallow
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv $TT_METAL_HOME/models/experimental/functional_unet/tests/test_unet_model.py
 fi
