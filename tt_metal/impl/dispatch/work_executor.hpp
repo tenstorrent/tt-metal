@@ -99,7 +99,7 @@ class WorkExecutor {
     ~WorkExecutor() { reset(); }
 
     inline void initialize() {
-        this->work_executor_mode = default_worker_executor_mode();
+        this->work_executor_mode = WorkExecutorMode::SYNCHRONOUS;
         this->worker_queue_mode = default_worker_queue_mode();
         this->worker_state = WorkerState::IDLE;
         this->worker_queue.parent_thread_id = 0;
@@ -254,12 +254,6 @@ class WorkExecutor {
         }
         this->worker_thread.join();
         this->worker_state = WorkerState::IDLE;
-    }
-
-    static WorkExecutorMode default_worker_executor_mode() {
-        static int value =
-            parse_env<int>("TT_METAL_ASYNC_DEVICE_QUEUE", static_cast<int>(WorkExecutorMode::SYNCHRONOUS));
-        return static_cast<WorkExecutorMode>(value);
     }
 
     static WorkerQueueMode default_worker_queue_mode() {
