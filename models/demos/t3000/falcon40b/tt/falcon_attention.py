@@ -17,7 +17,7 @@ from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, d
 
 
 def generate_cos_sin_cache(
-    device_mesh,
+    mesh_device,
     head_dim,
     base_url,
     max_position_embeddings=2048,
@@ -44,9 +44,9 @@ def generate_cos_sin_cache(
         tensor=emb.cos()[None, None, :, :],
         dtype=model_config["COS_CACHED_WEIGHTS_DTYPE"],
         layout=ttnn.TILE_LAYOUT,
-        device=device_mesh,
+        device=mesh_device,
         memory_config=model_config["COS_CACHED_WEIGHTS_MEMCFG"],
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
         cache_file_name=cos_cached_path,
     )
 
@@ -56,9 +56,9 @@ def generate_cos_sin_cache(
         tensor=emb.sin()[None, None, :, :],
         dtype=model_config["SIN_CACHED_WEIGHTS_DTYPE"],
         layout=ttnn.TILE_LAYOUT,
-        device=device_mesh,
+        device=mesh_device,
         memory_config=model_config["SIN_CACHED_WEIGHTS_MEMCFG"],
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
         cache_file_name=sin_cached_path,
     )
 
@@ -72,7 +72,7 @@ class TtFalconRotaryEmbedding:
 
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         head_dim,
         base_url,
         layer_num,
@@ -89,7 +89,7 @@ class TtFalconRotaryEmbedding:
             self.tt_cos_cached, self.tt_sin_cached = global_cos_sin_cache
         else:
             self.tt_cos_cached, self.tt_sin_cached = generate_cos_sin_cache(
-                device_mesh,
+                mesh_device,
                 head_dim,
                 f"{base_url}.{layer_num}",
                 max_position_embeddings,
@@ -118,7 +118,7 @@ class TtFalconAttention:
 
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -134,11 +134,11 @@ class TtFalconAttention:
         self.num_kv_heads = config.num_kv_heads
         self.head_dim = self.hidden_size // self.num_heads
         self.max_position_embeddings = max_position_embeddings
-        self.num_devices = device_mesh.get_num_devices()
-        self.device_mesh = device_mesh
+        self.num_devices = mesh_device.get_num_devices()
+        self.mesh_device = mesh_device
         self.state_dict = state_dict
         self.model_config = model_config
-        self.num_heads_per_device = self.num_heads // device_mesh.get_num_devices()
+        self.num_heads_per_device = self.num_heads // mesh_device.get_num_devices()
         self.tt_cache_path = tt_cache_path
         self.max_batch_size = 32
 
@@ -163,9 +163,9 @@ class TtFalconAttention:
             tensor=self.state_dict[query_key_value_str],
             dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=-1),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-1),
             cache_file_name=query_key_value_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
@@ -176,14 +176,14 @@ class TtFalconAttention:
             tensor=self.state_dict[selfout_str],
             dtype=self.model_config["SELFOUT_MM_WEIGHTS_DTYPE"],
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=-1),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-1),
             cache_file_name=selfout_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
         self.rotary_embedding = TtFalconRotaryEmbedding(
-            self.device_mesh,
+            self.mesh_device,
             self.head_dim,
             base_url,
             layer_num=layer_num,
@@ -217,9 +217,9 @@ class TtFalconAttention:
                 tensor=attn_cache,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                device=self.device_mesh,
+                device=self.mesh_device,
                 memory_config=self.model_config["DRAM_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=kv_cache_path,
             )
 
@@ -227,9 +227,9 @@ class TtFalconAttention:
                 tensor=attn_cache,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                device=self.device_mesh,
+                device=self.mesh_device,
                 memory_config=self.model_config["DRAM_MEMCFG"],
-                mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=kv_cache_path,
             )
 
@@ -516,7 +516,7 @@ class TtFalconAttention:
         attn_weights = ttnn.experimental.group_attn_matmul(
             query_layer,
             key_layer_transposed,
-            compute_with_storage_grid_size=self.device_mesh.get_devices()[
+            compute_with_storage_grid_size=self.mesh_device.get_devices()[
                 0
             ].compute_with_storage_grid_size(),  # Change this
             memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
@@ -573,7 +573,7 @@ class TtFalconAttention:
         attn_output = ttnn.experimental.group_attn_matmul(
             attn_weights,
             value_layer,
-            compute_with_storage_grid_size=self.device_mesh.get_devices()[0].compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=self.mesh_device.get_devices()[0].compute_with_storage_grid_size(),
             memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
         )

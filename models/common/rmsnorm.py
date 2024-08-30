@@ -11,15 +11,15 @@ SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard heigh
 
 class RMSNorm(LightweightModule):
     """
-    RMSNorm supporting replication over a DeviceMesh and sharding within devices.
+    RMSNorm supporting replication over a MeshDevice and sharding within devices.
 
     This class implements a Root Mean Square Normalization (RMSNorm) that can be
     distributed across multiple devices and cores. If the `device` parameter is a
-    DeviceMesh, the weights and computations are replicated across all devices in
+    MeshDevice, the weights and computations are replicated across all devices in
     the mesh. Expects an interleaved input tensor, can optionally output a sharded tensor.
 
     Args:
-        device: The device or DeviceMesh on which to perform the computations.
+        device: The device or MeshDevice on which to perform the computations.
         state_dict: The state dictionary containing the model parameters.
         dim: Input dimension (e.g. model hidden dimension size).
         layer_num: The layer number to determine the weight key in the state dictionary.
@@ -61,7 +61,7 @@ class RMSNorm(LightweightModule):
         torch_weight = state_dict[weight_name].unsqueeze(0).view(1, 1, dim).expand([1, SHARD_HEIGHT, dim])
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
 
-        is_device_mesh = device.__class__.__name__ == "DeviceMesh"
+        is_mesh_device = device.__class__.__name__ == "MeshDevice"
         self.weight = ttnn.as_tensor(
             torch_weight,
             device=device,
@@ -69,7 +69,7 @@ class RMSNorm(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
             cache_file_name=cache_name,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_device_mesh else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 
         if is_sharded:

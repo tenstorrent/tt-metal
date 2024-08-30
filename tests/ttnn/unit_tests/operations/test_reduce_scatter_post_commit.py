@@ -29,7 +29,7 @@ def is_unsupported_case(input_shape, scatter_dim, math_op, mem_config, num_devic
 
 
 def run_reduce_scatter_test(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
     scatter_dim,
@@ -43,7 +43,7 @@ def run_reduce_scatter_test(
     enable_async=True,
     num_iters=1,
 ):
-    if len(t3k_device_mesh.get_device_ids()) != 8:
+    if len(t3k_mesh_device.get_device_ids()) != 8:
         pytest.skip("Not T3000!")
 
     debug = False
@@ -54,8 +54,8 @@ def run_reduce_scatter_test(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    for device_id in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device_id).enable_async(enable_async)
+    for device_id in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device_id).enable_async(enable_async)
     if enable_async:
         logger.info(f"Using Async Mode for Reduce Scatter Op Dispatch")
 
@@ -76,7 +76,7 @@ def run_reduce_scatter_test(
         tt_input_tensors.append(
             ttnn.Tensor(canonical_input_tensor, input_dtype)
             .to(layout)
-            .to(t3k_device_mesh.get_device(t3k_device_mesh.get_device_ids()[i]), mem_config)
+            .to(t3k_mesh_device.get_device(t3k_mesh_device.get_device_ids()[i]), mem_config)
         )
 
     assert len(tt_input_tensors) == num_devices
@@ -92,8 +92,8 @@ def run_reduce_scatter_test(
             memory_config=mem_config,
         )
 
-        for device_id in t3k_device_mesh.get_device_ids():
-            ttnn.synchronize_device(t3k_device_mesh.get_device(device_id))
+        for device_id in t3k_mesh_device.get_device_ids():
+            ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
         logger.info(f"Done iteration {i}")
 
     # Compute golden
@@ -167,7 +167,7 @@ def run_reduce_scatter_test(
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
 def test_reduce_scatter_post_commit(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
     scatter_dim,
@@ -182,7 +182,7 @@ def test_reduce_scatter_post_commit(
     num_iters=1,
 ):
     run_reduce_scatter_test(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
         scatter_dim,
@@ -199,7 +199,7 @@ def test_reduce_scatter_post_commit(
 
 
 def run_reduce_scatter_sharded_test(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
     output_shard_shape,
@@ -216,13 +216,13 @@ def run_reduce_scatter_sharded_test(
     enable_async=True,
     num_iters=1,
 ):
-    if len(t3k_device_mesh.get_device_ids()) != 8:
+    if len(t3k_mesh_device.get_device_ids()) != 8:
         pytest.skip("Not T3000!")
 
     debug = False
 
-    for device_id in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device_id).enable_async(enable_async)
+    for device_id in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device_id).enable_async(enable_async)
 
     # Generate input tensors
     input_shard_shape = list(output_shard_shape)
@@ -265,7 +265,7 @@ def run_reduce_scatter_sharded_test(
         tt_input_tensors.append(
             ttnn.Tensor(canonical_input_tensor, input_dtype)
             .to(tensor_layout)
-            .to(t3k_device_mesh.get_device(t3k_device_mesh.get_device_ids()[i]), input_mem_config)
+            .to(t3k_mesh_device.get_device(t3k_mesh_device.get_device_ids()[i]), input_mem_config)
         )
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
@@ -279,8 +279,8 @@ def run_reduce_scatter_sharded_test(
             memory_config=output_mem_config,
         )
 
-        for device_id in t3k_device_mesh.get_device_ids():
-            ttnn.synchronize_device(t3k_device_mesh.get_device(device_id))
+        for device_id in t3k_mesh_device.get_device_ids():
+            ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
         logger.info(f"Done iteration {i}")
 
     # Compute golden
@@ -362,7 +362,7 @@ def run_reduce_scatter_sharded_test(
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
 def test_width_sharded_reduce_scatter_post_commit(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
     output_shard_shape,
@@ -380,7 +380,7 @@ def test_width_sharded_reduce_scatter_post_commit(
     num_iters=1,
 ):
     run_reduce_scatter_sharded_test(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
         output_shard_shape,
@@ -436,7 +436,7 @@ def test_width_sharded_reduce_scatter_post_commit(
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
 def test_height_sharded_reduce_scatter_post_commit(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
     output_shard_shape,
@@ -454,7 +454,7 @@ def test_height_sharded_reduce_scatter_post_commit(
     num_iters=1,
 ):
     run_reduce_scatter_sharded_test(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
         output_shard_shape,
@@ -509,7 +509,7 @@ def test_height_sharded_reduce_scatter_post_commit(
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
 def test_block_sharded_reduce_scatter_post_commit(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
     output_shard_shape,
@@ -527,7 +527,7 @@ def test_block_sharded_reduce_scatter_post_commit(
     num_iters=1,
 ):
     run_reduce_scatter_sharded_test(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
         output_shard_shape,

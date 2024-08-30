@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/ccl/line_all_gather/device/line_all_gather_op.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "tt_metal/impl/device/device_mesh_view.hpp"
+#include "tt_metal/impl/device/mesh_device_view.hpp"
 #include "tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -126,11 +126,11 @@ Tensor line_all_gather(
     const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t cluster_axis,
-    const DeviceMesh& device_mesh,
+    const MeshDevice& mesh_device,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config) {
 
-    const auto mesh_view = device_mesh.get_view();
+    const auto mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};

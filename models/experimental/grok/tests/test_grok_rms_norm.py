@@ -24,12 +24,12 @@ from models.utility_functions import (
 )
 
 
-def test_grok_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds):
+def test_grok_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=os.getenv("CI") == "true")
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -41,7 +41,7 @@ def test_grok_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = TtRMSNorm(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         args=model_args,
         dtype=dtype,
@@ -53,14 +53,14 @@ def test_grok_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds
 
     tt_input = ttnn.from_torch(
         input,
-        device=t3k_device_mesh,
+        device=t3k_mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
     )
 
     tt_output = tt_model(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
@@ -74,12 +74,12 @@ def test_grok_rms_norm_inference(t3k_device_mesh, use_program_cache, reset_seeds
     assert passing, f"Grok_rms_norm output does not meet PCC requirement {0.99}."
 
 
-def test_grok_rms_norm_sharded_inference(t3k_device_mesh, use_program_cache, reset_seeds):
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+def test_grok_rms_norm_sharded_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=os.getenv("CI") == "true")
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -91,7 +91,7 @@ def test_grok_rms_norm_sharded_inference(t3k_device_mesh, use_program_cache, res
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = TtRMSNormSharded(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         args=model_args,
         dtype=dtype,
@@ -103,14 +103,14 @@ def test_grok_rms_norm_sharded_inference(t3k_device_mesh, use_program_cache, res
 
     tt_input = ttnn.from_torch(
         input,
-        device=t3k_device_mesh,
+        device=t3k_mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
     )
 
     tt_output = tt_model(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

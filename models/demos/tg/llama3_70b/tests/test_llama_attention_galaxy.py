@@ -14,7 +14,7 @@ from models.demos.tg.llama3_70b.tt.llama_attention_galaxy import TtLlamaAttentio
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     extract_pcc_from_log,
     generate_rot_emb,
     get_rotation_mat,
@@ -36,7 +36,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     extract_pcc_from_log,
     generate_rot_emb,
     get_rotation_mat,
@@ -143,9 +143,9 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ACT_MEMCFG,
-            device=llama_attention_model.device_mesh,
+            device=llama_attention_model.mesh_device,
             mesh_mapper=ShardTensor2dMesh(
-                llama_attention_model.device_mesh, dims=(3, None), cluster_shape=llama_attention_model.cluster_shape
+                llama_attention_model.mesh_device, dims=(3, None), cluster_shape=llama_attention_model.cluster_shape
             ),
         )
 
@@ -179,8 +179,8 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ROT_MAT_MEMCFG,
-            device=llama_attention_model.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.device_mesh),
+            device=llama_attention_model.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
         )
 
         attn_masks = None
@@ -197,9 +197,9 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=llama_attention_model.device_mesh,
+            device=llama_attention_model.mesh_device,
             mesh_mapper=ShardTensor2dMesh(
-                llama_attention_model.device_mesh, dims=(3, None), cluster_shape=llama_attention_model.cluster_shape
+                llama_attention_model.mesh_device, dims=(3, None), cluster_shape=llama_attention_model.cluster_shape
             ),
         )
 
@@ -216,8 +216,8 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=llama_attention_model.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.device_mesh),
+            device=llama_attention_model.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
         )
         sin_gathereds = ttnn.as_tensor(
             sin_gathered,
@@ -225,8 +225,8 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=llama_attention_model.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.device_mesh),
+            device=llama_attention_model.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
         )
 
         rot_mats = [cos_gathereds, sin_gathereds]
@@ -239,9 +239,9 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=cache_name(f"attn_mask_prefill_{seq_len}"),
-            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=llama_attention_model.device_mesh,
+            device=llama_attention_model.mesh_device,
         )
 
     return (
@@ -253,7 +253,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
 
 
 def run_test_LlamaAttention_inference(
-    device_mesh,
+    mesh_device,
     cluster_shape,
     batch,
     seq_len,
@@ -294,12 +294,12 @@ def run_test_LlamaAttention_inference(
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=device_mesh,
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        device=mesh_device,
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     tt_LlamaAttention_model = TtLlamaAttention_galaxy(
-        device_mesh,
+        mesh_device,
         cluster_shape,
         state_dict,
         BASE_URL,
@@ -354,10 +354,10 @@ def run_test_LlamaAttention_inference(
             attn_mask,
         )
 
-        # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(device_mesh))[0]
+        # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(mesh_device))[0]
 
         tt_out = ttnn.to_torch(
-            tt_out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(3, 1), cluster_shape=cluster_shape)
+            tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)
         )
         tt_out = tt_out[:, 0:1, :, :]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
@@ -394,7 +394,7 @@ def run_test_LlamaAttention_inference(
 
     tt_layer_present_all = [
         ttnn.to_torch(
-            lp, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(1, 0), cluster_shape=cluster_shape)
+            lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 0), cluster_shape=cluster_shape)
         ).transpose(0, 1)[:batch, ...]
         for lp in tt_layer_present_all
     ]
@@ -421,7 +421,7 @@ def run_test_LlamaAttention_inference(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "cluster_shape, device_mesh", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["device_mesh"]
+    "cluster_shape, mesh_device", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "llama_version",
@@ -447,7 +447,7 @@ def test_LlamaAttention_inference(
     batch,
     seq_len,
     pcc,
-    device_mesh,
+    mesh_device,
     max_batch_size,
     max_context_len,
     llama_version,
@@ -471,9 +471,9 @@ def test_LlamaAttention_inference(
         max_context_len=max_context_len,
     )
 
-    check_device_mesh(device_mesh, model_config)
+    check_mesh_device(mesh_device, model_config)
     run_test_LlamaAttention_inference(
-        device_mesh,
+        mesh_device,
         cluster_shape,
         batch,
         seq_len,

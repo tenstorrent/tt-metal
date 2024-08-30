@@ -15,7 +15,7 @@ from torch import nn
 class TtFalconDecoderLayer(nn.Module):
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -36,7 +36,7 @@ class TtFalconDecoderLayer(nn.Module):
         assert config.parallel_attn, "Path for config.parallel_attn=False is not implemented in TtFalconDecoderLayer!"
 
         self.self_attn_prefill = TtFalconAttentionPrefill(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -49,7 +49,7 @@ class TtFalconDecoderLayer(nn.Module):
         )
 
         self.self_attn_decode = TtFalconAttentionDecode(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -62,7 +62,7 @@ class TtFalconDecoderLayer(nn.Module):
         )
 
         self.mlp_prefill = TtFalconMLPPrefill(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -74,7 +74,7 @@ class TtFalconDecoderLayer(nn.Module):
         )
 
         self.mlp_decode = TtFalconMLPDecode(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -91,7 +91,7 @@ class TtFalconDecoderLayer(nn.Module):
         layernorm_bias_str = f"{layer_name}.input_layernorm.bias"
 
         self.layernorm_gamma = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             layernorm_weights_str,
@@ -99,7 +99,7 @@ class TtFalconDecoderLayer(nn.Module):
             weights_to_cache=(self.state_dict[layernorm_weights_str] if self.state_dict else None),
         )
         self.layernorm_beta = get_weights_cached(
-            device_mesh,
+            mesh_device,
             model_config,
             tt_cache_path,
             layernorm_bias_str,
