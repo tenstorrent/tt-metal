@@ -805,8 +805,7 @@ Tensor set_tensor_id(const Tensor& tensor) {
         return tensor;
     }
     auto output = tensor;
-    ttnn::increment_tensor_id();
-    output.tensor_id = ttnn::get_tensor_id();
+    output.tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
     return output;
 };
 
