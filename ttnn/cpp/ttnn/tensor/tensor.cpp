@@ -20,7 +20,7 @@
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include "types.hpp"
+
 using namespace tt::constants;
 
 
