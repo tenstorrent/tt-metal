@@ -283,108 +283,60 @@ def scale_mask_softmax_in_place_shape_func(input_shape):
     return input_shape, [1, 1, input_shape[-2], input_shape[-1]]
 
 
-def primaru_moreh_mean_0(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0])
+def primary_moreh_mean_0(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0])
 
 
-def primaru_moreh_mean_0_shape_func(input_shape):
-    return input_shape, [1, input_shape[1], input_shape[2], input_shape[3]]
+def primary_moreh_mean_01(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0, 1])
 
 
-def primaru_moreh_mean_01(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1])
+def primary_moreh_mean_012(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0, 1, 2])
 
 
-def primaru_moreh_mean_01_shape_func(input_shape):
-    return input_shape, [1, 1, input_shape[2], input_shape[3]]
+def primary_moreh_mean_0123(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0, 1, 2, 3])
 
 
-def primaru_moreh_mean_012(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1, 2])
+def primary_moreh_mean_013(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0, 1, 3])
 
 
-def primaru_moreh_mean_012_shape_func(input_shape):
-    return input_shape, [1, 1, 1, input_shape[3]]
+def primary_moreh_mean_023(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[0, 2, 3])
 
 
-def primaru_moreh_mean_0123(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1, 2, 3])
+def primary_moreh_mean_1(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[1])
 
 
-def primaru_moreh_mean_0123_shape_func(input_shape):
-    return input_shape, [1, 1, 1, 1]
+def primary_moreh_mean_12(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[1, 2])
 
 
-def primaru_moreh_mean_013(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 1, 3])
+def primary_moreh_mean_123(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[1, 2, 3])
 
 
-def primaru_moreh_mean_013_shape_func(input_shape):
-    return input_shape, [1, 1, input_shape[2], 1]
+def primary_moreh_mean_13(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[1, 3])
 
 
-def primaru_moreh_mean_023(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[0, 2, 3])
+def primary_moreh_mean_2(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[2])
 
 
-def primaru_moreh_mean_023_shape_func(input_shape):
-    return input_shape, [1, input_shape[1], 1, 1]
+def primary_moreh_mean_23(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[2, 3])
 
 
-def primaru_moreh_mean_1(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1])
+def primary_moreh_mean_3(x):
+    ttnn.experimental.operations.primary.moreh_mean(x, dim=[3])
 
 
-def primaru_moreh_mean_1_shape_func(input_shape):
-    return input_shape, [input_shape[0], 1, input_shape[2], input_shape[3]]
-
-
-def primaru_moreh_mean_12(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1, 2])
-
-
-def primaru_moreh_mean_12_shape_func(input_shape):
-    return input_shape, [input_shape[0], 1, 1, input_shape[3]]
-
-
-def primaru_moreh_mean_123(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1, 2, 3])
-
-
-def primaru_moreh_mean_123_shape_func(input_shape):
-    return input_shape, [input_shape[0], 1, 1, 1]
-
-
-def primaru_moreh_mean_13(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[1, 3])
-
-
-def primaru_moreh_mean_13_shape_func(input_shape):
-    return input_shape, [input_shape[0], 1, input_shape[2], 1]
-
-
-def primaru_moreh_mean_2(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[2])
-
-
-def primaru_moreh_mean_2_shape_func(input_shape):
-    return input_shape, [input_shape[0], input_shape[1], 1, input_shape[3]]
-
-
-def primaru_moreh_mean_23(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[2, 3])
-
-
-def primaru_moreh_mean_23_shape_func(input_shape):
-    return input_shape, [input_shape[0], input_shape[1], 1, 1]
-
-
-def primaru_moreh_mean_3(x, y):
-    tt_lib.operations.primary.moreh_mean(x, y, dims=[3])
-
-
-def primaru_moreh_mean_3_shape_func(input_shape):
-    return input_shape, [input_shape[0], input_shape[1], input_shape[2], 1]
+def primary_moreh_mean_backward(x, y):
+    ttnn.experimental.operations.primary.moreh_mean_backward(x, dim=[0], keepdim=True, input_grad=y)
 
 
 def celu_bw(x, y):
@@ -1034,60 +986,6 @@ all_binary_ops = [
         "shape_func": scale_mask_softmax_in_place_shape_func,
     },
     {
-        "op": primaru_moreh_mean_0,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_0",
-        "shape_func": primaru_moreh_mean_0_shape_func,
-    },
-    {
-        "op": primaru_moreh_mean_01,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_01",
-        "shape_func": primaru_moreh_mean_01_shape_func,
-    },
-    # {
-    #     "op": primaru_moreh_mean_012,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_012",
-    #     "shape_func": primaru_moreh_mean_012_shape_func,
-    # },
-    # {
-    #     "op": primaru_moreh_mean_013,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_013",
-    #     "shape_func": primaru_moreh_mean_013_shape_func,
-    # },
-    {
-        "op": primaru_moreh_mean_1,
-        "name": "tt_lib.operations.primary.moreh_mean_dims_1",
-        "shape_func": primaru_moreh_mean_1_shape_func,
-    },
-    # {
-    #     "op": primaru_moreh_mean_12,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_12",
-    #     "shape_func": primaru_moreh_mean_12_shape_func,
-    # },
-    # {
-    #     "op": primaru_moreh_mean_13,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_13",
-    #     "shape_func": primaru_moreh_mean_13_shape_func,
-    # },
-    # {
-    #     "op": primaru_moreh_mean_2,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_2",
-    #     "shape_func": primaru_moreh_mean_2_shape_func,
-    # },
-    # {
-    #     "op": primaru_moreh_mean_23,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_23",
-    #     "shape_func": primaru_moreh_mean_23_shape_func,
-    # },
-    # {
-    #     "op": primaru_moreh_mean_3,
-    #     "name": "tt_lib.operations.primary.moreh_mean_dims_3",
-    #     "shape_func": primaru_moreh_mean_3_shape_func,
-    # },
-    {
-        "op": tt_lib.operations.primary.moreh_mean_backward,
-        "name": "tt_lib.operations.primary.moreh_mean_backward",
-    },
-    {
         "op": ttnn.angle_bw,
         "name": "ttnn.angle_bw",
         "is_complex": [False, True],
@@ -1108,6 +1006,10 @@ all_binary_ops = [
     {
         "op": ttnn.round_bw,
         "name": "ttnn.round_bw",
+    },
+    {
+        "op": primary_moreh_mean_backward,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_backward",
     },
 ]
 
@@ -2364,6 +2266,58 @@ all_unary_ops = [
     {
         "op": fused_softmax,
         "name": "tt_lib.fused_ops.softmax.softmax",
+    },
+    {
+        "op": primary_moreh_mean_0,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_0",
+    },
+    {
+        "op": primary_moreh_mean_01,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_01",
+    },
+    {
+        "op": primary_moreh_mean_012,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_012",
+    },
+    {
+        "op": primary_moreh_mean_013,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_013",
+    },
+    {
+        "op": primary_moreh_mean_023,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_023",
+    },
+    {
+        "op": primary_moreh_mean_0123,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_0123",
+    },
+    {
+        "op": primary_moreh_mean_1,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_1",
+    },
+    {
+        "op": primary_moreh_mean_12,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_12",
+    },
+    {
+        "op": primary_moreh_mean_13,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_13",
+    },
+    {
+        "op": primary_moreh_mean_123,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_123",
+    },
+    {
+        "op": primary_moreh_mean_2,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_2",
+    },
+    {
+        "op": primary_moreh_mean_23,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_23",
+    },
+    {
+        "op": primary_moreh_mean_3,
+        "name": "ttnn.experimental.operations.primary.moreh_mean_dims_3",
     },
 ]
 
