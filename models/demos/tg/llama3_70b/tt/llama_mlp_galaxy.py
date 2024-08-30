@@ -145,7 +145,7 @@ class TtLlamaMLP_galaxy:
             self.FF1_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
                 (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 2048),
                 (1, 1, 2048, 3584),  # 3.5 *1024 = 3584
-                # grid=ttnn.CoreGrid(x=4, y=1),
+                grid=ttnn.CoreGrid(x=8, y=4),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
                 fuse_batch=False,
@@ -153,7 +153,7 @@ class TtLlamaMLP_galaxy:
             self.FF2_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
                 (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 3584),
                 (1, 1, 3584, 2048),
-                # grid=ttnn.CoreGrid(x=4, y=1),
+                grid=ttnn.CoreGrid(x=8, y=4),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
                 fuse_batch=False,
@@ -315,40 +315,36 @@ class TtLlamaMLP_galaxy:
             program_config=self.FF1_PROGCFG,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        x.deallocate(True)
 
         w1_out = ttnn.reshape(w1_out, (1, 1, seq_len, -1))
 
-        w1_out_reduced = tt_all_reduce(
+        w1_out = tt_all_reduce(
             w1_out,
             self.mesh_device,
             cluster_axis=1,
             num_links=2,
         )
-        w1_out.deallocate(True)
 
         w3_out = ttnn.reshape(w3_out, (1, 1, seq_len, -1))
-        w3_out_reduced = tt_all_reduce(
+        w3_out = tt_all_reduce(
             w3_out,
             self.mesh_device,
             cluster_axis=1,
             num_links=2,
         )
-        w3_out.deallocate(True)
+
+        # w1_out.deallocate(True)
 
         hidden_states = ttnn.mul(
-            w1_out_reduced,
-            w3_out_reduced,
+            w1_out,
+            w3_out,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat16,
         )
 
-        w1_out_reduced.deallocate(True)
-        w3_out_reduced.deallocate(True)
-
         # hidden_states = ttnn.to_memory_config(hidden_states, self.FF2_ACT_MEMCFG)
         hidden_states = ttnn.reshape(hidden_states, (1, batch_dim, seq_len // batch_dim, -1))
-        hidden_states_out = ttnn.matmul(
+        hidden_states = ttnn.matmul(
             hidden_states,
             self.w2,
             dtype=ttnn.bfloat16,
@@ -356,15 +352,22 @@ class TtLlamaMLP_galaxy:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        hidden_states.deallocate(True)
-        hidden_states_out = ttnn.reshape(hidden_states_out, (1, 1, seq_len, -1))
+        # w1_out_reduced.deallocate(True)
+        # w3_out_reduced.deallocate(True)
 
-        hidden_states_out_reduced = tt_all_reduce(
-            hidden_states_out,
-            self.mesh_device,
+        hidden_states = ttnn.reshape(hidden_states, (1, 1, seq_len, -1))
+
+        hidden_states = tt_all_reduce(
+            hidden_states,
+            self.device_mesh,
             cluster_axis=0,
             num_links=2,
         )
-        hidden_states_out.deallocate(True)
 
-        return hidden_states_out_reduced
+        # hidden_states.deallocate(True)
+        # hidden_states_out.deallocate(True)
+        # x.deallocate(True)
+        # w1_out.deallocate(True)
+        # w3_out.deallocate(True)
+
+        return hidden_states

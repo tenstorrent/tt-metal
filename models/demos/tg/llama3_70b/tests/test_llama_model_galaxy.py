@@ -110,6 +110,7 @@ def run_test_LlamaModel_inference(
         model_config,
         configuration,
         cache_path=cache_path,
+        # read_cache=True
     )
 
     if model_config["LLM_MODE"] == "prefill":
@@ -145,12 +146,12 @@ def run_test_LlamaModel_inference(
         start_pos = generation_start_pos + i
 
         # # PyTorch output --------------------------------------------------------------------
-        logger.info(f"Running inference on PyTorch")
+        # logger.info(f"Running inference on PyTorch")
         pytorch_out = pytorch_model(
             pt_inp_ids,
             start_pos,
         )
-        logger.info(f"Finished PyTorch inference")
+        # logger.info(f"Finished PyTorch inference")
 
         # TT hardware execution -------------------------------------------------------------
         tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)

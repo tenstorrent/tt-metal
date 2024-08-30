@@ -27,7 +27,8 @@ from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_gather,
 )
 from models.demos.t3000.falcon40b.tt.model_utils import (
-    matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
+    matmul_2d_config_from_tensor_shapes,
+    matmul_1d_config_from_tensor_shapes,
 )
 
 
@@ -133,9 +134,11 @@ class TtLlamaModel_galaxy:
             use_height_and_width_as_shard_shape=True,
         )
         if self.model_config["LLM_MODE"] == "prefill":
-            self.LM_HEAD_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
-                (1, 1, 256, 2048),
+            # seq_len is 32 if we slice LM head input
+            self.LM_HEAD_PROGCFG = matmul_1d_config_from_tensor_shapes(
+                (1, 1, 32, 2048),
                 (1, 1, 2048, 16 * 1024),
+                grid=ttnn.CoreGrid(x=8, y=2),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
             )
@@ -418,12 +421,10 @@ class TtLlamaModel_galaxy:
             norm_out,
             self.lm_head,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             compute_kernel_config=self.COMPUTE_KERNEL_CONFIG,
             program_config=self.LM_HEAD_PROGCFG,
         )
-
-        norm_out.deallocate(True)
 
         lm_head_out = tt_all_reduce(
             lm_head_out,
@@ -433,5 +434,6 @@ class TtLlamaModel_galaxy:
             num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # norm_out.deallocate(True)
 
         return lm_head_out

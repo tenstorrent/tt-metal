@@ -200,7 +200,7 @@ class TtLlamaAttention_galaxy:
             self.FUSED_QKV_MM_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
                 (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 2048),
                 (1, 1, 2048, 1280),
-                # grid=ttnn.CoreGrid(x=4, y=1),
+                grid=ttnn.CoreGrid(x=8, y=4),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
                 fuse_batch=False,
@@ -209,7 +209,7 @@ class TtLlamaAttention_galaxy:
             self.SELFOUT_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
                 (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 1024),
                 (1, 1, 1024, 2048),
-                # grid=ttnn.CoreGrid(x=4, y=1),
+                grid=ttnn.CoreGrid(x=8, y=4),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
                 fuse_batch=False,
@@ -551,23 +551,21 @@ class TtLlamaAttention_galaxy:
         fused_query_key_value = tt_all_reduce(
             fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        fused_query_key_value.deallocate(True)
+        # fused_query_key_value.deallocate(True)
 
-        fused_query_key_value_reduced = ttnn.reshape(fused_query_key_value_reduced, (1, 1, seq_len, -1))
+        fused_query_key_value = ttnn.reshape(fused_query_key_value, (1, 1, seq_len, -1))
 
         (
             query_layer,  # [bsz, n_local_heads, seq_len, head_dim]
             key_layer,  # [bsz, n_local_kv_heads, seq_len, head_dim]
             value_layer,  # [bsz, n_local_kv_heads, seq_len, head_dim]
         ) = ttnn.experimental.nlp_create_qkv_heads(
-            fused_query_key_value_reduced,
+            fused_query_key_value,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        fused_query_key_value_reduced.deallocate(True)
 
         # ROTARY EMBEDDINGS
         # Q Rotary Embeddings
@@ -575,14 +573,18 @@ class TtLlamaAttention_galaxy:
         query_layer_ret = ttnn.experimental.rotary_embedding_llama(
             query_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
-        query_layer.deallocate(True)
 
         # K Rotary Embeddings
         # key_layer: ttnn.Shape([1, 1, seq_len, 128]) -> [bsz, n_local_kv_heads, seq_len, head_dim]
         key_layer_ret = ttnn.experimental.rotary_embedding_llama(
             key_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
-        key_layer.deallocate(True)
+
+        # xs.deallocate(True)
+        # fused_query_key_value.deallocate(True)
+        # query_layer.deallocate(True)
+        # key_layer.deallocate(True)
+
         return query_layer_ret, key_layer_ret, value_layer
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
@@ -618,7 +620,6 @@ class TtLlamaAttention_galaxy:
             ttnn.experimental.typecast(single_user_key_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             user_id % self.batch_size_per_device_group,
         )
-        single_user_key_layer.deallocate(True)
 
         # FILL V CACHE
         values = self.layer_past[1]
@@ -634,7 +635,6 @@ class TtLlamaAttention_galaxy:
             ttnn.experimental.typecast(single_user_value_layer, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             user_id % self.batch_size_per_device_group,
         )
-        single_user_value_layer.deallocate(True)
 
         # SDPA
         attn_output = ttnn.transformers.scaled_dot_product_attention(
@@ -646,46 +646,49 @@ class TtLlamaAttention_galaxy:
             scale=self.scale,
         )
 
+        # single_user_key_layer.deallocate(True)
+        # single_user_value_layer.deallocate(True)
+
         # deallocate keys and values
-        query_layer.deallocate(True)
-        key_layer.deallocate(True)
-        value_layer.deallocate(True)
+        # query_layer.deallocate(True)
+        # key_layer.deallocate(True)
+        # value_layer.deallocate(True)
 
         return attn_output
 
     def prefill_attn_selfout(self, attn_output):
         # ATTENTION SELFOUT
-        attn_output_heads = ttnn.experimental.nlp_concat_heads(
+        attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # bsz, 1, seqlen, hidden_size
 
-        attn_output.deallocate(True)
-        _, _, seq_len, _ = attn_output_heads.shape
+        # attn_output.deallocate(True)
+        _, _, seq_len, _ = attn_output.shape
 
         max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
         batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
-        attn_output_heads = ttnn.reshape(attn_output_heads, (1, batch_dim, seq_len // batch_dim, -1))
+        attn_output = ttnn.reshape(attn_output, (1, batch_dim, seq_len // batch_dim, -1))
 
         attn_output = ttnn.matmul(
-            attn_output_heads,
+            attn_output,
             self.wo,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
             program_config=self.SELFOUT_PROGCFG,
         )  # bsz, 1, seqlen, hidden_size
 
-        attn_output_heads.deallocate(True)
+        # attn_output_heads.deallocate(True)
         attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, -1))
 
         # Call all reduce here
-        attn_output_reduced = tt_all_reduce(
+        attn_output = tt_all_reduce(
             attn_output,
             self.mesh_device,
             cluster_axis=0,
             num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        attn_output.deallocate(True)
+        # attn_output.deallocate(True)
 
-        return attn_output_reduced
+        return attn_output

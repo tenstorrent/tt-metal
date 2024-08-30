@@ -286,40 +286,39 @@ class TtLlamaDecoder_galaxy:
         attn_masks: List[ttnn.Tensor],
         user_id: int,
     ) -> List[ttnn.Tensor]:
-        attn_norm_out = self.tt_distributed_rmsnorm(
+        attn_outs = self.tt_distributed_rmsnorm(
             xs,
             epsilon=self.norm_eps,
             gamma=self.attn_norm_sharded,
         )
 
-        attn_outs = self.attention(attn_norm_out, rot_mats, 0, attn_masks, user_id)
-        attn_norm_out.deallocate(True)
+        attn_outs = self.attention(attn_outs, rot_mats, 0, attn_masks, user_id)
+        # attn_norm_out.deallocate(True)
 
-        layer_inp = xs
+        output = xs
         output = ttnn.add(
-            layer_inp,
+            output,
             attn_outs,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        attn_outs.deallocate(True)
-        layer_inp.deallocate(True)
-
-        ffn_norm_out = self.tt_distributed_rmsnorm(
+        output = self.tt_distributed_rmsnorm(
             output,
             epsilon=self.norm_eps,
             gamma=self.ffn_norm_sharded,
         )
 
-        ffn_out = self.mlp(ffn_norm_out)
-        ffn_norm_out.deallocate(True)
+        ffn_out = self.mlp(output)
+        # ffn_norm_out.deallocate(True)
         # residual add
-        layer_out = ttnn.add(
+        output = ttnn.add(
             output,
             ffn_out,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        ffn_out.deallocate(True)
-        output.deallocate(True)
-        return layer_out
+        # attn_outs.deallocate(True)
+        # # layer_inp.deallocate(True)
+        # ffn_out.deallocate(True)
+        # output.deallocate(True)
+        return output
