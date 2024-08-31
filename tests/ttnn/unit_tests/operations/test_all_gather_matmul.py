@@ -27,6 +27,7 @@ def run_all_gather_matmul_on_t3000_impl(
     matmul_weights_dtype,
     max_in0_block_w,
     # Memory configs
+    mem_config_input,
     mem_config_ag,
     mem_config_mm,
     mem_config_weights=None,
@@ -54,7 +55,7 @@ def run_all_gather_matmul_on_t3000_impl(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttl.tensor.Tensor(t, ag_input_dtype).to(layout).to(devices[i], mem_config_ag))
+        tt_input_tensors.append(ttl.tensor.Tensor(t, ag_input_dtype).to(layout).to(devices[i], mem_config_input))
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
     ##### Create the weight matrix for the matmul #####
@@ -257,9 +258,10 @@ def run_all_gather_matmul_on_t3000_impl(
     ],
 )
 @pytest.mark.parametrize(
-    "mem_config_ag, mem_config_mm",
+    "mem_config_input, mem_config_ag, mem_config_mm",
     [
         (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
@@ -284,6 +286,7 @@ def test_all_gather_matmul_on_t3000_post_commit(
     matmul_config,
     matmul_weights_dtype,
     max_in0_block_w,
+    mem_config_input,
     mem_config_ag,
     mem_config_mm,
     use_program_cache,
@@ -291,7 +294,7 @@ def test_all_gather_matmul_on_t3000_post_commit(
     enable_async,
 ):
     run_all_gather_matmul_on_t3000_impl(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         ag_output_shape,
         dim,
@@ -302,6 +305,7 @@ def test_all_gather_matmul_on_t3000_post_commit(
         matmul_config,
         matmul_weights_dtype,
         max_in0_block_w,
+        mem_config_input,
         mem_config_ag,
         mem_config_mm,
     )
@@ -357,9 +361,10 @@ def test_all_gather_matmul_on_t3000_post_commit(
     ],
 )
 @pytest.mark.parametrize(
-    "mem_config_ag, mem_config_mm",
+    "mem_config_input, mem_config_ag, mem_config_mm",
     [
         (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
@@ -373,7 +378,7 @@ def test_all_gather_matmul_on_t3000_post_commit(
     ],
 )
 def test_all_gather_matmul_1d_on_t3000_post_commit(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -384,6 +389,7 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     matmul_config,
     matmul_weights_dtype,
     max_in0_block_w,
+    mem_config_input,
     mem_config_ag,
     mem_config_mm,
     use_program_cache,
@@ -391,7 +397,7 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     enable_async,
 ):
     run_all_gather_matmul_on_t3000_impl(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         ag_output_shape,
         dim,
@@ -402,6 +408,7 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
         matmul_config,
         matmul_weights_dtype,
         max_in0_block_w,
+        mem_config_input,
         mem_config_ag,
         mem_config_mm,
     )
@@ -447,9 +454,29 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     ],
 )
 @pytest.mark.parametrize(
-    "mem_config_ag, mem_config_mm, mem_config_weights",
+    "mem_config_input, mem_config_ag, mem_config_mm, mem_config_weights",
     [
         (
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(7, 0),
+                            ),
+                        }
+                    ),
+                    [
+                        32,  # shard_height
+                        128,  # shard width
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            ),
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.L1,
@@ -483,7 +510,7 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
     ],
 )
 def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -494,6 +521,7 @@ def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
     matmul_config,
     matmul_weights_dtype,
     max_in0_block_w,
+    mem_config_input,
     mem_config_ag,
     mem_config_mm,
     mem_config_weights,
@@ -513,6 +541,7 @@ def test_all_gather_matmul_1d_llama_selfout_on_t3000_post_commit(
         matmul_config,
         matmul_weights_dtype,
         max_in0_block_w,
+        mem_config_input,
         mem_config_ag,
         mem_config_mm,
         mem_config_weights,

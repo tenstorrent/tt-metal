@@ -8,6 +8,7 @@
 #include "debug/assert.h"
 #include "debug/dprint.h"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include <array>
 
 // Called by the master worker to synchronize with the slave workers
 FORCE_INLINE void master_sync_slaves(
@@ -199,8 +200,8 @@ FORCE_INLINE void advance_start_page_idx(
 
 
 struct MatmulOpReceiver {
+    static constexpr uint32_t num_directions = 2; // ASSUMPTION: Always 2 directions
     uint32_t num_tensor_slices;
-    uint32_t num_directions = 2; // ASSUMPTION: Always 2 directions
 
     bool wait_for_op_signal;
     uint32_t num_transfers;
@@ -213,10 +214,10 @@ struct MatmulOpReceiver {
     uint32_t num_blocks_per_slice;
 
     // Used to track internal state
-    uint32_t ring_idxs[2];
-    uint32_t start_page_idxs[2];
-    bool is_clockwise_dirs[2];
-    volatile tt_l1_ptr uint32_t* signal_op_semaphore_addr_ptrs[2];
+    std::array<uint32_t, num_directions> ring_idxs;
+    std::array<uint32_t, num_directions> start_page_idxs;
+    std::array<bool, num_directions> is_clockwise_dirs;
+    std::array<volatile tt_l1_ptr uint32_t*, num_directions> signal_op_semaphore_addr_ptrs;
     uint32_t curr_dir;
     uint32_t curr_transfer_idx;
 
