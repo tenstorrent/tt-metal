@@ -7,13 +7,10 @@ import torch.nn as nn
 import torch.optim as optim
 
 import ttnn
-import ttnn
+
 import pytest
 from models.utility_functions import (
-    is_wormhole_b0,
     comp_allclose_and_pcc,
-    comp_pcc,
-    comp_allclose,
 )
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     get_compute_kernel_options,
@@ -24,16 +21,8 @@ from loguru import logger
 
 
 def create_tt_tensors(cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max_exp_avg_sq, amsgrad, device):
-    def create_tt_tensor(x, device):
-        ret = (
-            ttnn.Tensor(
-                x,
-                ttnn.bfloat16,
-            )
-            .to(ttnn.TILE_LAYOUT)
-            .to(device)
-        )
-        return ret
+    def create_tt_tensor(tensor: torch.Tensor, device):
+        return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     def create_empty_tensor(x, device):
         ret = ttnn.zeros(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
@@ -121,23 +110,23 @@ def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, 
     tt_param_in, tt_grad, tt_exp_avg_in, tt_exp_avg_sq_in, tt_max_exp_avg_sq_in = tt_input_tensors
     tt_param_out, tt_exp_avg_out, tt_exp_avg_sq_out, tt_max_exp_avg_sq_out = tt_output_tensors
 
-    ret_list_ = ttnn.experimental.operations.primary.moreh_adamw(
+    ret_list_ = ttnn.moreh_adamw(
         tt_param_in,
         tt_grad,
         tt_exp_avg_in,
         tt_exp_avg_sq_in,
-        lr,
-        betas[0],
-        betas[1],
-        eps,
-        weight_decay,
-        step,
-        amsgrad,
-        tt_max_exp_avg_sq_in,
-        tt_param_out,
-        tt_exp_avg_out,
-        tt_exp_avg_sq_out,
-        tt_max_exp_avg_sq_out,
+        lr=lr,
+        beta1=betas[0],
+        beta2=betas[1],
+        eps=eps,
+        weight_decay=weight_decay,
+        step=step,
+        amsgrad=amsgrad,
+        max_exp_avg_sq_in=tt_max_exp_avg_sq_in,
+        param_out=tt_param_out,
+        exp_avg_out=tt_exp_avg_out,
+        exp_avg_sq_out=tt_exp_avg_sq_out,
+        max_exp_avg_sq_out=tt_max_exp_avg_sq_out,
         compute_kernel_config=compute_kernel_config,
     )
 
@@ -214,6 +203,8 @@ def test_moreh_adamw_callback(shape, lr, betas, eps, weight_decay, amsgrad, step
     torch.manual_seed(0)
     for _ in range(2):
         run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
+        # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
+        tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
 
 
 @pytest.mark.parametrize(
