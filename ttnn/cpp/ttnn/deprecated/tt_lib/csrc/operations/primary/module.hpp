@@ -7,7 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
@@ -46,32 +45,6 @@ void py_module_types(py::module& m_primary) {
 }
 
 void py_module(py::module& m_primary) {
-    // moreh_adamw
-    m_primary.def(
-        "moreh_adamw",
-        &moreh_adamw,
-        py::arg("param_in").noconvert(),
-        py::arg("grad").noconvert(),
-        py::arg("exp_avg_in").noconvert(),
-        py::arg("exp_avg_sq_in").noconvert(),
-        py::arg("lr").noconvert() = 0.001f,
-        py::arg("beta1").noconvert() = 0.9f,
-        py::arg("beta2").noconvert() = 0.999f,
-        py::arg("eps").noconvert() = 1e-8f,
-        py::arg("weight_decay").noconvert() = 0.01f,
-        py::arg("step").noconvert(),
-        py::arg("amsgrad").noconvert() = false,
-        py::arg("max_exp_avg_sq_in").noconvert() = std::nullopt,
-        py::arg("param_out").noconvert() = std::nullopt,
-        py::arg("exp_avg_out").noconvert() = std::nullopt,
-        py::arg("exp_avg_sq_out").noconvert() = std::nullopt,
-        py::arg("max_exp_avg_sq_out").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a moreh_adamw operation.
-        )doc");
-
     // moreh_clip_grad_norm
     m_primary.def(
         "moreh_clip_grad_norm_",
