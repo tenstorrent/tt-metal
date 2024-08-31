@@ -5,14 +5,9 @@
 #include "common/core_coord.h"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
-
 #include "tt_metal/host_api.hpp"
-
 #include "ttnn/tensor/tensor_utils.hpp"
-
 #include "eth_l1_address_map.h"
-
-
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 
 /* All Gather Matmul fusion includes */
@@ -27,11 +22,36 @@ void AllGatherMatmul::validate(const std::vector<Tensor> &input_tensors, const s
 
     TT_ASSERT(input_tensors.size() == 4, "AllGatherMatmul requires 4 input tensors: [input, weight, all_gather_output, datacopy_output]");
 
+    auto& input_tensor = input_tensors[0];
+    auto& all_gather_output_tensor = input_tensors[1];
+    auto& weight_tensor = input_tensors[2];
+
     // All Gather validate
-    this->all_gather_struct.validate({input_tensors[0]});
+    this->all_gather_struct.validate({input_tensor});
 
     // Matmul validate.
-    this->matmul_struct.validate({input_tensors[1], input_tensors[2]}, optional_input_tensors);
+    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors);
+
+    // All Gather Matmul validate
+    TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
+    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1 && input_tensor.get_legacy_shape()[1] == 1, "AllGatherMatmul requires input tensor to have batch size of 1.");
+    std::visit([&] (const auto& config) {
+        using ProgramConfigType = std::decay_t<decltype(config)>;
+        if (not (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig> || std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>)) {
+            TT_FATAL("Unsupported MatmulProgramConfig type for AllGatherMatmul.");
+        }
+    }, this->matmul_struct.program_config.value());
+
+
+    const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
+    if (all_gather_output_tensor_shard_spec.has_value()) {
+
+        auto const& shard_grid = all_gather_output_tensor_shard_spec->grid.bounding_box();
+        auto const& shard_grid_start = shard_grid.start_coord;
+        auto const& shard_grid_end = shard_grid.end_coord;
+        const uint32_t num_all_gather_output_shards = (shard_grid_end.y - shard_grid_start.y + 1) * (shard_grid_end.x - shard_grid_start.x + 1);
+        TT_FATAL(this->all_gather_struct.ring_size == num_all_gather_output_shards, "AllGatherMatmul requires number of tensor slices to equal the number of output shards of the all_gather.");
+    }
 }
 
 std::vector<tt::tt_metal::Shape> AllGatherMatmul::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -63,7 +83,30 @@ std::vector<Tensor> AllGatherMatmul::create_output_tensors(const std::vector<Ten
 operation::ProgramWithCallbacks AllGatherMatmul::create_program(const std::vector<Tensor> & input_tensors, const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const {
 
     // Return the AllGatherMatmul program with callbacks
-    return all_gather_matmul_multi_core_with_workers(input_tensors[0], output_tensors[0], output_tensors[2], this->all_gather_struct.dim, this->all_gather_struct.num_links, this->all_gather_struct.ring_size, this->all_gather_struct.ring_index, this->all_gather_struct.receiver_device_id, this->all_gather_struct.sender_device_id, this->all_gather_struct.topology, this->all_gather_core_grid_offset);
+    return all_gather_matmul_multi_core_with_workers(
+        input_tensors[0], // input_tensor
+        output_tensors[0], // all_gather_output_tensor
+        output_tensors[2], // datacopy_output_tensor
+        input_tensors[2], // weight_tensor
+        output_tensors[1], // matmul_output_tensor
+
+        /* All Gather Params */
+        this->all_gather_struct.dim,
+        this->all_gather_struct.num_links,
+        this->all_gather_struct.ring_size,
+        this->all_gather_struct.ring_index,
+        this->all_gather_struct.receiver_device_id,
+        this->all_gather_struct.sender_device_id,
+        this->all_gather_struct.topology,
+        this->all_gather_core_grid_offset,
+
+        /* Matmul Params */
+        {}, // Bias
+        this->matmul_struct.bcast_batch.value(),
+        this->matmul_struct.compute_kernel_config.value(),
+        this->matmul_struct.program_config.value(),
+        this->matmul_struct.untilize_out
+    );
 }
 
 }  // namespace experimental
@@ -78,7 +121,8 @@ std::vector <ttnn::Tensor> all_gather_matmul(
     const uint32_t dim,
     const CoreCoord all_gather_core_grid_offset,
     const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& memory_config_ag,
+    const std::optional<MemoryConfig>& memory_config_mm,
     const bool transpose_a,
     const bool transpose_b,
     const std::optional<const DataType> dtype,
@@ -98,7 +142,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
 
 
     operation::launch_op(
-        [dim, all_gather_core_grid_offset, num_links, memory_config, transpose_a, transpose_b, dtype, program_config, activation, compute_kernel_config, core_grid, devices](
+        [dim, all_gather_core_grid_offset, num_links, memory_config_ag, memory_config_mm, transpose_a, transpose_b, dtype, program_config, activation, compute_kernel_config, core_grid, devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -107,7 +151,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
             const auto& weight_tensor = input_tensors[1];
 
             /* AllGather setup */
-            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config, devices);
+            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config_ag, devices);
 
             // Create the all gather output tensor used as input (activation) to the matmul
             ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
@@ -128,7 +172,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
                     /*parameters=*/operations::matmul::Matmul{
                         program_config,
                         /*bcast_batch=*/std::nullopt,
-                        memory_config.value_or(input_tensor.memory_config()),
+                        memory_config_mm.value_or(input_tensor.memory_config()),
                         dtype.value_or(input_tensor.get_dtype()),
                         compute_kernel_config,
                         /*untilize_out=*/false,

@@ -7,6 +7,8 @@
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+
 
 void kernel_main() {
     uint32_t arg_idx = 0;
@@ -45,18 +47,26 @@ void kernel_main() {
     constexpr uint32_t eth_sender_noc_y = get_compile_time_arg_val(19);
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(20);
     constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(21);
+    constexpr bool fuse_op = get_compile_time_arg_val(22);
+
+    /* Args for overlapped all gather */
+    OpSignaler op_signaler;
+
+    if constexpr(fuse_op) {
+        op_signaler = OpSignaler(arg_idx);
+    }
 
     static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
 
     #ifdef SHARDED_MEM_LAYOUT
-    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(22));
-    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(23);
-    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(24);
-    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(25);
-    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(26);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(27);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(28);
-    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(29) != 0;
+    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(23));
+    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(24);
+    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(25);
+    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(26);
+    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(27);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(28);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(29);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(30) != 0;
     #endif
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -136,6 +146,11 @@ void kernel_main() {
         ASSERT(num_pages_per_full_chunk == 0 || num_pages_per_full_chunk > rem_num_pages);
         ASSERT(half_cb_n_pages > rem_num_pages);
         pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
+    }
+
+    if constexpr(fuse_op) {
+        // Synchronize and signal that the local tensor slice is available
+        op_signaler.synchronize_workers_and_signal_op();
     }
 
     // num_transfers = num_devices - 1
