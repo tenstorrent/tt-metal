@@ -181,7 +181,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Load and prepare train/test data
-    data_path = Path("models/experimental/speculative_decode/draft_models/n_gram_models/data")
+    data_path = Path("models/experimental/speculative_decode/draft_models/n_gram/data")
     train, test = load_data(data_path)
 
     # Load the Tokenizer
