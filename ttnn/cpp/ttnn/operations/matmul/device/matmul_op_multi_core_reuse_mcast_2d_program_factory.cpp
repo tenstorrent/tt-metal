@@ -24,6 +24,7 @@ using namespace tt;
 using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
+    tt_metal::Program& program,
     tt_metal::Device* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -49,9 +50,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::DataFormat in1_data_format,
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
-    bool untilize_out) {
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
+    bool fuse_op = fused_op_signaler.has_value();
+
     TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
-    tt_metal::Program program{};
 
     uint32_t num_blocks = K / in0_block_w;
 
@@ -343,6 +346,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)B       // batch
         };
     }
+    in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)in1_is_dram,
@@ -389,6 +394,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
         in1_sender_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
+
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
+
     if (in1_is_sharded and in1_is_dram) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in0_block_w);
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in1_single_tile_size);
@@ -524,6 +532,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     .defines = mm_kernel_in0_sender_sharded_defines});
         }
     } else {
+
+        if (fuse_op) {
+            // Create semaphores
+            fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
+        }
+
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
@@ -900,6 +914,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 mm_in0_sender_args.push_back(per_core_M);
             }
 
+            if (fuse_op) {
+                fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
+            }
+
             tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_0_default
 
             // in0 receiver
@@ -1035,6 +1053,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                         }
                     }
                     mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 19, num_iter);
+                }
+                if (fuse_op) {
+                    fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
                 }
                 tt_metal::SetRuntimeArgs(
                     program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_1_default
@@ -1198,6 +1219,7 @@ namespace operations {
 namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
+    tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor> bias,
@@ -1213,7 +1235,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     bool fuse_batch,
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
-    bool untilize_out) {
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     // CB dataformats
@@ -1333,6 +1356,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
+        program,
         device,
         math_fidelity,
         fp32_dest_acc_en,
@@ -1358,7 +1382,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(
         in1_data_format,
         bias_data_format,
         output_data_format,
-        untilize_out);
+        untilize_out,
+        fused_op_signaler);
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
@@ -1378,7 +1403,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out) {
+
+    tt_metal::Program program{}; /* Create a program */
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
+
     return matmul_multi_core_reuse_mcast_2d_optimized_(
+        program,
         a,
         b,
         bias,
@@ -1394,7 +1424,43 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
         fuse_batch,
         transpose_mcast,
         fused_activation,
-        untilize_out);
+        untilize_out,
+        empty_fused_op_signaler);
+}
+
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    tt_metal::Program& program, /* Take programa as input by reference */
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<const Tensor> bias,
+    Tensor& output_tensor,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const MatmulProgramConfig program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
+
+    MatmulMultiCoreReuseMultiCastProgramConfig config = std::get<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config);
+
+    return matmul_multi_core_reuse_mcast_2d_optimized_(
+        program,
+        a,
+        b,
+        bias,
+        output_tensor,
+        broadcast_batch,
+        config.compute_with_storage_grid_size,
+        compute_kernel_config,
+        config.in0_block_w,
+        config.out_subblock_h,
+        config.out_subblock_w,
+        config.per_core_M,
+        config.per_core_N,
+        config.fuse_batch,
+        config.transpose_mcast,
+        config.fused_activation,
+        untilize_out,
+        fused_op_signaler);
 }
 
 }  // namespace matmul
