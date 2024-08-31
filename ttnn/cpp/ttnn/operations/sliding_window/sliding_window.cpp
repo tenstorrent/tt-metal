@@ -24,9 +24,9 @@ bool SlidingWindowConfig::has_parallel_config() const {
     * Calculate the window op output shape, excludes the channel dimension since this config is independent of the depth.
     */
 Shape SlidingWindowConfig::get_output_shape() const {
-    uint32_t output_h = (input_hw.first + 2 * pad_hw.first - dilation_hw.first * window_hw.first) / stride_hw.first + 1;
-    uint32_t output_w = (input_hw.second + 2 * pad_hw.second - dilation_hw.second * window_hw.second) / stride_hw.second + 1;
-    log_debug(tt::LogOp, "output_size: {} {} {}", batch_size, output_h, output_w);
+    uint32_t output_h = (input_hw.first + 2 * pad_hw.first - window_hw.first - (dilation_hw.first - 1) * (window_hw.first - 1 )) / stride_hw.first + 1;
+    uint32_t output_w = (input_hw.second + 2 * pad_hw.second - window_hw.second - (dilation_hw.second - 1) * (window_hw.second - 1 )) / stride_hw.second + 1;
+    log_debug(tt::LogOp, "SlidingWindowConfig::output_size: {} {} {}", batch_size, output_h, output_w);
     return Shape( std::vector<uint32_t>{batch_size, output_h, output_w, 0});
 }
 

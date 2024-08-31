@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
@@ -215,12 +216,17 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
+
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
+    uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
+    uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
+
     uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
     uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
+
     uint32_t input_size_h = conv_act_size_h + (pad_h*2);
     uint32_t input_size_w = conv_act_size_w + (pad_w*2);
 
@@ -310,7 +316,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     log_debug(LogOp, "act_block_num_tiles_split_last: {}", act_block_num_tiles_split_last);
     log_debug(LogOp, "act_block_w_datums: {}", act_block_w_datums);
     log_debug(LogOp, "conv_act_size_c: {}", conv_act_size_c);
+    log_debug(LogOp, "filter_h: {}", filter_h);
     log_debug(LogOp, "filter_w: {}", filter_w);
+    log_debug(LogOp, "dilation_h: {}", dilation_h);
+    log_debug(LogOp, "dilation_w: {}", dilation_w);
+
+
 
     // TT_FATAL(
     //     (act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH)) ||
@@ -526,8 +537,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)0, // Never in DRAM
         (uint32_t)stride_h,
         (uint32_t)stride_w,
+        (uint32_t)dilation_h,
+        (uint32_t)dilation_w,
         (uint32_t)input_size_w,
-        (uint32_t)conv_output_size_w,  // conv_output_w_last_index
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)filter_h, //Input filter window height
         (uint32_t)filter_w, //Input filter window width
