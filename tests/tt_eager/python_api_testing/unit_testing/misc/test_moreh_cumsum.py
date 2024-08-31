@@ -54,11 +54,6 @@ def get_backward_tensors(input_shape, device):
         ([TILE_HEIGHT // 2, TILE_WIDTH // 2]),
         ([2, 3, 4, TILE_HEIGHT * 5 + TILE_HEIGHT // 2, TILE_WIDTH * 5 + TILE_WIDTH // 2]),
     ),
-    ids=[
-        "0",
-        "1",
-        "2",
-    ],
 )
 @pytest.mark.parametrize(
     "dim",
@@ -84,8 +79,8 @@ def test_moreh_cumsum(input_shape, dim, use_provide_output, compute_kernel_optio
     if dim >= input_rank:
         pytest.skip(f"input dim {dim} exceeds the dims of input tensor {input_rank}")
     # TODO: remove this condition
-    if dim >= input_rank - 2:
-        pytest.skip("last two dimensions are not supported")
+    if dim == input_rank - 1:
+        pytest.skip("not supported")
 
     (tt_input, tt_output, torch_input) = get_tensors(input_shape, device)
     if not use_provide_output:
@@ -120,13 +115,10 @@ def test_moreh_cumsum(input_shape, dim, use_provide_output, compute_kernel_optio
     (
         ([TILE_HEIGHT, TILE_WIDTH]),
         ([TILE_HEIGHT // 2, TILE_WIDTH // 2]),
+        ([2 * TILE_HEIGHT - 7, 2 * TILE_WIDTH - 7]),
+        ([TILE_HEIGHT + 6, TILE_WIDTH + 6]),
         ([2, 3, 4, TILE_HEIGHT * 5 + TILE_HEIGHT // 2, TILE_WIDTH * 5 + TILE_WIDTH // 2]),
     ),
-    ids=[
-        "0",
-        "1",
-        "2",
-    ],
 )
 @pytest.mark.parametrize(
     "dim",
@@ -152,7 +144,7 @@ def test_moreh_cumsum_backward(input_shape, dim, use_provide_output, compute_ker
     if dim >= input_rank:
         pytest.skip(f"input dim {dim} exceeds the dims of input tensor {input_rank}")
     # TODO: remove this condition
-    if dim >= input_rank - 2:
+    if dim == input_rank - 1:
         pytest.skip("last two dimensions are not supported")
 
     (_, _, torch_input) = get_tensors(input_shape, device)

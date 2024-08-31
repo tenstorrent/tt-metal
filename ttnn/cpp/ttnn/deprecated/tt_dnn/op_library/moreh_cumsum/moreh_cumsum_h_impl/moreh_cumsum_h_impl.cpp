@@ -15,17 +15,21 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_cumsum_nc_impl(
+operation::ProgramWithCallbacks moreh_cumsum_h_impl(
     const Tensor &input,
     const Tensor &output,
-    const int64_t &dim,
     const bool &flip,
     const ttnn::DeviceComputeKernelConfig &compute_kernel_config) {
     const auto &shape = input.get_legacy_shape();
-    const uint32_t M = std::accumulate(shape.begin(), shape.begin() + dim, 1, std::multiplies<uint32_t>{});
-    const uint32_t N = shape[dim];
-    const uint32_t P = std::accumulate(shape.begin() + dim + 1, shape.end(), 1, std::multiplies<uint32_t>{}) /
-                       TILE_WIDTH / TILE_HEIGHT;
+    const uint32_t W = shape[-1];
+    const uint32_t H = shape[-2];
+    const uint32_t NC = std::accumulate(shape.begin(), shape.end() - 2, 1, std::multiplies<uint32_t>{});
+
+    const uint32_t Wt = W / TILE_WIDTH;
+    const uint32_t Ht = H / TILE_HEIGHT;
+
+    const uint32_t origin_H = shape.without_padding()[-2];
+    const uint32_t mask_h = origin_H % TILE_HEIGHT != 0 ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -37,20 +41,18 @@ operation::ProgramWithCallbacks moreh_cumsum_nc_impl(
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    const uint32_t num_cols = M * P;
+    const uint32_t num_cols = NC * Wt;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
         tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_cols);
 
     constexpr CB cb_src = CB::c_in0;
-    constexpr CB cb_zero = CB::c_in1;
     constexpr CB cb_acc = CB::c_intermed0;
     constexpr CB cb_dst = CB::c_out0;
 
-    const uint32_t cb_src_num_tiles = 1;
-    const uint32_t cb_zero_num_tiles = 1;
-    const uint32_t cb_acc_num_tiles = 2;
-    const uint32_t cb_dst_num_tiles = 1;
+    constexpr uint32_t cb_src_num_tiles = 2;
+    constexpr uint32_t cb_acc_num_tiles = 1;
+    constexpr uint32_t cb_dst_num_tiles = 2;
 
     CreateCircularBuffer(
         program,
@@ -58,14 +60,13 @@ operation::ProgramWithCallbacks moreh_cumsum_nc_impl(
         src_data_format,
         {
             {cb_src, cb_src_num_tiles},
+            {cb_acc, cb_acc_num_tiles},
         });
     CreateCircularBuffer(
         program,
         all_cores,
         dst_data_format,
         {
-            {cb_zero, cb_zero_num_tiles},
-            {cb_acc, cb_acc_num_tiles},
             {cb_dst, cb_dst_num_tiles},
         });
 
@@ -73,38 +74,38 @@ operation::ProgramWithCallbacks moreh_cumsum_nc_impl(
     const uint32_t src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args{
         src_is_dram,
-        N,
-        P,
+        Ht,
+        Wt,
         static_cast<uint32_t>(flip),
     };
     tt_metal::Buffer *dst_buffer = output.buffer();
     const uint32_t dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args{
         dst_is_dram,
-        N,
-        P,
+        Ht,
+        Wt,
         static_cast<uint32_t>(flip),
     };
 
     const auto reader_kernel_id = CreateReadKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_nc_impl/kernels/"
-        "reader_moreh_cumsum_nc.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_h_impl/kernels/reader_moreh_cumsum_h.cpp",
         all_cores,
         reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_nc_impl/kernels/"
-        "writer_moreh_cumsum_nc.cpp",
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_h_impl/kernels/writer_moreh_cumsum_h.cpp",
         all_cores,
         writer_compile_time_args);
 
     tt_metal::KernelHandle compute_kernel_1_id, compute_kernel_2_id;
 
     const std::vector<uint32_t> compute_args_group_1{
-        N,
-        P,
+        Ht,
+        Wt,
         num_cols_per_core_group_1,
+        static_cast<uint32_t>(flip),
+        mask_h,
     };
     std::map<string, string> compute_defines{};
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
@@ -126,7 +127,7 @@ operation::ProgramWithCallbacks moreh_cumsum_nc_impl(
     log_debug(LogOp, "data format {}", src_data_format);
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_nc_impl/kernels/moreh_cumsum_nc.cpp";
+        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_h_impl/kernels/moreh_cumsum_h.cpp";
     compute_kernel_1_id = CreateComputeKernel(
         program,
         compute_kernel_file,
@@ -139,9 +140,11 @@ operation::ProgramWithCallbacks moreh_cumsum_nc_impl(
 
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{
-            N,
-            P,
+            Ht,
+            Wt,
             num_cols_per_core_group_2,
+            static_cast<uint32_t>(flip),
+            mask_h,
         };
 
         compute_kernel_2_id = CreateComputeKernel(

@@ -58,11 +58,15 @@ operation::ProgramWithCallbacks MorehCumSum::create_program(
     auto& input = inputs.at(0);
     auto& output = outputs.at(0);
 
-    if (dim + 2 >= input.get_legacy_shape().rank()) {
-        TT_ASSERT(false, "currenty last 2 dims are not supported");
-    }
+    const auto input_rank = input.get_legacy_shape().rank();
 
-    return moreh_cumsum_nc_impl(input, output, dim, flip, compute_kernel_config);
+    if (dim == input_rank - 1) {
+        TT_FATAL(false, "not implemented");
+    } else if (dim == input_rank - 2) {
+        return moreh_cumsum_h_impl(input, output, flip, compute_kernel_config);
+    } else {
+        return moreh_cumsum_nc_impl(input, output, dim, flip, compute_kernel_config);
+    }
 }
 
 Tensor moreh_cumsum_(
@@ -71,7 +75,7 @@ Tensor moreh_cumsum_(
     std::optional<const Tensor> output,
     const bool flip,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input}))};
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE);
@@ -106,7 +110,7 @@ Tensor moreh_cumsum(
     const int64_t& dim,
     std::optional<const Tensor> output,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     return moreh_cumsum_(input, dim, output, false, output_mem_config, compute_kernel_config);
 }
 
@@ -115,7 +119,7 @@ Tensor moreh_cumsum_backward(
     const int64_t& dim,
     std::optional<const Tensor> input_grad,
     const MemoryConfig& output_mem_config,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     return moreh_cumsum_(output_grad, dim, input_grad, true, output_mem_config, compute_kernel_config);
 }
 
