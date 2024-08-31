@@ -9,9 +9,9 @@
 
 namespace ttnn::events {
 
-MultiDeviceEvent::MultiDeviceEvent(DeviceMesh* device_mesh) {
-    TT_ASSERT(device_mesh != nullptr, "Must provide a valid device_mesh when initializing an event on multiple devices.");
-    auto& devices = device_mesh->mesh_devices;
+MultiDeviceEvent::MultiDeviceEvent(MeshDevice* mesh_device) {
+    TT_ASSERT(mesh_device != nullptr, "Must provide a valid mesh_device when initializing an event on multiple devices.");
+    auto& devices = mesh_device->mesh_devices;
     this->events = std::vector<std::shared_ptr<Event>>(devices.size());
     for (int event_idx = 0; event_idx < devices.size(); event_idx++) {
         this->events[event_idx] = std::make_shared<Event>();
@@ -39,8 +39,8 @@ void wait_for_event(uint8_t cq_id, const std::shared_ptr<Event>& event) {
     });
 }
 
-MultiDeviceEvent create_event(DeviceMesh* device_mesh) {
-    return MultiDeviceEvent(device_mesh);
+MultiDeviceEvent create_event(MeshDevice* mesh_device) {
+    return MultiDeviceEvent(mesh_device);
 }
 
 void record_event(uint8_t cq_id, const MultiDeviceEvent& multi_device_event) {

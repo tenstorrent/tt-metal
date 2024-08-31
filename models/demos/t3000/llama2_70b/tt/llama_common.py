@@ -35,8 +35,8 @@ from ttnn import (
 
 
 class ShardTensor2dMesh(TensorToMesh):
-    def __init__(self, device_mesh, dims, cluster_shape):
-        super().__init__(device_mesh)
+    def __init__(self, mesh_device, dims, cluster_shape):
+        super().__init__(mesh_device)
         self.dims = dims
         self.cluster_shape = cluster_shape
 
@@ -66,10 +66,10 @@ class ShardTensor2dMesh(TensorToMesh):
 
 
 class ConcatMesh2DToTensor(MeshToTensor):
-    def __init__(self, device_mesh, dims, cluster_shape):
+    def __init__(self, mesh_device, dims, cluster_shape):
         self.dims = dims
         self.cluster_shape = cluster_shape
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
 
     def compose(self, tensor: ttnn.Tensor) -> torch.Tensor:
         tt_shards = [ttnn.to_torch(tt_input_tensor) for tt_input_tensor in ttnn.get_device_tensors(tensor)]
@@ -185,13 +185,13 @@ def setup_llama_env(llama_version="llama3", batch=32, seq_len=1, n_devices=8, ma
     return model_config, ckpt_dir, tokenizer_path, cache_path
 
 
-def check_device_mesh(t3k_device_mesh, model_config):
-    assert t3k_device_mesh.get_num_devices() >= model_config["NUM_DEVICES"], (
+def check_mesh_device(t3k_mesh_device, model_config):
+    assert t3k_mesh_device.get_num_devices() >= model_config["NUM_DEVICES"], (
         "Requires at least %d devices to run",
         model_config["NUM_DEVICES"],
     )
 
-    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
+    compute_grid_size = t3k_mesh_device.get_device(0).compute_with_storage_grid_size()
     assert not (
         compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]
     ), ("Requires grid size of at least %d to run", model_config["MAX_GRID_SIZE"])

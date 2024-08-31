@@ -83,7 +83,7 @@ void bind_max_pool2d_operation(py::module& module) {
                 std::array<uint32_t, 2> stride,
                 std::array<uint32_t, 2> padding,
                 std::array<uint32_t, 2> dilation,
-                DeviceMesh* device,
+                MeshDevice* device,
                 const uint8_t& queue_id)
                 -> ttnn::Tensor { return self(queue_id,
                                             input_tensor,

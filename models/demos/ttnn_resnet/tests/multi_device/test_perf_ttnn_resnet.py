@@ -455,7 +455,7 @@ def run_perf_resnet(
     indirect=["enable_async_mode"],
 )
 def test_perf_t3000(
-    device_mesh,
+    mesh_device,
     use_program_cache,
     device_batch_size,
     expected_inference_time,
@@ -470,7 +470,7 @@ def test_perf_t3000(
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
-        device_mesh,
+        mesh_device,
         f"resnet50_{mode}",
         model_location_generator,
     )
@@ -485,7 +485,7 @@ def test_perf_t3000(
     indirect=["enable_async_mode"],
 )
 def test_perf_trace_t3000(
-    device_mesh,
+    mesh_device,
     use_program_cache,
     device_batch_size,
     expected_inference_time,
@@ -500,7 +500,7 @@ def test_perf_trace_t3000(
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
-        device_mesh,
+        mesh_device,
         f"resnet50_trace_{mode}",
         model_location_generator,
     )
@@ -515,7 +515,7 @@ def test_perf_trace_t3000(
     indirect=["enable_async_mode"],
 )
 def test_perf_2cqs_t3000(
-    device_mesh,
+    mesh_device,
     use_program_cache,
     device_batch_size,
     expected_inference_time,
@@ -530,7 +530,7 @@ def test_perf_2cqs_t3000(
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
-        device_mesh,
+        mesh_device,
         f"resnet50_2cqs_{mode}",
         model_location_generator,
     )
@@ -547,7 +547,7 @@ def test_perf_2cqs_t3000(
     indirect=["enable_async_mode"],
 )
 def test_perf_trace_2cqs_t3000(
-    device_mesh,
+    mesh_device,
     use_program_cache,
     device_batch_size,
     expected_inference_time,
@@ -562,7 +562,7 @@ def test_perf_trace_2cqs_t3000(
         expected_inference_time,
         expected_compile_time,
         hf_cat_image_sample_input,
-        device_mesh,
+        mesh_device,
         f"resnet50_trace_2cqs_{mode}",
         model_location_generator,
     )

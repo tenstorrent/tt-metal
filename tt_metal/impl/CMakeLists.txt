@@ -2,8 +2,8 @@
 set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/device/device_pool.cpp
-	${CMAKE_CURRENT_SOURCE_DIR}/device/device_mesh.cpp
-	${CMAKE_CURRENT_SOURCE_DIR}/device/device_mesh_view.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/device/mesh_device.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/device/mesh_device_view.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp

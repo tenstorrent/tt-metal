@@ -13,7 +13,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_device_mesh,
+    check_mesh_device,
     MAX_SEQ_LEN,
     BASE_URL,
     load_llama_state_dict,
@@ -97,7 +97,7 @@ def calculate_decode_times(profiler, generation_length):
     return times, times[f"decode_time_{generation_length}"]
 
 
-def run_inference(tt_model, tokenizer, tokens, device_mesh, configuration, total_len, input_text_mask):
+def run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total_len, input_text_mask):
     start_pos = 0
     prev_pos = 0
     for cur_pos in range(start_pos + 1, total_len):
@@ -115,7 +115,7 @@ def run_inference(tt_model, tokenizer, tokens, device_mesh, configuration, total
         del tt_inp_emb
         del rot_mat
         del attn_mask
-        logits = ttnn.to_torch(tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
+        logits = ttnn.to_torch(tt_logits, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
         logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]
         del tt_logits
 
@@ -126,7 +126,7 @@ def run_inference(tt_model, tokenizer, tokens, device_mesh, configuration, total
 
 
 def run_test_LlamaModel_end_to_end(
-    device_mesh,
+    mesh_device,
     batch,
     seq_len,
     model_config,
@@ -172,7 +172,7 @@ def run_test_LlamaModel_end_to_end(
     logger.info("Moving weights to devices; might take some time...")
     profiler.start("TT_llama_model_setup")
     tt_model = TtLlamaModel_optimized(
-        device_mesh,
+        mesh_device,
         state_dict,
         BASE_URL,
         n_layers,
@@ -182,8 +182,8 @@ def run_test_LlamaModel_end_to_end(
         read_cache=True,
     )
 
-    for i in device_mesh.get_device_ids():
-        device = device_mesh.get_device(i)
+    for i in mesh_device.get_device_ids():
+        device = mesh_device.get_device(i)
         ttnn.synchronize_device(device)
 
     profiler.end("TT_llama_model_setup")
@@ -193,7 +193,7 @@ def run_test_LlamaModel_end_to_end(
     logger.info("Running 1st run decode stage with compile...")
 
     profiler.start(f"end_to_end_inference_with_compile")
-    run_inference(tt_model, tokenizer, tokens, device_mesh, configuration, total_len, input_text_mask)
+    run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total_len, input_text_mask)
     profiler.end(f"end_to_end_inference_with_compile")
     profiler.print()
     compile_and_loop_time = profiler.get("end_to_end_inference_with_compile")
@@ -201,7 +201,7 @@ def run_test_LlamaModel_end_to_end(
     logger.info(f"decode with compile time, single iter latency: {compile_iter_time}")
 
     profiler.start(f"end_to_end_inference")
-    run_inference(tt_model, tokenizer, tokens, device_mesh, configuration, total_len, input_text_mask)
+    run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total_len, input_text_mask)
     profiler.end(f"end_to_end_inference")
     profiler.print()
     loop_time = profiler.get("end_to_end_inference")
@@ -258,7 +258,7 @@ def test_Llama_perf_host(
     generation_length,
     expected_compile_time,
     expected_inference_time,
-    t3k_device_mesh,
+    t3k_mesh_device,
     llama_version,
     use_program_cache,
     n_layers=80,
@@ -275,16 +275,16 @@ def test_Llama_perf_host(
         seq_len=seq_len,
     )
 
-    check_device_mesh(t3k_device_mesh, model_config)
+    check_mesh_device(t3k_mesh_device, model_config)
 
-    for i in t3k_device_mesh.get_device_ids():
-        device = t3k_device_mesh.get_device(i)
+    for i in t3k_mesh_device.get_device_ids():
+        device = t3k_mesh_device.get_device(i)
         device.enable_async(True)
 
     disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end(
-        t3k_device_mesh,
+        t3k_mesh_device,
         batch,
         seq_len,
         model_config,

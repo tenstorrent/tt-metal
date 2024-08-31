@@ -34,7 +34,7 @@ from models.utility_functions import is_wormhole_b0
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)  # Option to run Falcon in Async mode
 @pytest.mark.parametrize(
-    "device_mesh",
+    "mesh_device",
     (
         (4, 4),
         (8, 4),
@@ -51,13 +51,13 @@ def test_demo_multichip(
     user_input,
     model_location_generator,
     get_tt_cache_path,
-    device_mesh,
+    mesh_device,
     use_program_cache,
     enable_async_mode,
     is_ci_env,
 ):
     assert is_wormhole_b0(), "Multi-chip is only supported for Wormhole B0"
-    num_devices = device_mesh.get_num_devices()
+    num_devices = mesh_device.get_num_devices()
 
     if is_ci_env:
         if num_devices != 32 or (not expected_greedy_output_path and not expected_perf_metrics):
@@ -84,7 +84,7 @@ def test_demo_multichip(
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-L1_SHARDED"],
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        device_mesh=device_mesh,
+        mesh_device=mesh_device,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,
         expected_perf_metrics=expected_perf_metrics,

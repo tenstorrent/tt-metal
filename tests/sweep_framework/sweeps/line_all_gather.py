@@ -62,22 +62,22 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def device_mesh_fixture():
+def mesh_device_fixture():
     import tt_lib as ttl
 
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
     device_ids = [0, 4, 5, 1, 2, 6, 7, 3]
     num_devices_requested = len(device_ids)
-    device_mesh = ttnn.open_device_mesh(ttnn.DeviceGrid(1, num_devices_requested), device_ids[:num_devices_requested])
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested), device_ids[:num_devices_requested])
     print("ALL GATHER: Opened device mesh")
 
-    yield (device_mesh, "T3000 Mesh")
+    yield (mesh_device, "T3000 Mesh")
 
     print("ALL GATHER: Closing device mesh")
-    for device in device_mesh.get_devices():
+    for device in mesh_device.get_devices():
         ttnn.DumpDeviceProfiler(device)
-    ttnn.close_device_mesh(device_mesh)
-    del device_mesh
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -96,8 +96,8 @@ def run(
     *,
     device,
 ) -> list:
-    t3k_device_mesh = device
-    for device in t3k_device_mesh.get_devices():
+    t3k_mesh_device = device
+    for device in t3k_mesh_device.get_devices():
         device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
@@ -105,8 +105,8 @@ def run(
 
     input_tensor = torch.rand(input_shape).bfloat16()
 
-    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=dim))
-    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_device_mesh)
+    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim))
+    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 
     for i in range(num_iters):
         start_time = start_measuring_time()

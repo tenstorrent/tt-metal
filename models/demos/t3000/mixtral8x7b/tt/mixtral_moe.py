@@ -9,9 +9,9 @@ from models.common.lightweightmodule import LightweightModule
 
 
 class TtMoeLayer(LightweightModule):
-    def __init__(self, device_mesh, state_dict, experts, args, layer_num, dtype):
+    def __init__(self, mesh_device, state_dict, experts, args, layer_num, dtype):
         super().__init__()
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.experts = experts
         self.args = args
         self.dtype = dtype
@@ -43,8 +43,8 @@ class TtMoeLayer(LightweightModule):
             layout=self.model_config["GATE_W_LAYOUT_TILE"],
             memory_config=self.model_config["GATE_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensorToMesh(device_mesh, dim=1),
+            device=self.mesh_device,
+            mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
         )
 
         self.tile_size = 32
@@ -56,8 +56,8 @@ class TtMoeLayer(LightweightModule):
             top8_mask,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            device=mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
         self.top8_mask_11B_64 = ttnn.sum(self.top8_mask_11B_64, dim=2)
 
@@ -67,8 +67,8 @@ class TtMoeLayer(LightweightModule):
             top2_mask,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            device=mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
         self.top2_mask_11BB = ttnn.sum(self.top2_mask_11BB, dim=2)
 
@@ -79,8 +79,8 @@ class TtMoeLayer(LightweightModule):
             reduce_mask_torch,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            device=self.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
     def forward(self, inputs, mode="decode"):

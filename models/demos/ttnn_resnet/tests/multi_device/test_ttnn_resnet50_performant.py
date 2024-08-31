@@ -39,7 +39,7 @@ ttnn.buffer_address = buffer_address
 )
 @pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_inference(
-    device_mesh,
+    mesh_device,
     use_program_cache,
     device_batch_size,
     act_dtype,
@@ -53,12 +53,12 @@ def test_run_resnet50_inference(
     if is_wormhole_b0() and device_batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
 
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(device_mesh, dim=0)
-    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device_mesh)
-    output_mesh_composer = ttnn.ConcatMeshToTensor(device_mesh, dim=0)
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     test_infra = create_test_infra(
-        device_mesh,
+        mesh_device,
         device_batch_size,
         act_dtype,
         weight_dtype,
@@ -72,20 +72,20 @@ def test_run_resnet50_inference(
     )
 
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(
-        device_mesh,
+        mesh_device,
         mesh_mapper=inputs_mesh_mapper,
     )
 
     # First run configures convs JIT
-    test_infra.input_tensor = tt_inputs_host.to(device_mesh, input_mem_config)
+    test_infra.input_tensor = tt_inputs_host.to(mesh_device, input_mem_config)
     test_infra.run()
     # Optimized run
-    test_infra.input_tensor = tt_inputs_host.to(device_mesh, input_mem_config)
+    test_infra.input_tensor = tt_inputs_host.to(mesh_device, input_mem_config)
     test_infra.run()
     # More optimized run with caching
     if use_signpost:
         signpost(header="start")
-    test_infra.input_tensor = tt_inputs_host.to(device_mesh, input_mem_config)
+    test_infra.input_tensor = tt_inputs_host.to(mesh_device, input_mem_config)
     test_infra.run()
     if use_signpost:
         signpost(header="stop")
@@ -100,7 +100,7 @@ def test_run_resnet50_inference(
 )
 @pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_trace_inference(
-    device_mesh,
+    mesh_device,
     use_program_cache,
     device_batch_size,
     act_dtype,
@@ -114,12 +114,12 @@ def test_run_resnet50_trace_inference(
     if is_wormhole_b0() and device_batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
 
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(device_mesh, dim=0)
-    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device_mesh)
-    output_mesh_composer = ttnn.ConcatMeshToTensor(device_mesh, dim=0)
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     test_infra = create_test_infra(
-        device_mesh,
+        mesh_device,
         device_batch_size,
         act_dtype,
         weight_dtype,
@@ -132,10 +132,10 @@ def test_run_resnet50_trace_inference(
         model_location_generator=model_location_generator,
     )
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(
-        device_mesh,
+        mesh_device,
         mesh_mapper=inputs_mesh_mapper,
     )
-    tt_image_res = tt_inputs_host.to(device_mesh, sharded_mem_config_DRAM)
+    tt_image_res = tt_inputs_host.to(mesh_device, sharded_mem_config_DRAM)
 
     # First run configures convs JIT
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 0)
@@ -149,16 +149,16 @@ def test_run_resnet50_trace_inference(
 
     # Capture
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 0)
-    tid = ttnn.begin_trace_capture(device_mesh, cq_id=0)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     test_infra.run()
-    ttnn.end_trace_capture(device_mesh, tid, cq_id=0)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
 
     # More optimized run with caching
     if use_signpost:
         signpost(header="start")
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 0)
-    ttnn.execute_trace(device_mesh, tid, cq_id=0, blocking=True)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
     if use_signpost:
         signpost(header="stop")
     test_infra.validate()
@@ -172,7 +172,7 @@ def test_run_resnet50_trace_inference(
 )
 @pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_2cqs_inference(
-    device_mesh,
+    mesh_device,
     use_program_cache,
     device_batch_size,
     act_dtype,
@@ -186,12 +186,12 @@ def test_run_resnet50_2cqs_inference(
     if is_wormhole_b0() and device_batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
 
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(device_mesh, dim=0)
-    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device_mesh)
-    output_mesh_composer = ttnn.ConcatMeshToTensor(device_mesh, dim=0)
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     test_infra = create_test_infra(
-        device_mesh,
+        mesh_device,
         device_batch_size,
         act_dtype,
         weight_dtype,
@@ -204,12 +204,12 @@ def test_run_resnet50_2cqs_inference(
         model_location_generator=model_location_generator,
     )
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(
-        device_mesh,
+        mesh_device,
         mesh_mapper=inputs_mesh_mapper,
     )
-    tt_image_res = tt_inputs_host.to(device_mesh, sharded_mem_config_DRAM)
-    op_event = ttnn.create_event(device_mesh)
-    write_event = ttnn.create_event(device_mesh)
+    tt_image_res = tt_inputs_host.to(mesh_device, sharded_mem_config_DRAM)
+    op_event = ttnn.create_event(mesh_device)
+    write_event = ttnn.create_event(mesh_device)
     # Initialize the op event so we can write
     ttnn.record_event(0, op_event)
 
@@ -246,7 +246,7 @@ def test_run_resnet50_2cqs_inference(
         ttnn.record_event(0, op_event)
         outputs.append(ttnn.from_device(test_infra.run(), blocking=False))
 
-    ttnn.synchronize_devices(device_mesh)
+    ttnn.synchronize_devices(mesh_device)
 
     if use_signpost:
         signpost(header="stop")
@@ -264,7 +264,7 @@ def test_run_resnet50_2cqs_inference(
 )
 @pytest.mark.parametrize("enable_async_mode", [True, False], indirect=True)
 def test_run_resnet50_trace_2cqs_inference(
-    device_mesh,
+    mesh_device,
     use_program_cache,
     device_batch_size,
     act_dtype,
@@ -278,12 +278,12 @@ def test_run_resnet50_trace_2cqs_inference(
     if is_wormhole_b0() and device_batch_size == 20:
         pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
 
-    inputs_mesh_mapper = ttnn.ShardTensorToMesh(device_mesh, dim=0)
-    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device_mesh)
-    output_mesh_composer = ttnn.ConcatMeshToTensor(device_mesh, dim=0)
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
     test_infra = create_test_infra(
-        device_mesh,
+        mesh_device,
         device_batch_size,
         act_dtype,
         weight_dtype,
@@ -296,12 +296,12 @@ def test_run_resnet50_trace_2cqs_inference(
         model_location_generator=model_location_generator,
     )
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(
-        device_mesh,
+        mesh_device,
         mesh_mapper=inputs_mesh_mapper,
     )
-    tt_image_res = tt_inputs_host.to(device_mesh, sharded_mem_config_DRAM)
-    op_event = ttnn.create_event(device_mesh)
-    write_event = ttnn.create_event(device_mesh)
+    tt_image_res = tt_inputs_host.to(mesh_device, sharded_mem_config_DRAM)
+    op_event = ttnn.create_event(mesh_device)
+    write_event = ttnn.create_event(mesh_device)
     # Initialize the op event so we can write
     ttnn.record_event(0, op_event)
 
@@ -336,16 +336,16 @@ def test_run_resnet50_trace_2cqs_inference(
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     ttnn.record_event(0, op_event)
-    tid = ttnn.begin_trace_capture(device_mesh, cq_id=0)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     test_infra.run()
     input_tensor = ttnn.allocate_tensor_on_device(
         shape,
         dtype,
         layout,
-        device_mesh,
+        mesh_device,
         input_mem_config,
     )
-    ttnn.end_trace_capture(device_mesh, tid, cq_id=0)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     assert first_out_addr == ttnn.buffer_address(input_tensor)
     test_infra.validate()
 
@@ -361,9 +361,9 @@ def test_run_resnet50_trace_2cqs_inference(
         # TODO: Add in place support to ttnn to_memory_config
         input_tensor = ttnn.reshard(tt_image_res, input_mem_config, input_tensor)
         ttnn.record_event(0, op_event)
-        ttnn.execute_trace(device_mesh, tid, cq_id=0, blocking=False)
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
         outputs.append(ttnn.from_device(test_infra.output_tensor, blocking=False))
-    ttnn.synchronize_devices(device_mesh)
+    ttnn.synchronize_devices(mesh_device)
 
     if use_signpost:
         signpost(header="stop")

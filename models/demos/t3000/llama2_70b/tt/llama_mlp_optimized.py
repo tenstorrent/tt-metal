@@ -12,7 +12,7 @@ from ttnn import ShardTensorToMesh
 class TtLlamaMLP_optimized:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -23,8 +23,8 @@ class TtLlamaMLP_optimized:
         read_cache=False,
     ):
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = device_mesh.get_num_devices()
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         self.model_config = model_config
         self.emulated = emulated
         self.read_cache = read_cache
@@ -71,7 +71,7 @@ class TtLlamaMLP_optimized:
             padded_w3[:, :, :, :H4] = self.state_dict[w3_str].transpose(-2, -1)
 
         # w1: 8k x 4k. width-sharded on 12 banks, 4224 over 12 banks.
-        device = self.device_mesh.get_device(0)
+        device = self.mesh_device.get_device(0)
         weight_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -85,9 +85,9 @@ class TtLlamaMLP_optimized:
             padded_w1,
             dtype=w1_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / w1_str,
         )
 
@@ -98,9 +98,9 @@ class TtLlamaMLP_optimized:
             padded_w2,
             dtype=w2_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=w2_memory_config,
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / w2_dram_shard_str,
         )
 
@@ -111,9 +111,9 @@ class TtLlamaMLP_optimized:
             padded_w3,
             dtype=w3_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=w3_mem_config,
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / w3_dram_shard_str,
         )
 
