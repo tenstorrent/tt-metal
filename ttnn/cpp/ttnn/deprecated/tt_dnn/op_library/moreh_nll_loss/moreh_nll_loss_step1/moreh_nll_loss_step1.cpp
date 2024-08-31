@@ -56,22 +56,22 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
     Program program = Program();
 
     // create circular buffers
+    const auto target_data_format = tt_metal::datatype_to_dataformat_converter(target.get_dtype());
     const auto data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    const auto int_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    const auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    const auto input_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Int32);
-    const auto cb_tile_size = tt_metal::detail::TileSize(data_format);
-    const auto intermed_tile_size = tt_metal::detail::TileSize(data_format);
+    const auto target_tile_size = tt_metal::detail::TileSize(target_data_format);
+    const auto data_tile_size = tt_metal::detail::TileSize(data_format);
+    const auto intermed_tile_size = tt_metal::detail::TileSize(intermed_data_format);
 
     const uint32_t available_L1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
 
-    uint32_t input_num_tile = 1;
+    uint32_t target_num_tile = 1;
     uint32_t weight_num_tile = weight_has_value ? div_up(channel_size, TILE_WIDTH) : 0;
     uint32_t intermed_num_tile = 1;
     uint32_t output_num_tile = 1;
-    uint32_t cb_usage = input_num_tile * input_tile_size + weight_num_tile * cb_tile_size +
-                        intermed_num_tile * intermed_tile_size + output_num_tile * cb_tile_size;
+    uint32_t cb_usage = target_num_tile * target_tile_size + weight_num_tile * data_tile_size +
+                        intermed_num_tile * intermed_tile_size + output_num_tile * data_tile_size;
 
     const bool use_large_algorithm = cb_usage >= available_L1;;
 
@@ -83,7 +83,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
             {
                 {CB::c_in0, 1, tt::DataFormat::Int32},     // traget
                 {CB::c_in1, 1},                            // weight
-                {CB::c_intermed0, 1, intermed_cb_format},  // tmp_weight
+                {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
                 {CB::c_out0, 1},                           // output
             });
     } else {
@@ -94,7 +94,7 @@ operation::ProgramWithCallbacks moreh_nll_loss_step1_impl(
             {
                 {CB::c_in0, 1, tt::DataFormat::Int32},     // traget
                 {CB::c_in1, weight_num_tile},              // weight
-                {CB::c_intermed0, 1, intermed_cb_format},  // tmp_weight
+                {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
                 {CB::c_out0, 1},                           // output
             });
     }
