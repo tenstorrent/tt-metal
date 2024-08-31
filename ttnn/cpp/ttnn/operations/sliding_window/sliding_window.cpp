@@ -21,11 +21,9 @@ Shape SlidingWindowConfig::get_input_shape() const {
     * Calculate the window op output shape, excludes the channel dimension since this config is independent of the depth.
     */
 Shape SlidingWindowConfig::get_output_shape() const {
-    uint32_t output_h = (input_hw_.first + 2 * pad_hw_.first - dilation_hw_.first * window_hw_.first) / stride_hw_.first + 1;
-    uint32_t output_w = (input_hw_.second + 2 * pad_hw_.second - dilation_hw_.second * window_hw_.second) / stride_hw_.second + 1;
-    // uint32_t output_h = (std::get<0>(input_hw_) + 2 * std::get<0>(pad_hw_) - std::get<0>(dilation_hw_) * std::get<0>(window_hw_)) / std::get<0>(stride_hw_) + 1;
-    // uint32_t output_w = (std::get<1>(input_hw_) + 2 * std::get<1>(pad_hw_) - std::get<1>(dilation_hw_) * std::get<1>(window_hw_)) / std::get<1>(stride_hw_) + 1;
-    log_debug(tt::LogOp, "output_size: {} {} {}", batch_size_, output_h, output_w);
+    uint32_t output_h = (input_hw_.first + 2 * pad_hw_.first - window_hw_.first - (dilation_hw_.first - 1) * (window_hw_.first - 1 )) / stride_hw_.first + 1;
+    uint32_t output_w = (input_hw_.second + 2 * pad_hw_.second - window_hw_.second - (dilation_hw_.second - 1) * (window_hw_.second - 1 )) / stride_hw_.second + 1;
+    log_debug(tt::LogOp, "SlidingWindowConfig::output_size: {} {} {}", batch_size_, output_h, output_w);
     return Shape( std::vector<uint32_t>{batch_size_, output_h, output_w, 0});
 }
 
