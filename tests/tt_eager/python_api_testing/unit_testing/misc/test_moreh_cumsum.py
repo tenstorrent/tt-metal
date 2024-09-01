@@ -78,9 +78,6 @@ def test_moreh_cumsum(input_shape, dim, use_provide_output, compute_kernel_optio
     input_rank = len(input_shape)
     if dim >= input_rank:
         pytest.skip(f"input dim {dim} exceeds the dims of input tensor {input_rank}")
-    # TODO: remove this condition
-    if dim == input_rank - 1:
-        pytest.skip("not supported")
 
     (tt_input, tt_output, torch_input) = get_tensors(input_shape, device)
     if not use_provide_output:
@@ -143,9 +140,6 @@ def test_moreh_cumsum_backward(input_shape, dim, use_provide_output, compute_ker
     input_rank = len(input_shape)
     if dim >= input_rank:
         pytest.skip(f"input dim {dim} exceeds the dims of input tensor {input_rank}")
-    # TODO: remove this condition
-    if dim == input_rank - 1:
-        pytest.skip("last two dimensions are not supported")
 
     (_, _, torch_input) = get_tensors(input_shape, device)
     (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(input_shape, device)

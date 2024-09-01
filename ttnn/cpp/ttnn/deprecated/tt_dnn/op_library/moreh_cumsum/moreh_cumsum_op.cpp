@@ -61,7 +61,7 @@ operation::ProgramWithCallbacks MorehCumSum::create_program(
     const auto input_rank = input.get_legacy_shape().rank();
 
     if (dim == input_rank - 1) {
-        TT_FATAL(false, "not implemented");
+        return moreh_cumsum_w_impl(input, output, flip, compute_kernel_config);
     } else if (dim == input_rank - 2) {
         return moreh_cumsum_h_impl(input, output, flip, compute_kernel_config);
     } else {
