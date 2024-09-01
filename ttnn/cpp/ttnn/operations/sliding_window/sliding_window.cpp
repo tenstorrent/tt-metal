@@ -85,7 +85,11 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(c
     uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
     uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
     uint32_t max_index = op_trace_metadata.size();
-    uint32_t halo_with_pad_len = (config.window_hw.first - 1) * padded_input_w + config.window_hw.second - 1;
+
+    uint32_t dilated_window_h = config.window_hw.first + (config.dilation_hw.first - 1) * (config.window_hw.first - 1 );
+    uint32_t dilated_window_w = config.window_hw.second + (config.dilation_hw.second - 1) * (config.window_hw.second - 1 );
+    uint32_t halo_with_pad_len = (dilated_window_h - 1) * padded_input_w + dilated_window_w - 1;
+
     uint32_t output_index_start = 0;
     for (uint32_t core = 0; core < num_cores; ++ core) {
         uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
