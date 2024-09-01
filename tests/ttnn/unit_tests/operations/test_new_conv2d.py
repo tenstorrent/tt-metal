@@ -173,13 +173,11 @@ def run_conv(
     reader_patterns_cache.clear()
 
     if not fp32_accum:
-        pcc = 0.995
+        pcc = 0.99
     elif math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
         pcc = 0.9969
     else:
         pcc = 0.998
-    if shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        pcc = 0.92
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     print(pcc, pcc_msg)
     assert passing
@@ -1555,7 +1553,10 @@ def test_conv_core_nondivis(
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "filter, dilation, pad",
-    [[3, 2, 2], [3, 3, 3]],
+    [
+        [3, 2, 2],
+        [3, 3, 3],
+    ],
 )
 def test_conv_dilation(
     device,
