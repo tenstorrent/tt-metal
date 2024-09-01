@@ -178,8 +178,6 @@ def run_conv(
         pcc = 0.9969
     else:
         pcc = 0.998
-    if shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        pcc = 0.92
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     print(pcc, pcc_msg)
     assert passing
