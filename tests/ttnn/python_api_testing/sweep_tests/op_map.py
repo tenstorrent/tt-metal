@@ -1042,4 +1042,8 @@ op_map = {
         "tt_op": ttnn_ops.argmax,
         "pytorch_op": pytorch_ops.argmax,
     },
+    "complex-imag": {
+        "tt_op": ttnn_ops.complex_imag,
+        "pytorch_op": pytorch_ops.complex_imag,
+    },
 }
