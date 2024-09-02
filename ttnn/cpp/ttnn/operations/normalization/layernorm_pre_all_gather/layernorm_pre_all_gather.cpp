@@ -17,7 +17,7 @@ ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(
     return operation::run(
                 LayerNorm{
                     .norm_type = LayerNormType::LAYERNORM,
-                    .distributed_type = LayerNormDistributedType::PRE_ALL_GATHER,
+                    .distributed_type = LayerNormStageType::PRE_ALL_GATHER,
                     .eps = 1e-12,
                     .output_mem_config = input_tensor.memory_config(),
                     .program_config = program_config.value_or(LayerNormDefaultProgramConfig{}),
