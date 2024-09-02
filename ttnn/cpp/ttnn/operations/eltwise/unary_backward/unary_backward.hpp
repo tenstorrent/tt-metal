@@ -266,7 +266,7 @@ constexpr auto lgamma_bw = ttnn::register_operation<
 
 constexpr auto fill_bw = ttnn::register_operation<
     "ttnn::fill_bw",
-    operations::unary_backward::ExecuteUnaryBackwardWoFloat<
+    operations::unary_backward::ExecuteUnaryBackwardOptional<
         operations::unary_backward::UnaryBackwardOpType::FILL_BW>>();
 
 constexpr auto hardsigmoid_bw = ttnn::register_operation<

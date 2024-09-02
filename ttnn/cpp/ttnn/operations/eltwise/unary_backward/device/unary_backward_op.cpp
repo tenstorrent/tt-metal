@@ -415,15 +415,26 @@ std::vector<Tensor> _relu_bw(const Tensor& grad, const Tensor& input, const std:
     return grad_tensor;
 }
 
-std::vector<Tensor> _fill_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
+std::vector<std::optional<Tensor>> _fill_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
     Tensor val = grad;
     val = ttnn::sum(val);
-    Tensor result = ttnn::full_like(grad, 0.0f);
-    result = ttnn::add(result, val, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
+    Tensor result_val = ttnn::full_like(grad, 0.0f);
+    result_val = ttnn::add(result_val, val, std::nullopt, output_mem_config);
+    std::vector<std::optional<Tensor>> result;
+
+    if (are_required_outputs.at(0)) {
+        if(input_grad.has_value()){
+            assign(queue_id, result_val, input_grad.value());
+        } else {
+            input_grad = result_val;
+        }
+        result.push_back(input_grad.value());
+    } else {
+        result.push_back(std::nullopt);
+    }
+
+    return std::move(result);
 }
 
 std::vector<Tensor> _hardsigmoid_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {

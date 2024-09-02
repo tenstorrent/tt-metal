@@ -25,7 +25,6 @@ from tests.ttnn.unit_tests.operations.backward.utility_funcs import (
 #   self: zeros_like(grad)
 #   value: grad.sum()
 #   result: at::fill(self_t, value_t)
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bw_fill(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
@@ -35,5 +34,35 @@ def test_bw_fill(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.fill_bw)
     golden_tensor = golden_function(grad_data, in_data)
 
+    comp_pass = compare_all_close(tt_output_tensor_on_device, golden_tensor, atol=150, rtol=1e-6)
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("are_required_outputs", [[True]])
+def test_bw_fill_opt_tensor(input_shapes, are_required_outputs, device):
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
+
+    input_grad = None
+    if are_required_outputs[0]:
+        _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
+
+    cq_id = 0
+    ttnn.fill_bw(
+        grad_tensor, input_tensor, are_required_outputs=are_required_outputs, input_grad=input_grad, queue_id=cq_id
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.fill_bw)
+    golden_tensor = golden_function(grad_data, in_data)
+
+    tt_output_tensor_on_device = [input_grad]
     comp_pass = compare_all_close(tt_output_tensor_on_device, golden_tensor, atol=150, rtol=1e-6)
     assert comp_pass

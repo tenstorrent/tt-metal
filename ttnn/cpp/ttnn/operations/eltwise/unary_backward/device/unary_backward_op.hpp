@@ -137,7 +137,6 @@ std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, float other
 std::vector<Tensor> _assign_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _multigammaln_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _lgamma_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _fill_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _hardsigmoid_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _cos_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _acosh_bw( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
@@ -555,8 +554,8 @@ struct OpHandler<UnaryBackwardOpType::LGAMMA_BW> {
 
 template <>
 struct OpHandler<UnaryBackwardOpType::FILL_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _fill_bw(grad, input, output_mem_config);
+    static std::vector<std::optional<Tensor>> handle(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+        return _fill_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
     }
 };
 
