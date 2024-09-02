@@ -1094,28 +1094,7 @@ def test_all_gather_on_t3000_nightly(
     )
 
 
-def run_all_gather_sharded(
-    mesh_device,
-    num_devices,
-    input_shape,
-    input_shard_shape,
-    shard_grid,
-    dim,
-    num_links,
-    orientation,
-    input_dtype,
-    tensor_layout,
-    tensor_mem_layout,
-    # num_cores,
-    use_program_cache,
-    function_level_defaults,
-    all_gather_topology,
-    enable_async,
-    n_worker=None,
-    n_buffer=None,
-    num_iter=1,
-    trace_mode=False,
-):
+def generate_input_tensor_sharded(input_shape, num_devices, dim):
     numel = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3] * num_devices
     unchunked_input_shape = list(input_shape)
     unchunked_input_shape[dim] *= num_devices
@@ -1138,6 +1117,22 @@ def run_all_gather_sharded(
 
     input_tensors = torch.chunk(unchunked_input_tensor, num_devices, dim)
 
+    return unchunked_input_shape, unchunked_input_tensor, input_tensors
+
+
+def generate_config_sharded(
+    input_shape,
+    unchunked_input_shape,
+    dim,
+    num_devices,
+    num_links,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    orientation,
+    shard_grid,
+    input_shard_shape,
+):
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"unchunked_input_shape: {unchunked_input_shape}")
     logger.info(f"dim: {dim}")
@@ -1173,16 +1168,10 @@ def run_all_gather_sharded(
         tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
     )
 
-    if num_devices < 2:
-        pytest.skip("Requires multiple devices to run")
-    elif num_devices == 2 and num_links == 2:
-        pytest.skip("Not enough links to run")
+    return input_mem_config, output_mem_config
 
-    if unchunked_input_shape[dim] % num_devices != 0 or (
-        dim == 3 and unchunked_input_shape[dim] // num_devices % 32 != 0
-    ):
-        pytest.skip("Unsupported test case")
 
+def generate_tt_tensors(input_tensors, input_dtype, tensor_layout, devices, input_mem_config):
     tt_input_tensors_dups = []
     tt_input_tensors = []
 
@@ -1195,6 +1184,103 @@ def run_all_gather_sharded(
         )
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+
+    return input_tensor_mesh
+
+
+def compare_results(input_dtype, tt_out_tensor, unchunked_input_tensor, input_shape):
+    torch.set_printoptions(sci_mode=False)
+    all_eq = True
+    reported_mismatch = False
+    for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        if input_dtype == ttnn.bfloat16:
+            eq, output = comp_equal(tt_output_tensor, unchunked_input_tensor)
+        else:
+            eq, output = comp_pcc(tt_output_tensor, unchunked_input_tensor)
+        if not eq:
+            all_eq = False
+            logger.error(f"output mismatch for tensor {i}")
+            for w in range(input_shape[0]):
+                for z in range(input_shape[1]):
+                    for y in range(0, input_shape[2], 32):
+                        for x in range(0, input_shape[3], 32):
+                            xx = 0
+                            yy = 0
+                            # for yy in range(32):
+                            #     for xx in range(32):
+                            if tt_output_tensor[w, z, y + yy, x + xx] != unchunked_input_tensor[w, z, y + yy, x + xx]:
+                                logger.error(
+                                    f"mismatch at {w}, {z}, {y + yy}, {x + xx}: {tt_output_tensor[w, z, y + yy, x + xx]} != {unchunked_input_tensor[w, z, y + yy, x + xx]}"
+                                )
+                                # if not reported_mismatch:
+                                #     reported_mismatch = True
+
+    return all_eq, output
+
+
+def run_all_gather_sharded(
+    t3k_mesh_device,
+    num_devices,
+    input_shape,
+    input_shard_shape,
+    shard_grid,
+    dim,
+    num_links,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    # num_cores,
+    use_program_cache,
+    function_level_defaults,
+    all_gather_operation,
+    enable_async,
+    n_worker=None,
+    n_buffer=None,
+    num_iter=1,
+    trace_mode=False,
+):
+    if len(t3k_mesh_device.get_device_ids()) != 8:
+        pytest.skip("Not T3000!")
+
+    for device_id in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device_id).enable_async(enable_async)
+
+    unchunked_input_shape, unchunked_input_tensor, input_tensors = generate_input_tensor_sharded(
+        input_shape, num_devices, dim
+    )
+
+    devices = [t3k_mesh_device.get_device(t3k_mesh_device.get_device_ids()[i]) for i in range(num_devices)]
+
+    # num_cores =
+    # compute_grid_size = devices[0].compute_with_storage_grid_size()
+
+    input_mem_config, output_mem_config = generate_config_sharded(
+        input_shape,
+        unchunked_input_shape,
+        dim,
+        num_devices,
+        num_links,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        orientation,
+        shard_grid,
+        input_shard_shape,
+    )
+
+    if num_devices < 2:
+        pytest.skip("Requires multiple devices to run")
+    elif num_devices == 2 and num_links == 2:
+        pytest.skip("Not enough links to run")
+
+    if unchunked_input_shape[dim] % num_devices != 0 or (
+        dim == 3 and unchunked_input_shape[dim] // num_devices % 32 != 0
+    ):
+        pytest.skip("Unsupported test case")
+
+    input_tensor_mesh = generate_tt_tensors(input_tensors, input_dtype, tensor_layout, devices, input_mem_config)
 
     if trace_mode:
         tt_out_tensor = run_with_trace(
@@ -1224,32 +1310,7 @@ def run_all_gather_sharded(
         for d in mesh_device.get_devices():
             ttnn.synchronize_device(d)
 
-    torch.set_printoptions(sci_mode=False)
-    all_eq = True
-    reported_mismatch = False
-    for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-        if input_dtype == ttnn.bfloat16:
-            eq, output = comp_equal(tt_output_tensor, unchunked_input_tensor)
-        else:
-            eq, output = comp_pcc(tt_output_tensor, unchunked_input_tensor)
-        if not eq:
-            all_eq = False
-            logger.error(f"output mismatch for tensor {i}")
-            for w in range(input_shape[0]):
-                for z in range(input_shape[1]):
-                    for y in range(0, input_shape[2], 32):
-                        for x in range(0, input_shape[3], 32):
-                            xx = 0
-                            yy = 0
-                            # for yy in range(32):
-                            #     for xx in range(32):
-                            if tt_output_tensor[w, z, y + yy, x + xx] != unchunked_input_tensor[w, z, y + yy, x + xx]:
-                                logger.error(
-                                    f"mismatch at {w}, {z}, {y + yy}, {x + xx}: {tt_output_tensor[w, z, y + yy, x + xx]} != {unchunked_input_tensor[w, z, y + yy, x + xx]}"
-                                )
-                                # if not reported_mismatch:
-                                #     reported_mismatch = True
+    all_eq, output = compare_results(input_dtype, tt_out_tensor, unchunked_input_tensor, input_shape)
 
     assert all_eq, f"{i} FAILED: {output}"
 
