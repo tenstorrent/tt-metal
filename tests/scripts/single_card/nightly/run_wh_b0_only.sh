@@ -9,6 +9,7 @@ fi
 fail=0
 
 echo "Running nightly tests for WH B0 only"
+env pytest models/experimental/functional_mobilenetv2/test/test_ttnn_mobilenetv2.py ; fail+=$?
 env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/nightly/wh_b0_only_eth ; fail+=$?
 env pytest -n auto tests/nightly/wh_b0_only ; fail+=$?
 
