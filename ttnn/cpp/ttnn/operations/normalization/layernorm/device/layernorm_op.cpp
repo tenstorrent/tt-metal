@@ -30,7 +30,17 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     const auto& beta = optional_input_tensors.at(2);
 
     if(this->distributed_type == LayerNormDistributedType::POST_ALL_GATHER) {
-       const auto& stats = optional_input_tensors.at(3);
+        const auto& stats = optional_input_tensors.at(3);
+        TT_FATAL(stats.has_value());
+        TT_FATAL(stats.value().get_layout() == Layout::TILE);
+        TT_FATAL(stats.value().get_dtype() == DataType::BFLOAT16);
+        TT_FATAL(stats.value().storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+        TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        if(this->norm_type == LayerNormType::LAYERNORM) {
+            TT_FATAL(stats.value().get_legacy_shape()[-1] % (2 * TILE_WIDTH) == 0, "Stats is expected to have E(x) and E(x^2) for each device stacked interleaved in the last dimension");
+        } else {
+            TT_FATAL(stats.value().get_legacy_shape()[-1] % TILE_WIDTH == 0, "Stats is expected to have E(x) for each device stacked in the last dimension");
+        }
     }
     TT_FATAL(a.get_layout() == Layout::TILE);
     TT_FATAL(a.get_dtype() == DataType::FLOAT32 or a.get_dtype() == DataType::BFLOAT16 or a.get_dtype() == DataType::BFLOAT8_B);
