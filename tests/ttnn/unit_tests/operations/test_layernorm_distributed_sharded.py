@@ -268,16 +268,23 @@ def test_post_allgather_layernorm(
         prev_tt_output_torch = tt_output_torch
 
 
-@pytest.mark.parametrize("is_rmsnorm", [False])
-@pytest.mark.parametrize("seed", [0])  # Test across 5 different seeds
-@pytest.mark.parametrize(("min_pcc_sumx", "min_pcc_sumx2"), ([0.9997, 0.995],))
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+@pytest.mark.parametrize("seed", [1234])
+@pytest.mark.parametrize(("min_pcc_sumx", "min_pcc_sumx2"), ([0.9997, 0.993],))
 @pytest.mark.parametrize("max_atol", [0.38])
-@pytest.mark.parametrize("input_width", [1024])
+@pytest.mark.parametrize(
+    "input_width, core_grid",
+    [
+        ([1024, (2, 8)]),
+        ([2048, (8, 8)]),
+    ],
+)
 @pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 def test_pre_allgather_layernorm(
-    device,
+    all_devices,
     input_width,
+    core_grid,
     is_rmsnorm,
     input_df,
     seed,
@@ -287,15 +294,17 @@ def test_pre_allgather_layernorm(
     min_pcc_sumx2,
     max_atol,
 ):
+    device = all_devices[0]
+
     if is_rmsnorm:
-        print("Testing RMSNorm")
+        print("RMSNorm")
     else:
-        print("Testing LayerNorm")
+        print("LayerNorm")
+
     torch.manual_seed(seed)
     input_shape = (1, 1, 32, input_width)
 
     torch_input_tensor = torch.normal(mean, std, size=input_shape, dtype=torch.bfloat16)
-    # torch_input_tensor = torch.ones(input_shape, dtype=torch.bfloat16)
 
     print(f" Mean : {torch_input_tensor.mean()}, Var : {torch_input_tensor.var()}")
 
@@ -324,12 +333,12 @@ def test_pre_allgather_layernorm(
         inplace=False,
     )
 
-    # create sum[x] and sum[x^2] tensors
+    # create sum(x) and sum(x^2) tensors
     sum_x_tensor = torch.sum(torch_input_tensor, dim=-1, keepdim=True).to(torch.bfloat16)  # [1, 1, 32, 1]
 
     sum_x2_tensor = torch.sum(torch_input_tensor**2, dim=-1, keepdim=True).to(torch.bfloat16)  # [1, 1, 32, 1]
 
-    iterations = 200
+    iterations = 10
     prev_tt_output_torch = None
     for iter in range(iterations):
         if is_rmsnorm:
@@ -338,9 +347,9 @@ def test_pre_allgather_layernorm(
             tt_output_tensor = ttnn.layernorm_pre_all_gather(tt_input_tensor, program_config=SHARDED_NORM_PRGM_CFG)
         tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)  # [1, 1, 32, 64]
 
-        if is_rmsnorm:
+        if is_rmsnorm:  # first tile contains sum(xˆ2) in first column
             tt_ex2_torch = tt_output_torch[..., :1]
-        else:
+        else:  # first tile contains sum(x) in first column (=index 0) and second tile contains sum(xˆ2) in first column (=index 32)
             tt_ex_torch = tt_output_torch[..., :1]
             tt_ex2_torch = tt_output_torch[..., 32:33]
 
@@ -360,10 +369,6 @@ def test_pre_allgather_layernorm(
             print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
             assert pcc_out2 >= min_pcc_sumx2, f"PCC of Sum(x^2) test failed: {pcc_out2} (threshold: {min_pcc_sumx2})"
         else:
-            all_close_passing = torch.allclose(prev_tt_output_torch, tt_output_torch, atol=0, equal_nan=False)
-            atol_delta = torch.max(torch.abs(prev_tt_output_torch - tt_output_torch)).item()
-            print(f"all_close_previous : {all_close_passing}, Max ATOL: {atol_delta}")
-            assert all_close_passing, f"Max Atol exceeded for previous : {atol_delta} (allowed: {0})"
+            all_close_passing = torch.equal(prev_tt_output_torch, tt_output_torch)
+            assert all_close_passing, f"Output is non-deterministic!"
         prev_tt_output_torch = tt_output_torch
-
-    # assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"

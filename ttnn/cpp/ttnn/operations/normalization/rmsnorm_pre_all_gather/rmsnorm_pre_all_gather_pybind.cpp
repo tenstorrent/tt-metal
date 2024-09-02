@@ -20,7 +20,7 @@ void bind_normalization_rmsnorm_pre_all_gather(py::module& module) {
         module,
         ttnn::rmsnorm_pre_all_gather,
         R"doc(rmsnorm_pre_all_gather(input_tensor: ttnn.Tensor, program_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-            Compute layer_norm over :attr:`input_tensor`.
+            Compute Sum(X^2) over :attr:`input_tensor`.
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
