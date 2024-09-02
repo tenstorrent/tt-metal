@@ -1,0 +1,1 @@
+../../../../../../../models/experimental/functional_mobilenetv2/test/test_ttnn_mobilenetv2.py
