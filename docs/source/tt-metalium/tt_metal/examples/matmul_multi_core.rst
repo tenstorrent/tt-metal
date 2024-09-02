@@ -61,7 +61,7 @@ execute, we receive back:
 
 .. code-block:: cpp
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
 The reason why we may have two separate sets of cores and tile counts is
 because depending on the grid size, it may not be possible to evenly distribute

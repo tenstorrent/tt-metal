@@ -69,7 +69,7 @@ def num_cores_to_corerange_set(
     """
     Create a CoreRangeSet containing the specified number of cores
     """
-    return ttnn._ttnn.operations.core.num_cores_to_core_range_set(
+    return ttnn._ttnn.operations.core.num_cores_to_corerange_set(
         target_num_cores=target_num_cores,
         grid_size=grid_size,
         row_wise=row_wise,

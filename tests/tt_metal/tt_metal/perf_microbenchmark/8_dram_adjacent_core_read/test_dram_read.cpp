@@ -29,7 +29,7 @@ using std::chrono::microseconds;
 // This test measures the bandwidth of DRAM accesses of Tensix cores. It creates
 // a bfloat16 format DRAM buffer of a given input size. Every Tensix cores read
 // from or write to the buffer whrere the amount of each core accesses is
-// determined by tt::tt_metal::split_work_to_cores function.
+// determined by split_work_to_cores function.
 //
 // Disclaimer:
 //   - This benchmark is designed to support an input size larger than 4GB. But
