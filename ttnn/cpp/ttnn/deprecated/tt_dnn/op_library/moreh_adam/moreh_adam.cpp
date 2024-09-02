@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks moreh_adam_(
     const auto num_cores_y = grid.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(grid, num_tiles);
+        tt_metal::split_work_to_cores(grid, num_tiles);
 
     auto arch = param_in.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =

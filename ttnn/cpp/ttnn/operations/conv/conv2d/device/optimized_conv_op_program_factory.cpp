@@ -409,7 +409,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
         if (this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             uint32_t total_height_tiles = tt::tt_metal::compute_volume(output_shape) / output_shape[-1] / TILE_HEIGHT;
             uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntiles;
-            CoreRangeSet shard_grid = tt::tt_metal:: num_cores_to_corerange_set(num_cores, this->parallelization_config.grid_size, true);
+            CoreRangeSet shard_grid = tt::tt_metal::num_cores_to_corerange_set(num_cores, this->parallelization_config.grid_size, true);
 
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, output_shape[-1]};
             auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};

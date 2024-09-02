@@ -38,7 +38,7 @@ inline std::tuple<uint32_t, uint32_t> get_max_cores_divisible_by_tiles_per_core_
 }
 
 // Finds the maximum even divisor of val starting at start_max_div and below
-inline int  find_max_divisor(uint32_t val, uint32_t start_max_div) {
+inline int find_max_divisor(uint32_t val, uint32_t start_max_div) {
     int result = 1;
     for (int find_divisor = start_max_div; find_divisor >= 1; find_divisor--) {
         if (find_divisor == 7 || find_divisor == 5)
@@ -51,7 +51,7 @@ inline int  find_max_divisor(uint32_t val, uint32_t start_max_div) {
     return result;
 }
 
-inline std::set<CoreRange>  num_cores_to_corerange_set(
+inline std::set<CoreRange> num_cores_to_corerange_set(
     uint32_t target_num_cores, CoreCoord grid_size, bool row_wise = false) {
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
@@ -102,7 +102,7 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
     CoreCoord grid_size, uint32_t units_to_divide) {
     uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y;
     auto target_num_cores = std::min(units_to_divide, num_cores_x * num_cores_y);
-    CoreRangeSet all_cores( num_cores_to_corerange_set(target_num_cores, grid_size));
+    CoreRangeSet all_cores(num_cores_to_corerange_set(target_num_cores, grid_size));
 
     std::set<CoreRange> core_group_1_set;
     std::set<CoreRange> core_group_2_set;

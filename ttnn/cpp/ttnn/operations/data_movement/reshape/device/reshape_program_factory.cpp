@@ -309,7 +309,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
         uint32_t num_new_sticks_per_core_read = 0, num_new_sticks_read_per_barrier = 0, num_new_sticks_per_cb_push = 0;
         if (old_stick_size > new_stick_size) {
             if (num_old_sticks_per_core != 0) {
-                num_old_sticks_per_core_read = merge_num_sticks_to_read(num_old_sticks_per_core, old_stick_size, max_read_size);
+                num_old_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(num_old_sticks_per_core, old_stick_size, max_read_size);
                 num_old_sticks_read_per_barrier = num_old_sticks_per_core / num_old_sticks_per_core_read;
                 num_old_sticks_per_cb_push = num_old_sticks_read_per_barrier * old_new_stick_size_ratio;
 
@@ -319,7 +319,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
             }
         } else {
             if (num_new_sticks_per_core != 0) {
-                num_new_sticks_per_core_read = merge_num_sticks_to_read(num_new_sticks_per_core, new_stick_size, max_read_size);
+                num_new_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(num_new_sticks_per_core, new_stick_size, max_read_size);
                 num_new_sticks_read_per_barrier = num_new_sticks_per_core / num_new_sticks_per_core_read;
                 num_new_sticks_per_cb_push = num_new_sticks_read_per_barrier;
 

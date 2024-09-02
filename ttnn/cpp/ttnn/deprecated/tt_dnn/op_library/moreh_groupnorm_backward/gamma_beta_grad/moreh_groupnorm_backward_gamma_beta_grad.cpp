@@ -85,7 +85,7 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
          core_group_1,
          core_group_2,
          num_channels_per_core_group_1,
-         num_channels_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_channels);
+         num_channels_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_channels);
 
     log_debug(LogTest, fmt::format("num_cores_to_be_used: {}", num_cores_to_be_used).c_str());
     log_debug(LogTest, fmt::format("num_channels_per_core_group_1: {}", num_channels_per_core_group_1).c_str());

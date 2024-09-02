@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks moreh_sum_int_h_impl(const Tensor &input, const 
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_cols);
+         num_cols_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_cols);
 
     log_debug(LogOp, "num_tiles {}, num_cols {}, num_cols_per_core_group_1 {}, num_cols_per_core_group_2 {}", num_tiles, num_cols, num_cols_per_core_group_1, num_cols_per_core_group_2);
 

@@ -375,7 +375,7 @@ void override_runtime_args_mc_hc_rm(
         // issue more reads before calling barrier
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
-            num_sticks_per_core_read = merge_num_sticks_to_read(num_sticks_per_core, W_bytes, max_read_size);
+            num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core, W_bytes, max_read_size);
             num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
         }
 
