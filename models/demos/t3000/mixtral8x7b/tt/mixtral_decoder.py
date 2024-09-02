@@ -71,7 +71,15 @@ class TtTransformerBlock(LightweightModule):
         )
 
     def forward(
-        self, xs_1SBH, start_pos_ids, attn_masks, rot_mat, transformation_mats=None, user_id=0, mode="decode"
+        self,
+        xs_1SBH,
+        start_pos_ids,
+        attn_masks,
+        rot_mat,
+        transformation_mats=None,
+        user_id=0,
+        mode="decode",
+        start_pos_ids_tensor=None,
     ) -> ttnn.Tensor:
         """
         Tensors are postfixed with 4 characters that represent their 4-D shape:
@@ -89,13 +97,14 @@ class TtTransformerBlock(LightweightModule):
             transformation_mats,
             user_id,
             mode,
+            start_pos_ids_tensor=start_pos_ids_tensor,
         )
         hs_1SBH = ttnn.add(xs_1SBH, attn_1SBH)
-        xs_1SBH.deallocate(True)
-        attn_1SBH.deallocate(True)
+        # xs_1SBH.deallocate(True)
+        # attn_1SBH.deallocate(True)
         ffn_norm_1SBH = self.ffn_norm(hs_1SBH)
         ffn_1SBH = self.feed_forward(ffn_norm_1SBH, mode=mode)
         out_1SBH = ttnn.add(hs_1SBH, ffn_1SBH)
-        hs_1SBH.deallocate(True)
-        ffn_1SBH.deallocate(True)
+        # hs_1SBH.deallocate(True)
+        # ffn_1SBH.deallocate(True)
         return out_1SBH

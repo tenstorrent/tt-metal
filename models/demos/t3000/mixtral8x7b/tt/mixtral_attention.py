@@ -150,12 +150,7 @@ class TtMixtralAttention(LightweightModule):
         self.q_mem_config = None
         self.k_mem_config = None
 
-    def forward_decode(
-        self,
-        xs,
-        start_pos_ids,
-        rot_mat,
-    ):
+    def forward_decode(self, xs, start_pos_ids, rot_mat, start_pos_ids_tensor):
         """
         x: (seq_len, 1, batch, hidden_dim)
         start_pos_ids: start position ids
@@ -174,7 +169,7 @@ class TtMixtralAttention(LightweightModule):
         ###
         # QKV matmuls
         ###
-
+        # print("x_11BH", self.wqkv.shape)
         xqkv_fused = ttnn.matmul(
             x_11BH,
             self.wqkv,
@@ -234,8 +229,12 @@ class TtMixtralAttention(LightweightModule):
         ###
         keys_1BPD = layer_past[0]
         values_1BPD = layer_past[1]
-        ttnn.experimental.paged_update_cache(keys_1BPD, k_heads_1B1D, update_idxs=start_pos_ids)
-        ttnn.experimental.paged_update_cache(values_1BPD, v_heads_1B1D, update_idxs=start_pos_ids)
+        if start_pos_ids_tensor is not None:
+            ttnn.experimental.paged_update_cache(keys_1BPD, k_heads_1B1D, update_idxs_tensor=start_pos_ids_tensor)
+            ttnn.experimental.paged_update_cache(values_1BPD, v_heads_1B1D, update_idxs_tensor=start_pos_ids_tensor)
+        else:
+            ttnn.experimental.paged_update_cache(keys_1BPD, k_heads_1B1D, update_idxs=start_pos_ids)
+            ttnn.experimental.paged_update_cache(values_1BPD, v_heads_1B1D, update_idxs=start_pos_ids)
         self.layer_past = [keys_1BPD, values_1BPD]
         k_heads_1B1D.deallocate(True)
         v_heads_1B1D.deallocate(True)
@@ -243,16 +242,28 @@ class TtMixtralAttention(LightweightModule):
         keys_1BPD = ttnn.reshape(keys_1BPD, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
         values_1BPD = ttnn.reshape(values_1BPD, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
 
-        attn_output_1B4D = ttnn.transformer.scaled_dot_product_attention_decode(
-            q_heads_1B4D,
-            keys_1BPD,
-            values_1BPD,
-            start_pos_ids,
-            scale=self.scale,
-            program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-            compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
-            memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
-        )
+        if start_pos_ids_tensor is not None:
+            attn_output_1B4D = ttnn.transformer.scaled_dot_product_attention_decode(
+                q_heads_1B4D,
+                keys_1BPD,
+                values_1BPD,
+                cur_pos_tensor=start_pos_ids_tensor,
+                scale=self.scale,
+                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
+            )
+        else:
+            attn_output_1B4D = ttnn.transformer.scaled_dot_product_attention_decode(
+                q_heads_1B4D,
+                keys_1BPD,
+                values_1BPD,
+                start_pos_ids,
+                scale=self.scale,
+                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"],
+            )
 
         attn_output_11BH = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_1B4D,
@@ -417,9 +428,19 @@ class TtMixtralAttention(LightweightModule):
         output_11BH_gathered.deallocate(True)
         return output_11BH_reduced
 
-    def forward(self, xs, start_pos_ids, attn_masks, rot_mats, transformation_mats=None, user_id=0, mode="decode"):
+    def forward(
+        self,
+        xs,
+        start_pos_ids,
+        attn_masks,
+        rot_mats,
+        transformation_mats=None,
+        user_id=0,
+        mode="decode",
+        start_pos_ids_tensor=None,
+    ):
         if mode == "prefill":
             return self.forward_prefill(xs, attn_masks, rot_mats, transformation_mats, user_id)
         else:
             assert attn_masks is None, "attn_masks should be None for decode mode"
-            return self.forward_decode(xs, start_pos_ids, rot_mats)
+            return self.forward_decode(xs, start_pos_ids, rot_mats, start_pos_ids_tensor)
