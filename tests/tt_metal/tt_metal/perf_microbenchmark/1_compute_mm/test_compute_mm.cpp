@@ -423,11 +423,11 @@ int main(int argc, char** argv) {
         if (fp32_dest_acc_en and (out_subblock_h * out_subblock_w > 4)) {
             if (out_subblock_w >= 4) {
                 out_subblock_h = 1;
-                out_subblock_w = find_max_block_size(out_subblock_w, 4);
+                out_subblock_w = tt::tt_metal::find_max_block_size(out_subblock_w, 4);
             } else {
                 while (out_subblock_h * out_subblock_w > 4) {
-                    uint32_t div = find_max_divisor(out_subblock_h, out_subblock_h-1);
-                    out_subblock_h = find_max_block_size(out_subblock_h, div);
+                    uint32_t div = tt::tt_metal::find_max_divisor(out_subblock_h, out_subblock_h-1);
+                    out_subblock_h = tt::tt_metal::find_max_block_size(out_subblock_h, div);
                 }
             }
         }

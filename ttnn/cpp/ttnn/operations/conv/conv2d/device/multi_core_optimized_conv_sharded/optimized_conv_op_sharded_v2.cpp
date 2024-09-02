@@ -412,11 +412,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     if (fp32_dest_acc_en and (out_subblock_h_ntiles * out_subblock_w_ntiles > 4)) {
         if (out_subblock_w_ntiles >= 4) {
             out_subblock_h_ntiles = 1;
-            out_subblock_w_ntiles = find_max_block_size(out_subblock_w_ntiles, 4);
+            out_subblock_w_ntiles = tt::tt_metal::find_max_block_size(out_subblock_w_ntiles, 4);
         } else {
             while (out_subblock_h_ntiles * out_subblock_w_ntiles > 4) {
-                uint32_t div = tt::tt_metal:: find_max_divisor(out_subblock_h_ntiles, out_subblock_h_ntiles - 1);
-                out_subblock_h_ntiles = find_max_block_size(out_subblock_h_ntiles, div);
+                uint32_t div = tt::tt_metal::find_max_divisor(out_subblock_h_ntiles, out_subblock_h_ntiles - 1);
+                out_subblock_h_ntiles = tt::tt_metal::find_max_block_size(out_subblock_h_ntiles, div);
             }
         }
     }
