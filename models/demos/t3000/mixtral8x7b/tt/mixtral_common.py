@@ -8,6 +8,7 @@ import ttnn
 from ttnn import ReplicateTensorToMesh
 from models.utility_functions import nearest_32
 import json
+import math
 
 
 # load from json, return as a list
@@ -77,6 +78,10 @@ def preprocess_inputs_prefill(
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
+    # The maximum KV-cache len supported is 32k. To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
+    if max_prefill_len == 32768:
+        max_prefill_len = 32768 - max_generated_tokens
+
     if instruct:
         # Pre append [INST] and post append [/INST] to the encoded prompts if instruct mode
         encoded_prompts = [tokenizer.encode("[INST] " + prompt + " [/INST]") for prompt in input_prompts]
@@ -87,14 +92,12 @@ def preprocess_inputs_prefill(
     min_prompt_len = min(prompt_lens)
     max_prompt_len = max(prompt_lens)
 
-    # The large input demo contains more tokens than the maximum (32k tokens)
-    # To avoid running out of memory, clip to max_prefill_len (16k tokens or value given by the test)
-    if min_prompt_len > 1024 * 16:
-        logger.info(
-            f"Clipping prompts to {max_prefill_len} tokens to avoid running out of memory. Also avoids `prefill-as-decode` mode for the entire demo (since it only computes 120 iterations)"
-        )
-        if instruct:
-            encoded_prompts = [encod[:max_prefill_len] for encod in encoded_prompts]
+    # The large input demo we provide contains more tokens than the maximum (32k tokens)
+    # To avoid running out of memory, clip to max_prefill_len
+    if min_prompt_len > max_prefill_len:
+        logger.info(f"Clipping prompts to {max_prefill_len}")
+        if instruct:  # When clipping, make sure to add the ` [/INST]` token at the end (4 tokens)
+            encoded_prompts = [encod[: max_prefill_len - 4] for encod in encoded_prompts]
             dec_prompts = [tokenizer.decode(encod) + " [/INST]" for encod in encoded_prompts]
             encoded_prompts = [tokenizer.encode(prompt) for prompt in dec_prompts]
         else:
@@ -111,36 +114,13 @@ def preprocess_inputs_prefill(
     assert min_prompt_len > 0, "Minimum prompt length must be greater than 0"
     assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
 
-    if min_prompt_len < 128:
-        prefill_seq_len = 0  # For short prompts do decode-as-prefill instead
-    # Maximum KV-cache length support is 32k. To avoid going over it, the max prefill size is fixed at 16K tokens.
-    # Any tokens beyond 16K in the prompt will be prefilled-as-decode.
-    else:
-        if min_prompt_len > 1024 * 16:
-            prefill_seq_len = 1024 * 16
-        elif min_prompt_len > 1024 * 8:
-            prefill_seq_len = 1024 * 8
-        elif min_prompt_len > 1024 * 4:
-            prefill_seq_len = 1024 * 4
-        elif min_prompt_len > 1024 * 2:
-            prefill_seq_len = 1024 * 2
-        elif min_prompt_len > 1024:
-            prefill_seq_len = 1024
-        else:
-            prefill_seq_len = 128
-        # Initial prefill tensor full of pad tokens
-        input_tokens_prefill = torch.full((len(input_prompts), prefill_seq_len), tokenizer.pad_id, dtype=torch.int32)
-
-    # Start couting from the first token after prefill
-    initial_decode_token = max_prompt_len - prefill_seq_len
-    if (
-        initial_decode_token == 0
-    ):  # Avoid a tensor with dim=0, for the special case where all users have the same prompt length exactly the same size of prefill
-        initial_decode_token = 1
-    # Initial decode tensor full of pad tokens
-    input_tokens_decode = torch.full((len(input_prompts), initial_decode_token), tokenizer.pad_id, dtype=torch.int32)
-
     logger.info(f"# of users: {len(encoded_prompts)}")
+    input_tokens_prefill = []
+    decoding_pos = []
+    prefill_lens = []
+
+    # Always prefill the nearest power of 2 for each user. This means that the majority of cases we will prefill more tokens than needed.
+    # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
     for i, encoded in enumerate(encoded_prompts):
         if prefill_seq_len > 0:
             input_tokens_prefill[i] = torch.tensor(encoded[:prefill_seq_len]).to(input_tokens_prefill)
@@ -190,15 +170,10 @@ def preprocess_inputs_prefill(
         for i in range(max_prompt_len - prefill_seq_len)
     ]
     return (
-        input_tokens_prefill_tt,
-        input_tokens_decode_tt,
-        max_prompt_len - prefill_seq_len,
-        input_mask_tt,
         input_tokens_prefill,
-        input_tokens_decode,
-        input_mask_bool,
-        prefill_seq_len,
         encoded_prompts,
+        decoding_pos,
+        prefill_lens,
     )
 
 
@@ -295,8 +270,7 @@ def cache_attention(mesh_device, state_dict, model_args, current_rot_mat, rot_ma
 
         _ = tt_attn(
             attention_inputs,
-            pos,
-            pos,
+            [pos] * model_args.max_batch_size,
             None,
             current_rot_mat,
         )
@@ -351,6 +325,76 @@ def get_single_rot_mat(dhead, mesh_device, start_pos=0, theta: float = 1000000.0
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
     ), ttnn.from_torch(
         rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def get_single_rot_mat_multi_pos(dhead, mesh_device, start_pos_ids, theta: float = 1000000.0):
+    freqs = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
+    sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
+    rot_matrix = torch.zeros(dhead, dhead)
+    rot_matrix[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+    rot_matrix[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+    rot_matrix = rot_matrix.transpose(-1, -2)
+
+    current_rot_mat = torch.zeros(len(start_pos_ids), dhead, dhead)
+    # Support for start_pos different than 0
+    for i, start_pos in enumerate(start_pos_ids):
+        freqs_i = start_pos * freqs
+        sin_freqs, cos_freqs = torch.sin(freqs_i), torch.cos(freqs_i)
+        current_rot_mat[i, torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+        current_rot_mat[i, torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+        current_rot_mat[i, torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+        current_rot_mat[i, torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+
+    return ttnn.from_torch(
+        current_rot_mat.unsqueeze(0).transpose(-1, -2),  # 1,B,head_dim,head_dim
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+    ), ttnn.from_torch(
+        rot_matrix.unsqueeze(0).unsqueeze(0).repeat(1, len(start_pos_ids), 1, 1),  # 1,1,head_dim,head_dim
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def get_single_rot_mat_multi_pos(dhead, mesh_device, start_pos_ids, theta: float = 1000000.0):
+    freqs = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
+    sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
+    rot_matrix = torch.zeros(dhead, dhead)
+    rot_matrix[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+    rot_matrix[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+    rot_matrix[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+    rot_matrix = rot_matrix.transpose(-1, -2)
+
+    current_rot_mat = torch.zeros(len(start_pos_ids), dhead, dhead)
+    # Support for start_pos different than 0
+    for i, start_pos in enumerate(start_pos_ids):
+        freqs_i = start_pos * freqs
+        sin_freqs, cos_freqs = torch.sin(freqs_i), torch.cos(freqs_i)
+        current_rot_mat[i, torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+        current_rot_mat[i, torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+        current_rot_mat[i, torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+        current_rot_mat[i, torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+
+    return ttnn.from_torch(
+        current_rot_mat.unsqueeze(0).transpose(-1, -2),  # 1,B,head_dim,head_dim
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+    ), ttnn.from_torch(
+        rot_matrix.unsqueeze(0).unsqueeze(0).repeat(1, len(start_pos_ids), 1, 1),  # 1,1,head_dim,head_dim
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -425,8 +469,14 @@ def prepare_inputs_ttnn_prefill(x_bsh, mesh_device):
     # Attention mask
     attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
     attn_mask_torch = torch.triu(attn_mask, diagonal=1)
+    if num_tokens is not None:  # Mask any additional tokens that were prefilled
+        attn_mask_torch[num_tokens:, num_tokens:] = torch.finfo(torch.float32).min
     attn_mask = attn_mask_torch.view(1, 1, seq_len, seq_len)
 
+    if seq_len == 128:
+        attn_mask_dtype = ttnn.bfloat16
+    else:
+        attn_mask_dtype = ttnn.bfloat8_b
     attn_mask = ttnn.from_torch(
         attn_mask,
         device=mesh_device,

@@ -99,16 +99,16 @@ class TtMixtralAttention(LightweightModule):
 
         cache_k = torch.zeros(
             (
-                self.n_kv_heads,
                 self.max_batch_size,
+                self.n_kv_heads,
                 self.max_seq_len,
                 self.head_dim,
             )
         )
         cache_v = torch.zeros(
             (
-                self.n_kv_heads,
                 self.max_batch_size,
+                self.n_kv_heads,
                 self.max_seq_len,
                 self.head_dim,
             )
@@ -122,7 +122,7 @@ class TtMixtralAttention(LightweightModule):
                 dtype=ttnn.bfloat8_b,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 memory_config=self.model_config["ATTN_CACHE_WEIGHTS_MEMCFG"],
-                cache_file_name=cache_name(f"empty_attn_cache_{cache_k.shape}"),
+                cache_file_name=cache_name(f"empty_attn_cache_T_{cache_k.shape}"),
             )
             for lp in layer_past
         ]
@@ -153,14 +153,12 @@ class TtMixtralAttention(LightweightModule):
     def forward_decode(
         self,
         xs,
-        start_pos,
-        current_pos,
+        start_pos_ids,
         rot_mat,
     ):
         """
         x: (seq_len, 1, batch, hidden_dim)
-        start_pos: the length of the KV cache. Same as current token's index.
-        current_pos: start_pos
+        start_pos_ids: start position ids
         rot_mats: rotation matrix for each device
 
         Tensors are postfixed with 4 characters that represent their 4-D shape:
@@ -222,6 +220,7 @@ class TtMixtralAttention(LightweightModule):
             compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
             # [seqlen, bsz, padd_heads, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, bsz, padd_heads, head_dim]
         )
+
         k_heads_1B1D = ttnn.matmul(
             k_heads_1B1D,
             rot_mat,
@@ -235,17 +234,20 @@ class TtMixtralAttention(LightweightModule):
         ###
         keys_1BPD = layer_past[0]
         values_1BPD = layer_past[1]
-        ttnn.kv_cache.update_cache_for_token_(keys_1BPD, k_heads_1B1D, current_pos)
-        ttnn.kv_cache.update_cache_for_token_(values_1BPD, v_heads_1B1D, current_pos)
+        ttnn.experimental.paged_update_cache(keys_1BPD, k_heads_1B1D, update_idxs=start_pos_ids)
+        ttnn.experimental.paged_update_cache(values_1BPD, v_heads_1B1D, update_idxs=start_pos_ids)
         self.layer_past = [keys_1BPD, values_1BPD]
         k_heads_1B1D.deallocate(True)
         v_heads_1B1D.deallocate(True)
+
+        keys_1BPD = ttnn.reshape(keys_1BPD, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
+        values_1BPD = ttnn.reshape(values_1BPD, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
 
         attn_output_1B4D = ttnn.transformer.scaled_dot_product_attention_decode(
             q_heads_1B4D,
             keys_1BPD,
             values_1BPD,
-            [current_pos for _ in range(self.max_batch_size)],
+            start_pos_ids,
             scale=self.scale,
             program_config=self.model_config["SDPA_DECODE_PROGCFG"],
             compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
@@ -351,12 +353,14 @@ class TtMixtralAttention(LightweightModule):
         # Fill KV-Cache
         keys_11SD = self.layer_past[0]
         values_11SD = self.layer_past[1]
-        keys_reshaped = ttnn.reshape(keys_11SD, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        values_reshaped = ttnn.reshape(values_11SD, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.kv_cache.fill_cache_for_user_(keys_reshaped, ttnn.typecast(k_heads_11SD, dtype=ttnn.bfloat8_b), user_id)
-        ttnn.kv_cache.fill_cache_for_user_(values_reshaped, ttnn.typecast(v_heads_11SD, dtype=ttnn.bfloat8_b), user_id)
-        keys_11SD = ttnn.reshape(keys_reshaped, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
-        values_11SD = ttnn.reshape(values_reshaped, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
+
+        if seq_len > 128:
+            k_heads_11SD = ttnn.typecast(k_heads_11SD, dtype=ttnn.bfloat8_b)
+            v_heads_11SD = ttnn.typecast(v_heads_11SD, dtype=ttnn.bfloat8_b)
+            q_heads_14SD = ttnn.typecast(q_heads_14SD, dtype=ttnn.bfloat8_b)
+        ttnn.kv_cache.fill_cache_for_user_(keys_11SD, ttnn.typecast(k_heads_11SD, dtype=ttnn.bfloat8_b), user_id)
+        ttnn.kv_cache.fill_cache_for_user_(values_11SD, ttnn.typecast(v_heads_11SD, dtype=ttnn.bfloat8_b), user_id)
+
         self.layer_past = [keys_11SD, values_11SD]
 
         # SDPA
@@ -413,11 +417,9 @@ class TtMixtralAttention(LightweightModule):
         output_11BH_gathered.deallocate(True)
         return output_11BH_reduced
 
-    def forward(
-        self, xs, start_pos, current_pos, attn_masks, rot_mats, transformation_mats=None, user_id=0, mode="decode"
-    ):
+    def forward(self, xs, start_pos_ids, attn_masks, rot_mats, transformation_mats=None, user_id=0, mode="decode"):
         if mode == "prefill":
             return self.forward_prefill(xs, attn_masks, rot_mats, transformation_mats, user_id)
         else:
             assert attn_masks is None, "attn_masks should be None for decode mode"
-            return self.forward_decode(xs, start_pos, current_pos, rot_mats)
+            return self.forward_decode(xs, start_pos_ids, rot_mats)

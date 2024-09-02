@@ -39,7 +39,7 @@ class Emb(torch.nn.Module):
 
 
 @torch.no_grad()
-def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_prefill_len, is_ci_env):
+def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_prefill_len, is_ci_env):
     # Set Mixtral flags for CI
     if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
         os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/"
@@ -105,18 +105,15 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
     profiler.end("weight_loading")
     logger.info("Loading weights finished!")
 
+    max_generated_tokens = 120
+
     profiler.start("preprocess_prefill_inputs")
     # Preprocess initial prompt inputs
     (
-        input_tokens_prefill_tt,
-        input_tokens_decode_tt,
-        prefill_as_decode_len,
-        input_mask,
         input_tokens_prefill_pt,
-        input_tokens_decode_pt,
-        input_mask_pt,
-        prefill_seq_len,
         encoded_prompts,
+        decoding_pos,
+        prefill_lens,
     ) = preprocess_inputs_prefill(
         input_prompts,
         tokenizer,
@@ -124,8 +121,8 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
         dtype,
         instruct_mode,
         mesh_device,
+        max_generated_tokens,
         is_ci_env,
-        max_prefill_len=max_prefill_len,
     )
     profiler.end("preprocess_prefill_inputs")
 
@@ -143,11 +140,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
 
     # Prepare the first token embedding for each user
     if embed_on_host:
-        pt_decode_input = embd(input_tokens_decode_pt[:, 0]).view(batch_size, 1, -1)
-        if prefill_seq_len > 0:
-            pt_prefill_input = [
-                embd(input_tokens_prefill_pt[b, :]).view(1, prefill_seq_len, -1) for b in range(batch_size)
-            ]
+        pt_prefill_input = [embd(input_tokens_prefill_pt[b]).view(1, prefill_lens[b], -1) for b in range(batch_size)]
     else:  # TODO Embedding on device
         pass
 
@@ -159,8 +152,8 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
         args=model_args,
         layers=list(range(model_args.n_layers)),
         dtype=dtype,
-        start_pos=prefill_seq_len,
-        rotary_on_host=True,
+        start_pos_ids=decoding_pos,
+        rotary_on_host=False,
     )
     profiler.end("loading_weights_to_device")
     logger.info("Finished loading weights to device.")
@@ -174,8 +167,67 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
     )
     profiler.end("prepare_rot_mat_for_decode")
 
-    generation_start_pos = prefill_seq_len
-    max_generated_tokens = 120
+    logger.info(f"Starting prefill ...")
+    profiler.start("prepare_rot_mat_for_prefill")
+    pt_out = []
+    head_dim = model_args.dim // model_args.n_heads
+    transformation_mat_torch = get_rot_transformation_mat(head_dim)
+    transformation_mats = ttnn.as_tensor(
+        transformation_mat_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
+    )
+    profiler.end("prepare_rot_mat_for_prefill")
+
+    # TODO This will break if just a single user is passed. In that situation we want to run prefill twice (one for warmup compile time)
+    num_users_generated_prefill = batch_size - 1  # First user is used for compile time
+    profiler.start(f"inference_prefill")
+    for batch_id in range(batch_size):
+        if batch_id == 0:  # First user prefill also accounts for compile time
+            profiler.start("compile_prefill")
+        prefill_seq_len = prefill_lens[batch_id]
+        rot_mats_prefill = get_prefill_rot_mat(
+            model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seq_len
+        )
+
+        if decoding_pos[batch_id] < prefill_seq_len:
+            pt_prefill_input[batch_id][
+                :, decoding_pos[batch_id] :, :
+            ] = 0  # Zero out the tokens after the prefill length
+        prefill_input, attn_mask, _ = prepare_inputs_ttnn_prefill(
+            pt_prefill_input[batch_id],
+            mesh_device,
+            num_tokens=decoding_pos[batch_id],
+        )
+        tt_out = tt_model(
+            prefill_input,
+            decoding_pos,
+            attn_mask,
+            rot_mats_prefill,
+            transformation_mats,
+            user_id=batch_id,
+            mode="prefill",
+            get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
+        )
+
+        pt_out.append(
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0][
+                :, (decoding_pos[batch_id] - 1) % 32, :
+            ].unsqueeze(1)
+        )
+
+        if batch_id == 0:  # First user prefill also accounts for compile time
+            profiler.end(f"compile_prefill")
+
+    # Device synchrozization ensures profiler is accurate in end-to-end timing
+    for dev in mesh_device.get_devices():
+        ttnn.device.synchronize_device(dev)
+
+    profiler.end(f"inference_prefill")
+    logger.info(f"Prefill finished")
 
     profiler.start("cache_attention")
     cache_attention(
@@ -188,59 +240,18 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
     )
     profiler.end("cache_attention")
 
-    if prefill_seq_len > 0:
-        logger.info(f"Starting prefill [{prefill_seq_len} tokens]...")
-        profiler.start("prepare_rot_mat_for_prefill")
-        rot_mats_prefill = get_prefill_rot_mat(
-            model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seq_len
-        )
-        head_dim = model_args.dim // model_args.n_heads
-        transformation_mat_torch = get_rot_transformation_mat(head_dim)
-        transformation_mats = ttnn.as_tensor(
-            transformation_mat_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
-        )
-        profiler.end("prepare_rot_mat_for_prefill")
-
-        num_users_generated_prefill = batch_size - 1  # First user is used for compile time
-        profiler.start(f"inference_prefill")
-        for batch_id in range(batch_size):
-            if batch_id == 0:  # First user prefill also accounts for compile time
-                profiler.start("compile_prefill")
-
-            prefill_input, attn_mask, _ = prepare_inputs_ttnn_prefill(
-                pt_prefill_input[batch_id],
-                mesh_device,
-            )
-            tt_out = tt_model(
-                prefill_input,
-                0,  # Start position
-                0,  # Current position
-                attn_mask,
-                rot_mats_prefill,
-                transformation_mats,
-                user_id=batch_id,
-                mode="prefill",
-            )
-
-            if batch_id == 0:  # First user prefill also accounts for compile time
-                profiler.end(f"compile_prefill")
-
-        # Device synchrozization ensures profiler is accurate in end-to-end timing
-        for dev in mesh_device.get_devices():
-            ttnn.synchronize_device(dev)
-
-        profiler.end(f"inference_prefill")
-        logger.info(f"Prefill finished [{prefill_seq_len} tokens]")
-
     logger.info("Starting decode...")
 
+    # Preparing first decode token
+    pt_out_batched = torch.stack(pt_out, dim=-2)
+    pt_out_batched = torch.argmax(pt_out_batched, dim=-1)
+    pt_decode_input = embd(pt_out_batched).view(batch_size, 1, -1)
+
     # Keep track of generated outputs to print out every iteration
-    all_outputs = [encoded_prompts[b][:prefill_seq_len] for b in range(batch_size)]
+    all_outputs = [encoded_prompts[b][: decoding_pos[b]] for b in range(batch_size)]
+    for user in range(batch_size):
+        user_tok = int(pt_out_batched[0, 0, user].item())
+        all_outputs[user].append(user_tok)
 
     # Keep track of users that are done generating and stop printing their outputs
     finished_generation = [False] * batch_size
@@ -255,29 +266,24 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
         # Check if all users have finished generating (reached EoS token). If so, stop decoding.
         if all(finished_generation):
             logger.info("All users have finished generating tokens")
-            num_tokens_generated_decode = (
-                iteration  # In case all users finish early, update the real number of generated tokens
-            )
+            # In case all users finish early, update the real number of generated tokens
+            num_tokens_generated_decode = iteration
             break
 
         iteration_time_start = time()
-        start_pos = generation_start_pos + iteration
-        current_pos = start_pos
-
         if embed_on_host:
             profiler.start("prepare_input_decode")
             decode_input_11BH = prepare_inputs_ttnn(
                 pt_decode_input,
                 model_args.dim,
-                start_pos,
-                model_args,
                 tt_model.mesh_device,
             )
             profiler.end("prepare_input_decode")
 
         profiler.start("decode_and_argmax")
         # Run ttnn mixtral model
-        tt_out_11BH = tt_model(decode_input_11BH, start_pos, current_pos)
+        tt_out_11BH = tt_model(decode_input_11BH, decoding_pos)
+        decoding_pos = [pos + 1 for pos in decoding_pos]
 
         if embed_on_host:
             # Convert ttnn tensor to torch tensor
@@ -291,22 +297,13 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
             # tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
             # Argmax on host to get the new generated tokens
             tt_token_batch = sample(tt_output_torch, temperature=0, top_p=0.8)
-            # Update the users that are still in prefill and the ones generating new tokens
-            if iteration < prefill_as_decode_len:
-                tt_token_batch = torch.where(
-                    input_mask_pt[:, iteration], input_tokens_decode_pt[:, iteration], tt_token_batch[:, 0]
-                ).unsqueeze(1)
-            # Next PT input embedding
+            tt_token_batch = tt_token_batch[:, 0].unsqueeze(1)
             pt_decode_input = embd(tt_token_batch).view(batch_size, 1, -1)
         else:  # Embedding/argmax on device
             # TODO Update argmax to ttnn when OP becomes available
             tt_out_B11B = ttnn.argmax(tt_out_11BH, dim=-1)
             tt_out_1B = ttnn.reshape(tt_out_B11B[:1, :, :, :], ttnn.Shape([1, batch_size]))  # [1, 32] Bfloat16
-            # Update the users that are still in prefill and the ones generating new tokens
-            if iteration < prefill_as_decode_len:
-                decode_input_1B = ttnn.where(input_mask[iteration], input_tokens_decode_tt[iteration], tt_out_1B)
-            else:
-                decode_input_1B = tt_out_1B
+            decode_input_1B = tt_out_1B
 
             # Next TT input embeddings
             decode_input_1BH = tt_embds(decode_input_1B)
@@ -362,26 +359,25 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
         for user in range(batch_size):
             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
-    # FIXME Issue #11850: Token verification is disabled for now
-    # if is_ci_env:
-    #     # When running in CI, check the output against the expected output to avoid accuracy regressions
-    #     if max_prefill_len == 128:
-    #         expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
-    #     else:  # max_prefill_len == 16k
-    #         expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_16k.json"
+    if is_ci_env:
+        # When running in CI, check the output against the expected output to avoid accuracy regressions
+        if test_prefill_len == 128:
+            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
+        else:  # test_prefill_len == 32k
+            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_32k.json"
 
-    #     with open(expected_output, "r") as f:
-    #         expected_out = json.load(f)
+        with open(expected_output, "r") as f:
+            expected_out = json.load(f)
 
-    #     for i in range(batch_size):
-    #         user_output = "".join(tokenizer.decode(all_outputs[i]))
-    #         # CI is running instruct weights only
-    #         user_expect = expected_out[i + batch_size]["output_instruct"]
+        for i in range(batch_size):
+            user_output = "".join(tokenizer.decode(all_outputs[i]))
+            # CI is running instruct weights only
+            user_expect = expected_out[i + batch_size]["output_instruct"]
 
-    #         # Only compare the new generated tokens (prefill part will match input)
-    #         assert user_expect in user_output, f"Output for user {i} does not contain the expected output!"
+            # Only compare the new generated tokens (prefill part will match input)
+            assert user_expect in user_output, f"Output for user {i} does not contain the expected output!"
 
-    #     logger.info("[CI-Only] Output token validation passed!")
+        logger.info("[CI-Only] Output token validation passed!")
 
     # Benchmark metrics
     compile_prefill_time = profiler.get_duration("compile_prefill")
@@ -407,7 +403,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
         "inference_prefill": inference_prefill_time,
         "inference_decode": inference_decode_time,
         "prefill_time_to_token": prefill_time_to_first,
-        "prefill_t/s": num_users_generated_prefill / inference_prefill_time * prefill_seq_len,  # tokens/s
+        "prefill_t/s": num_users_generated_prefill / inference_prefill_time * max(prefill_lens),  # tokens/s
         "decode_t/s/u": num_tokens_generated_decode / inference_decode_time,  # tokens/s
         "decode_t/s": num_tokens_generated_decode / inference_decode_time * batch_size,  # tokens/s/user
         # Optional measurements
@@ -456,7 +452,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
             ml_model_type="llm",
             num_layers=model_args.n_layers,
             batch_size=batch_size,
-            input_sequence_length=prefill_seq_len,
+            input_sequence_length=max(prefill_lens),
             output_sequence_length=1,
             # config_params=,
             # precision=,
@@ -464,45 +460,47 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, max_pre
 
 
 @pytest.mark.parametrize(
-    "input_prompts, max_prefill_len, instruct_weights",
+    "input_prompts, prefill_len, instruct_weights",
     [
         # General weights
         ("models/demos/t3000/mixtral8x7b/demo/input_data_prefill_128.json", 128, False),
         ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 4 * 1024, False),
         ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 8 * 1024, False),
         ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 16 * 1024, False),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 32 * 1024, False),
         # Instruct weights
         ("models/demos/t3000/mixtral8x7b/demo/input_data_questions_prefill_128.json", 128, True),
         ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 4 * 1024, True),
         ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 8 * 1024, True),
         ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 16 * 1024, True),
+        ("models/demos/t3000/mixtral8x7b/demo/input_tale_of_two_cities_32k.txt", 32 * 1024, True),
     ],
     ids=[
         "128-general",
         "4k-general",
         "8k-general",
         "16k-general",
+        "32k-general",
         "128-instruct",
         "4k-instruct",
         "8k-instruct",
         "16k-instruct",
+        "32k-instruct",
     ],
 )
-def test_mixtral8x7b_demo(
-    t3k_mesh_device, use_program_cache, input_prompts, instruct_weights, max_prefill_len, is_ci_env
-):
+def test_mixtral8x7b_demo(t3k_mesh_device, use_program_cache, input_prompts, instruct_weights, prefill_len, is_ci_env):
     if is_ci_env and instruct_weights == False:
-        pytest.skip("CI demo test only runs instruct weights with max prefill length of 16k to reduce CI pipeline load")
+        pytest.skip("CI demo test only runs instruct weights with max prefill length of 32k to reduce CI pipeline load")
 
-    if is_ci_env and max_prefill_len != 16 * 1024 and max_prefill_len != 128:
-        pytest.skip("CI demo test only runs instruct weights with max prefill length of 16k to reduce CI pipeline load")
+    if is_ci_env and prefill_len != 32 * 1024 and prefill_len != 128:
+        pytest.skip("CI demo test only runs instruct weights with max prefill length of 32k to reduce CI pipeline load")
 
     # Adjust the batch size based on the max prefill length
-    if max_prefill_len >= 16 * 1024:
+    if prefill_len >= 16 * 1024:
         batch_size = 4
-    elif max_prefill_len >= 8 * 1024:
+    elif prefill_len >= 8 * 1024:
         batch_size = 8
-    elif max_prefill_len >= 4 * 1024:
+    elif prefill_len >= 4 * 1024:
         batch_size = 16
     else:
         batch_size = 32
@@ -515,6 +513,6 @@ def test_mixtral8x7b_demo(
         batch_size=batch_size,
         mesh_device=t3k_mesh_device,
         instruct_mode=instruct_weights,
-        max_prefill_len=max_prefill_len,
+        test_prefill_len=prefill_len,
         is_ci_env=is_ci_env,
     )
