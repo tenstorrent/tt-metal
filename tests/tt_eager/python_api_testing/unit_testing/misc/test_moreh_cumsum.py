@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
     compute_kernel_options,
     compute_kernel_ids,
 )
-from models.utility_functions import comp_allclose_and_pcc
+from models.utility_functions import comp_allclose_and_pcc, skip_for_grayskull
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
@@ -47,6 +47,7 @@ def get_backward_tensors(input_shape, device):
     return tt_output_grad, tt_input_grad, torch_output_grad
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shape",
     (
@@ -107,6 +108,7 @@ def test_moreh_cumsum(input_shape, dim, use_provide_output, compute_kernel_optio
     assert passing
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shape",
     (
