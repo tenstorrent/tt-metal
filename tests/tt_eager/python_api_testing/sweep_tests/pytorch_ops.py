@@ -2479,3 +2479,15 @@ def complex_imag_bw(x, y, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
+
+
+def complex_real_bw(x, y, *args, **kwargs):
+    grad_data = x.real
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.real(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad

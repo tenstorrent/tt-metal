@@ -1050,4 +1050,12 @@ op_map = {
         "tt_op": ttnn_ops.complex_imag_bw,
         "pytorch_op": pytorch_ops.complex_imag_bw,
     },
+    "complex-real": {
+        "tt_op": ttnn_ops.complex_real,
+        "pytorch_op": pytorch_ops.complex_real,
+    },
+    "complex-real-bw": {
+        "tt_op": ttnn_ops.complex_real_bw,
+        "pytorch_op": pytorch_ops.complex_real_bw,
+    },
 }
