@@ -154,13 +154,11 @@ void py_bind_assign(py::module& module) {
             [] (const decltype(ttnn::assign)& self,
                 const ttnn::Tensor& input_a,
                 const ttnn::Tensor& input_b,
-                std::optional<ttnn::Tensor> &optional_output_tensor,
                 uint8_t queue_id) {
-                    return self(queue_id, input_a, input_b, optional_output_tensor);
+                    return self(queue_id, input_a, input_b);
                 },
                 py::arg("input_a").noconvert(),
                 py::arg("input_b").noconvert(),
-                py::arg("output_tensor") = std::nullopt,
                 py::arg("queue_id") = 0}
     );
 }

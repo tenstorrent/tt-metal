@@ -381,47 +381,41 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result;
+
     if (are_required_outputs.at(0)) {
-        if(input_grad.has_value()){
-            assign(grad, input_grad.value());
-        } else {
+        if(!input_grad.has_value()){
             input_grad = grad;
         }
+        assign(grad, input_grad.value());
         result.push_back(input_grad.value());
     } else {
         result.push_back(std::nullopt);
     }
     if (are_required_outputs.at(1)) {
-        if(other_grad.has_value()){
-            assign(grad, other_grad.value());
-        } else {
+        if(!other_grad.has_value()){
             other_grad = grad;
         }
+        assign(grad, other_grad.value());
         result.push_back(other_grad.value());
     } else {
         result.push_back(std::nullopt);
     }
 
-    return std::move(result);
+    return result;
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
     uint8_t cq_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config,
-    const std::vector<bool>& are_required_outputs,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
-    if (are_required_outputs.at(0)) {
         if(input_grad.has_value()){
             assign(grad, input_grad.value());
         } else {
             input_grad = grad;
         }
         result.push_back(input_grad.value());
-    } else {
-        result.push_back(std::nullopt);
-    }
 
-    return std::move(result);
+    return result;
 
 }
 

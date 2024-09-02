@@ -46,11 +46,7 @@ ttnn::Tensor AssignOperation::invoke(
     const MemoryConfig& output_mem_config,
     std::optional<const DataType> output_dtype,
     std::optional<Tensor> optional_output_tensor) {
-        if (optional_output_tensor.has_value()) {
-        operation::run(CopyDeviceOperation{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input}, {}, {optional_output_tensor}, queue_id).at(0);
-        return optional_output_tensor.value();
-    }
-    return operation::run(CopyDeviceOperation{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input}, {}, {}, queue_id).at(0);
+    return operation::run(CopyDeviceOperation{output_mem_config, output_dtype.value_or(input.get_dtype())}, {input}, {}, {optional_output_tensor}, queue_id).at(0);
 }
 
 ttnn::Tensor AssignOperation::invoke(
@@ -63,12 +59,7 @@ ttnn::Tensor AssignOperation::invoke(
 ttnn::Tensor AssignOperation::invoke(
     uint8_t queue_id,
     const Tensor& input_a,
-    const Tensor& input_b,
-    std::optional<Tensor> optional_output_tensor) {
-        if (optional_output_tensor.has_value()) {
-        operation::run(CopyDeviceOperation{input_b.memory_config(), input_b.get_dtype()}, {input_a, input_b}, {}, {optional_output_tensor}, queue_id).at(0);
-        return optional_output_tensor.value();
-    }
+    const Tensor& input_b) {
     operation::run(CopyDeviceOperation{input_b.memory_config(), input_b.get_dtype()}, {input_a, input_b}, {}, {}, queue_id);
     return input_b;
 }

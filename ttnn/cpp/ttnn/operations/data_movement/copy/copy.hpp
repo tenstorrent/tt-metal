@@ -51,8 +51,7 @@ struct AssignOperation {
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const Tensor& input_a,
-        const Tensor& input_b,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
+        const Tensor& input_b);
 
     static ttnn::Tensor invoke(
         const Tensor& input_a,

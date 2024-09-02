@@ -718,16 +718,14 @@ void bind_binary_backward_assign(py::module& module, const binary_backward_opera
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_grad,
                const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-               return self(queue_id, grad_tensor, input_tensor, memory_config, are_required_outputs, input_grad);
+               return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("are_required_outputs") = std::vector<bool>{true},
             py::arg("input_grad") = std::nullopt,
             py::arg("queue_id") = 0},
 

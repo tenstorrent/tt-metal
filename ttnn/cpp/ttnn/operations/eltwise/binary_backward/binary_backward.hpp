@@ -98,7 +98,6 @@ struct ExecuteBackwardAssign  {
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        const std::vector<bool> &are_required_outputs = std::vector<bool>{true},
         std::optional<Tensor> input_grad = std::nullopt);
 
     static std::vector<std::optional<ttnn::Tensor>> invoke(
