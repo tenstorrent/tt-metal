@@ -74,7 +74,7 @@ void MAIN {
     constexpr uint32_t cb_ex_external = tt::CB::dataflow2; // E[x] partials recieved from other cores
     constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3; // E[x^2] partial reduce
     constexpr uint32_t cb_stats = tt::CB::c_in7; // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_stats2 = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_stats2 = tt::CB::c_intermed4; // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5; // E[x^2] partials recieved from other cores
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
     constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x^2] global reduce
@@ -110,50 +110,51 @@ void MAIN {
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr(is_allgather_worker) {
-        cb_reserve_back(cb_stats2, stats_tiles);
         if (enable_sqrt) {
-            #ifndef RMSNORM
-            //copy E(x) to cb_stats2
+            cb_reserve_back(cb_stats2, stats_tiles);
 
-            tile_regs_acquire();
-            copy_tile_to_dst_init_short();
-            copy_tile(cb_stats, 0, dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_stats2);
-            //cb_push_back(cb_stats2, 1);
-            tile_regs_release();
+            // #ifndef RMSNORM
+            // //copy E(x) to cb_stats2
 
-            // calculate var = E(x^2) - E(x)^2
-            // E(x)^2
-            // unpack_reconfig_data_format(cb_stats, cb_stats);
-            cb_reserve_back(cb_ex_sqr, 1);
-            tile_regs_acquire();
-            mul_tiles_init();
-            mul_tiles(cb_stats, cb_stats, 0, 0, dst0);  // first tile in stats is always E(x)
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex_sqr);
-            cb_push_back(cb_ex_sqr, 1);
-            tile_regs_release();
+            // tile_regs_acquire();
+            // copy_tile_to_dst_init_short();
+            // copy_tile(cb_stats, 0, dst0);
+            // tile_regs_commit();
+            // tile_regs_wait();
+            // pack_tile(dst0, cb_stats2);
+            // //cb_push_back(cb_stats2, 1);
+            // tile_regs_release();
+
+            // // calculate var = E(x^2) - E(x)^2
+            // // E(x)^2
+            // // unpack_reconfig_data_format(cb_stats, cb_stats);
+            // cb_reserve_back(cb_ex_sqr, 1);
+            // tile_regs_acquire();
+            // mul_tiles_init();
+            // mul_tiles(cb_stats, cb_stats, 0, 0, dst0);  // first tile in stats is always E(x)
+            // tile_regs_commit();
+            // tile_regs_wait();
+            // pack_tile(dst0, cb_ex_sqr);
+            // cb_push_back(cb_ex_sqr, 1);
+            // tile_regs_release();
 
 
-            // E(x^2) - E(x)^2
-            unpack_reconfig_data_format_srcb(cb_stats, cb_ex_sqr);
-            pack_reconfig_data_format(cb_var);
-            cb_wait_front(cb_ex_sqr, 1);
-            cb_reserve_back(cb_var, 1);
-            tile_regs_acquire();
-            sub_tiles_init();
-            sub_tiles(cb_stats, cb_ex_sqr, 1, 0, dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_var);
-            cb_push_back(cb_var, 1);
-            tile_regs_release();
-            // UNPACK(DPRINT << " cb_var : "<<TSLICE(cb_var, 0, SliceRange::h0_w0_32()) << ENDL());
-            cb_pop_front(cb_ex_sqr, 1);
-            #endif
+            // // E(x^2) - E(x)^2
+            // unpack_reconfig_data_format_srcb(cb_stats, cb_ex_sqr);
+            // pack_reconfig_data_format(cb_var);
+            // cb_wait_front(cb_ex_sqr, 1);
+            // cb_reserve_back(cb_var, 1);
+            // tile_regs_acquire();
+            // sub_tiles_init();
+            // sub_tiles(cb_stats, cb_ex_sqr, 1, 0, dst0);
+            // tile_regs_commit();
+            // tile_regs_wait();
+            // pack_tile(dst0, cb_var);
+            // cb_push_back(cb_var, 1);
+            // tile_regs_release();
+            // // UNPACK(DPRINT << " cb_var : "<<TSLICE(cb_var, 0, SliceRange::h0_w0_32()) << ENDL());
+            // cb_pop_front(cb_ex_sqr, 1);
+            // #endif
 
 
             // 1/[sqrt(Var + eps)],
@@ -191,42 +192,41 @@ void MAIN {
             cb_push_back(cb_stats2, stats_tiles);
             tile_regs_release();
 
-            // cb_wait_front(cb_stats2, 2); //TODO remove
-            // UNPACK(DPRINT << "EX : "<<TSLICE(cb_stats2, 0, SliceRange::h0_w0_32()) << ENDL());
-            // UNPACK(DPRINT << "EX2 : "<<TSLICE(cb_stats2, 1, SliceRange::h0_w0_32()) << ENDL());
+            // cb_wait_front(cb_stats2, 1);
+            UNPACK(DPRINT << "cb_stats2 : "<<TSLICE(cb_stats2, 0, SliceRange::h0_w0_32()) << ENDL());
         }
     }
 
-    #ifndef RMSNORM
-    // x - E[x]
-    unpack_reconfig_data_format(cb_in0, cb_ex2_global);
-    pack_reconfig_data_format(cb_xmm);
-    index_h_offset = 0;
-    sub_bcast_cols_init_short();
-    cb_reserve_back(cb_xmm, num_tiles_per_block);
-    for (uint32_t i = 0; i < block_h; i++) {
-        index_subblock_w_offset = 0;
-        cb_wait_front(cb_ex2_global, 1);
-        for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < subblock_w; w++) {
-                index = w + index_subblock_w_offset;
-                sub_tiles_bcast_cols(cb_in0, cb_ex2_global, index, 0, w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, cb_xmm);
-            }
-            tile_regs_release();
-            index_subblock_w_offset += subblock_w;
-        }
-        cb_pop_front(cb_ex2_global, 1);
-        cb_pop_front(cb_in0, block_w);
-    }
-    cb_push_back(cb_xmm, num_tiles_per_block);
-    // UNPACK(DPRINT << " cb_xmm X-E[x] : "<<TSLICE(cb_xmm, 0, SliceRange::h0_w0_32()) << ENDL());
-    #endif
+    // #ifndef RMSNORM
+    // // x - E[x]
+    // unpack_reconfig_data_format(cb_in0, cb_ex2_global);
+    // pack_reconfig_data_format(cb_xmm);
+    // index_h_offset = 0;
+    // sub_bcast_cols_init_short();
+    // cb_reserve_back(cb_xmm, num_tiles_per_block);
+    // for (uint32_t i = 0; i < block_h; i++) {
+    //     index_subblock_w_offset = 0;
+    //     cb_wait_front(cb_ex2_global, 1);
+    //     for (uint32_t j = 0; j < num_subblocks_w; j++) {
+    //         tile_regs_acquire();
+    //         for (uint32_t w = 0; w < subblock_w; w++) {
+    //             index = w + index_subblock_w_offset;
+    //             sub_tiles_bcast_cols(cb_in0, cb_ex2_global, index, 0, w);
+    //         }
+    //         tile_regs_commit();
+    //         tile_regs_wait();
+    //         for (uint32_t i = 0; i < subblock_w; i++) {
+    //             pack_tile(i, cb_xmm);
+    //         }
+    //         tile_regs_release();
+    //         index_subblock_w_offset += subblock_w;
+    //     }
+    //     cb_pop_front(cb_ex2_global, 1);
+    //     cb_pop_front(cb_in0, block_w);
+    // }
+    // cb_push_back(cb_xmm, num_tiles_per_block);
+    // // UNPACK(DPRINT << " cb_xmm X-E[x] : "<<TSLICE(cb_xmm, 0, SliceRange::h0_w0_32()) << ENDL());
+    // #endif
 
     if constexpr(do_gamma == 0 && do_beta == 0) {
         pack_reconfig_data_format(cb_out);

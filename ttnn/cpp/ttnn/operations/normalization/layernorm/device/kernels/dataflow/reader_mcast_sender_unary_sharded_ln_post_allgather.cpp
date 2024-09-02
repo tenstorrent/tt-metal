@@ -43,7 +43,7 @@ void kernel_main() {
     constexpr uint32_t cb_ex_external = tt::CB::dataflow2;
     constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3;
     constexpr uint32_t cb_stats = tt::CB::c_in7;
-    constexpr uint32_t cb_stats2 = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_stats2 = tt::CB::c_intermed4; // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5;
     constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3;
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
