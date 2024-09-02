@@ -12,7 +12,7 @@ import torch
 
 
 class TtTransformer(LightweightModule):
-    def __init__(self, mesh_device, state_dict, args, dtype, layers, start_pos=0, rotary_on_host=False):
+    def __init__(self, mesh_device, state_dict, args, dtype, layers, start_pos_ids, rotary_on_host=False):
         super().__init__()
         self.args = args
         self.vocab_size = args.vocab_size
@@ -61,9 +61,11 @@ class TtTransformer(LightweightModule):
         self.compute_kernel = self.args.get_compute_kernel_config()
 
         if self.rotary_on_host:
-            self.current_rot_mat, self.rot_matrix = get_single_rot_mat_torch(self.args.head_dim, start_pos)
+            self.current_rot_mat, self.rot_matrix = get_single_rot_mat_torch(self.args.head_dim, start_pos_ids)
         else:
-            self.current_rot_mat, self.rot_matrix = get_single_rot_mat(self.args.head_dim, mesh_device, start_pos)
+            self.current_rot_mat, self.rot_matrix = get_single_rot_mat_multi_pos(
+                self.args.head_dim, mesh_device, start_pos_ids
+            )
 
     def forward(
         self,
@@ -120,8 +122,8 @@ class TtTransformer(LightweightModule):
         else:
             if (start_pos_ids[0] + 1) % 32 == 0:
                 # generate new rotmat to avoid numerical instability every 32 tokens
-                self.current_rot_mat, self.rot_matrix = get_single_rot_mat(
-                    self.args.head_dim, self.mesh_device, start_pos + 1
+                self.current_rot_mat, self.rot_matrix = get_single_rot_mat_multi_pos(
+                    self.args.head_dim, self.mesh_device, [pos + 1 for pos in start_pos_ids]
                 )
             else:
                 # assigning to a new variable to explictly deallocate since matmul creates a new buffer for the output

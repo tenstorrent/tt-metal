@@ -73,7 +73,15 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, instruct, mes
 
 
 def preprocess_inputs_prefill(
-    input_prompts, tokenizer, model_args, dtype, instruct, mesh_device, is_ci_env=False, max_prefill_len=16384
+    input_prompts,
+    tokenizer,
+    model_args,
+    dtype,
+    instruct,
+    mesh_device,
+    max_generated_tokens,
+    is_ci_env=False,
+    max_prefill_len=32768,
 ):
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
@@ -122,53 +130,18 @@ def preprocess_inputs_prefill(
     # Always prefill the nearest power of 2 for each user. This means that the majority of cases we will prefill more tokens than needed.
     # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
     for i, encoded in enumerate(encoded_prompts):
-        if prefill_seq_len > 0:
-            input_tokens_prefill[i] = torch.tensor(encoded[:prefill_seq_len]).to(input_tokens_prefill)
-        # Right padding
-        input_tokens_decode[i, : len(encoded[prefill_seq_len:])] = torch.tensor(encoded[prefill_seq_len:]).to(
-            input_tokens_decode
-        )
+        # Prefill size is nearest power of 2
+        prefill_seq_len = max(2 ** math.ceil(math.log(len(encoded), 2)), 128)
 
-    input_mask_bool = input_tokens_decode != tokenizer.pad_id
-    input_mask = input_mask_bool.int()  # from_torch doesn't support bool type
+        # Initial prefill tensors full of pad tokens
+        input_tokens_prefill_i = torch.full((1, prefill_seq_len), 0, dtype=torch.int32)
+        input_tokens_prefill_i[0, : len(encoded[:])] = torch.tensor(encoded[:]).to(input_tokens_prefill_i)
+        input_tokens_prefill.append(input_tokens_prefill_i)
 
-    # convert to ttnn tensor
-    # Encoded input tokens need to be uint32 for embedding. Otherwise the dtype conversion to bfloat16 will change the tokenizer ID
-    if prefill_seq_len > 0:
-        input_tokens_prefill_tt = [
-            ttnn.from_torch(
-                input_tokens_prefill[i, :].unsqueeze(0),
-                device=mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(mesh_device),
-            )
-            for i in range(len(encoded_prompts))
-        ]
-    else:  # Prefill-as-decode for short prompts
-        input_tokens_prefill_tt = None
+        # Keep the correct decoding position of each user
+        decoding_pos.append(len(encoded))
+        prefill_lens.append(prefill_seq_len)
 
-    input_tokens_decode_tt = [
-        ttnn.from_torch(
-            input_tokens_decode[:, i].unsqueeze(0),
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
-        )
-        for i in range(max_prompt_len - prefill_seq_len)
-    ]
-
-    input_mask_tt = [
-        ttnn.from_torch(
-            input_mask[:, i].unsqueeze(0),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
-        )
-        for i in range(max_prompt_len - prefill_seq_len)
-    ]
     return (
         input_tokens_prefill,
         encoded_prompts,
@@ -181,7 +154,7 @@ def nearest_n(x, n):
     return ((x + n - 1) // n) * n
 
 
-def prepare_inputs_ttnn(x_bsh, hidden_size, current_pos, model_args, mesh_device):
+def prepare_inputs_ttnn(x_bsh, hidden_size, mesh_device):
     """
     Prepare inputs for decode mode.
     x: (batch, seq, hidden_dim)
@@ -367,41 +340,6 @@ def get_single_rot_mat_multi_pos(dhead, mesh_device, start_pos_ids, theta: float
     )
 
 
-def get_single_rot_mat_multi_pos(dhead, mesh_device, start_pos_ids, theta: float = 1000000.0):
-    freqs = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
-    sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
-    rot_matrix = torch.zeros(dhead, dhead)
-    rot_matrix[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
-    rot_matrix[torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
-    rot_matrix[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
-    rot_matrix[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
-    rot_matrix = rot_matrix.transpose(-1, -2)
-
-    current_rot_mat = torch.zeros(len(start_pos_ids), dhead, dhead)
-    # Support for start_pos different than 0
-    for i, start_pos in enumerate(start_pos_ids):
-        freqs_i = start_pos * freqs
-        sin_freqs, cos_freqs = torch.sin(freqs_i), torch.cos(freqs_i)
-        current_rot_mat[i, torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
-        current_rot_mat[i, torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
-        current_rot_mat[i, torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
-        current_rot_mat[i, torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
-
-    return ttnn.from_torch(
-        current_rot_mat.unsqueeze(0).transpose(-1, -2),  # 1,B,head_dim,head_dim
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
-    ), ttnn.from_torch(
-        rot_matrix.unsqueeze(0).unsqueeze(0).repeat(1, len(start_pos_ids), 1, 1),  # 1,1,head_dim,head_dim
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
-    )
-
-
 def precompute_freqs(dim: int, end: int, theta: float = 1000000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
@@ -453,7 +391,7 @@ def get_prefill_rot_mat(head_dim, max_seq_len, mesh_device, seq_len):
     return rot_mats
 
 
-def prepare_inputs_ttnn_prefill(x_bsh, mesh_device):
+def prepare_inputs_ttnn_prefill(x_bsh, mesh_device, num_tokens=None):
     """
     Prepare inputs for prefill mode.
     x: (batch, seq, hidden_dim)
@@ -480,7 +418,7 @@ def prepare_inputs_ttnn_prefill(x_bsh, mesh_device):
     attn_mask = ttnn.from_torch(
         attn_mask,
         device=mesh_device,
-        dtype=ttnn.bfloat16,
+        dtype=attn_mask_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
