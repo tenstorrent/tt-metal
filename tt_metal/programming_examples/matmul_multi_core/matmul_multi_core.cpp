@@ -70,7 +70,7 @@ void matmul_multi_core(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16
      * Use a helper function to deduce the splits needed to co-operatively do
      * this matmul.
      */
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
     /*
     * Extracting Matrix dimensions from input/output vectors

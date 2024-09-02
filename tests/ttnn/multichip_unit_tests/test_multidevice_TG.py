@@ -8,7 +8,6 @@ import pytest
 import ttnn
 import tempfile
 from loguru import logger
-import tt_lib
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 from ttnn import (
@@ -714,7 +713,7 @@ class TestUpdateCache:
 
             compute_grid_size = mesh_device.get_device(0).compute_with_storage_grid_size()
             num_cores = min(seq_len // 32 * num_heads, 32)  # Always use max 32 cores for testing
-            mesh_shape = ttnn.CoreRangeSet(tt_lib.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+            mesh_shape = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
             input_shard_spec = ttnn.ShardSpec(
                 mesh_shape,
                 [
@@ -786,7 +785,7 @@ class TestUpdateCache:
         xt = x_new.permute(2, 1, 0, 3)
         compute_grid_size = mesh_device.get_device(0).compute_with_storage_grid_size()
         num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
-        mesh_shape = ttnn.CoreRangeSet(tt_lib.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+        mesh_shape = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
         input_shard_spec = ttnn.ShardSpec(
             mesh_shape,
             [
