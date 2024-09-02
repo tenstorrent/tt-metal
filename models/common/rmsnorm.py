@@ -69,7 +69,7 @@ class RMSNorm(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
             cache_file_name=cache_name,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2) if is_mesh_device else None,
         )
 
         if is_sharded:

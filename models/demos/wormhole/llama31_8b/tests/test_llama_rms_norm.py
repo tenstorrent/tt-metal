@@ -14,13 +14,14 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_llama_rms_norm_inference(device, use_program_cache, reset_seeds):
+def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(device)
+    model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -29,7 +30,7 @@ def test_llama_rms_norm_inference(device, use_program_cache, reset_seeds):
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = TtRMSNorm(
-        device=device,
+        device=mesh_device,
         dim=model_args.dim,
         state_dict=state_dict,
         layer_num=0,
@@ -40,11 +41,15 @@ def test_llama_rms_norm_inference(device, use_program_cache, reset_seeds):
     reference_output = reference_model(input)
 
     tt_input = ttnn.from_torch(
-        input, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
+        input,
+        device=mesh_device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=2),
     )  # , device, put_on_device=False)
 
     tt_output = tt_model(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output).squeeze(0)
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=2)).squeeze(0)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
