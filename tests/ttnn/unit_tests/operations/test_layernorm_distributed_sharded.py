@@ -206,13 +206,14 @@ def test_post_allgather_layernorm(
 
     sum_x2_tensor = torch.sum(torch_input_tensor**2, dim=-1, keepdim=True).to(torch.bfloat16) / input_width
 
-    tt_sum_x_tensor = ttnn.from_torch(
-        sum_x_tensor,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=input_df,
-    )
+    if not is_rmsnorm:
+        tt_sum_x_tensor = ttnn.from_torch(
+            sum_x_tensor,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=input_df,
+        )
 
     tt_sum_x2_tensor = ttnn.from_torch(
         sum_x2_tensor,
@@ -221,16 +222,21 @@ def test_post_allgather_layernorm(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=input_df,
     )
-    tt_stats_tensor = ttnn.concat([tt_sum_x_tensor, tt_sum_x2_tensor], -1)
+    if is_rmsnorm:
+        tt_stats_tensor = tt_sum_x2_tensor
+    else:
+        tt_stats_tensor = ttnn.concat([tt_sum_x_tensor, tt_sum_x2_tensor], -1)
+
     # shard to 1 core
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, 64),
+        shape=(1, 1, 32, tt_stats_tensor.get_legacy_shape()[-1]),
         core_grid=ttnn.CoreGrid(y=1, x=1),
         strategy=ttnn.ShardStrategy.WIDTH,
     )
     tt_stats_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
         tt_stats_tensor, sharded_mem_config=tt_stats_sharded_config
     )
+
     iterations = 1
     prev_tt_output_torch = None
     for iter in range(iterations):
