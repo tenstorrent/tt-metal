@@ -210,7 +210,7 @@ Tensor to_layout_impl(
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    DeviceMesh* device) {
+    MeshDevice* device) {
     return detail::to_layout_impl(tensor_arg, layout, dtype, memory_config, device);
 }
 

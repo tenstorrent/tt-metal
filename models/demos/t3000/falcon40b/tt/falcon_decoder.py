@@ -18,7 +18,7 @@ from models.demos.t3000.falcon40b.tt.model_utils import fused_partial_layernorm
 class TtFalconDecoderLayer:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -33,17 +33,17 @@ class TtFalconDecoderLayer:
         self.hidden_size = config.hidden_size
         self.state_dict = state_dict
         self.base_url = base_url
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.layer_num = layer_num
         self.max_position_embeddings = max_position_embeddings
         self.model_config = model_config
-        self.num_devices = len(device_mesh.get_device_ids())
+        self.num_devices = len(mesh_device.get_device_ids())
         self.ln_output_tensors_dict = ln_output_tensors_dict
 
         assert config.parallel_attn, "Path for config.parallel_attn=False is not implemented in TtFalconDecoderLayer!"
 
         self.self_attn = TtFalconAttention(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -55,7 +55,7 @@ class TtFalconDecoderLayer:
         )
 
         self.mlp = TtFalconMLP(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -78,9 +78,9 @@ class TtFalconDecoderLayer:
             tensor=self.state_dict[ln_mlp_weights_str],
             dtype=self.model_config["LN_MLP_WEIGHTS_DTYPE"],
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["LN_MLP_WEIGHTS_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_mlp_weights_path,
             preprocess=pad_ln_params,
         )
@@ -91,9 +91,9 @@ class TtFalconDecoderLayer:
             tensor=self.state_dict[ln_mlp_bias_str],
             dtype=self.model_config["LN_MLP_BIAS_DTYPE"],
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["LN_MLP_BIAS_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_mlp_bias_path,
             preprocess=pad_ln_params,
         )
@@ -109,9 +109,9 @@ class TtFalconDecoderLayer:
             tensor=self.state_dict[ln_attn_weights_str],
             dtype=self.model_config["LN_ATTN_WEIGHTS_DTYPE"],
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["LN_ATTN_WEIGHTS_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_attn_weights_path,
             preprocess=pad_ln_params,
         )
@@ -122,9 +122,9 @@ class TtFalconDecoderLayer:
             tensor=self.state_dict[ln_attn_bias_str],
             dtype=self.model_config["LN_ATTN_BIAS_DTYPE"],
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["LN_ATTN_BIAS_MEMCFG"],
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_attn_bias_path,
             preprocess=pad_ln_params,
         )

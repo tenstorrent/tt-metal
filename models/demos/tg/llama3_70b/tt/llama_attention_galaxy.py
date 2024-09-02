@@ -23,7 +23,7 @@ from models.demos.tg.llama3_70b.tt.llama_common import (
 class TtLlamaAttention_galaxy:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         cluster_shape,
         state_dict,
         base_url,
@@ -35,8 +35,8 @@ class TtLlamaAttention_galaxy:
         read_cache=False,
     ):
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = device_mesh.get_num_devices()
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         assert self.num_devices == 32, "Only 32 devices supported for TG"
         self.model_config = model_config
         self.read_cache = read_cache
@@ -86,8 +86,8 @@ class TtLlamaAttention_galaxy:
             weight,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=1),
+            device=self.mesh_device,
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=1),
         )
 
     def get_user_selection_mat(self):
@@ -99,8 +99,8 @@ class TtLlamaAttention_galaxy:
             user_selection_matrix,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            device=self.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
 
     def get_attn_model_config(self):
@@ -220,14 +220,14 @@ class TtLlamaAttention_galaxy:
             ttnn.to_device(
                 ttnn.as_tensor(
                     lp,
-                    device=self.device_mesh,
-                    mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+                    device=self.mesh_device,
+                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=ttnn.bfloat8_b,
                     cache_file_name=self.cache_path / f"empty_attn_cache_galaxy_{cache_k.shape}",
                 ),
-                self.device_mesh,
+                self.mesh_device,
             )
             for lp in layer_past
         ]
@@ -289,9 +289,9 @@ class TtLlamaAttention_galaxy:
             qkv_cat,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(2, 3), cluster_shape=self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(2, 3), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / wqkv_cache_str,
         )
 
@@ -299,9 +299,9 @@ class TtLlamaAttention_galaxy:
             pt_wo,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ShardTensor2dMesh(self.device_mesh, dims=(3, 2), cluster_shape=self.cluster_shape),
+            mesh_mapper=ShardTensor2dMesh(self.mesh_device, dims=(3, 2), cluster_shape=self.cluster_shape),
             cache_file_name=self.cache_path / wo_cache_str,
         )
 
@@ -349,7 +349,7 @@ class TtLlamaAttention_galaxy:
         xs.deallocate(True)
 
         fused_query_key_value = tt_all_reduce(
-            fused_query_key_value, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
         # TODO: Slice the fused_query_key_value tensor get batch=8
@@ -427,7 +427,7 @@ class TtLlamaAttention_galaxy:
         value_layer.deallocate(True)
 
         program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.device_mesh.get_device(0).compute_with_storage_grid_size(),
+            compute_with_storage_grid_size=self.mesh_device.get_device(0).compute_with_storage_grid_size(),
             q_chunk_size=0,  # unused
             k_chunk_size=0,  # unused
         )
@@ -458,7 +458,7 @@ class TtLlamaAttention_galaxy:
 
         attn_output = tt_all_gather(
             attn_output,
-            self.device_mesh,
+            self.mesh_device,
             dim=2,
             cluster_axis=1,
             num_links=2,
@@ -484,7 +484,7 @@ class TtLlamaAttention_galaxy:
 
         attn_output = tt_all_reduce(
             attn_output,
-            self.device_mesh,
+            self.mesh_device,
             cluster_axis=0,
             num_links=2,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -527,7 +527,7 @@ class TtLlamaAttention_galaxy:
         )
 
         fused_query_key_value = tt_all_reduce(
-            fused_query_key_value, self.device_mesh, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
         fused_query_key_value = ttnn.reshape(fused_query_key_value, (1, 1, seq_len, -1))
@@ -656,7 +656,7 @@ class TtLlamaAttention_galaxy:
         # Call all reduce here
         attn_output = tt_all_reduce(
             attn_output,
-            self.device_mesh,
+            self.mesh_device,
             cluster_axis=0,
             num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

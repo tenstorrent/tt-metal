@@ -6,11 +6,11 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def is_n300_with_eth_dispatch_cores(device_mesh) -> bool:
+def is_n300_with_eth_dispatch_cores(mesh_device) -> bool:
     all_devices_using_full_grid = all(
-        [(8 == device.core_grid.x and 8 == device.core_grid.y) for device in device_mesh.get_devices()]
+        [(8 == device.core_grid.x and 8 == device.core_grid.y) for device in mesh_device.get_devices()]
     )
-    return all_devices_using_full_grid and (len(device_mesh.get_devices()) == 2)
+    return all_devices_using_full_grid and (len(mesh_device.get_devices()) == 2)
 
 
 def check_pcc_conv(torch_tensor, ttnn_tensor, pcc=0.999, mesh_composer=None):

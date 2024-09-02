@@ -245,9 +245,9 @@ def from_torch(
 
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
-        tensor = ttl.tensor.Tensor(shards, dtype, mesh_mapper.config())
+        tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
     else:
-        tensor = ttl.tensor.Tensor(tensor, dtype)
+        tensor = ttnn.Tensor(tensor, dtype)
 
     if layout is not None:
         tensor = ttnn.to_layout(tensor, layout, device=device)

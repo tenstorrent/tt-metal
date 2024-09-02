@@ -12,7 +12,7 @@ from ttnn import ShardTensorToMesh
 class TtLlamaAttention_optimized:
     def __init__(
         self,
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -24,8 +24,8 @@ class TtLlamaAttention_optimized:
         read_cache=False,
     ):
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
-        self.num_devices = device_mesh.get_num_devices()
+        self.mesh_device = mesh_device
+        self.num_devices = mesh_device.get_num_devices()
         self.model_config = model_config
         self.read_cache = read_cache
 
@@ -81,14 +81,14 @@ class TtLlamaAttention_optimized:
             ttnn.to_device(
                 ttnn.as_tensor(
                     lp,
-                    device=self.device_mesh,
-                    mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=0),
+                    device=self.mesh_device,
+                    mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=self.model_config["DRAM_MEMCFG"],
                     dtype=ttnn.bfloat8_b,
                     cache_file_name=self.cache_path / f"empty_attn_cache{cache_k.shape}",
                 ),
-                self.device_mesh,
+                self.mesh_device,
             )
             for lp in layer_past
         ]
@@ -149,24 +149,24 @@ class TtLlamaAttention_optimized:
             qkv_cat,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / wqkv_cache_str,
         )
-        self.qkv = ttnn.to_device(qkv_ttnn, self.device_mesh)
+        self.qkv = ttnn.to_device(qkv_ttnn, self.mesh_device)
 
         wo_ttnn = ttnn.as_tensor(
             pt_wo,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=self.model_config["DRAM_MEMCFG"],
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / wo_str,
         )
 
-        self.wo = ttnn.to_device(wo_ttnn, self.device_mesh)
+        self.wo = ttnn.to_device(wo_ttnn, self.mesh_device)
 
     def __call__(
         self,

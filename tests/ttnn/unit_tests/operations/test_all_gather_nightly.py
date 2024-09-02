@@ -50,7 +50,7 @@ from ttnn import ShardTensorToMesh
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_nightly(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -64,7 +64,7 @@ def test_line_all_gather_on_t3000_nightly(
     num_iters=1,
 ):
     run_line_all_gather(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -138,7 +138,7 @@ def test_line_all_gather_on_t3000_nightly_two_link(
 
 
 def run_line_all_gather_instances(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     num_instances,
     input_shape,
@@ -152,10 +152,10 @@ def run_line_all_gather_instances(
     enable_async,
     num_iters=1,
 ):
-    if t3k_device_mesh.get_num_devices() != 8:
+    if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3000!")
 
-    for device in t3k_device_mesh.get_devices():
+    for device in t3k_mesh_device.get_devices():
         device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
@@ -169,7 +169,7 @@ def run_line_all_gather_instances(
 
     t3k_device = []
 
-    for device in t3k_device_mesh.get_devices():
+    for device in t3k_mesh_device.get_devices():
         t3k_device.append(device)
 
     t3000_device_rows = [
@@ -181,8 +181,8 @@ def run_line_all_gather_instances(
 
     input_tensor = torch.rand(input_shape).bfloat16()
 
-    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=dim))
-    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_device_mesh)
+    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim))
+    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 
     result_mesh_tensors = []
     for loop in range(num_iters):
@@ -236,7 +236,7 @@ def run_line_all_gather_instances(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_nightly_instances(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     num_instances,
     input_shape,
@@ -251,7 +251,7 @@ def test_line_all_gather_on_t3000_nightly_instances(
     num_iters=1,
 ):
     run_line_all_gather_instances(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         num_instances,
         input_shape,

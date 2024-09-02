@@ -6,14 +6,14 @@ import torch
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 from models.experimental.grok.tt.grok_common import LightweightModule
-from models.experimental.grok.scripts.tlog import tlog, tlog_device_mesh
+from models.experimental.grok.scripts.tlog import tlog, tlog_mesh_device
 
 
 class TtMoeLayer(LightweightModule):
-    def __init__(self, device_mesh, state_dict, experts, args, layer_num, dtype):
+    def __init__(self, mesh_device, state_dict, experts, args, layer_num, dtype):
         super().__init__()
-        self.device_mesh = device_mesh
-        tlog_device_mesh = device_mesh
+        self.mesh_device = mesh_device
+        tlog_mesh_device = mesh_device
         self.experts = experts
         self.args = args
         self.dtype = dtype
@@ -33,8 +33,8 @@ class TtMoeLayer(LightweightModule):
             layout=self.model_config["GATE_W_LAYOUT_TILE"],
             memory_config=self.model_config["GATE_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
-            device=self.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            device=self.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
         self.num_devices = 8
@@ -47,15 +47,15 @@ class TtMoeLayer(LightweightModule):
             reduce_mask_torch,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            device=self.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
         self.expert_mask_11BB = ttnn.from_torch(
             torch.cat([torch.full((1, 1, 32, 32), fill_value=i + 1) for i in range(8)], dim=3),
             dtype=ttnn.uint16,
             layout=ttnn.TILE_LAYOUT,
-            device=device_mesh,
-            mesh_mapper=ShardTensorToMesh(device_mesh, dim=3),
+            device=mesh_device,
+            mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
         )
         top8_mask = torch.full((1, 1, 32, 64), fill_value=torch.finfo(torch.float).min)
         top8_mask[:, :, :, 1:9] = 0.0
@@ -63,8 +63,8 @@ class TtMoeLayer(LightweightModule):
             top8_mask,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            device=mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
         top2_mask = torch.full((1, 1, 32, 32), fill_value=0.0)
@@ -73,8 +73,8 @@ class TtMoeLayer(LightweightModule):
             top2_mask,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            device=mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
         self.softmax_compute_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True

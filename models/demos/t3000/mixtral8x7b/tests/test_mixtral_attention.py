@@ -19,13 +19,13 @@ from models.utility_functions import (
 )
 
 
-def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_seeds):
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     pcc = 0.99
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -37,11 +37,11 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
     batch = 32
     seq_len = 1  # Decode one token at a time
 
-    tt_model = TtMixtralAttention(t3k_device_mesh, state_dict, args=model_args, layer_num=0, dtype=dtype)
+    tt_model = TtMixtralAttention(t3k_mesh_device, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        tt_model.device_mesh,
+        tt_model.mesh_device,
     )
 
     generation_start_pos = 0
@@ -57,7 +57,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
             model_args.dim,
             start_pos,
             model_args,
-            tt_model.device_mesh,
+            tt_model.mesh_device,
         )
 
         current_pos = start_pos % model_args.sliding_window
@@ -70,7 +70,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
         )
 
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
             .squeeze(2)
             .view(batch, 1, -1)
         )  # [ batch, seq, hidden_dim]

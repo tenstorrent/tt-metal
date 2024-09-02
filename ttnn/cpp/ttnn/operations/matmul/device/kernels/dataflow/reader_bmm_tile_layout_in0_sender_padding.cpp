@@ -6,19 +6,24 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "debug/dprint.h"
+
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
+
+    uint32_t rt_args_idx = 0;
     // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(0);
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(1);
+    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
     // in0 mcast args
-    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(2);
-    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(3);
-    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(4);
-    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(5);
+    const uint32_t in0_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(rt_args_idx++);
 
     // padding args
-    const uint32_t last_block_h = get_arg_val<uint32_t>(6);
+    const uint32_t last_block_h = get_arg_val<uint32_t>(rt_args_idx++);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
@@ -45,6 +50,18 @@ void kernel_main() {
     // batch args
     constexpr uint32_t MtKt = get_compile_time_arg_val(15);  // if 0
     constexpr uint32_t batch = get_compile_time_arg_val(16);
+
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(17);
+
+    MatmulOpReceiver fused_op_receiver;
+    if constexpr (fuse_op) {
+        fused_op_receiver = MatmulOpReceiver(
+            true, /* wait_for_op_signal */
+            rt_args_idx,
+            num_blocks,
+            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
+        );
+    }
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
@@ -98,6 +115,13 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; ++block) {
+            if constexpr (fuse_op) {
+                fused_op_receiver.update_current_block_start_tile_id(
+                    block,
+                    in0_tensor_current_block_start_tile_id,
+                    in0_tensor_start_tile_id
+                );
+            }
 #ifndef IN0_SHARDED
             // Operand 0
             cb_reserve_back(cb_id_in0, in0_block_num_tiles);
