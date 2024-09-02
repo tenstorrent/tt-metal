@@ -2,13 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tt_lib import tensor as ttl_tensor
 import ttnn
 import torch
 from functools import wraps
 from loguru import logger
 from contextlib import contextmanager
-import ttnn
 
 
 # Log only once to not pollute output
@@ -24,7 +22,7 @@ def check_log_pytorch_warning(arg):
 def custom_tensor_print_handler(tensor_cls):
     def custom_tt_tensor_to_str_fn(tensor):
         # We just report that this was a tt tensor and its shape as detailed information is already reported in other columns
-        return f"tt_lib.tensor.Tensor({'_'.join(map(str, tensor.get_legacy_shape()))})"
+        return f"ttnn.Tensor({'_'.join(map(str, tensor.get_legacy_shape()))})"
 
     def custom_pt_tensor_to_str_fn(tensor):
         return f"torch.Tensor({'|'.join(['_'.join(map(str, tensor.shape)), str(tensor.layout), str(tensor.dtype), str(tensor.device)])})"
@@ -32,7 +30,7 @@ def custom_tensor_print_handler(tensor_cls):
     # Save original methods
     tensor_str_og = tensor_cls.__str__
     tensor_repr_og = tensor_cls.__repr__
-    if tensor_cls == ttl_tensor.Tensor:
+    if tensor_cls == ttnn.Tensor:
         custom_tensor_to_str_fn = custom_tt_tensor_to_str_fn
     elif tensor_cls == torch.Tensor:
         custom_tensor_to_str_fn = custom_pt_tensor_to_str_fn
@@ -53,13 +51,13 @@ def convert_tt_tensor_to_pt_tensor(tt_tensor, output_format):
     # Update output_format with format of first encountered arg
     if (
         output_format.get("device", None) is None
-        and tt_tensor.storage_type() == ttl_tensor.StorageType.DEVICE
+        and tt_tensor.storage_type() == ttnn.StorageType.DEVICE
         and output_format["on_device"]
     ):
         output_format["device"] = tt_tensor.device()
 
     tt_tensor = tt_tensor.cpu()
-    tt_tensor = tt_tensor.to(ttl_tensor.Layout.ROW_MAJOR)
+    tt_tensor = tt_tensor.to(ttnn.ROW_MAJOR_LAYOUT)
     torch_tensor = tt_tensor.to_torch()
     # Required as not all torch ops/layers support bfloat16
     if torch_tensor.dtype == torch.bfloat16:
@@ -75,22 +73,22 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
     # Required as tt ops don't currently support float
     if pt_tensor.dtype == torch.float32:
         pt_tensor = pt_tensor.bfloat16()
-    tt_tensor = ttl_tensor.Tensor(pt_tensor.reshape(output_shape))
+    tt_tensor = ttnn.Tensor(pt_tensor.reshape(output_shape))
 
-    if output_format["layout"] == ttl_tensor.Layout.TILE:
+    if output_format["layout"] == ttnn.TILE_LAYOUT:
         if (
             tt_tensor.get_legacy_shape()[2] % 32 == 0 and tt_tensor.get_legacy_shape()[3] % 32 == 0
         ):  # Restore tile layout only if legal or else leave as RM
-            tt_tensor = tt_tensor.to(ttl_tensor.Layout.TILE)
+            tt_tensor = tt_tensor.to(ttnn.TILE_LAYOUT)
     else:
-        assert output_format["layout"] == ttl_tensor.Layout.ROW_MAJOR
+        assert output_format["layout"] == ttnn.ROW_MAJOR_LAYOUT
 
     if output_format["on_device"]:
         assert "device" in output_format
         assert isinstance(output_format["device"], ttnn.Device)
         if (
-            tt_tensor.get_layout() == ttl_tensor.Layout.TILE
-            or tt_tensor.get_layout() == ttl_tensor.Layout.ROW_MAJOR
+            tt_tensor.get_layout() == ttnn.TILE_LAYOUT
+            or tt_tensor.get_layout() == ttnn.ROW_MAJOR_LAYOUT
             and tt_tensor.get_legacy_shape()[3] % 2 == 0
         ):
             tt_tensor = tt_tensor.to(output_format["device"])
@@ -99,7 +97,7 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
 
 def convert_tt_tensors_to_pt_tensors(args, output_format):
     check_log_pytorch_warning(args)
-    if isinstance(args, ttl_tensor.Tensor):
+    if isinstance(args, ttnn.Tensor):
         return convert_tt_tensor_to_pt_tensor(args, output_format)
     elif isinstance(args, dict):
         outputs = {}
@@ -144,7 +142,7 @@ def convert_tt_tensors_wrapper(func):
         if "output_layout" in kwargs:
             output_format["layout"] = kwargs["output_layout"]
         else:
-            output_format["layout"] = ttl_tensor.Layout.TILE
+            output_format["layout"] = ttnn.TILE_LAYOUT
 
         new_args = convert_tt_tensors_to_pt_tensors(args, output_format)
         new_kwargs = convert_tt_tensors_to_pt_tensors(kwargs, output_format)

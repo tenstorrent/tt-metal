@@ -4,9 +4,6 @@
 
 from typing import Tuple, Union, Optional
 
-
-import tt_lib as ttl
-
 import ttnn
 
 

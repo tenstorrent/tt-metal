@@ -6,7 +6,6 @@ import sys
 from typing import Union
 
 import ttnn
-import ttnn._ttnn.deprecated as ttl
 
 __all__ = []
 

@@ -26,11 +26,9 @@ from ttnn.operations.conv.sliding_window_op_utils import (
 from typing import Union, Tuple, Dict
 
 from tt_lib.utils import _nearest_32
-import tt_lib as ttl
 
 import math
 import torch
-import ttnn
 
 
 def golden_maxpool2d(

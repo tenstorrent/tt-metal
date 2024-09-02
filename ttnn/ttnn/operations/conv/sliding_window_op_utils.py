@@ -5,7 +5,7 @@
 import numpy as np
 from collections import namedtuple
 
-import tt_lib as ttl
+import ttnn
 from tt_lib.utils import _nearest_y, roundup
 
 SlidingWindowOpParams = namedtuple(
@@ -74,47 +74,45 @@ def calculate_shard_grid(grid_size, num_cores_nhw, transpose_mcast=True):
     num_cores_w, num_cores_h = grid_size
     if transpose_mcast:
         shard_layout = (
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED
             if (num_cores_nhw == num_cores_w and num_cores_h > 1)
-            else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+            else ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         )
     else:
         shard_layout = (
-            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED
             if (num_cores_nhw == num_cores_h and num_cores_w > 1)
-            else ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
+            else ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         )
 
-    if shard_layout == ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED:
-        core_range = ttl.tensor.CoreRange(
-            ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
-        )
-        shard_grid = ttl.tensor.CoreRangeSet({core_range})
+    if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        core_range = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))
+        shard_grid = ttnn.CoreRangeSet({core_range})
     else:
         if num_cores_nhw >= num_cores_w:
             num_cores_height_excluding_remainder_last_row = num_cores_nhw // num_cores_w
             assert num_cores_h >= num_cores_height_excluding_remainder_last_row
-            core_range_1 = ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_height_excluding_remainder_last_row - 1),
+            core_range_1 = ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(num_cores_w - 1, num_cores_height_excluding_remainder_last_row - 1),
             )
             num_cores_last = num_cores_nhw % num_cores_w
             if num_cores_last > 0:
                 assert num_cores_h == num_cores_height_excluding_remainder_last_row + 1
-                core_range_2 = ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, num_cores_height_excluding_remainder_last_row),
-                    ttl.tensor.CoreCoord(num_cores_last - 1, num_cores_height_excluding_remainder_last_row),
+                core_range_2 = ttnn.CoreRange(
+                    ttnn.CoreCoord(0, num_cores_height_excluding_remainder_last_row),
+                    ttnn.CoreCoord(num_cores_last - 1, num_cores_height_excluding_remainder_last_row),
                 )
-                shard_grid = ttl.tensor.CoreRangeSet({core_range_1, core_range_2})
+                shard_grid = ttnn.CoreRangeSet({core_range_1, core_range_2})
             else:
                 assert num_cores_h == num_cores_height_excluding_remainder_last_row
-                shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
+                shard_grid = ttnn.CoreRangeSet({core_range_1})
         else:
-            core_range_1 = ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0),
-                ttl.tensor.CoreCoord(num_cores_nhw - 1, 0),
+            core_range_1 = ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(num_cores_nhw - 1, 0),
             )
-            shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
+            shard_grid = ttnn.CoreRangeSet({core_range_1})
     return shard_grid, shard_layout
 
 
@@ -174,12 +172,10 @@ def calculate_memory_config(
         assert padded_channels % logical_grid_size[0] == 0
         shard_shape = [nhw_shard, padded_channels // logical_grid_size[0]]
     shard_orientation = (
-        ttl.tensor.ShardOrientation.ROW_MAJOR
+        ttnn.ShardOrientation.ROW_MAJOR
         if is_1d_systolic
-        else (ttl.tensor.ShardOrientation.COL_MAJOR if transpose_mcast else ttl.tensor.ShardOrientation.ROW_MAJOR)
+        else (ttnn.ShardOrientation.COL_MAJOR if transpose_mcast else ttnn.ShardOrientation.ROW_MAJOR)
     )
-    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
-    shard_scheme = (
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED if is_1d_systolic else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
-    )
-    return ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
+    shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED if is_1d_systolic else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    return ttnn.MemoryConfig(shard_scheme, ttnn.BufferType.L1, shard_spec)
