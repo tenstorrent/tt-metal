@@ -39,7 +39,7 @@ class Emb(torch.nn.Module):
 
 
 @torch.no_grad()
-def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_prefill_len, is_ci_env):
+def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_prefill_len, is_ci_env):
     # Set Mixtral flags for CI
     if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
         os.environ["MIXTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/instruct/"
@@ -81,7 +81,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
 
     # Load model args, weights, and tokenizer
     model_args = TtModelArgs(
-        device_mesh.get_device(0), instruct=instruct_mode, max_seq_len=max_seq_len, max_batch_size=batch_size
+        mesh_device.get_device(0), instruct=instruct_mode, max_seq_len=max_seq_len, max_batch_size=batch_size
     )
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
@@ -120,7 +120,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
         model_args,
         dtype,
         instruct_mode,
-        device_mesh,
+        mesh_device,
         max_generated_tokens,
         is_ci_env,
     )
@@ -131,7 +131,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
 
     if not embed_on_host:
         tt_embds = TtMixtralEmbedding(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             args=model_args,
             weight_cache_path=model_args.weight_cache_path(dtype),
             state_dict=state_dict,
@@ -147,7 +147,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
     logger.info("Loading weights to device...")
     profiler.start("loading_weights_to_device")
     tt_model = TtTransformer(
-        device_mesh=device_mesh,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -162,7 +162,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
     # Prepare rotary matrix for decode
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        tt_model.device_mesh,
+        tt_model.mesh_device,
         model_args.max_seq_len,
     )
     profiler.end("prepare_rot_mat_for_decode")
@@ -176,9 +176,9 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=device_mesh,
+        device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
     profiler.end("prepare_rot_mat_for_prefill")
 
@@ -190,7 +190,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
             profiler.start("compile_prefill")
         prefill_seq_len = prefill_lens[batch_id]
         rot_mats_prefill = get_prefill_rot_mat(
-            model_args.head_dim, model_args.max_seq_len, device_mesh, seq_len=prefill_seq_len
+            model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_seq_len
         )
 
         if decoding_pos[batch_id] < prefill_seq_len:
@@ -199,7 +199,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
             ] = 0  # Zero out the tokens after the prefill length
         prefill_input, attn_mask, _ = prepare_inputs_ttnn_prefill(
             pt_prefill_input[batch_id],
-            device_mesh,
+            mesh_device,
             num_tokens=decoding_pos[batch_id],
         )
         tt_out = tt_model(
@@ -214,7 +214,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
         )
 
         pt_out.append(
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0))[0][
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0][
                 :, (decoding_pos[batch_id] - 1) % 32, :
             ].unsqueeze(1)
         )
@@ -223,7 +223,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
             profiler.end(f"compile_prefill")
 
     # Device synchrozization ensures profiler is accurate in end-to-end timing
-    for dev in device_mesh.get_devices():
+    for dev in mesh_device.get_devices():
         ttnn.device.synchronize_device(dev)
 
     profiler.end(f"inference_prefill")
@@ -231,7 +231,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
 
     profiler.start("cache_attention")
     cache_attention(
-        device_mesh,
+        mesh_device,
         state_dict,
         model_args,
         current_rot_mat,
@@ -276,7 +276,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
             decode_input_11BH = prepare_inputs_ttnn(
                 pt_decode_input,
                 model_args.dim,
-                tt_model.device_mesh,
+                tt_model.mesh_device,
             )
             profiler.end("prepare_input_decode")
 
@@ -288,7 +288,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
         if embed_on_host:
             # Convert ttnn tensor to torch tensor
             tt_output_torch = (
-                ttnn.to_torch(tt_out_11BH, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0))[0]
+                ttnn.to_torch(tt_out_11BH, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
                 .squeeze(1)
                 .view(32, 1, -1)
                 .detach()
@@ -488,7 +488,7 @@ def run_mixtral_demo(user_input, batch_size, device_mesh, instruct_mode, test_pr
         "32k-instruct",
     ],
 )
-def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, instruct_weights, prefill_len, is_ci_env):
+def test_mixtral8x7b_demo(t3k_mesh_device, use_program_cache, input_prompts, instruct_weights, prefill_len, is_ci_env):
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights with max prefill length of 32k to reduce CI pipeline load")
 
@@ -505,13 +505,13 @@ def test_mixtral8x7b_demo(t3k_device_mesh, use_program_cache, input_prompts, ins
     else:
         batch_size = 32
 
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     return run_mixtral_demo(
         user_input=input_prompts,
         batch_size=batch_size,
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         instruct_mode=instruct_weights,
         test_prefill_len=prefill_len,
         is_ci_env=is_ci_env,

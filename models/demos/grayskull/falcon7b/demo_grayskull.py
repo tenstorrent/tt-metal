@@ -37,7 +37,7 @@ def test_demo(
         model_config_strs_prefill_decode=["BFLOAT16-DRAM", "BFLOAT16-DRAM"],
         model_location_generator=model_location_generator,
         get_tt_cache_path=get_tt_cache_path,
-        device_mesh=device,
+        mesh_device=device,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,
         expected_perf_metrics=expected_perf_metrics,

@@ -33,13 +33,13 @@ from models.utility_functions import (
     ),
 )
 @torch.no_grad()
-def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_seeds, seq_len):
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_seeds, seq_len):
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     pcc = 0.99
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
     model_args = set_model_args(model_args, seq_len)
     state_dict = model_args.load_state_dict()
     batch = 1  # Prefill only a single user
@@ -51,20 +51,20 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
     reference_model.load_state_dict(partial_state_dict)
 
     # Prepare rotation matrices for RoPE
-    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, t3k_device_mesh, seq_len=seq_len)
+    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, t3k_mesh_device, seq_len=seq_len)
     head_dim = model_args.dim // model_args.n_heads
     transformation_mat_torch = get_rot_transformation_mat(head_dim)
     transformation_mats = ttnn.as_tensor(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_device_mesh,
+        device=t3k_mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
     )
 
     # Load ttnn model
-    tt_model = TtMixtralAttention(t3k_device_mesh, state_dict, args=model_args, layer_num=0, dtype=dtype)
+    tt_model = TtMixtralAttention(t3k_mesh_device, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
     generation_start_pos = 0
     generation_length = 3
@@ -77,7 +77,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
         start_pos_ids = [generation_start_pos + i for _ in range(batch)]
         attention_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
             tt_attention_input,
-            t3k_device_mesh,
+            t3k_mesh_device,
         )
 
         # Run ttnn attention module
@@ -91,7 +91,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
             mode="prefill",
         )
 
-        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0].view(
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0].view(
             batch, seq_len, -1
         )  # [ batch, seq, hidden_dim]
 
@@ -115,7 +115,7 @@ def test_mixtral_attention_inference(t3k_device_mesh, use_program_cache, reset_s
         # Validate KV-cache
         tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layer_past]
         tt_layer_present_all = [
-            ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=1)) for lp in tt_layer_present_all
+            ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=1)) for lp in tt_layer_present_all
         ]
         pytorch_layer_present = [
             reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]

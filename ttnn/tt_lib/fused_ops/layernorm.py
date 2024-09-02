@@ -5,7 +5,6 @@
 import torch
 
 import ttnn
-from tt_lib import tensor
 from tt_lib.utils import (
     pad_activation,
     pad_weight,
@@ -61,26 +60,26 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
     if num_dims == 1:
         padded_h = 32
     padded_w = roundup32(W)
-    gamma_ = tensor.Tensor(gamma, [1, 1, padded_h, padded_w], tensor.DataType.BFLOAT16, tensor.Layout.TILE, device)
+    gamma_ = ttnn.Tensor(gamma, [1, 1, padded_h, padded_w], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
 
     beta_ = None
     if beta is not None:
-        beta_ = tensor.Tensor(beta, [1, 1, padded_h, padded_w], tensor.DataType.BFLOAT16, tensor.Layout.TILE, device)
+        beta_ = ttnn.Tensor(beta, [1, 1, padded_h, padded_w], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
 
-    epsilon_ = tensor.Tensor(
+    epsilon_ = ttnn.Tensor(
         [epsilon] + [0.0 for _ in range(32 * 32 - 1)],
         [1, 1, 32, 32],
-        tensor.DataType.BFLOAT16,
-        tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
     if num_dims == 2:
-        var_scaler_ = tensor.Tensor(
+        var_scaler_ = ttnn.Tensor(
             [1 / (H * W)] + [0.0 for _ in range(32 * 32 - 1)],
             [1, 1, 32, 32],
-            tensor.DataType.BFLOAT16,
-            tensor.Layout.TILE,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
             device,
         )
     else:
@@ -200,7 +199,7 @@ if __name__ == "__main__":
     gamma = pad_weight(torch.full((1, 1, 1, W), gammaf))
     beta = pad_weight(torch.full((1, 1, 1, W), betaf))
 
-    t0 = tensor.Tensor(tilize_to_list(x), [1, 1, H, W], tensor.DataType.BFLOAT16, tensor.Layout.TILE, device)
+    t0 = ttnn.Tensor(tilize_to_list(x), [1, 1, H, W], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
     ttgamma = tilize_to_list(gamma)
     ttbeta = tilize_to_list(beta)
     func = Layernorm(ttgamma, ttbeta, epsf, 1, W, device, num_dims=1)

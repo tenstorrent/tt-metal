@@ -377,7 +377,9 @@ class UNet2DConditionModel:
         # sample = self.conv_in(sample)
         out_channels = self.parameters.conv_in.weight.shape[0]
         in_channels = self.parameters.conv_in.weight.shape[1]
-
+        shard_layout = (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if in_channels < 320 else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
@@ -386,9 +388,7 @@ class UNet2DConditionModel:
             math_approx_mode_enabled=True,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            if self.in_channels < 320
-            else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout=shard_layout,
             input_channels_alignment=32,
             transpose_shards=False,
             reshard_if_not_optimal=True,

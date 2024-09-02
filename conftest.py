@@ -167,7 +167,7 @@ def all_devices(request, device_params):
 
 
 @pytest.fixture(scope="function")
-def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     """
     Pytest fixture to set up a device mesh for tests.
 
@@ -182,7 +182,7 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
         device_params: Additional device configuration parameters.
 
     Yields:
-        device_mesh: Initialized device mesh object.
+        mesh_device: Initialized device mesh object.
     """
     import ttnn
 
@@ -199,30 +199,30 @@ def device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
         num_devices_requested = grid_dims[0] * grid_dims[1]
         if num_devices_requested > len(device_ids):
             pytest.skip("Requested more devices than available. Test not applicable for machine")
-        device_grid = ttnn.DeviceGrid(*grid_dims)
+        mesh_shape = ttnn.MeshShape(*grid_dims)
         assert num_devices_requested <= len(device_ids), "Requested more devices than available."
     else:
         num_devices_requested = min(param, len(device_ids))
-        device_grid = ttnn.DeviceGrid(1, num_devices_requested)
+        mesh_shape = ttnn.MeshShape(1, num_devices_requested)
 
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
-    device_mesh = ttnn.open_device_mesh(
-        device_grid, device_ids[:num_devices_requested], dispatch_core_type=get_dispatch_core_type(), **device_params
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape, device_ids[:num_devices_requested], dispatch_core_type=get_dispatch_core_type(), **device_params
     )
 
-    logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
-    yield device_mesh
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
 
-    for device in device_mesh.get_devices():
+    for device in mesh_device.get_devices():
         ttnn.DumpDeviceProfiler(device)
 
-    ttnn.close_device_mesh(device_mesh)
-    del device_mesh
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
 
 
 @pytest.fixture(scope="function")
-def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
     device_ids = ttnn.get_pcie_device_ids()
@@ -233,25 +233,25 @@ def pcie_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     request.node.pci_ids = device_ids[:num_pcie_devices_requested]
 
-    device_mesh = ttnn.open_device_mesh(
-        ttnn.DeviceGrid(1, num_pcie_devices_requested),
+    mesh_device = ttnn.open_mesh_device(
+        ttnn.MeshShape(1, num_pcie_devices_requested),
         device_ids[:num_pcie_devices_requested],
         dispatch_core_type=get_dispatch_core_type(),
         **device_params,
     )
 
-    logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
-    yield device_mesh
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
 
-    for device in device_mesh.get_devices():
+    for device in mesh_device.get_devices():
         ttnn.DumpDeviceProfiler(device)
 
-    ttnn.close_device_mesh(device_mesh)
-    del device_mesh
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
 
 
 @pytest.fixture(scope="function")
-def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
     if ttnn.get_num_devices() < 8:
@@ -264,21 +264,21 @@ def t3k_device_mesh(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
-    device_mesh = ttnn.open_device_mesh(
-        ttnn.DeviceGrid(1, num_devices_requested),
+    mesh_device = ttnn.open_mesh_device(
+        ttnn.MeshShape(1, num_devices_requested),
         device_ids[:num_devices_requested],
         dispatch_core_type=get_dispatch_core_type(),
         **device_params,
     )
 
-    logger.debug(f"multidevice with {device_mesh.get_num_devices()} devices is created")
-    yield device_mesh
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
 
-    for device in device_mesh.get_devices():
+    for device in mesh_device.get_devices():
         ttnn.DumpDeviceProfiler(device)
 
-    ttnn.close_device_mesh(device_mesh)
-    del device_mesh
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
 
 
 @pytest.fixture()
@@ -305,12 +305,12 @@ def get_devices(request):
         devices = request.getfixturevalue("all_devices")
     elif "pcie_devices" in request.fixturenames:
         devices = request.getfixturevalue("pcie_devices")
-    elif "device_mesh" in request.fixturenames:
-        devices = request.getfixturevalue("device_mesh").get_devices()
-    elif "t3k_device_mesh" in request.fixturenames:
-        devices = request.getfixturevalue("t3k_device_mesh").get_devices()
-    elif "pcie_device_mesh" in request.fixturenames:
-        devices = request.getfixturevalue("pcie_device_mesh").get_devices()
+    elif "mesh_device" in request.fixturenames:
+        devices = request.getfixturevalue("mesh_device").get_devices()
+    elif "t3k_mesh_device" in request.fixturenames:
+        devices = request.getfixturevalue("t3k_mesh_device").get_devices()
+    elif "pcie_mesh_device" in request.fixturenames:
+        devices = request.getfixturevalue("pcie_mesh_device").get_devices()
     else:
         devices = []
     return devices

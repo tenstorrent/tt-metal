@@ -15,7 +15,7 @@ from models.utility_functions import (
 )
 
 
-def test_load_dummy_weights(t3k_device_mesh):
+def test_load_dummy_weights(t3k_mesh_device):
     # Set to incorrect paths to test dummy weight loading
 
     backup_cache_path = TtModelArgs.DEFAULT_CACHE_PATH
@@ -27,11 +27,11 @@ def test_load_dummy_weights(t3k_device_mesh):
         TtModelArgs.DEFAULT_TOKENIZER_PATH = "this/path/does/not/exist"
         TtModelArgs.DEFAULT_CKPT_DIR = "this/path/does/not/exist"
 
-        model_args = TtModelArgs(t3k_device_mesh.get_device(0), dummy_weights=True)
+        model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=True)
         model_args.n_layers = 1
         state_dict = model_args.load_state_dict()
         tt_model = TtTransformer(
-            device_mesh=t3k_device_mesh,
+            mesh_device=t3k_mesh_device,
             state_dict=state_dict,
             args=model_args,
             layers=list(range(model_args.n_layers)),

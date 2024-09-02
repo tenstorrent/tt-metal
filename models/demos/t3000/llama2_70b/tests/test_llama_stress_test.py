@@ -38,7 +38,7 @@ def prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token):
 
 
 def run_test_LlamaModel_stress_test(
-    device_mesh,
+    mesh_device,
     batch,
     seq_len,
     model_config,
@@ -73,7 +73,7 @@ def run_test_LlamaModel_stress_test(
     # Set up model -----------------------------------------------------------------------
     logger.info("Moving weights to devices; might take some time...")
     tt_model = TtLlamaModel_optimized(
-        device_mesh,
+        mesh_device,
         state_dict,
         BASE_URL,
         n_layers,
@@ -84,8 +84,8 @@ def run_test_LlamaModel_stress_test(
         cache_path=cache_path,
         read_cache=True,
     )
-    for i in device_mesh.get_device_ids():
-        device = device_mesh.get_device(i)
+    for i in mesh_device.get_device_ids():
+        device = mesh_device.get_device(i)
         ttnn.synchronize_device(device)
 
     del state_dict
@@ -103,7 +103,7 @@ def run_test_LlamaModel_stress_test(
 
             del tt_inp_emb, rot_mat, attn_mask
 
-            logits = ttnn.to_torch(tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
+            logits = ttnn.to_torch(tt_logits, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
             logits = logits[..., : configuration.vocab_size].float()
             del tt_logits
 
@@ -125,7 +125,7 @@ def run_test_LlamaModel_stress_test(
 )
 def test_Llama_stress_test(
     generation_length,
-    t3k_device_mesh,
+    t3k_mesh_device,
     n_layers=80,
     n_devices=8,
     emulated=False,
@@ -134,15 +134,15 @@ def test_Llama_stress_test(
 
     model_config = get_model_config(model_config_str="BFLOAT16-DRAM", num_devices=n_devices, seq_len=seq_len)
 
-    if t3k_device_mesh.get_num_devices() < n_devices and not emulated:
+    if t3k_mesh_device.get_num_devices() < n_devices and not emulated:
         pytest.skip(f"Requires at {n_devices} devices to run")
 
-    compute_grid_size = t3k_device_mesh.get_device(0).compute_with_storage_grid_size()
+    compute_grid_size = t3k_mesh_device.get_device(0).compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    for i in t3k_device_mesh.get_device_ids():
-        device = t3k_device_mesh.get_device(i)
+    for i in t3k_mesh_device.get_device_ids():
+        device = t3k_mesh_device.get_device(i)
         device.enable_program_cache()
     disable_compilation_reports()
     run_test_LlamaModel_stress_test(

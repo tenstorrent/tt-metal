@@ -38,15 +38,15 @@ void bind_line_all_gather(pybind11::module& module, const ccl_operation_t& opera
                const ttnn::Tensor& input_tensor,
                const uint32_t dim,
                const uint32_t cluster_axis,
-               const DeviceMesh& device_mesh,
+               const MeshDevice& mesh_device,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(input_tensor, dim, cluster_axis, device_mesh, num_links, memory_config);
+                return self(input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
             py::arg("cluster_axis"),
-            py::arg("device_mesh"),
+            py::arg("mesh_device"),
             py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt});
@@ -71,9 +71,9 @@ void py_bind_line_all_gather(pybind11::module& module) {
                 After the all-gather operation, the size of the :attr:`dim`
                 dimension will larger by number of devices in the line.
             * :attr:`cluster_axis` (int):
-                Provided a MeshTensor, the axis corresponding to DeviceMesh
+                Provided a MeshTensor, the axis corresponding to MeshDevice
                 to perform the line-all-gather operation on.
-            * :attr:`device_mesh` (DeviceMesh):
+            * :attr:`mesh_device` (MeshDevice):
                 Device mesh to perform the line-all-gather operation on.
 
         Keyword Args:

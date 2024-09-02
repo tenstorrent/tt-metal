@@ -38,15 +38,19 @@ def get_username():
 
 def get_devices(test_module):
     try:
-        return test_module.device_mesh_fixture()
+        return test_module.mesh_device_fixture()
     except:
         return default_device()
 
 
 def run(test_module, input_queue, output_queue):
     device_generator = get_devices(test_module)
-    device, device_name = next(device_generator)
-    print(f"SWEEPS: Opened device configuration, {device_name}.")
+    try:
+        device, device_name = next(device_generator)
+        print(f"SWEEPS: Opened device configuration, {device_name}.")
+    except AssertionError as e:
+        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None])
+        return
     try:
         while True:
             test_vector = input_queue.get(block=True, timeout=1)
@@ -65,7 +69,7 @@ def run(test_module, input_queue, output_queue):
             output_queue.put([status, message, e2e_perf])
     except Empty as e:
         try:
-            # Run teardown in device_mesh_fixture
+            # Run teardown in mesh_device_fixture
             next(device_generator)
         except StopIteration:
             print(f"SWEEPS: Closed device configuration, {device_name}.")
@@ -124,6 +128,13 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                     result["status"] = TestStatus.PASS
                     result["message"] = message
                 else:
+                    if "DEVICE EXCEPTION" in message:
+                        print(
+                            "SWEEPS: DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: ",
+                            message,
+                        )
+                        print("SWEEPS: Skipping test suite because of device error, proceeding...")
+                        return []
                     if "Out of Memory: Not enough space to allocate" in message:
                         result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
                     elif "Watcher" in message:

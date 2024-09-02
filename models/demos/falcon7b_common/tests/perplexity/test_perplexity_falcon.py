@@ -27,7 +27,7 @@ from models.utility_functions import is_wormhole_b0
     ],
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)  # Option to run Falcon in Async mode
-@pytest.mark.parametrize("device_mesh", (1,), indirect=True)
+@pytest.mark.parametrize("mesh_device", (1,), indirect=True)
 def test_perplexity(
     llm_mode,
     batch_size,
@@ -40,7 +40,7 @@ def test_perplexity(
     enable_async_mode,
     model_location_generator,
     get_tt_cache_path,
-    device_mesh,
+    mesh_device,
     use_program_cache,
 ):
     assert is_wormhole_b0(), "This test is only for Wormhole B0"
@@ -52,7 +52,7 @@ def test_perplexity(
         model_config_str,
         model_location_generator,
         get_tt_cache_path,
-        device_mesh,
+        mesh_device,
         num_samples,
         {"ppl": expected_ppl, "top1_acc": expected_top1, "top5_acc": expected_top5},
     )

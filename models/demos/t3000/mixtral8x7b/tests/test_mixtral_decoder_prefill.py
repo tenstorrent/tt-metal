@@ -29,19 +29,19 @@ from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
         1024 * 32,
     ),
 )
-def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_seeds, seq_len):
+def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_seeds, seq_len):
     """
     b: batch
     s: sequence length
     h: hidden size
     """
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     pcc = 0.99
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
     model_args = set_model_args(model_args, seq_len)
     batch = 1
     state_dict = model_args.load_state_dict()
@@ -49,21 +49,21 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
     reference_model = TransformerBlock(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
-    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, t3k_device_mesh, seq_len=seq_len)
+    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, t3k_mesh_device, seq_len=seq_len)
     head_dim = model_args.dim // model_args.n_heads
     transformation_mat_torch = get_rot_transformation_mat(head_dim)
     transformation_mats = ttnn.as_tensor(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_device_mesh,
+        device=t3k_mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
     )
 
     # Initialize TT model
     tt_model = TtTransformerBlock(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         args=model_args,
         layer_num=0,
@@ -86,7 +86,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
 
         decode_input_b1sh, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
             pt_decode_input_bsh,
-            tt_model.device_mesh,
+            tt_model.mesh_device,
         )
         # Run TT model
         tt_out_b1sh = tt_model(
@@ -100,7 +100,7 @@ def test_mixtral_decoder_inference(t3k_device_mesh, use_program_cache, reset_see
         )
 
         tt_output_torch_b1h = (
-            ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
             .squeeze(1)
             .view(batch, seq_len, -1)
         )

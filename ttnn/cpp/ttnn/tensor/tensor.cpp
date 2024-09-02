@@ -20,6 +20,7 @@
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+
 using namespace tt::constants;
 
 
@@ -374,8 +375,8 @@ Tensor Tensor::to(Device* target_device, const MemoryConfig& mem_config) const {
     return tensor_ops::tensor_to(*this, target_device, mem_config);
 }
 
-Tensor Tensor::to(DeviceMesh* device_mesh, const MemoryConfig& mem_config) const {
-    std::vector<Device*> workers_to_use = distribute_tensor_to_mesh(*this, *device_mesh);
+Tensor Tensor::to(MeshDevice* mesh_device, const MemoryConfig& mem_config) const {
+    std::vector<Device*> workers_to_use = distribute_tensor_to_mesh(*this, *mesh_device);
     return tensor_ops::tensor_to(*this, workers_to_use, mem_config);
 }
 
@@ -406,8 +407,8 @@ Tensor Tensor::to(Layout target_layout, Device* worker) const {
     return tensor_ops::tensor_to(*this, target_layout, worker);
 }
 
-Tensor Tensor::to(Layout target_layout, DeviceMesh* device_mesh) const {
-    return tensor_ops::tensor_to(*this, target_layout, device_mesh);
+Tensor Tensor::to(Layout target_layout, MeshDevice* mesh_device) const {
+    return tensor_ops::tensor_to(*this, target_layout, mesh_device);
 }
 
 const std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
@@ -450,31 +451,7 @@ bool Tensor::is_allocated() const {
     ZoneScoped;
     auto output = std::visit(
         [](auto&& storage) -> bool {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, OwnedStorage>) {
-                return std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.buffer);
-            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return bool(storage.buffer) and storage.buffer->size() > 0;
-            } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
-                return true;
-            } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                bool is_allocated = true;
-                for (int i = 0; i < storage.num_buffers(); i++) {
-                    is_allocated &=
-                        std::visit([](auto&& buffer) -> bool { return buffer.is_allocated(); }, storage.get_buffer(i));
-                }
-                return is_allocated;
-            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                bool is_allocated = true;
-                for (int i = 0; i < storage.ordered_device_ids.size(); ++i) {
-                    auto device_id = storage.ordered_device_ids[i];
-                    const auto& buffer = storage.get_buffer_for_device_id(device_id);
-                    is_allocated &= bool(buffer) and buffer->size() > 0;
-                }
-                return is_allocated;
-            } else {
-                raise_unsupported_storage<T>();
-            }
+            return storage.is_allocated();
         },
         this->get_storage());
     return output;
@@ -712,10 +689,10 @@ Tensor allocate_tensor_on_device(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
-    DeviceMesh* device_mesh,
+    MeshDevice* mesh_device,
     const MemoryConfig& memory_config) {
     // Top level wrapper to asynchronously create a device tensor (multi-device)
-    Tensor device_tensor = Tensor(device_mesh->get_devices());
+    Tensor device_tensor = Tensor(mesh_device->get_devices());
     uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
     const auto& workers = device_tensor.get_workers();
     uint32_t num_workers = workers.size();
@@ -795,7 +772,7 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
 }
 
 
-std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, DeviceMesh& device_mesh) {
+std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, MeshDevice& mesh_device) {
     auto get_multi_device_workers = [&](const std::vector<Device*>& workers) {
         if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage()) or
             std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
@@ -804,22 +781,22 @@ std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, DeviceMesh&
         return workers;
     };
 
-    if (device_mesh.get_view() != nullptr and std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
+    if (mesh_device.get_view() != nullptr and std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
         const auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
 
         return std::visit([&](const auto& strategy) {
             using StrategyType = std::decay_t<decltype(strategy)>;
             if constexpr (std::is_same_v<StrategyType, ShardTensor2D>) {
-                auto mesh_view = device_mesh.get_view();
+                auto mesh_view = mesh_device.get_view();
                 return mesh_view->get_devices(strategy.shard_mesh);
             } else {
-                return get_multi_device_workers(device_mesh.get_devices());
+                return get_multi_device_workers(mesh_device.get_devices());
             }
         }, host_storage.strategy);
     } else if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {
         return tensor.workers;
     } else {
-        return get_multi_device_workers(device_mesh.get_devices());
+        return get_multi_device_workers(mesh_device.get_devices());
     }
 }
 

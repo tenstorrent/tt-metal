@@ -43,7 +43,7 @@ class Emb(torch.nn.Module):
 
 @torch.no_grad()
 def run_test_perplexity(
-    device_mesh,
+    mesh_device,
     batch_size,
     llm_mode,
     max_seq_len,
@@ -70,7 +70,7 @@ def run_test_perplexity(
         ref_running_nll, ref_running_top1_acc, ref_running_top5_acc = 0.0, 0.0, 0.0
 
     # Load model args, weights, and tokenizer
-    model_args = TtModelArgs(device_mesh.get_device(0), instruct=instruct_mode)
+    model_args = TtModelArgs(mesh_device.get_device(0), instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
     if instruct_mode:
         tokenizer._model.pad_id = tokenizer._model.eos_id
@@ -104,7 +104,7 @@ def run_test_perplexity(
     # Load TTNN mixtral model
     logger.info("Loading weights to device...")
     tt_model = TtTransformer(
-        device_mesh=device_mesh,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -120,7 +120,7 @@ def run_test_perplexity(
 
     if not embed_on_host:
         tt_embds = TtMixtralEmbedding(
-            device_mesh=device_mesh,
+            mesh_device=mesh_device,
             args=model_args,
             weight_cache_path=model_args.weight_cache_path(dtype),
             state_dict=state_dict,
@@ -132,13 +132,13 @@ def run_test_perplexity(
     # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        tt_model.device_mesh,
+        tt_model.mesh_device,
     )
 
     generation_start_pos = 0
 
     cache_attention(
-        device_mesh,
+        mesh_device,
         state_dict,
         model_args,
         current_rot_mat,
@@ -166,7 +166,9 @@ def run_test_perplexity(
                     decode_input_11BH = prepare_inputs_ttnn(
                         pt_decode_input,
                         model_args.dim,
-                        tt_model.device_mesh,
+                        start_pos,
+                        model_args,
+                        tt_model.mesh_device,
                     )
                 else:
                     assert "Only embedding on host is supported for now!"
@@ -177,7 +179,7 @@ def run_test_perplexity(
                 if embed_on_host:
                     # Convert ttnn tensor to torch tensor
                     pt_logits = (
-                        ttnn.to_torch(tt_logits, mesh_composer=ConcatMeshToTensor(device_mesh, dim=0))[0]
+                        ttnn.to_torch(tt_logits, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
                         .squeeze(1)
                         .view(32, seqlen, -1)
                         .detach()
@@ -267,7 +269,7 @@ def run_test_perplexity(
     ],
 )
 def test_mixtral_perplexity(
-    t3k_device_mesh,
+    t3k_mesh_device,
     use_program_cache,
     reset_seeds,
     llm_mode,
@@ -281,11 +283,11 @@ def test_mixtral_perplexity(
         llm_mode == "decode"
     ), "Only decode mode is supported for now"  # TODO Add prefill support when it reaches main
 
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     return run_test_perplexity(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         batch_size=32,
         llm_mode=llm_mode,
         max_seq_len=max_seq_len,

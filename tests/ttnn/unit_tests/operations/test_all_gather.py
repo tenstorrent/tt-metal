@@ -367,7 +367,7 @@ def test_all_gather_on_t3000_post_commit(
 
 
 def run_line_all_gather(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -380,10 +380,10 @@ def run_line_all_gather(
     enable_async,
     num_iters=1,
 ):
-    if t3k_device_mesh.get_num_devices() != 8:
+    if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3000!")
 
-    for device in t3k_device_mesh.get_devices():
+    for device in t3k_mesh_device.get_devices():
         device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
@@ -400,8 +400,8 @@ def run_line_all_gather(
 
     input_tensor = torch.rand(input_shape).bfloat16()
 
-    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_device_mesh, dim=dim))
-    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_device_mesh)
+    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim))
+    input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 
     for i in range(num_iters):
         tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
@@ -517,7 +517,7 @@ def run_line_all_gather_deprecated(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_post_commit(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -531,7 +531,7 @@ def test_line_all_gather_on_t3000_post_commit(
     num_iters=1,
 ):
     run_line_all_gather(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,
@@ -638,7 +638,7 @@ def test_line_all_gather_on_t3000_post_commit_two_link(
 )
 @pytest.mark.parametrize("enable_async", [True, False])
 def test_line_all_gather_on_t3000_nightly(
-    t3k_device_mesh,
+    t3k_mesh_device,
     num_devices,
     input_shape,
     dim,
@@ -652,7 +652,7 @@ def test_line_all_gather_on_t3000_nightly(
     num_iters=1,
 ):
     run_line_all_gather(
-        t3k_device_mesh,
+        t3k_mesh_device,
         num_devices,
         input_shape,
         dim,

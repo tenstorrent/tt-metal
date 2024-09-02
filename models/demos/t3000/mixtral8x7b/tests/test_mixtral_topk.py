@@ -40,10 +40,10 @@ class Emb(torch.nn.Module):
     ),
 )
 def test_mixtral_model_inference(
-    t3k_device_mesh, use_program_cache, reset_seeds, iterations, expected_top1, expected_top5
+    t3k_mesh_device, use_program_cache, reset_seeds, iterations, expected_top1, expected_top5
 ):
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     dtype = ttnn.bfloat8_b
     seqlen = 1  # Generating one token per user at a time
@@ -53,14 +53,14 @@ def test_mixtral_model_inference(
     running_top5 = 0
     inputs_file = "models/demos/t3000/mixtral8x7b/demo/input_data.json"
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
     state_dict = model_args.load_state_dict()
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Prepare inputs
     input_prompts = load_inputs(inputs_file, 32)
     input_tokens_tt, max_prompt_len, input_mask, input_tokens_pt, input_mask_pt = preprocess_inputs(
-        input_prompts, tokenizer, model_args, dtype, False, t3k_device_mesh
+        input_prompts, tokenizer, model_args, dtype, False, t3k_mesh_device
     )
 
     # Load reference model
@@ -74,7 +74,7 @@ def test_mixtral_model_inference(
 
     # Load TTNN model
     tt_model = TtTransformer(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -94,14 +94,16 @@ def test_mixtral_model_inference(
         decode_input = prepare_inputs_ttnn(
             pt_decode_input,
             model_args.dim,
-            tt_model.device_mesh,
+            start_pos,
+            model_args,
+            tt_model.mesh_device,
         )
 
         # Run TT model
         tt_out = tt_model(decode_input, [start_pos] * batch)
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
             .squeeze(1)
             .view(32, seqlen, -1)
             .detach()

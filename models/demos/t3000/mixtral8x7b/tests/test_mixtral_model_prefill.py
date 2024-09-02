@@ -40,13 +40,13 @@ class Emb(torch.nn.Module):
         1024 * 32,
     ),
 )
-def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_seeds, seq_len, is_ci_env):
+def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_seeds, seq_len, is_ci_env):
     # Set additional Mistral flag for CI
     if is_ci_env:
         os.environ["MIXTRAL_REF_OUTPUT_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/Mixtral-8x7B-v0.1/prefill/"
 
-    for device in t3k_device_mesh.get_device_ids():
-        t3k_device_mesh.get_device(device).enable_async(True)
+    for device in t3k_mesh_device.get_device_ids():
+        t3k_mesh_device.get_device(device).enable_async(True)
 
     n_layers = 32
 
@@ -64,7 +64,7 @@ def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_se
             ref_out_file
         ), f"Reference output file not found: {ref_out_file}. Please set the flag 'MIXTRAL_REF_OUTPUT_PATH' correctly."
 
-    model_args = TtModelArgs(t3k_device_mesh.get_device(0))
+    model_args = TtModelArgs(t3k_mesh_device.get_device(0))
     model_args = set_model_args(model_args, seq_len)
     model_args.n_layers = n_layers
 
@@ -81,20 +81,20 @@ def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_se
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
     # Prepare rotary matrices
-    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, t3k_device_mesh, seq_len=seq_len)
+    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, t3k_mesh_device, seq_len=seq_len)
     head_dim = model_args.dim // model_args.n_heads
     transformation_mat_torch = get_rot_transformation_mat(head_dim)
     transformation_mats = ttnn.as_tensor(
         transformation_mat_torch,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=t3k_device_mesh,
+        device=t3k_mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(t3k_device_mesh),
+        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
     )
     # Load TTNN model
     tt_model = TtTransformer(
-        device_mesh=t3k_device_mesh,
+        mesh_device=t3k_mesh_device,
         state_dict=state_dict,
         args=model_args,
         layers=list(range(model_args.n_layers)),
@@ -111,7 +111,7 @@ def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_se
     for iter in range(1):
         decode_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
             tt_decode_input,
-            tt_model.device_mesh,
+            tt_model.mesh_device,
         )
 
         # Run TT model
@@ -119,7 +119,7 @@ def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_se
 
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
             .view(batch, seq_len, -1)
             .detach()
             .float()
@@ -167,13 +167,15 @@ def test_mixtral_model_inference_CI(t3k_device_mesh, use_program_cache, reset_se
         decode_input = prepare_inputs_ttnn(
             decode_input_torch,
             model_args.dim,
-            tt_model.device_mesh,
+            start_pos,
+            model_args,
+            tt_model.mesh_device,
         )
         tt_out = tt_model(decode_input, start_pos_ids, mode="decode")
 
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_device_mesh, dim=0))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
             .view(32, seqlen, -1)
             .detach()
             .float()

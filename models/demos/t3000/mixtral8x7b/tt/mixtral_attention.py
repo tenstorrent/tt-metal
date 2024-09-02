@@ -10,12 +10,12 @@ from models.common.lightweightmodule import LightweightModule
 
 
 class TtMixtralAttention(LightweightModule):
-    def __init__(self, device_mesh, state_dict, args, layer_num, dtype):
+    def __init__(self, mesh_device, state_dict, args, layer_num, dtype):
         super().__init__()
         self.num_devices = 8
         self.tile_size = 32
         self.state_dict = state_dict
-        self.device_mesh = device_mesh
+        self.mesh_device = mesh_device
         self.model_args = args
 
         self.hidden_size = args.dim
@@ -73,8 +73,8 @@ class TtMixtralAttention(LightweightModule):
             )
             .unsqueeze(0)
             .unsqueeze(0),
-            device=self.device_mesh,
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=-1),
+            device=self.mesh_device,
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-1),
             dtype=self.dtype,
             memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
             layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -89,8 +89,8 @@ class TtMixtralAttention(LightweightModule):
             )
             .unsqueeze(0)
             .unsqueeze(0),
-            device=self.device_mesh,
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=-2),
+            device=self.mesh_device,
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-2),
             dtype=self.dtype,
             memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
             layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -117,8 +117,8 @@ class TtMixtralAttention(LightweightModule):
         self.layer_past = [
             ttnn.as_tensor(
                 lp,
-                device=self.device_mesh,
-                mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=1),
+                device=self.mesh_device,
+                mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
                 dtype=ttnn.bfloat8_b,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 memory_config=self.model_config["ATTN_CACHE_WEIGHTS_MEMCFG"],
@@ -134,8 +134,8 @@ class TtMixtralAttention(LightweightModule):
             reduce_mask_torch[:, :, i, range(i, self.tile_size * 8, self.tile_size)] = 1
         self.reduce_mask = ttnn.from_torch(
             reduce_mask_torch,
-            device=self.device_mesh,
-            mesh_mapper=ReplicateTensorToMesh(self.device_mesh),
+            device=self.mesh_device,
+            mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
         )

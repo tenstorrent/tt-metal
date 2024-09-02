@@ -94,7 +94,7 @@ void py_bind_conv2d(py::module& module) {
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self, const ttnn::Tensor& input_tensor,
                 const ttnn::Tensor& weight_tensor,
-                ttnn::DeviceMesh* device,
+                ttnn::MeshDevice* device,
                 uint32_t in_channels,
                 uint32_t out_channels,
                 uint32_t batch_size,
@@ -195,7 +195,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "get_conv_padded_input_shape_and_mem_config",
-        [](DeviceMesh * device,
+        [](MeshDevice * device,
             const ttnn::Tensor& input_tensor,
             const Conv2dConfig& conv_config,
             uint32_t batch_size,
@@ -203,7 +203,7 @@ void py_bind_conv2d(py::module& module) {
             uint32_t width,
             uint32_t in_channels,
             uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
-            return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<DeviceMesh>(
+            return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<MeshDevice>(
                 device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels);
         },
         py::kw_only(),

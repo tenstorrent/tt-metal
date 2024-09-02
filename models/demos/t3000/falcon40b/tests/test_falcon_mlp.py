@@ -35,7 +35,7 @@ class PytorchFalconMLPModel(torch.nn.Module):
 
 
 def run_test_FalconMLP_inference(
-    device_mesh,
+    mesh_device,
     model_version,
     llm_mode,
     batch,
@@ -70,7 +70,7 @@ def run_test_FalconMLP_inference(
     # TT hardware execution -------------------------------------------------------------
 
     tt_FalconMLP_model = TtFalconMLP(
-        device_mesh,
+        mesh_device,
         state_dict,
         base_url,
         layer_num,
@@ -82,14 +82,14 @@ def run_test_FalconMLP_inference(
     tt_mlp_input = ttnn.as_tensor(
         mlp_input,
         dtype=model_config["LN_MLP_OUTPUT_DTYPE"],
-        device=device_mesh,
+        device=mesh_device,
         memory_config=model_config["LN_MLP_OUTPUT_MEMCFG"],
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device_mesh),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     tt_out = tt_FalconMLP_model(tt_mlp_input, llm_mode)
-    tt_out_tensor = ttnn.to_torch(tt_out, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
+    tt_out_tensor = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
     # check outputs ----------------------------------------------------------------------
     does_pass, output_pcc = comp_pcc(pytorch_out, tt_out_tensor, pcc)
     logger.info(f"PCC value: {output_pcc}")
@@ -143,7 +143,7 @@ def test_FalconMLP_inference(
     model_config_str,
     model_location_generator,
     get_tt_cache_path,
-    t3k_device_mesh,
+    t3k_mesh_device,
     use_program_cache,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
@@ -153,7 +153,7 @@ def test_FalconMLP_inference(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
-    devices = t3k_device_mesh.get_devices()
+    devices = t3k_mesh_device.get_devices()
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
@@ -162,7 +162,7 @@ def test_FalconMLP_inference(
         model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
     )
     run_test_FalconMLP_inference(
-        t3k_device_mesh,
+        t3k_mesh_device,
         model_version,
         llm_mode,
         batch,
