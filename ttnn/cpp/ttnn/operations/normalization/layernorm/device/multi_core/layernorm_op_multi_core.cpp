@@ -1111,7 +1111,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 		.set_page_size(ex_cb_partial2_index, single_tile_size);
     auto cb_ex_partial2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial2_config);
     // ex2
-    uint32_t ex2_cb_index = tt::CB::c_intermed4;
+    uint32_t ex2_cb_index = tt::CB::dataflow4;
 
     CBHandle cb_ex2 = 0;
     if(stats.has_value()) {
@@ -1120,7 +1120,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             .set_page_size(ex2_cb_index, single_tile_size).set_globally_allocated_address(*stats.value().buffer());
         cb_ex2 = tt::tt_metal::CreateCircularBuffer(program, sender_cores, ex2_cb_config);
 
-        uint32_t cb_stats2_index = tt::CB::dataflow4;
+        uint32_t cb_stats2_index = tt::CB::c_intermed4;
         tt::tt_metal::CircularBufferConfig cb_stats2_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{cb_stats2_index, cb_data_format}})
         .set_page_size(cb_stats2_index, single_tile_size);
         CBHandle cb_stats2 = tt::tt_metal::CreateCircularBuffer(program, sender_cores, cb_stats2_config);

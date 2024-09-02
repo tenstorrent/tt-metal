@@ -28,9 +28,9 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
+    const auto& stats = optional_input_tensors.at(3);
 
     if(this->distributed_type == LayerNormStageType::POST_ALL_GATHER) {
-        const auto& stats = optional_input_tensors.at(3);
         TT_FATAL(stats.has_value());
         TT_FATAL(stats.value().get_layout() == Layout::TILE);
         TT_FATAL(stats.value().get_dtype() == DataType::BFLOAT16);
@@ -102,8 +102,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
                     TT_FATAL(this->output_mem_config.is_sharded());
                 }
                 if(this->distributed_type == LayerNormStageType::POST_ALL_GATHER) {
-                    const auto& stats = optional_input_tensors.at(3);
-                    const auto shard_spec = stats.shard_spec().value();
+                    const auto shard_spec = stats.value().shard_spec().value();
                     TT_FATAL(shard_spec.num_cores() == 1);
                 }
                 TT_FATAL(a.memory_config().buffer_type == this->output_mem_config.buffer_type);

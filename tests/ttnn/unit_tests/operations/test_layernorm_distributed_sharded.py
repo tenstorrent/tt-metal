@@ -154,10 +154,10 @@ def test_post_allgather_layernorm(
     input_shape = (1, 1, 32, input_width)
     weights_shape = (1, 1, 1, input_width)
 
-    # torch_input_tensor = torch.normal(mean, std, size=input_shape, dtype=torch.bfloat16)
-    # torch_weight = torch.normal(mean, std, size=weights_shape, dtype=torch.bfloat16)
-    torch_input_tensor = torch.ones(input_shape, dtype=torch.bfloat16)
-    torch_weight = torch.ones(weights_shape, dtype=torch.bfloat16)
+    torch_input_tensor = torch.normal(mean, std, size=input_shape, dtype=torch.bfloat16)
+    torch_weight = torch.normal(mean, std, size=weights_shape, dtype=torch.bfloat16)
+    # torch_input_tensor = torch.ones(input_shape, dtype=torch.bfloat16) * 2
+    # torch_weight = torch.ones(weights_shape, dtype=torch.bfloat16)
 
     print(f" Mean : {torch_input_tensor.mean()}, Var : {torch_input_tensor.var()}")
 
@@ -268,7 +268,7 @@ def test_post_allgather_layernorm(
             print(f"PCC: {pcc_out}")
             print(f"all_close : {all_close_passing}, Max ATOL: {atol_delta}")
             assert pcc_out >= min_pcc, f"PCC test failed: {pcc_out} (threshold: {min_pcc})"
-            # assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
+            assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
 
         else:
             all_close_passing = torch.allclose(prev_tt_output_torch, tt_output_torch, atol=0, equal_nan=False)
