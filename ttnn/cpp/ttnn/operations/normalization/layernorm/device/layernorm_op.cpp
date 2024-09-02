@@ -16,7 +16,7 @@ using namespace tt::constants;
 namespace ttnn::operations::normalization {
 
 void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    if (this->distributed_type == LayerNormDistributedType::POST_ALL_GATHER)
+    if (this->distributed_type == LayerNormStageType::POST_ALL_GATHER)
     {
         TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 5 input tensors");
     }
@@ -29,7 +29,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
     const auto& gamma = optional_input_tensors.at(1);
     const auto& beta = optional_input_tensors.at(2);
 
-    if(this->distributed_type == LayerNormDistributedType::POST_ALL_GATHER) {
+    if(this->distributed_type == LayerNormStageType::POST_ALL_GATHER) {
         const auto& stats = optional_input_tensors.at(3);
         TT_FATAL(stats.has_value());
         TT_FATAL(stats.value().get_layout() == Layout::TILE);
@@ -153,7 +153,7 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 }
 std::vector<tt::tt_metal::Shape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (this->distributed_type == LayerNormDistributedType::PRE_ALL_GATHER)
+    if (this->distributed_type == LayerNormStageType::PRE_ALL_GATHER)
     {
         auto output_shape = input_tensor.get_legacy_shape();
         auto padding = output_shape.padding();
@@ -179,7 +179,7 @@ std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &
             if constexpr (
                 std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>
             ) {
-                if (this->distributed_type == LayerNormDistributedType::PRE_ALL_GATHER){
+                if (this->distributed_type == LayerNormStageType::PRE_ALL_GATHER){
                     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
                     auto shard_spec = input_tensor.shard_spec().value();
                     shard_spec.shape[1] = output_shape[3];
