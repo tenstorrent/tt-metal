@@ -486,7 +486,7 @@ int main(int argc, char **argv) {
 
 
 
-    pass &= tt_metal::CloseDevice(device);;
+    pass &= tt_metal::CloseDevice(device);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

@@ -26,7 +26,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     const uint32_t head_dim = operation_attributes.head_dim;
     const bool transpose_k_heads = operation_attributes.transpose_k_heads;
     auto& output = tensor_return_value;
-    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();;
+    CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
     const auto& input_shape = input_tensor.get_legacy_shape();
 
