@@ -193,7 +193,7 @@ void MAIN {
             tile_regs_release();
 
             // cb_wait_front(cb_stats2, 1);
-            UNPACK(DPRINT << "cb_stats2 : "<<TSLICE(cb_stats2, 0, SliceRange::h0_w0_32()) << ENDL());
+            // UNPACK(DPRINT << "cb_stats2 : "<<TSLICE(cb_stats2, 0, SliceRange::h0_w0_32()) << ENDL());
         }
     }
 
