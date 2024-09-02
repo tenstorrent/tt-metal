@@ -70,6 +70,8 @@ void kernel_main() {
     // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
 
     constexpr uint32_t TILE_WIDTH = 32;
+    constexpr uint32_t MAX_ROWS_FOR_REDUCTION = 16;
+    constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;
 
     constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CB::c_in1 : tt::CB::c_in0;
     constexpr uint32_t in_shard_cb_id = tt::CB::c_in2;    // local input shard
@@ -97,22 +99,24 @@ void kernel_main() {
     uint32_t npages_to_reserve = nblocks;
     uint32_t num_8_tile_blocks = 1;
     uint32_t read_bytes = in_nbytes_c;
-    if(in_nbytes_c > 512) {
-        num_8_tile_blocks = in_nbytes_c / 512;
-        read_bytes = 512; // for now, pow of 2 channels are only supported.
+    if(in_nbytes_c > MAX_ELE_PER_REDUCTION) {
+        num_8_tile_blocks = in_nbytes_c / MAX_ELE_PER_REDUCTION;
+        read_bytes = MAX_ELE_PER_REDUCTION; // for now, pow of 2 channels are only supported.
     }
     uint32_t counter = reader_id;
+    uint32_t remaining_rows = (window_h * window_w) % MAX_ROWS_FOR_REDUCTION;
     while (counter < reader_nindices) {
         for(uint32_t j = 0; j < num_8_tile_blocks; j++ ) {
             for (uint32_t i = 0; i < nblocks; ++ i) {
                 uint16_t top_left_local_index = reader_indices_ptr[counter];
                 uint32_t h_multiples = 0;
+                uint32_t num_rows = 0;
+                uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
+                uint32_t out_l1_write_addr = out_l1_write_addr_base;
+                cb_reserve_back(in_cb_id, npages_to_reserve);
                 for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
-                    uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
-                    uint32_t out_l1_write_addr = out_l1_write_addr_base;
                     uint32_t stick_offset = top_left_local_index + h_multiples;
-                    uint32_t read_offset = j * 512 + in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
-                    cb_reserve_back(in_cb_id, npages_to_reserve);
+                    uint32_t read_offset = j * MAX_ELE_PER_REDUCTION + in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
                     for(uint32_t w = 0; w < window_w; w++) {
                         noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
                         /*if(reader_id == 0) {*/
@@ -120,7 +124,18 @@ void kernel_main() {
                         /*}*/
                         out_l1_write_addr += read_bytes;
                         read_offset += in_nbytes_c;
+                        num_rows++;
+                        if(num_rows == MAX_ROWS_FOR_REDUCTION) {
+                            noc_async_read_barrier();
+                            cb_push_back(in_cb_id, npages_to_reserve);
+                            num_rows = 0;
+                            out_l1_write_addr_base = get_write_ptr(in_cb_id);
+                            out_l1_write_addr = out_l1_write_addr_base;
+                            cb_reserve_back(in_cb_id, npages_to_reserve);
+                        }
                     }
+                }
+                if(remaining_rows) {
                     noc_async_read_barrier();
                     cb_push_back(in_cb_id, npages_to_reserve);
                 }
