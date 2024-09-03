@@ -26,8 +26,6 @@ bool SlidingWindowConfig::has_parallel_config() const {
 Shape SlidingWindowConfig::get_output_shape() const {
     uint32_t output_h = (input_hw.first + 2 * pad_hw.first - dilation_hw.first * window_hw.first) / stride_hw.first + 1;
     uint32_t output_w = (input_hw.second + 2 * pad_hw.second - dilation_hw.second * window_hw.second) / stride_hw.second + 1;
-    // uint32_t output_h = (std::get<0>(input_hw) + 2 * std::get<0>(pad_hw) - std::get<0>(dilation_hw) * std::get<0>(window_hw)) / std::get<0>(stride_hw) + 1;
-    // uint32_t output_w = (std::get<1>(input_hw) + 2 * std::get<1>(pad_hw) - std::get<1>(dilation_hw) * std::get<1>(window_hw)) / std::get<1>(stride_hw) + 1;
     log_debug(tt::LogOp, "output_size: {} {} {}", batch_size, output_h, output_w);
     return Shape( std::vector<uint32_t>{batch_size, output_h, output_w, 0});
 }
