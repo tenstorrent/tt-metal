@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import List, Union, Optional
-from tt_lib import tensor
 
 from loguru import logger
 import ttnn
@@ -16,13 +15,13 @@ def Linear(in_features: int, out_features: int, weight: List[Union[int, float]],
     ``weight`` must be the weight as a tilized list of values.
     """
     logger.warning("Linear will be deprecated soon, please use linear in models/helper_funcs")
-    assert weight.get_layout() == tensor.Layout.TILE
+    assert weight.get_layout() == ttnn.TILE_LAYOUT
     weight = weight.to(device)
 
     if bias is None:
         bias = None
     else:
-        assert bias.get_layout() == tensor.Layout.TILE
+        assert bias.get_layout() == ttnn.TILE_LAYOUT
         bias = bias.to(device)
 
     def linear_(activation):

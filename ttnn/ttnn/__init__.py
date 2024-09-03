@@ -135,7 +135,7 @@ from ttnn.types import (
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,
-    DeviceGrid,
+    MeshShape,
     UnaryWithParam,
     UnaryOpType,
     BinaryOpType,
@@ -168,16 +168,18 @@ from ttnn.device import (
     pad_to_tile_shape,
 )
 
+from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
+
 from ttnn.multi_device import (
-    DeviceMesh,
+    MeshDevice,
     DispatchCoreType,
-    open_device_mesh,
-    close_device_mesh,
+    open_mesh_device,
+    close_mesh_device,
     get_num_pcie_devices,
     get_num_devices,
     get_pcie_device_ids,
     get_device_ids,
-    create_device_mesh,
+    create_mesh_device,
     synchronize_devices,
     TensorToMesh,
     ShardTensorToMesh,
@@ -186,7 +188,7 @@ from ttnn.multi_device import (
     MeshToTensor,
     ConcatMeshToTensor,
     ListMeshToTensor,
-    visualize_device_mesh,
+    visualize_mesh_device,
     ConcatMesh2dToTensor,
 )
 

@@ -7,9 +7,8 @@ import torch
 import ttnn
 from models.utility_functions import (
     is_wormhole_b0,
-    divup,
-    skip_for_grayskull,
 )
+from models.utility_functions import run_for_wormhole_b0, run_for_grayskull
 from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import create_test_infra
 
 try:
@@ -20,13 +19,7 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
-)
-def test_run_resnet50_inference(
+def run_resnet50_inference(
     device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
 ):
     if batch_size == 8:
@@ -61,14 +54,7 @@ def test_run_resnet50_inference(
     test_infra.validate()
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
-)
-@pytest.mark.parametrize("enable_async", [True, False])
-def test_run_resnet50_trace_inference(
+def run_resnet50_trace_inference(
     device,
     use_program_cache,
     batch_size,
@@ -127,13 +113,7 @@ def test_run_resnet50_trace_inference(
     device.enable_async(False)
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "num_hw_cqs": 2}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
-)
-def test_run_resnet50_2cqs_inference(
+def run_resnet50_2cqs_inference(
     device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
 ):
     if batch_size == 8:
@@ -196,16 +176,7 @@ def test_run_resnet50_2cqs_inference(
         test_infra.validate(output)
 
 
-@skip_for_grayskull(reason_str="Untested for Grayskull")
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 800768, "num_hw_cqs": 2}], indirect=True
-)
-@pytest.mark.parametrize(
-    "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
-)
-@pytest.mark.parametrize("enable_async", [True, False])
-def test_run_resnet50_trace_2cqs_inference(
+def run_resnet50_trace_2cqs_inference(
     device,
     use_program_cache,
     batch_size,
@@ -305,3 +276,179 @@ def test_run_resnet50_trace_2cqs_inference(
         test_infra.validate(output)
 
     device.enable_async(False)
+
+
+@run_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype, math_fidelity",
+    ((20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+)
+def test_run_resnet50_inference_gs(
+    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+):
+    run_resnet50_inference(
+        device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+    )
+
+
+@run_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1332224}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype, math_fidelity",
+    ((20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+)
+@pytest.mark.parametrize("enable_async", [True, False])
+def test_run_resnet50_trace_inference_gs(
+    device,
+    use_program_cache,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    enable_async,
+    model_location_generator,
+):
+    run_resnet50_trace_inference(
+        device,
+        use_program_cache,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        enable_async,
+        model_location_generator,
+    )
+
+
+@run_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_hw_cqs": 2}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype, math_fidelity",
+    ((20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+)
+def test_run_resnet50_2cqs_inference_gs(
+    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+):
+    run_resnet50_2cqs_inference(
+        device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+    )
+
+
+@run_for_grayskull()
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 1332224, "num_hw_cqs": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype, math_fidelity",
+    ((20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+)
+@pytest.mark.parametrize("enable_async", [True, False])
+def test_run_resnet50_trace_2cqs_inference_gs(
+    device,
+    use_program_cache,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    enable_async,
+    model_location_generator,
+):
+    run_resnet50_trace_2cqs_inference(
+        device,
+        use_program_cache,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        enable_async,
+        model_location_generator,
+    )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype, math_fidelity",
+    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+)
+def test_run_resnet50_inference_wh(
+    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+):
+    run_resnet50_inference(
+        device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+    )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype, math_fidelity",
+    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+)
+@pytest.mark.parametrize("enable_async", [True, False])
+def test_run_resnet50_trace_inference_wh(
+    device,
+    use_program_cache,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    enable_async,
+    model_location_generator,
+):
+    run_resnet50_trace_inference(
+        device,
+        use_program_cache,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        enable_async,
+        model_location_generator,
+    )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "num_hw_cqs": 2}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype, math_fidelity",
+    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+)
+def test_run_resnet50_2cqs_inference_wh(
+    device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+):
+    run_resnet50_2cqs_inference(
+        device, use_program_cache, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator
+    )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 800768, "num_hw_cqs": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype, math_fidelity",
+    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+)
+@pytest.mark.parametrize("enable_async", [True, False])
+def test_run_resnet50_trace_2cqs_inference_wh(
+    device,
+    use_program_cache,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    enable_async,
+    model_location_generator,
+):
+    run_resnet50_trace_2cqs_inference(
+        device,
+        use_program_cache,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        enable_async,
+        model_location_generator,
+    )

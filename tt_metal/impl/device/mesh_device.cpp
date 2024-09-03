@@ -4,22 +4,22 @@
 
 #include <memory>
 
-#include "tt_metal/impl/device/device_mesh.hpp"
-#include "tt_metal/impl/device/device_mesh_view.hpp"
+#include "tt_metal/impl/device/mesh_device.hpp"
+#include "tt_metal/impl/device/mesh_device_view.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
 
 namespace tt::tt_metal {
 
-DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type)
-    : device_grid(device_grid)
+MeshDevice::MeshDevice(const MeshShape& mesh_shape, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type)
+    : mesh_shape(mesh_shape)
 {
-    auto [num_rows, num_cols] = device_grid;
+    auto [num_rows, num_cols] = mesh_shape;
     auto num_requested_devices = num_rows * num_cols;
     auto num_available_devices = tt::tt_metal::GetNumAvailableDevices();
     TT_ASSERT(num_requested_devices <= num_available_devices, "Requested more devices than available");
-    TT_ASSERT(num_requested_devices <= device_ids.size(), "User provided insufficient number of device_ids for DeviceMesh");
+    TT_ASSERT(num_requested_devices <= device_ids.size(), "User provided insufficient number of device_ids for MeshDevice");
 
     this->is_galaxy_ = tt::Cluster::instance().is_galaxy_cluster();
     if (this->is_galaxy_) {
@@ -51,7 +51,7 @@ DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_id
         for (int i = 0; i < num_requested_devices; i++) {
             mesh_devices.emplace_back(device_ids[i], managed_devices.at(galaxy_device_ids[i]));
         }
-        this->view = std::make_unique<tt::tt_metal::DeviceMeshView>(*this);
+        this->view = std::make_unique<tt::tt_metal::MeshDeviceView>(*this);
     } else {
         managed_devices = tt::tt_metal::detail::CreateDevices(device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_type);
         for (int i = 0; i < num_requested_devices; i++) {
@@ -65,13 +65,13 @@ DeviceMesh::DeviceMesh(const DeviceGrid& device_grid, const DeviceIds &device_id
 }
 
 
-DeviceMesh::~DeviceMesh() {
+MeshDevice::~MeshDevice() {
     if (not managed_devices.empty()) {
         close_devices();
     }
 }
 
-Device* DeviceMesh::get_device(int logical_device_id) const {
+Device* MeshDevice::get_device(int logical_device_id) const {
     for (const auto& [device_id, device] : mesh_devices) {
         if (device_id == logical_device_id) {
             return device;
@@ -80,7 +80,7 @@ Device* DeviceMesh::get_device(int logical_device_id) const {
     TT_THROW("User has provided an invalid device index");
 }
 
-std::vector<Device*> DeviceMesh::get_devices() const
+std::vector<Device*> MeshDevice::get_devices() const
 {
     std::vector<Device*> devices;
     for (const auto& [device_id, device] : mesh_devices) {
@@ -89,7 +89,7 @@ std::vector<Device*> DeviceMesh::get_devices() const
     return devices;
 }
 
-Device* DeviceMesh::get_device(int row_idx, int col_idx) const {
+Device* MeshDevice::get_device(int row_idx, int col_idx) const {
     if (not is_galaxy_) {
         TT_THROW("Non-galaxy device mesh does not currently support indexing over rows and columns of a logical 2D mesh.");
     }
@@ -103,21 +103,21 @@ Device* DeviceMesh::get_device(int row_idx, int col_idx) const {
     return this->mesh_devices[idx].second;
 }
 
-std::vector<Device*> DeviceMesh::get_devices_on_row(int row_idx) const {
+std::vector<Device*> MeshDevice::get_devices_on_row(int row_idx) const {
     if (not is_galaxy_) {
         TT_THROW("Non-galaxy device mesh does not currently support indexing over rows and columns of a logical 2D mesh.");
     }
     return this->view->get_devices_on_row(row_idx);
 }
 
-std::vector<Device*> DeviceMesh::get_devices_on_column(int col_idx) const {
+std::vector<Device*> MeshDevice::get_devices_on_column(int col_idx) const {
     if (not is_galaxy_) {
         TT_THROW("Non-galaxy device mesh does not currently support indexing over rows and columns of a logical 2D mesh.");
     }
     return this->view->get_devices_on_column(col_idx);
 }
 
-const DeviceIds DeviceMesh::get_device_ids() const
+const DeviceIds MeshDevice::get_device_ids() const
 {
     DeviceIds device_ids;
     for (const auto& [device_id, device] : mesh_devices) {
@@ -126,49 +126,49 @@ const DeviceIds DeviceMesh::get_device_ids() const
     return device_ids;
 }
 
-int DeviceMesh::num_devices() const
+int MeshDevice::num_devices() const
 {
     return mesh_devices.size();
 }
 
-CoreCoord DeviceMesh::compute_with_storage_grid_size() const {
+CoreCoord MeshDevice::compute_with_storage_grid_size() const {
     return mesh_devices.at(0).second->compute_with_storage_grid_size();
 }
 
-CoreCoord DeviceMesh::dram_grid_size() const {
+CoreCoord MeshDevice::dram_grid_size() const {
     return mesh_devices.at(0).second->dram_grid_size();
 }
 
-tt::ARCH DeviceMesh::arch() const {
+tt::ARCH MeshDevice::arch() const {
     return mesh_devices.at(0).second->arch();
 }
 
-int DeviceMesh::num_rows() const
+int MeshDevice::num_rows() const
 {
-    return this->device_grid.first;
+    return this->mesh_shape.first;
 }
 
-int DeviceMesh::num_cols() const
+int MeshDevice::num_cols() const
 {
-    return this->device_grid.second;
+    return this->mesh_shape.second;
 }
 
-DeviceGrid DeviceMesh::shape() const
+MeshShape MeshDevice::shape() const
 {
-    return this->device_grid;
+    return this->mesh_shape;
 }
 
-void DeviceMesh::close_devices() {
+void MeshDevice::close_devices() {
     tt::tt_metal::detail::CloseDevices(managed_devices);
     mesh_devices.clear();
     managed_devices.clear();
 }
 
-std::shared_ptr<const DeviceMeshView> DeviceMesh::get_view() const {
+std::shared_ptr<const MeshDeviceView> MeshDevice::get_view() const {
     return this->view;
 }
 
-std::shared_ptr<DeviceMeshView> DeviceMesh::get_view() {
+std::shared_ptr<MeshDeviceView> MeshDevice::get_view() {
     return this->view;
 }
 

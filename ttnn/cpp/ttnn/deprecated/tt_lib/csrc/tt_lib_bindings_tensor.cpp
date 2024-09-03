@@ -9,10 +9,10 @@
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/work_split.hpp"
-#include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "type_caster.hpp"
 
+namespace py = pybind11;
 namespace tt::tt_metal {
 
 namespace detail {
@@ -334,7 +334,7 @@ void TensorModule(py::module& m_tensor) {
         R"doc(Load tensor to file)doc");
     m_tensor.def(
         "load_tensor",
-        static_cast<Tensor (*)(const std::string&, DeviceMesh*)>(&load_tensor<DeviceMesh*>),
+        static_cast<Tensor (*)(const std::string&, MeshDevice*)>(&load_tensor<MeshDevice*>),
         py::arg("file_name"),
         py::arg("device") = nullptr,
         R"doc(Load tensor to file)doc");
@@ -361,7 +361,7 @@ void TensorModule(py::module& m_tensor) {
 
     m_tensor.def(
         "allocate_tensor_on_device",
-        py::overload_cast<const ttnn::Shape&, DataType, Layout, DeviceMesh*, const MemoryConfig&>(
+        py::overload_cast<const ttnn::Shape&, DataType, Layout, MeshDevice*, const MemoryConfig&>(
             &allocate_tensor_on_device),
         py::arg("shape"),
         py::arg("dtype"),

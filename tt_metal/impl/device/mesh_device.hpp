@@ -10,29 +10,29 @@
 #include <optional>
 
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/device_mesh_view.hpp"
+#include "tt_metal/impl/device/mesh_device_view.hpp"
 
 namespace tt::tt_metal {
 
 using DeviceIds = std::vector<int>;
-class DeviceMeshView;
+class MeshDeviceView;
 
-class DeviceMesh
+class MeshDevice
 {
 public:
-    DeviceGrid device_grid;
+    MeshShape mesh_shape;
     std::map<chip_id_t, Device *> managed_devices;
     std::vector<std::pair<int, Device *>> mesh_devices;
-    std::shared_ptr<DeviceMeshView> view;
+    std::shared_ptr<MeshDeviceView> view;
 
-    DeviceMesh(const DeviceGrid &device_grid, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type);
-    ~DeviceMesh();
+    MeshDevice(const MeshShape &mesh_shape, const DeviceIds &device_ids, size_t l1_small_size, size_t trace_region_size, size_t num_command_queues, DispatchCoreType dispatch_core_type);
+    ~MeshDevice();
 
-    DeviceMesh(const DeviceMesh &) = delete;
-    DeviceMesh &operator=(const DeviceMesh &) = delete;
+    MeshDevice(const MeshDevice &) = delete;
+    MeshDevice &operator=(const MeshDevice &) = delete;
 
-    DeviceMesh(DeviceMesh &&) = delete;
-    DeviceMesh &operator=(DeviceMesh &&) = delete;
+    MeshDevice(MeshDevice &&) = delete;
+    MeshDevice &operator=(MeshDevice &&) = delete;
 
     std::vector<Device*> get_devices() const;
     Device *get_device(int logical_device_id) const;
@@ -45,7 +45,7 @@ public:
     int num_devices() const;
     int num_rows() const;
     int num_cols() const;
-    DeviceGrid shape() const;
+    MeshShape shape() const;
 
     CoreCoord compute_with_storage_grid_size() const;
 
@@ -54,8 +54,8 @@ public:
     tt::ARCH arch() const;
 
     void close_devices();
-    std::shared_ptr<const DeviceMeshView> get_view() const;
-    std::shared_ptr<DeviceMeshView> get_view();
+    std::shared_ptr<const MeshDeviceView> get_view() const;
+    std::shared_ptr<MeshDeviceView> get_view();
 
    private:
     bool is_galaxy_;
