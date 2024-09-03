@@ -2,6 +2,7 @@
 set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_add.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_add.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mlir_interface.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_repeat_interleave.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_async_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multiprod_queue.cpp
