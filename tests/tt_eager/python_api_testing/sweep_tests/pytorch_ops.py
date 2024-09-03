@@ -2503,3 +2503,11 @@ def complex_angle_bw(x, y, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
+
+
+def complex_is_real(x, *args, **kwargs):
+    return torch.isreal(x)
+
+
+def complex_is_imag(x, *args, **kwargs):
+    return torch.isreal(x)

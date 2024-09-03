@@ -1062,4 +1062,12 @@ op_map = {
         "tt_op": ttnn_ops.complex_angle_bw,
         "pytorch_op": pytorch_ops.complex_angle_bw,
     },
+    "complex-is-imag": {
+        "tt_op": ttnn_ops.complex_is_imag,
+        "pytorch_op": pytorch_ops.complex_is_imag,
+    },
+    "complex-is-real": {
+        "tt_op": ttnn_ops.complex_is_real,
+        "pytorch_op": pytorch_ops.complex_is_real,
+    },
 }
