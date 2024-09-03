@@ -94,7 +94,8 @@ class TtLlamaAttention(nn.Module):
                 dtype=self.dtype,
                 memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
-                cache_file_name=cache_name("wqkv"),
+                # cache_file_name=cache_name("wqkv"),
+                mesh_mapper=ttnn.ShardTensorToMesh(self.devices[i], dim=0),
             )
 
             wo = ttnn.as_tensor(
@@ -108,6 +109,7 @@ class TtLlamaAttention(nn.Module):
                 dtype=self.dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 cache_file_name=cache_name("wo"),
+                mesh_mapper=ttnn.ShardTensorToMesh(self.devices[i], dim=1),
             )
 
             cache_k = torch.zeros(
@@ -129,7 +131,11 @@ class TtLlamaAttention(nn.Module):
             layer_past = [cache_k, cache_v]
             layer_past = [
                 ttnn.from_torch(
-                    lp, device=self.devices[i], layout=self.model_config["ATTN_W_LAYOUT_TILE"], dtype=self.dtype
+                    lp,
+                    device=self.devices[i],
+                    layout=self.model_config["ATTN_W_LAYOUT_TILE"],
+                    dtype=self.dtype,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.devices[i], dim=2),
                 )
                 for lp in layer_past
             ]

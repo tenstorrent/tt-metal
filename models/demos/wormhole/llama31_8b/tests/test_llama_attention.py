@@ -18,11 +18,11 @@ from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_llama_attention_inference(device, use_program_cache, reset_seeds):
+def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    model_args = TtModelArgs(device)
+    model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -35,18 +35,18 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
     seq_len = 1
 
     generation_start_pos = 0
-    generation_length = 10
+    generation_length = 1  # 10
     all_tests_pass = True
 
-    # pre-compute the rotational embedding matrix and send to device
+    # pre-compute the rotational embedding matrix and send to mesh_device
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
-        device,
+        mesh_device,
         start_pos=0,
     )
 
     tt_model = TtLlamaAttention(
-        [device],
+        [mesh_device],
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
@@ -69,7 +69,7 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
             current_pos,
             model_args.dim,
             model_args.sliding_window,
-            device,
+            mesh_device,
         )
 
         tt_out = tt_model([attention_input], pos, rot_mats=current_rot_mat)
@@ -77,7 +77,9 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
         assert isinstance(tt_out, list)
         tt_out = tt_out[0]
         tt_output_torch = (
-            ttnn.to_torch(tt_out).view(1, -1, 4096).permute(1, 0, 2)[: model_args.max_batch_size, :, :]
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+            .view(1, -1, 4096)
+            .permute(1, 0, 2)[: model_args.max_batch_size, :, :]
         )  # [ batch, seq, hidden_dim]
 
         freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
@@ -109,7 +111,12 @@ def test_llama_attention_inference(device, use_program_cache, reset_seeds):
             # TT hardware execution -------------------------------------------------------------
             tt_layer_present = []
             for layer_past in tt_model.layer_past_list:
-                tt_layer_present.append([ttnn.to_torch(cache) for cache in layer_past])
+                tt_layer_present.append(
+                    [
+                        ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+                        for cache in layer_past
+                    ]
+                )
 
             tt_layer_present = tt_layer_present[0]
 

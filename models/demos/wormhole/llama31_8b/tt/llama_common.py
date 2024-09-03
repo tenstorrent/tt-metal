@@ -202,7 +202,13 @@ def prepare_inputs_ttnn(x, current_pos, hidden_size, sliding_window, device):
     # assert x.size() == (seq_len, 1, batch, hidden_size)
 
     if torch.is_tensor(x):
-        x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        x = ttnn.from_torch(
+            x,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=3),
+        )
     else:  # Convert the row major layout from embedding back to tile layout
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
     return (
@@ -374,6 +380,7 @@ def get_single_rot_mat(dhead, device, start_pos=0, theta: float = 500000.0, use_
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     ), ttnn.from_torch(
         rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
         device=device,
