@@ -1058,4 +1058,8 @@ op_map = {
         "tt_op": ttnn_ops.complex_real_bw,
         "pytorch_op": pytorch_ops.complex_real_bw,
     },
+    "complex-angle-bw": {
+        "tt_op": ttnn_ops.complex_angle_bw,
+        "pytorch_op": pytorch_ops.complex_angle_bw,
+    },
 }
