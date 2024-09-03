@@ -123,12 +123,12 @@ def test_sharded_layernorm(
 
 
 @pytest.mark.parametrize("is_rmsnorm", [True])  # Layernorm not supported for now
-@pytest.mark.parametrize("seed", [0])  # Test across 5 different seeds
+@pytest.mark.parametrize("seed", [0, 1234])  # Test across 5 different seeds
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize("min_pcc", [0.9997])
 @pytest.mark.parametrize("max_atol", [0.38])
 @pytest.mark.parametrize("input_width", [1024])
-@pytest.mark.parametrize("num_devices", [2])
+@pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize(
     "input_df",
     [
@@ -185,6 +185,9 @@ def test_post_allgather_layernorm(
         torch_output_tensor = torch.nn.functional.layer_norm(
             torch_input_tensor, (input_width,), weight=torch_weight.squeeze(0).squeeze(0).squeeze(0), eps=eps
         )
+
+    torch_output_tensor_chunks = torch.chunk(torch_output_tensor, num_devices, dim=-1)
+    torch_output_tensor = torch_output_tensor_chunks[0]
 
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensors[0],
@@ -247,8 +250,9 @@ def test_post_allgather_layernorm(
     if is_rmsnorm:
         tt_stats_tensor = ttnn.concat(sum_x2_tensors, -1)
     else:
-        # TODO: concat interleaved
-        tt_stats_tensor = ttnn.concat([tt_sum_x_tensor, tt_sum_x2_tensor], -1)
+        tt_stats_tensor = ttnn.concat(
+            [tt_tensor for pair in zip(sum_x_tensors, sum_x2_tensors) for tt_tensor in pair], -1
+        )
 
     # shard to 1 core
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
@@ -480,23 +484,27 @@ def run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, input_df, device
     beta_chunked = beta.chunk(n_devices, dim=-1)
     inp_chunked = canon_inp.chunk(n_devices, dim=-1)
 
+    inp_shape_per_device = inp_chunked[0].shape
+
     epsilon = 1e-5
+    core_grid = (8, 8)
+    num_cores = core_grid[0] * core_grid[1]
 
     # reference impl
     out_torch = reference_layernorm(canon_inp, gamma, beta, epsilon, is_rmsnorm)
 
     # shard to 32 cores
     sharded_memory_config = ttnn.create_sharded_memory_config(
-        shape=inp_shape,
-        core_grid=ttnn.CoreGrid(y=2, x=8),
+        shape=inp_shape_per_device,
+        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
         strategy=ttnn.ShardStrategy.WIDTH,
     )
 
     sharded_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[8, 2],
-        subblock_w=(inp_shape[3] // 16) // 32,
+        compute_with_storage_grid_size=core_grid,
+        subblock_w=(inp_shape_per_device[3] // num_cores) // 32,
         block_h=1,
-        block_w=(inp_shape[3] // 16) // 32,
+        block_w=(inp_shape_per_device[3] // num_cores) // 32,
         inplace=False,
     )
 
@@ -579,13 +587,13 @@ def run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, input_df, device
 @pytest.mark.parametrize(
     "inp_shape",
     [
-        (1, 1, 32, 1024),
+        (1, 1, 32, 4096),
     ],
-    ids=["w1024"],
+    ids=["8K"],
 )
 @pytest.mark.parametrize(
     "n_devices",
-    [1],
+    [2],
     # [4, 8],
 )
 @pytest.mark.parametrize(
