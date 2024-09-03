@@ -118,7 +118,7 @@ class TtMixtralAttention(LightweightModule):
             ttnn.as_tensor(
                 lp,
                 device=self.mesh_device,
-                mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
+                mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=1),
                 dtype=ttnn.bfloat8_b,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 memory_config=self.model_config["ATTN_CACHE_WEIGHTS_MEMCFG"],
