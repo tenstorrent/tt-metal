@@ -2,6 +2,9 @@ name: "ttnn - Run sweeps"
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - jdesousa/sweeps-ci-tagging
 
 jobs:
   build-artifact:
@@ -27,13 +30,11 @@ jobs:
       - uses: ./.github/actions/prepare-metal-run
         with:
           arch: wormhole_b0
-      - name: Setup ttnn sweeps generation environment
+      - name: Run ttnn sweeps generation
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-      - name: Run ttnn sweeps generation
-        run: |
           python tests/sweep_framework/parameter_generator.py --elastic cloud --tag ci-main --explicit
 
   ttnn-run-sweeps:
@@ -49,16 +50,19 @@ jobs:
               name: "Grayskull E150 Sweeps",
               arch: grayskull,
               runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              tt-smi-cmd: "tt-smi-metal -r 0"
             },
             {
               name: "Wormhole N150 Sweeps",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              tt-smi-cmd: "tt-smi-metal -r 0"
             },
             {
               name: "Wormhole N300 Sweeps",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+              tt-smi-cmd: "tt-smi-metal -r 0"
             }
           ]
     env:
@@ -66,6 +70,7 @@ jobs:
       ARCH_NAME: ${{ matrix.test-group.arch }}
       ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
       ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
+      TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
     timeout-minutes: 720
