@@ -2,25 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_lib_bindings.hpp"
 
-#include "tt_lib_bindings_tensor.hpp"
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
-#include "tt_metal/detail/reports/compilation_reporter.hpp"
-#include "tt_metal/detail/reports/memory_reporter.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
-#include "tt_metal/impl/event/event.hpp"
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include "profiler.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 
 namespace py = pybind11;
 
-namespace tt {
-
-namespace tt_metal {
-
+namespace ttnn {
+namespace profiler {
+namespace detail {
 void ProfilerModule(py::module &m_profiler) {
-    m_profiler.def("start_tracy_zone",&op_profiler::start_tracy_zone,
+    m_profiler.def("start_tracy_zone",&tt::tt_metal::op_profiler::start_tracy_zone,
             py::arg("source"), py::arg("functName"),py::arg("lineNum"), py::arg("color") = 0, R"doc(
         Stop profiling op with tracy.
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
@@ -33,7 +28,7 @@ void ProfilerModule(py::module &m_profiler) {
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_profiler.def("stop_tracy_zone",&op_profiler::stop_tracy_zone, py::arg("name") = "", py::arg("color") = 0, R"doc(
+    m_profiler.def("stop_tracy_zone",&tt::tt_metal::op_profiler::stop_tracy_zone, py::arg("name") = "", py::arg("color") = 0, R"doc(
         Stop profiling op with tracy.
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                                    | Data type             | Valid range | Required |
@@ -45,7 +40,7 @@ void ProfilerModule(py::module &m_profiler) {
 
     m_profiler.def(
         "tracy_message",
-        &op_profiler::tracy_message,
+        &tt::tt_metal::op_profiler::tracy_message,
         py::arg("message"),
         py::arg("color") = 0xf0f8ff,
         R"doc(
@@ -60,12 +55,16 @@ void ProfilerModule(py::module &m_profiler) {
 
     m_profiler.def(
         "tracy_frame",
-        &op_profiler::tracy_frame,
+        &tt::tt_metal::op_profiler::tracy_frame,
         R"doc(
         Emit a tracy frame signpost.
     )doc");
 }
 
-} // end namespace tt_metal
+}  // namespace detail
 
-} // end namespace tt
+void py_module(py::module& module) {
+   detail::ProfilerModule(module);
+}
+}  // namespace profiler
+}  // namespace ttnn
