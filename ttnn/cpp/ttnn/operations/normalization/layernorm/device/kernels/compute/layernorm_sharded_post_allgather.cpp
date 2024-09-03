@@ -33,6 +33,7 @@ void MAIN {
     constexpr uint32_t num_tiles_per_block            = get_compile_time_arg_val(9);
     constexpr bool FLOAT32_DTYPE                      = get_compile_time_arg_val(10) == 1;
     constexpr uint32_t num_blocks_second_stage        = get_compile_time_arg_val(11);
+    constexpr uint32_t stats_tiles_cols               = get_compile_time_arg_val(12);
 
     const uint32_t num_reduce_tiles_per_block_h             = get_arg_val<uint32_t>(0); // This value is the same for all cores, except ones that have padding tiles in it. In that case, skip reduce for padding tiles.
     const uint32_t num_tiles_per_allgather_worker           = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
@@ -74,7 +75,8 @@ void MAIN {
     constexpr uint32_t cb_ex_external = tt::CB::dataflow2; // E[x] partials recieved from other cores
     constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3; // E[x^2] partial reduce
     constexpr uint32_t cb_stats = tt::CB::c_in7; // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_stats2 = tt::CB::c_intermed4; // E[(x-E[x])^2] global reduce
+    // constexpr uint32_t cb_stats_reduced = tt::CB::c_intermed5; // Reduced input stats
+    constexpr uint32_t cb_stats_reduced = tt::CB::c_intermed4; // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5; // E[x^2] partials recieved from other cores
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
     constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x^2] global reduce
@@ -84,7 +86,8 @@ void MAIN {
     constexpr uint32_t cb_out = tt::CB::c_out0;
 
     #ifdef RMSNORM
-    constexpr uint32_t cb_var = cb_stats;
+    // constexpr uint32_t cb_var = cb_stats;
+    constexpr uint32_t cb_var = tt::CB::c_intermed2; // E(xˆ2) reduced over all devices
     constexpr uint32_t stats_tiles = 1;
     #else
     constexpr uint32_t cb_var = tt::CB::c_intermed2; // Var(x)
@@ -111,7 +114,6 @@ void MAIN {
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr(is_allgather_worker) {
         if (enable_sqrt) {
-            cb_reserve_back(cb_stats2, stats_tiles);
 
             // #ifndef RMSNORM
             // //copy E(x) to cb_stats2
@@ -157,17 +159,74 @@ void MAIN {
             // #endif
 
 
+
+
+
+
+
+            unpack_reconfig_data_format(cb_stats, cb_scaler_global);
+            pack_reconfig_data_format(cb_stats_reduced);
+
+            cb_wait_front(cb_scaler_global, 1);
+            UNPACK(DPRINT << "cb_scaler_global : "<<TSLICE(cb_scaler_global, 0, SliceRange::h0_w0_32()) << ENDL());
+
+            /*
+            * Reduce stats input.
+            * cb_stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]
+            * RMSNorm packs mean(x**2) into cb_var. Layernorm just uses cb_stats_reduced.
+            */
+            reduce_init_delta<false>();
+            // cb_wait_front(cb_stats, stats_tiles_cols); // no need, we have sharded inputs
+            cb_reserve_back(cb_stats_reduced, stats_tiles);
+            // #ifdef RMSNORM
+            cb_reserve_back(cb_var, 1);
+            // #endif
+            tile_regs_acquire();
+            // Reduce sum(x**2) first
+            for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tiles) {
+                reduce_tile(cb_stats, cb_scaler_global, i, 0, 0);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            // pack_tile(0, cb_stats_reduced);
+
+            // #ifndef RMSNORM
+            // // Reduce sum(x) next
+            // for (uint32_t i = 1; i < stats_tiles_cols; i += stats_tiles) {
+            //     reduce_tile(cb_stats, cb_reduce, i, 0, 1);
+            // }
+            // pack_tile(1, cb_stats_reduced);
+            // #else
+            pack_tile(0, cb_var);
+            // #endif
+            // REL();
+            tile_regs_release();
+            // cb_push_back(cb_stats_reduced, stats_tiles);
+            // cb_pop_front(cb_stats, stats_tiles_cols); // no need, we have sharded inputs
+            // #ifdef RMSNORM
+            cb_push_back(cb_var, 1);
+            // #endif
+
+            reduce_revert_delta();
+            cb_pop_front(cb_scaler_global, 1);
+
+
+
+
+
+
             // 1/[sqrt(Var + eps)],
             unpack_reconfig_data_format(cb_var, cb_eps);    // cb_var is cb_stats in case of RMS norm
-            pack_reconfig_data_format(cb_stats2);
+            pack_reconfig_data_format(cb_reciprocal);
             #ifndef RMSNORM
             cb_wait_front(cb_var, 1);
             #endif
             cb_wait_front(cb_eps, 1);
 
+            cb_reserve_back(cb_reciprocal, stats_tiles);
+
             // UNPACK(DPRINT << "cb_var : "<<TSLICE(cb_var, 0, SliceRange::h0_w0_32()) << ENDL());
             // UNPACK(DPRINT << "cb_eps : "<<TSLICE(cb_eps, 0, SliceRange::h0_w0_32()) << ENDL());
-            //cb_reserve_back(cb_stats2, 1);
             add_tiles_init();
             tile_regs_acquire();
             add_tiles(cb_var, cb_eps, 0, 0, dst0);
@@ -181,7 +240,7 @@ void MAIN {
             recip_tile(dst0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_stats2);
+            pack_tile(dst0, cb_reciprocal);
 
             //cb_pop_front(cb_stats, stats_tiles); // pop the stats tiles we are done and pushed into cb_stats2
             // PACK(DPRINT << " cb_stats E[x] : "<<TSLICE(cb_stats, 0, SliceRange::h0_w0_32()) << ENDL());
@@ -189,11 +248,11 @@ void MAIN {
             // UNPACK(DPRINT << "unpack cb_stats Reci : "<<TSLICE(cb_ex, 0, SliceRange::h0_w0_32()) << ENDL());
             cb_pop_front(cb_var, 1);
             cb_pop_front(cb_eps, 1);
-            cb_push_back(cb_stats2, stats_tiles);
+            cb_push_back(cb_reciprocal, stats_tiles);
             tile_regs_release();
 
-            // cb_wait_front(cb_stats2, 1);
-            // UNPACK(DPRINT << "cb_stats2 : "<<TSLICE(cb_stats2, 0, SliceRange::h0_w0_32()) << ENDL());
+            // cb_wait_front(cb_reciprocal, 1);
+            // UNPACK(DPRINT << "cb_reciprocal : "<<TSLICE(cb_reciprocal, 0, SliceRange::h0_w0_32()) << ENDL());
         }
     }
 

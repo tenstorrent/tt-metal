@@ -492,6 +492,19 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::log_debug("math_approx_mode: {}", math_approx_mode);
     tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
+    uint32_t stats_block_tiles = 2;
+    if (rms_norm) {
+        stats_block_tiles = 1;
+    }
+
+    auto num_devices_in_stats = 0;
+    auto stats_wt = 0;
+    if (stats.has_value()){
+        stats_wt = stats.value().get_legacy_shape()[-1] / TILE_WIDTH;
+        num_devices_in_stats = stats_wt / stats_block_tiles;
+    }
+
+
     // tensor shape
     const auto shape = a.get_legacy_shape();
     uint32_t M = a.volume() / shape[-1];
@@ -560,10 +573,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
     }
     uint32_t num_rows_per_all_to_all_worker_last = block_ht - (block_ht / num_rows_per_all_to_all_worker) * num_rows_per_all_to_all_worker;
-    uint32_t stats_block_tiles = 2;
-    if (rms_norm) {
-        stats_block_tiles = 1;
-    }
     uint32_t in0_block_tiles = block_wt * block_ht;
     uint32_t in0_CB_tiles = in0_block_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in_single_tile_size;
@@ -999,7 +1008,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         1,
         block_ht * block_wt,
         fp32_dest_acc_en,
-        num_blocks_second_stage
+        num_blocks_second_stage,
+        stats_wt
     };
     std::vector<uint32_t> not_all_to_all_compute_compile_time_args = {
         0,
@@ -1013,7 +1023,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         0,
         block_ht * block_wt,
         fp32_dest_acc_en,
-        num_blocks_second_stage
+        num_blocks_second_stage,
+        stats_wt
     };
     // compute kernel
     std::string compute_kernel_file;
@@ -1182,6 +1193,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
+    // TODO: check gcinv value is correct!!
+    float gcinv = 1.0f / (block_w * num_devices_in_stats); // bcast-w scaler for global reduce over total number columns
     float winv = 1.0f / block_w; // bcast-w scaler
     float cinv = 1.0f / num_blocks; // bcast-cores scaler
     float cinv_one = 1.0f; // bcast-cores scaler for all-to-all cores not on first row/col
@@ -1191,6 +1204,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t packed_cinv_value_one = pack_two_bfloat16_into_uint32({bfloat_cinv_value_one, bfloat_cinv_value_one});
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
+    auto bfloat_gcinv_value = bfloat16(gcinv);
+    uint32_t packed_gcinv_value = pack_two_bfloat16_into_uint32({bfloat_gcinv_value, bfloat_gcinv_value});
     union { float f; uint32_t u; } e; e.f = eps;
 
     std::vector<uint32_t> in0_mcast_noc_x;
@@ -1390,6 +1405,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             if (use_two_stage_reduce) {
                 if (is_pre_all_gather) {
                     writer_mcast_sender_args.push_back(packed_cinv_value_one);
+                    writer_mcast_sender_args.push_back(packed_cinv_value_one);
+                } else if (is_post_all_gather) {
+                    writer_mcast_sender_args.push_back(packed_gcinv_value);
+                    writer_mcast_sender_args.push_back(packed_gcinv_value);
                 } else {
                     if (width_index < num_cores_all_to_all_first_stage) {
                         writer_mcast_sender_args.push_back(packed_cinv_value);
@@ -1414,15 +1433,20 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             std::vector<uint32_t> writer_mcast_receiver_args;
             if (is_pre_all_gather) {
                 writer_mcast_receiver_args.push_back(packed_cinv_value_one);
+                writer_mcast_receiver_args.push_back(packed_cinv_value_one);
+            } else if (is_post_all_gather) {
+                writer_mcast_receiver_args.push_back(packed_gcinv_value);
+                writer_mcast_receiver_args.push_back(packed_gcinv_value);
             } else {
                 writer_mcast_receiver_args.push_back(packed_cinv_value);
                 writer_mcast_receiver_args.push_back(packed_winv_value);
-                writer_mcast_receiver_args.push_back(e.u);
-                writer_mcast_receiver_args.push_back(gamma_dram_addr);
-                writer_mcast_receiver_args.push_back(beta_dram_addr);
-                writer_mcast_receiver_args.push_back(gamma_tile_start_id);
-                writer_mcast_receiver_args.push_back(beta_tile_start_id);
             }
+
+            writer_mcast_receiver_args.push_back(e.u);
+            writer_mcast_receiver_args.push_back(gamma_dram_addr);
+            writer_mcast_receiver_args.push_back(beta_dram_addr);
+            writer_mcast_receiver_args.push_back(gamma_tile_start_id);
+            writer_mcast_receiver_args.push_back(beta_tile_start_id);
             tt::tt_metal::SetRuntimeArgs(program, writer_mcast_receiver_kernels_id, core, writer_mcast_receiver_args);
             writer_kernel_ids.push_back(writer_mcast_receiver_kernels_id);
         }
