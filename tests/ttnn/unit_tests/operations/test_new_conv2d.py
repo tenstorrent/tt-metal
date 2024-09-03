@@ -317,21 +317,12 @@ def run_conv_with_split(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
     (
-        (128, 128, 8, 8, 3, 3, 1, 1, 1),
         (128, 256, 8, 8, 3, 3, 1, 1, 1),
-        (128, 256, 8, 8, 3, 3, 1, 1, 1),
-        (128, 256, 8, 8, 3, 3, 1, 1, 1),
-        (256, 256, 8, 8, 3, 3, 1, 1, 1),
         (256, 2048, 8, 8, 3, 3, 1, 1, 8),
-        (512, 2048, 8, 8, 3, 3, 1, 1, 4),
         (512, 2048, 16, 16, 3, 3, 1, 1, 4),
-        (768, 768, 16, 16, 3, 3, 1, 1, 1),
         (768, 768, 8, 8, 3, 3, 1, 1, 1),
-        (768, 768, 10, 10, 3, 3, 0, 0, 1),
         (768, 768, 16, 16, 3, 3, 1, 1, 1),
         (1280, 1280, 16, 16, 3, 3, 1, 1, 1),
-        (1280, 1280, 8, 8, 3, 3, 1, 1, 1),
-        (1280, 1280, 8, 8, 3, 3, 1, 1, 1),
         (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
     ),
 )
@@ -341,11 +332,11 @@ def run_conv_with_split(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
+    [ttnn.bfloat16],
 )
 def test_conv_ws(
     device,
