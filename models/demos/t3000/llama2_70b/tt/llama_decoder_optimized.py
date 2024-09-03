@@ -147,11 +147,12 @@ class TtLlamaDecoder_optimized:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
+        cache_idxs=None,
     ) -> ttnn.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
         elif self.model_config["LLM_MODE"] == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
+            return self.decode_forward(xs, rot_mats, start_pos, attn_masks, cache_idxs)
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
@@ -161,6 +162,7 @@ class TtLlamaDecoder_optimized:
         rot_mats: List[ttnn.Tensor],
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
+        cache_idxs,
     ) -> List[ttnn.Tensor]:
         ### xs (residual stream) is fractured on all chips
         xs_replicated = ttnn.all_gather(
@@ -182,7 +184,7 @@ class TtLlamaDecoder_optimized:
         # attn_norm_replicated is sharded
 
         # attn_outs is fractured
-        attn_outs = self.attention(attn_norm_replicated, rot_mats, start_pos, attn_masks)
+        attn_outs = self.attention(attn_norm_replicated, rot_mats, start_pos, attn_masks, cache_idxs=cache_idxs)
 
         ### Fractured residual add
         # Add attn output to residiual first in place to save memory

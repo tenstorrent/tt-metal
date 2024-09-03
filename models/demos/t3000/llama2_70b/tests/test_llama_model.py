@@ -149,13 +149,14 @@ def run_test_LlamaModel_inference(
         )
 
         # TT hardware execution -------------------------------------------------------------
-        tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
+        tt_inp_emb, start_pos, rot_mat, attn_mask, cache_idxs = tt_model.prepare_inputs(tt_inp_ids, start_pos)
 
         tt_out = tt_model(
             tt_inp_emb,
             rot_mat,
             start_pos,
             attn_mask,
+            cache_idxs=cache_idxs,
         )
         del tt_inp_emb, rot_mat, attn_mask
 
@@ -217,7 +218,7 @@ def run_test_LlamaModel_inference(
 
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0)).transpose(0, 1)[:batch, ...]
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=1))[:batch, ...]
         for lp in tt_layer_present_all
     ]
 

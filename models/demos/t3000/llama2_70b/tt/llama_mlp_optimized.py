@@ -90,9 +90,9 @@ class TtLlamaMLP_optimized:
             padded_w1,
             dtype=w1_dtype,
             layout=ttnn.TILE_LAYOUT,
-            device=self.device_mesh,
+            device=self.mesh_device,
             memory_config=w3_mem_config,
-            mesh_mapper=ShardTensorToMesh(self.device_mesh, dim=3),
+            mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
             cache_file_name=self.cache_path / w1_dram_shard_str,
         )
 

@@ -201,12 +201,23 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos):
         rot_mats = ttnn.interleaved_to_sharded(rot_mats, llama_attention_model.model_config["ROT_MAT_MM_IN1_MEMCFG"])
 
         attn_masks = None
+        cache_idxs = torch.tensor([start_pos for _ in range(batch)])
+        cache_idxs_tt = ttnn.as_tensor(
+            cache_idxs,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=llama_attention_model.mesh_device,
+            memory_config=llama_attention_model.model_config["DRAM_MEMCFG"],
+            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
+            # cache_file_name=cache_name(f"cache_idxs_decode_b{batch}_{start_pos}"),
+        )
 
     return (
         xs,
         start_pos,
         rot_mats,
         attn_masks,
+        cache_idxs_tt,
     )
 
 
@@ -299,7 +310,7 @@ def run_test_LlamaAttention_inference(
         )
 
         # TT hardware execution -------------------------------------------------------------
-        attention_input, start_pos, rot_mat, attn_mask = tt_llama_attention_prepare_inputs(
+        attention_input, start_pos, rot_mat, attn_mask, cache_idxs = tt_llama_attention_prepare_inputs(
             tt_LlamaAttention_model, tt_input, start_pos
         )
         tt_out = tt_LlamaAttention_model(
@@ -307,6 +318,7 @@ def run_test_LlamaAttention_inference(
             rot_mat,
             start_pos,
             attn_mask,
+            cache_idxs=cache_idxs if model_config["LLM_MODE"] == "decode" else None,
         )
 
         tt_out = ttnn.from_device(tt_out)
@@ -345,7 +357,7 @@ def run_test_LlamaAttention_inference(
     # concat the pasts by heads
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaAttention_model.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0)).transpose(0, 1)[:batch, ...]
+        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=1))[:batch, ...]
         for lp in tt_layer_present_all
     ]
 

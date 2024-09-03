@@ -64,16 +64,16 @@ class TtLlamaAttention_optimized:
 
         cache_k = torch.zeros(
             (
-                self.n_kv_heads,
                 self.max_batch_size,
+                self.n_kv_heads,
                 self.model_config["MAX_CONTEXT_LEN"],
                 self.head_dim,
             )
         )
         cache_v = torch.zeros(
             (
-                self.n_kv_heads,
                 self.max_batch_size,
+                self.n_kv_heads,
                 self.model_config["MAX_CONTEXT_LEN"],
                 self.head_dim,
             )
@@ -84,7 +84,7 @@ class TtLlamaAttention_optimized:
                 ttnn.as_tensor(
                     lp,
                     device=self.mesh_device,
-                    mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
+                    mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=1),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=self.model_config["DRAM_MEMCFG"],
                     dtype=self.kv_dtype,
@@ -170,32 +170,19 @@ class TtLlamaAttention_optimized:
 
         self.wo = ttnn.to_device(wo_ttnn, self.mesh_device)
 
-    def __call__(
-        self,
-        xs,
-        rot_mats,
-        start_pos: int,
-        attn_masks,
-        user_id: int = 0,
-    ):
+    def __call__(self, xs, rot_mats, start_pos: int, attn_masks, user_id: int = 0, cache_idxs=None):
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         if self.model_config["LLM_MODE"] == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
+            return self.decode_forward(xs, rot_mats, start_pos, attn_masks, cache_idxs)
         # Prefill should have input tensor of shape (1, batch=1, seqlen, hidden_size)
         elif self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(xs, rot_mats, attn_masks, user_id)
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
-    def decode_forward(
-        self,
-        xs,
-        rot_mats,
-        start_pos: int,
-        attn_masks,
-    ):
+    def decode_forward(self, xs, rot_mats, start_pos: int, attn_masks, cache_idxs):
         query_layer, key_layer, value_layer = self.attn_qkv(xs, rot_mats)
-        attn_outputs = self.attn_mqa(query_layer, key_layer, value_layer, start_pos)
+        attn_outputs = self.attn_mqa(query_layer, key_layer, value_layer, start_pos, cache_idxs)
         return self.attn_selfout(attn_outputs)
 
     def attn_qkv(
@@ -261,23 +248,32 @@ class TtLlamaAttention_optimized:
         key_layer,
         value_layer,
         start_pos: int,
-        batch_offset: int = 0,
+        cache_idxs,
     ):
         # K CACHE UPDATE
         keys = self.layer_past[0]
-        ttnn.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
+        # ttnn.update_cache(keys, key_layer, start_pos, batch_offset=batch_offset)
+        ttnn.experimental.paged_update_cache(keys, key_layer, update_idxs_tensor=cache_idxs, update_idxs=[])
+
         key_layer.deallocate(True)
 
         # V CACHE UPDATE
         values = self.layer_past[1]
-        ttnn.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
+        # ttnn.update_cache(values, value_layer, start_pos, batch_offset=batch_offset)
+        ttnn.experimental.paged_update_cache(values, value_layer, update_idxs_tensor=cache_idxs, update_idxs=[])
+
         value_layer.deallocate(True)
+
+        # Have to reshape back since sdpa expects batch in dim 1
+        keys_reshaped = ttnn.reshape(keys, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
+        values_reshaped = ttnn.reshape(values, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
 
         attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
             query_layer,
-            keys,
-            values,
-            [start_pos for _ in range(self.max_batch_size)],
+            keys_reshaped,
+            values_reshaped,
+            # [start_pos for _ in range(self.max_batch_size)],
+            cur_pos_tensor=cache_idxs,
             scale=self.scale,
             program_config=self.model_config["SDPA_DECODE_PROGRAM_CONFIG"],
             compute_kernel_config=self.model_config["SDPA_COMPUTE_KERNEL_CONFIG"],
@@ -393,14 +389,14 @@ class TtLlamaAttention_optimized:
         # FILL K CACHE
         keys = self.layer_past[0]
         # Fill cache expects batch in dim0
-        keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.fill_cache(keys_reshaped, ttnn.experimental.typecast(key_layer, self.kv_dtype), user_id)
+        # keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
+        ttnn.fill_cache(keys, ttnn.experimental.typecast(key_layer, self.kv_dtype), user_id)
 
         # FILL V CACHE
         values = self.layer_past[1]
         # Fill cache expects batch in dim0
-        values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.fill_cache(values_reshaped, ttnn.experimental.typecast(value_layer, self.kv_dtype), user_id)
+        # values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
+        ttnn.fill_cache(values, ttnn.experimental.typecast(value_layer, self.kv_dtype), user_id)
 
         # SDPA
         attn_output = ttnn.transformer.scaled_dot_product_attention(

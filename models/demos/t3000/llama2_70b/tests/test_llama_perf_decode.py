@@ -119,13 +119,15 @@ def run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total
         tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # logits = ttnn.to_torch(tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3))
         tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
-        logits = ttnn.to_torch(tt_logits_tensors[0])
+        logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
+        # logits_rm = ttnn.untilize(tt_logits_tensors[0], use_multicore=True)
+        logits = ttnn.to_torch(logits_rm)
 
         # logits = logits[..., : configuration.vocab_size].float()  # [1, batch, vocab_size]
         # del tt_logits
 
         logger.info("Capturing trace")
-        trace_id = ttnn.begin_trace_capture(device_mesh, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_logits = tt_model(
             tt_inp_emb,
             rot_mat,
@@ -133,21 +135,25 @@ def run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total
             attn_mask,
         )
         tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.end_trace_capture(device_mesh, trace_id, cq_id=0)
+        tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
+        logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
+        # logits = ttnn.to_torch(logits_rm)
+        # logits_rm = ttnn.untilize(tt_logits_tensors[0], use_multicore=True)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
         logger.info("Starting Trace perf test...")
 
         import time
 
-        num_iters = 1
+        num_iters = 100
         times = []
         for i in range(num_iters):
             x1 = time.time()
-            ttnn.execute_trace(device_mesh, trace_id, blocking=False)
+            ttnn.execute_trace(mesh_device, trace_id, blocking=False)
             # logits = ttnn.to_torch(
             # tt_logits, device=device_mesh, mesh_composer=ConcatMeshToTensor(device_mesh, dim=3)
             # )
-            logits = ttnn.to_torch(tt_logits_tensors[0])
+            logits = ttnn.to_torch(logits_rm)
 
             x2 = time.time()
 
@@ -156,7 +162,7 @@ def run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total
             f"Ran Trace for {num_iters} iterations. Avg Trace execution time: {sum(times[1:]) / len(times[1:])} seconds."
         )
         print(times)
-        ttnn.release_trace(device_mesh, trace_id)
+        ttnn.release_trace(mesh_device, trace_id)
         breakpoint()
 
         next_token = torch.argmax(logits, dim=-1)
@@ -302,7 +308,7 @@ def test_Llama_perf_host(
     t3k_mesh_device,
     llama_version,
     use_program_cache,
-    n_layers=1,
+    n_layers=80,
     n_devices=8,
 ):
     if generation_length == 2048:

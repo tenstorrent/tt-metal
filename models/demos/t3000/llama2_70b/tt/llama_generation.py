@@ -59,27 +59,28 @@ class TtLlamaModelForGeneration:
         else:
             return self.prefill_forward(tokens, start_pos)
 
-    def decode_forward(self, tokens: torch.Tensor, start_pos: int):
+    def decode_forward(self, tokens: torch.Tensor, start_pos: int, trace_capture=False):
         self._update_model_config("decode", tokens.shape[0], 1)
         batch = tokens.shape[0]
-        tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(tokens, start_pos)
+        tt_inp_emb, start_pos, rot_mat, attn_mask, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos)
 
         tt_logits = self.tt_model(
             tt_inp_emb,
             rot_mat,
             start_pos,
             attn_mask,
+            cache_idxs=cache_idxs_tt,
         )
 
-        del tt_inp_emb
-        del rot_mat
-        del attn_mask
+        # del tt_inp_emb
+        # del rot_mat
+        # del attn_mask
 
         logits = self._process_logits(tt_logits)
 
         logits = logits.permute(2, 1, 0, 3).squeeze().unsqueeze(1)  # [batch, 1, vocab_size]
         logits = logits[:batch]  # Remove padded users
-        del tt_logits
+        # del tt_logits
 
         return logits
 

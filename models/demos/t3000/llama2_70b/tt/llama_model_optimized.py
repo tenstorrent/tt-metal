@@ -229,6 +229,8 @@ class TtLlamaModel_optimized:
 
             attn_masks = None
 
+            cache_idxs_tt = None  # unused in prefill mode
+
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             assert xs.shape == (
@@ -258,12 +260,18 @@ class TtLlamaModel_optimized:
 
             attn_masks = None
 
-        return (
-            xs,
-            start_pos,
-            rot_mats,
-            attn_masks,
-        )
+            cache_idxs = torch.tensor([start_pos for _ in range(batch)])
+            cache_idxs_tt = ttnn.as_tensor(
+                cache_idxs,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+                memory_config=self.model_config["DRAM_MEMCFG"],
+                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                # cache_file_name=cache_name(f"cache_idxs_decode_b{batch}_{start_pos}"),
+            )
+
+        return (xs, start_pos, rot_mats, attn_masks, cache_idxs_tt)
 
     def __call__(
         self,
@@ -272,12 +280,13 @@ class TtLlamaModel_optimized:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
+        cache_idxs=None,
         unpadded_seq_len=None,
     ) -> ttnn.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
             return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id, unpadded_seq_len=unpadded_seq_len)
         elif self.model_config["LLM_MODE"] == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
+            return self.decode_forward(xs, rot_mats, start_pos, attn_masks, cache_idxs)
         else:
             raise ValueError(f"Unknown llm_mode: {self.model_config['LLM_MODE']}")
 
@@ -287,10 +296,11 @@ class TtLlamaModel_optimized:
         rot_mats: List[ttnn.Tensor],
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
+        cache_idxs,
     ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
-            xs = layer(xs, rot_mats, start_pos, attn_masks)  # xs is sharded
+            xs = layer(xs, rot_mats, start_pos, attn_masks, cache_idxs=cache_idxs)  # xs is sharded
 
         xs = ttnn.all_gather(
             xs,
