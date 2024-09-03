@@ -591,12 +591,9 @@ struct MultiDeviceHostStorage {
         // preinitialize empty tensor handles and use/populate them in the worker threads.
 
         inline void insert_buffer_and_shape_for_device(Device* device, const DeviceBuffer buffer, const Shape shape) {
+            std::scoped_lock lock(buffer_mtx, shape_mtx);
             TT_ASSERT(device == buffer->device(), "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-            {
-                std::lock_guard<std::mutex> lock(buffer_mtx);
-                buffers.insert({device->id(), buffer});
-            }
-            std::lock_guard<std::mutex> lock(shape_mtx);
+            buffers.insert({device->id(), buffer});
             shapes.insert({device->id(), shape});
         }
 
