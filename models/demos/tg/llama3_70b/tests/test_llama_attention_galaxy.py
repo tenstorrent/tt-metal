@@ -77,7 +77,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         start_pos, and KV cache has valid data up to start_pos.
         """
         batch = x.size(0)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
         freqs_cis = freqs_cis[start_pos : start_pos + 1]
 
         attn_mask = torch.zeros(batch, 1, 1, start_pos + 1)

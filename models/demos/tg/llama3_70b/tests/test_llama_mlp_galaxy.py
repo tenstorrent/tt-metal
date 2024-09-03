@@ -137,32 +137,22 @@ def run_test_LlamaMLP_inference(
     )
 
     tt_mlp_input = tt_llama_mlp_prepare_inputs(tt_LlamaMLP_model, tt_inp)
-    for n in range(1000):
-        logger.info(f"Running inference on TT hardware, iteration {n}")
+    tt_out = tt_LlamaMLP_model(tt_mlp_input)
 
-        tt_out = tt_LlamaMLP_model(tt_mlp_input)
+    tt_out = ttnn.to_torch(
+        tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)
+    )
+    tt_out = tt_out[:, 0:1, :, :]
 
-        tt_out = ttnn.to_torch(
-            tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)
-        )
-        tt_out = tt_out[:, 0:1, :, :]
+    does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+    logger.info(f"PCC value: {output_pcc}")
 
-        does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
-        logger.info(f"PCC value: {output_pcc}")
-        if n == 0:
-            expect_pcc = output_pcc
-            tt_expect = tt_out
-        else:
-            if output_pcc != expect_pcc:
-                logger.info(f"PCC value is not consistent with the first iteration: {output_pcc} vs {expect_pcc}")
-                breakpoint()
-
-        if does_pass:
-            logger.info(f"{llama_version} TG MLP output Passed!")
-        else:
-            logger.warning(f"{llama_version} TG MLP output Failed!")
-            gc.collect()
-            assert does_pass, f"PCC value is lower than {pcc}"
+    if does_pass:
+        logger.info(f"{llama_version} TG MLP output Passed!")
+    else:
+        logger.warning(f"{llama_version} TG MLP output Failed!")
+        gc.collect()
+        assert does_pass, f"PCC value is lower than {pcc}"
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
