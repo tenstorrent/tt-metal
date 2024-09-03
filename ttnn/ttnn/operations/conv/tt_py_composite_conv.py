@@ -601,6 +601,9 @@ class TTPyCompositeConvSetupDepracated(TTPyOp):
         )
 
     # override abstract methods from base class TTPyOp
+    def __call__(self):
+        assert "This class is depracated. Please do not use."
+
     def set_op_configs(
         self,
         device,
