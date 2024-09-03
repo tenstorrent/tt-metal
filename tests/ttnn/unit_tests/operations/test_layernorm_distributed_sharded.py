@@ -128,8 +128,8 @@ def test_sharded_layernorm(
 @pytest.mark.parametrize("min_pcc", [0.9997])
 @pytest.mark.parametrize("max_atol", [0.38])
 @pytest.mark.parametrize("input_width", [1024])
-@pytest.mark.parametrize("input_df", [ttnn.bfloat16])
-@pytest.mark.parametrize("weights_df", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 def test_post_allgather_layernorm(
     all_devices,
