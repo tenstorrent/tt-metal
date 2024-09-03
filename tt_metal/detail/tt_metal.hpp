@@ -39,11 +39,11 @@ namespace tt::tt_metal {
         *
         * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
         * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
-        * | buffer      | Buffer to send data to                          | const Buffer &          |                                                  | Yes      |
+        * | buffer      | Buffer to send data to                          | Buffer &                |                                                  | Yes      |
         * | host_buffer | Buffer on host to copy data from                | std::vector<uint32_t> & | Host buffer size must match buffer               | Yes      |
         */
-        void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer);
-        void WriteToBuffer( std::shared_ptr<const Buffer> buffer, const std::vector<uint32_t> &host_buffer);
+        void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer);
+        void WriteToBuffer( std::shared_ptr<Buffer> buffer, const std::vector<uint32_t> &host_buffer);
         /**
         * Copies data from a buffer into a host buffer
         *
@@ -51,12 +51,12 @@ namespace tt::tt_metal {
         *
         * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
         * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
-        * | buffer      | Buffer to read data from                        | const Buffer &          |                                                  | Yes      |
+        * | buffer      | Buffer to read data from                        | Buffer &                |                                                  | Yes      |
         * | host_buffer | Buffer on host to copy data into                | std::vector<uint32_t> & |                                                  | Yes      |
         * | shard_order | For a sharded buffer we can read in shard order | bool                    |                                                  | No       |
         */
-        void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order = false);
-        void ReadFromBuffer(std::shared_ptr<const Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order = false);
+        void ReadFromBuffer(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order = false);
+        void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order = false);
 
         /**
         * Copies data from a buffer into a host buffer
@@ -65,11 +65,11 @@ namespace tt::tt_metal {
         *
         * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
         * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
-        * | buffer      | Buffer to read data from                        | const Buffer &          |                                                  | Yes      |
+        * | buffer      | Buffer to read data from                        | Buffer &                |                                                  | Yes      |
         * | host_buffer | Buffer on host to copy data into                | std::vector<uint32_t> & |                                                  | Yes      |
         * | core_id     | ID of core                                      | const uint32_t &        |                                                  | Yes      |
         */
-        void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t & core_id);
+        void ReadShard(Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t & core_id);
 
 
 
