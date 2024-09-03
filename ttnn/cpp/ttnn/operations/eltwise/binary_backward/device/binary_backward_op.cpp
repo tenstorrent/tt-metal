@@ -620,12 +620,15 @@ const ComplexTensor& grad, const ComplexTensor& input, const ComplexTensor& othe
     return grad_tensor;
 }
 
-std::vector<Tensor> ExecuteBackwardMul::invoke(
-    const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor result = ttnn::multiply(grad, scalar, std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(result);
-    return grad_tensor;
+std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardMul::invoke(
+    uint8_t queue_id, const Tensor& grad, const Tensor& input, float scalar, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+     if(!input_grad.has_value()){
+        input_grad = ttnn::zeros_like(grad);
+    }
+    ttnn::multiply(queue_id, grad, scalar, std::nullopt, output_mem_config, input_grad);
+    result.push_back(input_grad);
+    return result;
 }
 
 std::vector<ComplexTensor> ExecuteBackwardMul::invoke(

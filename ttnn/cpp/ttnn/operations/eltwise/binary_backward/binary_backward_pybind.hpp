@@ -11,7 +11,7 @@
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
 #include "ttnn/types.hpp"
-
+#include "ttnn/cpp/ttnn/common/constants.hpp"
 namespace py = pybind11;
 
 namespace ttnn {
@@ -392,14 +392,18 @@ void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& o
                const Tensor& grad_tensor,
                const Tensor& input_tensor_a,
                const float scalar,
-               const std::optional<MemoryConfig>& memory_config){
-                return self(grad_tensor, input_tensor_a, scalar, memory_config);
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& input_grad,
+               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                return self(queue_id, grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
             py::arg("scalar"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt},
+            py::arg("memory_config") = std::nullopt,
+            py::arg("input_grad") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
@@ -422,7 +426,7 @@ void bind_binary_bw_mul(py::module& module, const binary_backward_operation_t& o
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
             py::arg("input_grad") = std::nullopt,
             py::arg("other_grad") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         // complex tensor
         ttnn::pybind_overload_t{

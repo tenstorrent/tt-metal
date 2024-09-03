@@ -68,11 +68,13 @@ struct ExecuteBinaryBackwardFloat {
 
 struct ExecuteBackwardMul  {
 
-    static std::vector<Tensor> invoke(
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
+        uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         float scalar,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_grad = std::nullopt);
 
     static std::vector<std::optional<Tensor>> invoke(
         uint8_t queue_id,
