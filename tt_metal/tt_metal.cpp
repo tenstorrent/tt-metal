@@ -380,7 +380,7 @@ void print_page(
     std::cout << std::dec << std::endl;
 }
 
-void WriteToDeviceSharded(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+void WriteToDeviceSharded(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),
@@ -397,7 +397,7 @@ void WriteToDeviceSharded(const Buffer &buffer, const std::vector<uint32_t> &hos
 
     auto device = buffer.device();
 
-    auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
+    const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     auto total_pages = buffer.num_pages();
     for (int host_page_id = 0; host_page_id < total_pages; host_page_id++) {
         auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page_id];
@@ -454,7 +454,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
     }
 }
 
-void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+void WriteToDevice(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {
@@ -466,11 +466,11 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
     }
 }
 
-void WriteToBuffer(std::shared_ptr<const Buffer> buffer, const std::vector<uint32_t> &host_buffer) {
+void WriteToBuffer(std::shared_ptr<Buffer> buffer, const std::vector<uint32_t> &host_buffer) {
     WriteToBuffer(*buffer, host_buffer);
 }
 
-void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
@@ -519,7 +519,7 @@ void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint3
 
 void read_pages_to_host_helper(
     Device *device,
-    const Buffer &dev_buffer,
+    Buffer &dev_buffer,
     std::vector<uint32_t> &host_buffer,
     const uint32_t &page_size,
     const uint32_t &host_page_id,
@@ -532,7 +532,7 @@ void read_pages_to_host_helper(
     tt::Cluster::instance().read_core(host_buffer.data() + host_buffer_start, page_size, tt_cxy_pair(device->id(), noc_coordinates), absolute_address);
 }
 
-void ReadFromDeviceSharded(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromDeviceSharded(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
     TensorMemoryLayout buffer_layout = buffer.buffer_layout();
 
     auto device = buffer.device();
@@ -548,7 +548,7 @@ void ReadFromDeviceSharded(const Buffer &buffer, std::vector<uint32_t> &host_buf
 
     host_buffer = std::vector<uint32_t>(total_pages * num_entries_per_page);
 
-    auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
+    const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (int dev_page_id = 0; dev_page_id < total_pages; dev_page_id++) {
         auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
         auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
@@ -564,7 +564,7 @@ void ReadFromDeviceSharded(const Buffer &buffer, std::vector<uint32_t> &host_buf
     }
 }
 
-void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromDevice(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
     ZoneScoped;
     host_buffer.clear();  // overwrite the data
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
@@ -577,11 +577,11 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bo
     }
 }
 
-void ReadFromBuffer(std::shared_ptr<const Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
     ReadFromBuffer(*buffer, host_buffer, shard_order);
 }
 
-void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
+void ReadFromBuffer(Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
     Device *device = buffer.device();
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
@@ -602,7 +602,7 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bo
     }
 }
 
-void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t &core_id) {
+void ReadShard(Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t &core_id) {
     Device *device = buffer.device();
     TT_ASSERT(is_sharded(buffer.buffer_layout()));
     host_buffer.clear();  // overwrite the data
@@ -612,7 +612,7 @@ void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const u
     host_buffer = std::vector<uint32_t>(num_entries_per_shard);
 
     std::vector<uint32_t> page_ids;
-    auto buffer_page_mapping = generate_buffer_page_mapping(buffer);
+    const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (uint32_t i = 0; i < buffer_page_mapping.dev_page_to_core_mapping_.size(); i++) {
         if (buffer_page_mapping.dev_page_to_core_mapping_[i] == core_id) {
             page_ids.push_back(i);
