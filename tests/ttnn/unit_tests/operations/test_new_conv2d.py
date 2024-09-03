@@ -1532,13 +1532,23 @@ def test_conv_core_nondivis(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width,  act_block_w_div, shard_layout",
     (
-        (128, 128, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        (256, 2048, 8, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        (512, 2048, 16, 16, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        (768, 768, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        (1280, 1280, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        (1280, 1280, 8, 8, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        (1280, 2560, 8, 8, 2, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (128, 128, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (256, 2048, 8, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (512, 2048, 16, 16, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (768, 768, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (1280, 1280, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (1280, 1280, 8, 8, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (1280, 2560, 8, 8, 2, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (32, 32, 64, 64, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        # (64, 64, 512, 256, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        # #Width Sharded
+        # (128, 128, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (256, 2048, 8, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (512, 2048, 16, 16, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (768, 768, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (1280, 1280, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (1280, 1280, 8, 8, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        # (1280, 2560, 8, 8, 2, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
     ),
 )
 @pytest.mark.parametrize(

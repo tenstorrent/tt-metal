@@ -39,23 +39,25 @@ void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr,
 
 void kernel_main() {
 
-    constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t window_inner = get_compile_time_arg_val(7);
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(8);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(10); //Input filter window width
-    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(14);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(15);
-    constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(16);
-    constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(17);
-    constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(18);
-    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(19));
-    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(20));
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(21);
-
-    constexpr bool transpose_mcast = get_compile_time_arg_val(22) == 1;
+    constexpr bool act_in_dram                          = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t stride_h                         = get_compile_time_arg_val(1);
+    constexpr uint32_t stride_w                         = get_compile_time_arg_val(2);
+    constexpr uint32_t dilation_h                       = get_compile_time_arg_val(3);
+    constexpr uint32_t dilation_w                       = get_compile_time_arg_val(4);
+    constexpr uint32_t conv_act_size_w                  = get_compile_time_arg_val(5);
+    constexpr uint32_t conv_act_c_read_bytes            = get_compile_time_arg_val(7);
+    constexpr uint32_t window_inner                     = get_compile_time_arg_val(9);
+    constexpr uint32_t act_block_h_datums               = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_size_w                    = get_compile_time_arg_val(12); //Input filter window width
+    constexpr uint32_t act_num_blocks_h                 = get_compile_time_arg_val(16);
+    constexpr uint32_t act_block_num_tiles              = get_compile_time_arg_val(17);
+    constexpr uint32_t act_w_num_outer                  = get_compile_time_arg_val(18);
+    constexpr uint32_t act_mcast_num_dests              = get_compile_time_arg_val(19);
+    constexpr uint32_t act_mcast_num_cores              = get_compile_time_arg_val(20);
+    const uint32_t act_mcast_sender_semaphore_addr      = get_semaphore(get_compile_time_arg_val(21));
+    const uint32_t act_mcast_receiver_semaphore_addr    = get_semaphore(get_compile_time_arg_val(22));
+    constexpr uint32_t act_mcast_sender_size_bytes      = get_compile_time_arg_val(23);
+    constexpr bool transpose_mcast                      = get_compile_time_arg_val(24) == 1;
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
