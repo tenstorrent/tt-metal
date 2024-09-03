@@ -43,8 +43,6 @@ struct SlidingWindowConfig {
     uint32_pair_t pad_hw = {0, 0} ;
     uint32_pair_t dilation_hw = {1, 1};
 
-    uint32_t groups = 1;
-
     // parallel configuration
     uint32_t num_cores_nhw = 1;        // num cores along collapsed height nhw
     CoreRangeSet core_range_set = std::set{CoreRange({0, 0}, {0, 0})};   // active cores

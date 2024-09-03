@@ -731,7 +731,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             .stride_hw = {stride[0], stride[1]},
             .pad_hw = {padding[0], padding[1]},
             .dilation_hw = {dilation[0], dilation[1]},
-            .groups = groups,
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid,
             .snap_to_tile = true
@@ -750,6 +749,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 bias_tensor_on_device,
                 sliding_window_config,
                 out_channels,
+                groups,
                 conv_config.output_layout == Layout::ROW_MAJOR,
                 conv_config.activation == "relu",
                 conv_config.math_fidelity,
@@ -796,6 +796,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             bias_tensor_on_device,
             sliding_window_config,
             out_channels,
+            groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
             conv_config.activation == "relu",
             conv_config.math_fidelity,
