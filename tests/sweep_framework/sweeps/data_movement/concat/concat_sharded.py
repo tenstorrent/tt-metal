@@ -171,6 +171,10 @@ parameter_block_sharded = {
         "input_mem_config": [
             ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         ],
+        "output_mem_config": [
+            ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            ttnn.L1_MEMORY_CONFIG,
+        ],
     }
 }
 
@@ -188,6 +192,10 @@ parameters_height_sharded = {
         "input_mem_config": [
             ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         ],
+        "output_mem_config": [
+            ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+            ttnn.L1_MEMORY_CONFIG,
+        ],
     }
 }
 
@@ -204,6 +212,10 @@ parameters_width_sharded = {
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_mem_config": [
             ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        ],
+        "output_mem_config": [
+            ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            ttnn.L1_MEMORY_CONFIG,
         ],
     }
 }
@@ -250,6 +262,7 @@ def run(
     dtype,
     layout,
     input_mem_config,
+    output_mem_config,
     *,
     device,
 ) -> list:
@@ -258,14 +271,14 @@ def run(
     if input_mem_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
         input_mem_config_a = ttnn.create_sharded_memory_config(
             shape=concat_specs["shape1"],
-            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores1"][0], y=concat_specs["num_cores1"][1]),
+            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores1"][1], y=concat_specs["num_cores1"][0]),
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=False,
         )
         input_mem_config_b = ttnn.create_sharded_memory_config(
             shape=concat_specs["shape2"],
-            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores2"][0], y=concat_specs["num_cores2"][1]),
+            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores2"][1], y=concat_specs["num_cores2"][0]),
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=False,
@@ -273,14 +286,14 @@ def run(
     elif input_mem_config == ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG:
         input_mem_config_a = ttnn.create_sharded_memory_config(
             shape=concat_specs["shape1"],
-            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores1"][0], y=concat_specs["num_cores1"][1]),
+            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores1"][1], y=concat_specs["num_cores1"][0]),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=False,
         )
         input_mem_config_b = ttnn.create_sharded_memory_config(
             shape=concat_specs["shape2"],
-            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores2"][0], y=concat_specs["num_cores2"][1]),
+            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores2"][1], y=concat_specs["num_cores2"][0]),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=False,
@@ -288,21 +301,36 @@ def run(
     else:
         input_mem_config_a = ttnn.create_sharded_memory_config(
             shape=concat_specs["shape1"],
-            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores1"][0], y=concat_specs["num_cores1"][1]),
+            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores1"][1], y=concat_specs["num_cores1"][0]),
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=False,
         )
         input_mem_config_b = ttnn.create_sharded_memory_config(
             shape=concat_specs["shape1"],
-            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores2"][0], y=concat_specs["num_cores2"][1]),
+            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores2"][1], y=concat_specs["num_cores2"][0]),
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=False,
         )
-
     torch_input_tensors.append(torch_random(concat_specs["shape1"], -0.1, 0.1, dtype=torch.bfloat16))
     torch_input_tensors.append(torch_random(concat_specs["shape2"], -0.1, 0.1, dtype=torch.bfloat16))
+    torch_output_tensor = torch.concat(torch_input_tensors, dim=concat_specs["dim"])
+
+    if (
+        output_mem_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+        or output_mem_config == ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        or output_mem_config == ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+    ):
+        shape_list = list(torch_output_tensor.size())
+        output_mem_config = ttnn.create_sharded_memory_config(
+            shape=shape_list,
+            core_grid=ttnn.CoreGrid(x=concat_specs["num_cores1"][1], y=concat_specs["num_cores1"][0]),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=False,
+        )
+
     input_tensors = []
     input_tensors.append(
         ttnn.from_torch(
@@ -323,8 +351,7 @@ def run(
         )
     )
     start_time = start_measuring_time()
-    result_tensor = ttnn.concat(input_tensors, dim=concat_specs["dim"], memory_config=input_mem_config_a)
+    result_tensor = ttnn.concat(input_tensors, dim=concat_specs["dim"], memory_config=output_mem_config)
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(result_tensor)
-    torch_output_tensor = torch.concat(torch_input_tensors, dim=concat_specs["dim"])
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
