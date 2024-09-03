@@ -50,6 +50,9 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
         TT_FATAL(in_ref.is_sharded() == shard_first, "All tensors must be sharded or all must be interleaved");
         if (shard_first) {
             TT_FATAL((in_ref.get_layout() == Layout::ROW_MAJOR), "Only row major supported for sharded concat.");
+            TT_FATAL(in_ref.shard_spec().has_value(), "Sharded tensors must have a shard spec.");
+            TT_FATAL(in_ref.memory_config().memory_layout != TensorMemoryLayout::BLOCK_SHARDED, "Block sharded inputs are not supported");
+            TT_FATAL(in_ref.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Width sharded inputs are not supported");
         }
     }
     if (shard_first) {
