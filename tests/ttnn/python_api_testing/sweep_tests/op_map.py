@@ -1042,4 +1042,12 @@ op_map = {
         "tt_op": ttnn_ops.argmax,
         "pytorch_op": pytorch_ops.argmax,
     },
+    "eltwise-bitwise_xor": {
+        "tt_op": ttnn_ops.eltwise_bitwise_xor,
+        "pytorch_op": pytorch_ops.bitwise_xor,
+    },
+    "eltwise-bitwise_not": {
+        "tt_op": ttnn_ops.eltwise_bitwise_not,
+        "pytorch_op": pytorch_ops.bitwise_not,
+    },
 }
