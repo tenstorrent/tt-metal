@@ -369,7 +369,6 @@ int main() {
             .stride_hw = {tc.stride_h, tc.stride_w},
             .pad_hw = {tc.pad_h, tc.pad_w},
             .dilation_hw = {1, 1},
-            .groups = 1,
             .num_cores_nhw = tc.num_cores_nhw};
         Shape input_tensor_shape = {
             config.batch_size,
