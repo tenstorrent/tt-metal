@@ -2,8 +2,33 @@ name: "ttnn - Run sweeps"
 
 on:
   workflow_dispatch:
-    schedule:
-     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
+    inputs:
+      sweep_name:
+        type: choice
+        description: "Which sweep module to run?"
+        required: true
+        default: "ALL SWEEPS (Nightly)"
+        options:
+          - ALL SWEEPS (Nightly)
+          - add
+          - line_all_gather
+          - logical_and_
+          - matmul.full.matmul_default_block_sharded
+          - matmul.full.matmul_default_height_sharded
+          - matmul.full.matmul_default_interleaved
+          - matmul.full.matmul_default_width_sharded
+          - matmul.short.matmul_create_program_config
+          - matmul.short.matmul_default_sharded
+          - matmul.short.matmul_default
+          - matmul.short.matmul_user_program_config_mcast_1d
+          - matmul.short.matmul_user_program_config_mcast_2d
+          - matmul.short.matmul_user_program_config
+          - matmul.short.matmul
+          - data_movement.concat.concat_interleaved_n_tensors
+          - data_movement.concat.concat_interleaved
+          - data_movement.concat.concat_sharded
+  schedule:
+    - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
 jobs:
   build-artifact:
@@ -29,7 +54,15 @@ jobs:
       - uses: ./.github/actions/prepare-metal-run
         with:
           arch: wormhole_b0
-      - name: Run ttnn sweeps generation
+      - name: Run ttnn sweeps generation (single sweep)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          python tests/sweep_framework/parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main --explicit
+      - name: Run ttnn sweeps generation (all sweeps)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
@@ -82,7 +115,15 @@ jobs:
       - uses: ./.github/actions/prepare-metal-run
         with:
           arch: ${{ matrix.test-group.arch }}
-      - name: Run ttnn sweeps
+      - name: Run ttnn sweeps (single sweep)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          python tests/sweep_framework/runner.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main
+      - name: Run ttnn sweeps (all sweeps, nightly)
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
