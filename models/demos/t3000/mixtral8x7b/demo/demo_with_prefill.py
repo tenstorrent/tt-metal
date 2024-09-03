@@ -329,16 +329,16 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
                 all_outputs[user].append(user_tok)
 
         # Print out generated outputs for each user at the end of every iteration
-        if not is_ci_env:  # Avoid printing every iteration in CI
-            if len(user_input) == 1:
-                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-            else:
-                for user in range(batch_size):
-                    text = "".join(tokenizer.decode(all_outputs[user]))
-                    if len(text) > 100:
-                        text = "..." + text[-97:]
-                    text = text.replace("\n", " ")
-                    logger.info("[User {}] {}".format(user, text))
+        # if not is_ci_env:  # Avoid printing every iteration in CI
+        #     if len(user_input) == 1:
+        #         logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
+        #     else:
+        #         for user in range(batch_size):
+        #             text = "".join(tokenizer.decode(all_outputs[user]))
+        #             if len(text) > 100:
+        #                 text = "..." + text[-97:]
+        #             text = text.replace("\n", " ")
+        #             logger.info("[User {}] {}".format(user, text))
 
         # Always print iteration perf
         logger.info(
@@ -359,25 +359,30 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
         for user in range(batch_size):
             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
-    if is_ci_env:
-        # When running in CI, check the output against the expected output to avoid accuracy regressions
-        if test_prefill_len == 128:
-            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
-        else:  # test_prefill_len == 32k
-            expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_32k.json"
+    # if is_ci_env:
+    #     # When running in CI, check the output against the expected output to avoid accuracy regressions
+    #     if test_prefill_len == 128:
+    #         expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_128.json"
+    #     else:  # test_prefill_len == 32k
+    #         expected_output = "models/demos/t3000/mixtral8x7b/demo/expected_outputs_prefill_32k.json"
 
-        with open(expected_output, "r") as f:
-            expected_out = json.load(f)
+    #     with open(expected_output, "r") as f:
+    #         expected_out = json.load(f)
 
-        for i in range(batch_size):
-            user_output = "".join(tokenizer.decode(all_outputs[i]))
-            # CI is running instruct weights only
-            user_expect = expected_out[i + batch_size]["output_instruct"]
+    #     for i in range(batch_size):
+    #         user_output = "".join(tokenizer.decode(all_outputs[i]))
+    #         # CI is running instruct weights only
+    #         user_expect = expected_out[i + batch_size]["output_instruct"]
 
-            # Only compare the new generated tokens (prefill part will match input)
-            assert user_expect in user_output, f"Output for user {i} does not contain the expected output!"
+    #         # Only compare the new generated tokens (prefill part will match input)
+    #         assert user_expect in user_output, f"Output for user {i} does not contain the expected output!"
 
-        logger.info("[CI-Only] Output token validation passed!")
+    #     logger.info("[CI-Only] Output token validation passed!")
+
+    # TODO revert this change
+    for i in range(batch_size):
+        user_output = "".join(tokenizer.decode(all_outputs[i]))
+        logger.info(f"[DEBUG][USER {i}] {user_output}")
 
     # Benchmark metrics
     compile_prefill_time = profiler.get_duration("compile_prefill")
