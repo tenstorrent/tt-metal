@@ -9,7 +9,6 @@
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "type_caster.hpp"
 
