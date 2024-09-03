@@ -41,7 +41,7 @@ void MorehGetitem::validate_with_output_tensors(
         if (index_layout == Layout::ROW_MAJOR) {
             TT_FATAL(index_shape.rank() == 1);
         } else if (index_layout == Layout::TILE) {
-            TT_FATAL(index_shape.rank() == 4);
+            TT_FATAL(index_shape.rank() == 5);
         }
         TT_FATAL(
             !(input_layout == Layout::ROW_MAJOR && index_layout == Layout::TILE),
@@ -51,7 +51,7 @@ void MorehGetitem::validate_with_output_tensors(
 
     if (input_layout == Layout::ROW_MAJOR) {
         for (auto dim : this->index_dims) {
-            TT_FATAL(dim != 3, "getitem for ROW_MAJOR layout not support W index tensor!");
+            TT_FATAL(dim != 4, "getitem for ROW_MAJOR layout not support W index tensor!");
         }
     }
 
@@ -73,7 +73,8 @@ void MorehGetitem::validate_with_output_tensors(
 }
 
 std::vector<Shape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    Shape output_shape = input_tensors.at(0).get_legacy_shape();
+    auto input_shape = input_tensors.at(0).get_legacy_shape();
+    auto output_shape = input_shape;
     auto layout = input_tensors.at(0).get_layout();
 
     if (layout == Layout::TILE) {
@@ -83,10 +84,12 @@ std::vector<Shape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>
         // index_tensor: [(100), (100)]
         // index_dims = 1,2
         // output: (10, 1, 100, 40)
+
+        auto dim_offset = 5 - input_shape.rank();
         auto dimensions_pads = std::vector<Padding::PadDimension>();
         std::vector<uint32_t> output_size_vec;
 
-        for (int dim = 0; dim < 4; dim++) {
+        for (int dim = 0; dim < output_shape.size(); dim++) {
             dimensions_pads.push_back(output_shape.padding()[dim]);
             output_size_vec.push_back(output_shape[dim]);
         }
@@ -95,26 +98,27 @@ std::vector<Shape> MorehGetitem::compute_output_shapes(const std::vector<Tensor>
         uint32_t index_size = index.get_legacy_shape()[-1];
         uint32_t index_size_without_padding = index.get_legacy_shape().without_padding()[-1];
 
-        uint32_t last_dim = this->index_dims.back();
+        uint32_t last_dim = this->index_dims.back() + dim_offset;
 
         for (uint32_t i = 0; i < this->index_dims.size(); i++) {
-            uint32_t dim = this->index_dims.at(i);
+            uint32_t out_put_dim = this->index_dims.at(i);
+            uint32_t dim = out_put_dim + dim_offset;
             auto index = input_tensors.at(i + 1);
 
-            if (dim == 2 || dim == 3) {
-                dimensions_pads[dim] = Padding::PadDimension{.front = 0, .back = 31};
-                output_size_vec[dim] = 32;
+            if (dim == 3 || dim == 4) {
+                dimensions_pads[out_put_dim] = Padding::PadDimension{.front = 0, .back = 31};
+                output_size_vec[out_put_dim] = 32;
             } else {
-                output_size_vec[dim] = 1;
+                output_size_vec[out_put_dim] = 1;
             }
         }
 
-        if (last_dim == 2 || last_dim == 3) {
-            output_size_vec[last_dim] = round_up_to_mul32(index_size);
+        if (last_dim == 3 || last_dim == 4) {
+            output_size_vec[this->index_dims.back()] = round_up_to_mul32(index_size);
             uint32_t padding_back = round_up_to_mul32(index_size_without_padding) - index_size_without_padding;
-            dimensions_pads[last_dim] = Padding::PadDimension{.front = 0, .back = padding_back};
+            dimensions_pads[this->index_dims.back()] = Padding::PadDimension{.front = 0, .back = padding_back};
         } else {
-            output_size_vec[last_dim] = index_size_without_padding;
+            output_size_vec[this->index_dims.back()] = index_size_without_padding;
         }
 
         const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
