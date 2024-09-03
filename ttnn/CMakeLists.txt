@@ -347,6 +347,7 @@ set(TTNN_SRC)
 set(PYBIND_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/profiler.cpp
 )
 
 foreach(FILE ${ALL_TTNN_SRCS})

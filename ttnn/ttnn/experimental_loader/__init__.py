@@ -16,7 +16,6 @@ def register_tt_lib_operations_as_ttnn_operations(module):
     if not (
         module_name.startswith("ttnn._ttnn.deprecated.tensor")
         or module_name.startswith("ttnn._ttnn.deprecated.operations")
-        or module_name.startswith("ttnn._ttnn.deprecated.profiler")
     ):
         return
     ttnn_module_name = module_name.replace("ttnn._ttnn.deprecated", "ttnn.experimental")
@@ -42,4 +41,3 @@ def register_tt_lib_operations_as_ttnn_operations(module):
 
 register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.tensor)
 register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.operations)
-register_tt_lib_operations_as_ttnn_operations(ttnn._ttnn.deprecated.profiler)

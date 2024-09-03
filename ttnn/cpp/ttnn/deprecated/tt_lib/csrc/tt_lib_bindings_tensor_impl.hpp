@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_lib_bindings.hpp"
+namespace py = pybind11;
 
 namespace tt::tt_metal{
 
