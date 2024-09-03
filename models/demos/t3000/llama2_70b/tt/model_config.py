@@ -36,8 +36,10 @@ def get_model_config(
     assert seq_len in (1, 128, 256, 2048, 8192, 32 * 1024, 128 * 1024)
 
     # Supported values, TODO update for larger TT chips
-    if max_context_len > 4096:
+    if max_context_len == 8192:
         assert max_batch_size == 16
+    elif max_context_len == 128 * 1024:
+        assert max_batch_size == 1
     else:
         assert max_batch_size == 32
     assert batch <= max_batch_size
@@ -173,7 +175,10 @@ def get_model_config(
     if llm_mode == "decode":
         model_config["PADDED_BATCH_SIZE"] = 32
         shard_height = model_config["PADDED_BATCH_SIZE"]
-        if batch == 16:
+        if batch == 1:
+            batch_grid_size = [1, 1]
+            batch_core_range = shard_spec_1_cores_grid
+        elif batch == 16:
             batch_grid_size = [8, 2]
             batch_core_range = shard_spec_16_cores_grid
         elif batch == 32:

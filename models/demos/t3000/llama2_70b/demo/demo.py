@@ -386,11 +386,8 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
-    (
-        (32, 2048),
-        (16, 8192),
-    ),
-    ids=("short_context", "long_context"),
+    ((32, 2048), (16, 8192), (1, 128 * 1024)),
+    ids=("short_context", "long_context", "128k_context"),
 )
 def test_LlamaModel_demo(
     # model args

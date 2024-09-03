@@ -405,7 +405,6 @@ class TtLlamaAttention_optimized:
             query_layer,
             key_layer,
             value_layer,
-            attn_masks,
             is_causal=True,
             scale=self.scale,
             program_config=self.model_config["SDPA_PROGCFG"],
@@ -422,7 +421,7 @@ class TtLlamaAttention_optimized:
         # ATTENTION SELFOUT
         attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            memory_config=self.model_config["L1_MEMCFG"],
+            memory_config=self.model_config["DRAM_MEMCFG"],
         )  # seqlen, 1, batch, hidden_size
 
         attn_output = ttnn.all_gather(

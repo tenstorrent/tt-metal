@@ -227,27 +227,7 @@ class TtLlamaModel_optimized:
             sin_gathereds = ttnn.to_device(sin_gathereds, self.mesh_device)
             rot_mats = [cos_gathereds, sin_gathereds]
 
-            attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
-            attn_mask = torch.triu(attn_mask, diagonal=1)
-            if valid_seq_len:
-                attn_mask[:, valid_seq_len:] = torch.finfo(
-                    attn_mask.dtype
-                ).min  # Mask columns beyond valid_seq_len as padding
-                attn_mask[valid_seq_len:, :] = torch.finfo(
-                    attn_mask.dtype
-                ).min  # Mask rows beyond valid_seq_len as padding
-            attn_mask = attn_mask.expand(batch, 1, -1, -1)
-
-            attn_masks = ttnn.as_tensor(
-                attn_mask,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name(f"attn_masks_prefill_{seq_len}"),
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
-                memory_config=self.model_config["DRAM_MEMCFG"],
-                device=self.mesh_device,
-            )
-            attn_masks = ttnn.to_device(attn_masks, self.mesh_device)
+            attn_masks = None
 
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
