@@ -128,6 +128,7 @@ def test_sharded_layernorm(
 @pytest.mark.parametrize("min_pcc", [0.9997])
 @pytest.mark.parametrize("max_atol", [0.38])
 @pytest.mark.parametrize("input_width", [1024])
+@pytest.mark.parametrize("num_devices", [2])
 @pytest.mark.parametrize(
     "input_df",
     [
@@ -146,6 +147,7 @@ def test_sharded_layernorm(
 def test_post_allgather_layernorm(
     all_devices,
     input_width,
+    num_devices,
     is_rmsnorm,
     input_df,
     weights_df,
@@ -163,11 +165,15 @@ def test_post_allgather_layernorm(
     else:
         print("Testing LayerNorm")
     torch.manual_seed(seed)
-    input_shape = (1, 1, 32, input_width)
-    weights_shape = (1, 1, 1, input_width)
+    input_shape = (1, 1, 32, input_width * num_devices)
+    weights_shape = (1, 1, 1, input_width * num_devices)
 
     torch_input_tensor = torch.normal(mean, std, size=input_shape, dtype=torch.bfloat16)
     torch_weight = torch.normal(mean, std, size=weights_shape, dtype=torch.bfloat16)
+
+    torch_input_tensors = torch.chunk(torch_input_tensor, num_devices, dim=-1)
+    torch_weights = torch.chunk(torch_weight, num_devices, dim=-1)
+
     # torch_input_tensor = torch.ones(input_shape, dtype=torch.bfloat16) * 2
     # torch_weight = torch.ones(weights_shape, dtype=torch.bfloat16)
 
@@ -181,7 +187,7 @@ def test_post_allgather_layernorm(
         )
 
     tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
+        torch_input_tensors[0],
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -206,7 +212,7 @@ def test_post_allgather_layernorm(
     )
 
     tt_weights = ttnn.as_tensor(
-        torch_weight,
+        torch_weights[0],
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -214,29 +220,34 @@ def test_post_allgather_layernorm(
     )
 
     # create E[x] and E[x^2] tensors
-    sum_x_tensor = torch.sum(torch_input_tensor, dim=-1, keepdim=True).to(torch.bfloat16)
+    sum_x_tensors = []
+    for d in range(num_devices):
+        sum_x_tensors.append(torch.sum(torch_input_tensors[d], dim=-1, keepdim=True).to(torch.bfloat16))
 
-    sum_x2_tensor = torch.sum(torch_input_tensor**2, dim=-1, keepdim=True).to(torch.bfloat16)
+    sum_x2_tensors = []
+    for d in range(num_devices):
+        sum_x2_tensors.append(torch.sum(torch_input_tensors[d] ** 2, dim=-1, keepdim=True).to(torch.bfloat16))
 
     if not is_rmsnorm:
-        tt_sum_x_tensor = ttnn.from_torch(
-            sum_x_tensor,
+        for d in range(num_devices):
+            sum_x_tensors[d] = ttnn.from_torch(
+                sum_x_tensors[d],
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+    for d in range(num_devices):
+        sum_x2_tensors[d] = ttnn.from_torch(
+            sum_x2_tensors[d],
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=input_df,
         )
-
-    tt_sum_x2_tensor = ttnn.from_torch(
-        sum_x2_tensor,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=input_df,
-    )
     if is_rmsnorm:
-        tt_stats_tensor = tt_sum_x2_tensor
+        tt_stats_tensor = ttnn.concat(sum_x2_tensors, -1)
     else:
+        # TODO: concat interleaved
         tt_stats_tensor = ttnn.concat([tt_sum_x_tensor, tt_sum_x2_tensor], -1)
 
     # shard to 1 core

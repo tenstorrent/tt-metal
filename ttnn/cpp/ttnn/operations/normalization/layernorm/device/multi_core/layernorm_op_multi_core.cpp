@@ -1194,7 +1194,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::vector<KernelHandle> writer_kernel_ids;
     writer_kernel_ids.reserve(cores.size());
     // TODO: check gcinv value is correct!!
-    float gcinv = 1.0f / (block_w * num_devices_in_stats); // bcast-w scaler for global reduce over total number columns
+    float gcinv = 1.0f / (block_w * num_blocks * num_devices_in_stats); // bcast-w scaler for global reduce over total number columns
     float winv = 1.0f / block_w; // bcast-w scaler
     float cinv = 1.0f / num_blocks; // bcast-cores scaler
     float cinv_one = 1.0f; // bcast-cores scaler for all-to-all cores not on first row/col
