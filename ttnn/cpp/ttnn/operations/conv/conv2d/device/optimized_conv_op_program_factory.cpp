@@ -48,12 +48,12 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape
 }
 
 pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const Shape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment) {
-    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw_.first;  // filter_h
-    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw_.second;  // filter_W
-    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw_.first;
-    uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw_.second;
-    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw_.first;
-    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw_.second;
+    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
+    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
+    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
+    uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
+    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
+    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
     auto [conv_output_h, conv_output_w] = compute_opt_conv_output_face_shape(conv_activation_shape[1], conv_activation_shape[2], filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, padding_for_32B_alignment);
     uint32_t batch_size = conv_activation_shape[0];
     // pad height
@@ -231,17 +231,13 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
         // If conv_reader_indices is passed in, use v2 where we don't generate indices locally
         if (conv_reader_indices.has_value()) {
             const auto& input_tensor_a_shape = this->input_tensor_shape;
-            auto sliding_window_config = sliding_window::SlidingWindowConfig(
-                input_tensor_a_shape[0],
-                input_tensor_a_shape[1],
-                input_tensor_a_shape[2],
-                conv_params[0], //filter_h
-                conv_params[1], //filter_w
-                conv_params[2], //stride_h
-                conv_params[3], //stride_w
-                conv_params[4], //pad_h
-                conv_params[5] //pad_w
-            );
+            sliding_window::SlidingWindowConfig sliding_window_config{
+                .batch_size = input_tensor_a_shape[0],
+                .input_hw = {input_tensor_a_shape[1], input_tensor_a_shape[2]},
+                .window_hw = {conv_params[0], conv_params[1]},
+                .stride_hw = {conv_params[2], conv_params[3]},
+                .pad_hw = {conv_params[4], conv_params[5]},
+            };
             return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, sliding_window_config, output_channels, untilize_out, has_bias, fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, this->use_shallow_conv_variant, transpose_mcast, output_tensor, this->compute_kernel_config, this->enable_act_double_buffer, this->enable_split_reader, this->enable_subblock_padding);
         } else {
             return multi_core_optimized_conv_sharded_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor);
@@ -382,12 +378,12 @@ std::vector<tt::tt_metal::Shape> OptimizedConvNew::compute_output_shapes(const s
     uint32_t conv_activation_h = input_tensor_a_shape[1];
     uint32_t conv_activation_w = input_tensor_a_shape[2];
     // TODO: clean up here
-    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw_.first;  // filter_h
-    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw_.second;  // filter_W
-    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw_.first;
-    uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw_.second;
-    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw_.first;
-    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw_.second;
+    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
+    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
+    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
+    uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
+    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
+    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
     auto [conv_output_h, conv_output_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, extra_padding_for_32B_alignment);
 
     // Tiled output shape is padded shape. Padded to tile shape.
@@ -486,12 +482,12 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(cons
     uint32_t conv_activation_h = input_tensor_a_shape[1];
     uint32_t conv_activation_w = input_tensor_a_shape[2];
     uint32_t conv_activation_c = input_tensor_a_shape[3];
-    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw_.first;  // filter_h
-    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw_.second;  // filter_W
-    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw_.first;
-    uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw_.second;
-    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw_.first;
-    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw_.second;
+    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
+    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
+    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
+    uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
+    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
+    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
 
     const auto& t = output_tensors.at(0);
     if(t.storage_type() != StorageType::DEVICE) {

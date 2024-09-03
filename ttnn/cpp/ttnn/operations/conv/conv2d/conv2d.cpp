@@ -724,26 +724,22 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     }
     if (!use_matmul_for_1x1_conv) {
         // call halo op
-        SlidingWindowConfig sliding_window_config = SlidingWindowConfig(
-            batch_size,
-            input_height,
-            input_width,
-            kernel_size[0],
-            kernel_size[1],
-            stride[0],
-            stride[1],
-            padding[0],
-            padding[1],
-            dilation[0],
-            dilation[1],
-            groups,
-            opt_conv_op_parallel_config.num_cores_nhw,
-            input_tensor_post_tm.memory_config().shard_spec.value().grid,
-            true);
+        SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
+            .batch_size = batch_size,
+            .input_hw = {input_height, input_width},
+            .window_hw = {kernel_size[0], kernel_size[1]},
+            .stride_hw = {stride[0], stride[1]},
+            .pad_hw = {padding[0], padding[1]},
+            .dilation_hw = {dilation[0], dilation[1]},
+            .groups = groups,
+            .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
+            .core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid,
+            .snap_to_tile = true
+        };
 
         bool bypass_halo = (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED &&
-            sliding_window_config.pad_hw_.first==0 &&
-            sliding_window_config.pad_hw_.second==0
+            sliding_window_config.pad_hw.first==0 &&
+            sliding_window_config.pad_hw.second==0
             );
         if(bypass_halo)
         {

@@ -518,12 +518,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
-    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw_.first;  // filter_h
-    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw_.second;  // filter_W
-    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw_.first;
-    uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw_.second;
-    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw_.first;
-    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw_.second;
+    uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
+    uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
+    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
+    uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
+    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
+    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
 
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
