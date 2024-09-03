@@ -13,7 +13,7 @@
 #include <unordered_set>
 #include <string>
 #include <cstdlib> // std::strtoul
-
+#include <vector>
 
 namespace ttnn::graph {
 
@@ -46,6 +46,30 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
     return ttnn::Shape(shape);
 }
 } // namespace
+
+// returns sizes for every circular buffer allocation
+std::vector<uint32_t> extract_circular_buffer_allocations_per_core(const nlohmann::json& trace) {
+    std::vector<uint32_t> circular_buffer_sizes;
+    for (const auto& v : trace) {
+        if (v["node_type"] == "circular_buffer_allocate") {
+            circular_buffer_sizes.emplace_back(std::stoi(v["params"]["size"].get<std::string>()));
+        }
+    }
+    return circular_buffer_sizes;
+}
+
+// returns sizes for every buffer allocation
+std::vector<uint32_t> extract_l1_buffer_allocations(const nlohmann::json& trace) {
+    std::vector<uint32_t> buffer_sizes;
+    for (const auto& v : trace) {
+        if (v["node_type"] == "buffer_allocate") {
+            if (v["params"]["type"] == "L1") {
+                buffer_sizes.emplace_back(std::stoi(v["params"]["size"].get<std::string>()));
+            }
+        }
+    }
+    return buffer_sizes;
+}
 
 uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
     uint32_t total_cb = 0;
@@ -215,5 +239,9 @@ std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace)
     return output;
 }
 
+std::ostream &operator<<(std::ostream &os, const TensorInfo &info) {
+    os << "TensorInfo{shape: " << info.shape << ", size: " << info.size << ", type: " << static_cast<int>(info.type) << "}";
+    return os;
+}
 
 } // namespace ttnn::graph
