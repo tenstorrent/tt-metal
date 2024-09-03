@@ -36,8 +36,8 @@ def create_custom_preprocessor(device):
 
                 weight1, bias1 = fold_batch_norm2d_into_conv2d(conv1, bn1)
                 update_ttnn_module_args(ttnn_module_args[f"resblock_{i}_conv1"])
-                parameters[f"resblock_{i}_conv1"], _ = preprocess_conv2d(
-                    weight1, bias1, ttnn_module_args[f"resblock_{i}_conv1"], return_parallel_config=True
+                parameters[f"resblock_{i}_conv1"] = preprocess_conv2d(
+                    weight1, bias1, ttnn_module_args[f"resblock_{i}_conv1"]
                 )
 
                 ttnn_module_args[f"resblock_{i}_conv2"] = ttnn_module_args["3"]
@@ -50,8 +50,8 @@ def create_custom_preprocessor(device):
                 # Preprocess the convolutional layer
                 weight2, bias2 = fold_batch_norm2d_into_conv2d(conv2, bn2)
                 update_ttnn_module_args(ttnn_module_args[f"resblock_{i}_conv2"])
-                parameters[f"resblock_{i}_conv2"], _ = preprocess_conv2d(
-                    weight2, bias2, ttnn_module_args[f"resblock_{i}_conv2"], return_parallel_config=True
+                parameters[f"resblock_{i}_conv2"] = preprocess_conv2d(
+                    weight2, bias2, ttnn_module_args[f"resblock_{i}_conv2"]
                 )
 
         return parameters

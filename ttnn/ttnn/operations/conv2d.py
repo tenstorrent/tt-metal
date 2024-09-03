@@ -15,7 +15,7 @@ from ttnn.operations.conv.sliding_window_op_utils import (
     get_output_dim as get_conv_output_dim,
 )
 from ttnn.operations.conv.tt_py_composite_conv import (
-    TTPyCompositeConv,
+    TTPyCompositeConvSetupDepracated,
     SlidingWindowOpParams,
     find_closest_common_largest_divisor,
     find_closest_largest_divisor,
@@ -38,7 +38,7 @@ OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv2d.OptimizedConvP
 OptimizedConvBlockConfig = ttnn._ttnn.operations.conv2d.OptimizedConvBlockConfig
 
 
-class Conv2d:
+class Conv2dSetupDepracated:
     def __init__(
         self,
         in_channels: int,
@@ -121,7 +121,7 @@ class Conv2d:
             activation = activation.lower()
             assert activation == "relu", f"Only support relu fusion with conv. Got activation={activation}."
             fuse_relu = True
-        self.conv = TTPyCompositeConv(
+        self.conv_setup = TTPyCompositeConvSetupDepracated(
             sliding_window_op_params,
             weight,
             out_channels,
@@ -187,38 +187,11 @@ class Conv2d:
         torch_out = torch_out.reshape(1, 1, -1, self.out_channels)
         return torch_out
 
-    @ttnn.register_python_operation(
-        name="ttnn.Conv2d.__call__",
-        is_method=True,
-        golden_function=_golden_function_conv2d,
-    )
-    def __call__(self, activation: ttnn.Tensor):
-        return self.conv(activation)
-
     def _golden_function_copy_input(self, input):
         return input
 
-    @ttnn.register_python_operation(
-        name="ttnn.Conv2d.copy_input_to_device",
-        golden_function=_golden_function_copy_input,
-        is_method=True,
-    )
-    def copy_input_to_device(self, input: ttnn.Tensor):
-        return self.conv.copy_input_to_device(input)
-
     def _golden_function_copy_output(self, output):
         return output
-
-    @ttnn.register_python_operation(
-        name="ttnn.Conv2d.copy_output_from_device",
-        golden_function=_golden_function_copy_output,
-        is_method=True,
-    )
-    def copy_output_from_device(self, output: ttnn.Tensor):
-        return self.conv.copy_output_from_device(output)
-
-    def get_parallel_config(self):
-        return self.conv.get_parallel_config()
 
 
 # internal. not user facing
@@ -440,20 +413,9 @@ def conv2d(
     bias_tensor: ttnn.Tensor = None,
     conv_config: Conv2dConfig = None,  # config overrides by user
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
-    debug=False,
+    debug=False,  # ignored
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
-    run_new_conv = True
-    if debug:
-        deallocate_act_debug_mode = conv_config.deallocate_activation
-        conv_config.deallocate_activation = False
-    if run_new_conv:
-        (
-            output_tensor_new,
-            output_height_new,
-            output_width_new,
-            weight_tensor_on_dev_new,
-            bias_tensor_on_dev_new,
-        ) = ttnn._ttnn.operations.conv2d.conv2d(
+    return ttnn._ttnn.operations.conv2d.conv2d(
             input_tensor=input_tensor,
             weight_tensor=weight_tensor,
             device=device,
@@ -470,263 +432,5 @@ def conv2d(
             bias_tensor=bias_tensor,
             conv_config=conv_config,
         )
-        if not debug:
-            return (
-                output_tensor_new,
-                output_height_new,
-                output_width_new,
-                weight_tensor_on_dev_new,
-                bias_tensor_on_dev_new,
-            )
-    if run_new_conv:
-        print("DEBUG MODE ENABLED. WILL RUN OLD PATH AND COMPARE WEIGHT, BIAS & OUTPUT TENSORS.")
-        assert (
-            not conv_config.deallocate_activation
-        )  # cannot run old path if activation was deallocated in the new path above
-    output_height = ((int)((input_height - kernel_size[0] + 2 * padding[0]) / stride[0])) + 1
-    output_width = ((int)((input_width - kernel_size[1] + 2 * padding[1]) / stride[1])) + 1
-    conv_config.deallocate_activation = deallocate_act_debug_mode
-    if "reader_patterns_cache" not in conv_op_cache:
-        conv_op_cache["reader_patterns_cache"] = {}
-    weight_is_on_device = ttnn.is_tensor_storage_on_device(weight_tensor)
-    if bias_tensor is not None:
-        bias_is_on_device = ttnn.is_tensor_storage_on_device(bias_tensor)
-        assert (
-            weight_is_on_device == bias_is_on_device
-        ), "Both weight and bias tensors both must be pre-processed if one of them is pre-processed."
-
-    # Input processing. TODO: Cache input processing decisions
-    if conv_config is None:
-        conv_config = Conv2dConfig()
-    config_shard_grid = None
-    # breakpoint()
-    if conv_config.core_grid is not None:
-        config_shard_grid = get_shard_grid_from_core_grid(conv_config.core_grid)
-
-    needs_reshard = False
-    input_memory_config = ttnn.get_memory_config(input_tensor)
-    if ttnn.is_sharded(input_tensor):
-        input_shard_scheme = input_memory_config.memory_layout
-        input_shard_orientation = input_memory_config.shard_spec.orientation
-        input_shard_grid = input_memory_config.shard_spec.grid
-        if not (
-            input_shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            or input_shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED
-        ):
-            needs_reshard = True
-        if (
-            input_shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            and input_shard_orientation != ttnn.ShardOrientation.COL_MAJOR
-        ):
-            needs_reshard = True
-        if (
-            input_shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            and input_shard_orientation != ttnn.ShardOrientation.ROW_MAJOR
-        ):
-            needs_reshard = True
-        if config_shard_grid is not None:
-            if config_shard_grid != input_shard_grid:
-                needs_reshard = True
-        if conv_config.shard_layout is not None:
-            if input_shard_scheme != conv_config.shard_layout:
-                needs_reshard = True
-    else:
-        needs_reshard = True
-    parallel_config = None
-    if conv_config.reshard_if_not_optimal or needs_reshard:
-        optimal_parallel_config = determine_parallel_config(
-            conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            batch_size,
-            in_channels,
-            output_height,
-            output_width,
-            out_channels,
-            device,
-        )
-    if needs_reshard:
-        if conv_config.shard_layout is None:
-            conv_config.shard_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        if conv_config.core_grid is None:
-            parallel_config = optimal_parallel_config
-        else:
-            assert config_shard_grid is not None
-            grid_size, num_cores_nhw = get_grid_size_and_num_cores_nhw_from_core_grid(
-                conv_config.core_grid, conv_config.conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            )
-
-            shard_orientation = (
-                ttnn.ShardOrientation.ROW_MAJOR
-                if conv_config.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                else ttnn.ShardOrientation.COL_MAJOR
-            )
-            parallel_config = ParallelConfig(
-                grid_size.y, grid_size.x, num_cores_nhw, conv_config.shard_layout, shard_orientation
-            )
-    else:
-        assert ttnn.is_sharded(input_tensor)
-        grid_size, num_cores_nhw = get_grid_size_and_num_cores_nhw_from_core_grid(
-            input_memory_config.shard_spec.grid,
-            input_memory_config.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        )
-        parallel_config = ParallelConfig(
-            grid_size.y,
-            grid_size.x,
-            num_cores_nhw,
-            input_memory_config.memory_layout,
-            input_memory_config.shard_spec.orientation,
-        )
-
-    if conv_config.reshard_if_not_optimal:
-        if parallel_config != optimal_parallel_config:
-            parallel_config = optimal_parallel_config
-            needs_reshard = True
-    if needs_reshard:
-        input_is_on_device = ttnn.is_tensor_storage_on_device(input_tensor)
-        # not sure if reshard op works for all cases
-        # copying to l1 interleaved first
-        # input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG)
-        if input_tensor.shape[0] != 1 or input_tensor.shape[1] != 1:
-            # reshape to [1, 1, N*H*W, C]
-            input_tensor = ttnn.reshape(input_tensor, (1, 1, -1, input_tensor.shape[-1]))
-        input_num_cores_nhw = parallel_config.num_cores_nhw
-        input_tensor_height_snapped_to_tile = roundup(input_tensor.shape[2], input_num_cores_nhw * 32)
-        assert input_tensor_height_snapped_to_tile >= input_tensor.shape[2]
-        input_tensor_width_snapped_to_channels_alignment = roundup(
-            input_tensor.shape[3], conv_config.input_channels_alignment
-        )
-        assert input_tensor_width_snapped_to_channels_alignment >= input_tensor.shape[3]
-        if not input_is_on_device and (
-            input_tensor_height_snapped_to_tile != input_tensor.shape[2]
-            or input_tensor_width_snapped_to_channels_alignment != input_tensor.shape[3]
-        ):
-            if input_is_on_device:
-                input_tensor = ttnn.pad(
-                    input_tensor,
-                    padding=(
-                        (0, 0),
-                        (0, 0),
-                        (0, input_tensor_height_snapped_to_tile - input_tensor.shape[2]),
-                        (0, input_tensor_width_snapped_to_channels_alignment - input_tensor.shape[3]),
-                    ),
-                    value=0,
-                )
-            else:
-                import torch
-
-                input_tensor = ttnn.to_torch(input_tensor)
-                input_tensor = torch.nn.functional.pad(
-                    input_tensor,
-                    (
-                        0,
-                        input_tensor_width_snapped_to_channels_alignment - input_tensor.shape[3],
-                        0,
-                        input_tensor_height_snapped_to_tile - input_tensor.shape[2],
-                        0,
-                        0,
-                    ),
-                )
-                input_tensor = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
-
-        input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
-            input_tensor.shape, parallel_config, tile_size=32
-        )
-        if input_is_on_device:
-            input_tensor_before_tm = input_tensor
-            input_tensor = ttnn.to_memory_config(input_tensor, input_tensor_sharded_memory_config)
-            if conv_config.deallocate_activation:
-                ttnn.deallocate(input_tensor_before_tm)
-        else:
-            input_tensor = ttnn.to_device(input_tensor, device=device, memory_config=input_tensor_sharded_memory_config)
-        # since we resharded/moved the input tensor, we can deallocate it after halo op within composite conv
-        conv_config.deallocate_activation = True
-    is_1x1_conv = kernel_size == (1, 1) and stride[0] == stride[1] and stride[0] == 1 and padding == (0, 0)
-    if is_1x1_conv and input_tensor.layout != ttnn.TILE_LAYOUT:
-        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, dtype=conv_config.dtype)
-    input_is_on_device = ttnn.is_tensor_storage_on_device(input_tensor)
-    assert input_is_on_device
-    if weight_tensor in conv_op_cache:
-        assert weight_is_on_device
-        # Run conv
-        conv = conv_op_cache[weight_tensor]
-        assert conv.conv.weight == weight_tensor
-        assert conv.conv.bias == bias_tensor
-    else:
-        # Following code will be removed after op refactoring
-        block_and_parallel_config_override = {}
-        if conv_config.act_block_h_override > 0:
-            block_and_parallel_config_override["act_block_h"] = conv_config.act_block_h_override
-        assert parallel_config is not None
-        block_and_parallel_config_override["grid_size"] = [parallel_config.grid_size.x, parallel_config.grid_size.y]
-        block_and_parallel_config_override["num_cores_nhw"] = parallel_config.num_cores_nhw
-        if is_grayskull(device=device):
-            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-                math_fidelity=conv_config.math_fidelity,
-                math_approx_mode=conv_config.math_approx_mode_enabled,
-            )
-        elif is_wormhole_b0(device=device):
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=conv_config.math_fidelity,
-                math_approx_mode=conv_config.math_approx_mode_enabled,
-                fp32_dest_acc_en=conv_config.fp32_dest_acc_enabled,
-                packer_l1_acc=conv_config.packer_l1_accum_enabled,
-            )
-        else:
-            assert False, f"Unsupported device: {device}"
-        # Build conv op object
-        conv = ttnn.Conv2d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
-            groups=groups,
-            dtype=conv_config.dtype,
-            device=device,
-            use_1d_systolic_array=parallel_config.shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            weight=weight_tensor,
-            bias=bias_tensor,
-            math_fidelity=conv_config.math_fidelity,
-            weights_dtype=conv_config.weights_dtype,
-            conv_blocking_and_parallelization_config_override=block_and_parallel_config_override,
-            compute_kernel_config=compute_kernel_config,
-            activation=conv_config.activation if conv_config.activation != "" else None,
-            using_parameters_cache=weight_is_on_device,
-            reader_patterns_cache=conv_op_cache["reader_patterns_cache"],
-            deallocate_activation=conv_config.deallocate_activation,
-            padded_input_channels=input_tensor.shape[3],
-            reallocate_halo_output=conv_config.reallocate_halo_output,
-            use_shallow_conv_variant=conv_config.input_channels_alignment == 16,
-        )
-        # Cache conv by weight tensor
-        conv_op_cache[conv.conv.weight] = conv
-    # Run conv
-    output_tensor = conv(input_tensor)
-    if run_new_conv:
-        import torch
-
-        assert output_height == output_height_new
-        assert output_width == output_width_new
-        assert conv.conv.weight.layout == weight_tensor_on_dev_new.layout
-        assert conv.conv.bias.layout == bias_tensor_on_dev_new.layout
-        weight_t_cpu_golden = ttnn.to_torch(conv.conv.weight)
-        bias_t_cpu_golden = ttnn.to_torch(conv.conv.bias)
-        bias_t_cpu_golden = bias_t_cpu_golden[:, :, 0:1, :]
-        weight_t_cpu = ttnn.to_torch(weight_tensor_on_dev_new)
-        bias_t_cpu = ttnn.to_torch(bias_tensor_on_dev_new)
-        output_t_cpu_golden = ttnn.to_torch(output_tensor)
-        output_t_cpu = ttnn.to_torch(output_tensor_new)
-        assert torch.all(torch.eq(weight_t_cpu_golden, weight_t_cpu))
-        assert torch.all(torch.eq(bias_t_cpu_golden, bias_t_cpu))
-        # breakpoint()
-        # assert torch.all(torch.eq(output_t_cpu_golden, output_t_cpu))
-        # breakpoint()
-        print("Returning output tensor from new path")
-        return (output_tensor_new, output_height, output_width, weight_tensor_on_dev_new, bias_tensor_on_dev_new)
-    return (output_tensor, output_height, output_width, conv.conv.weight, conv.conv.bias)
-
 
 __all__ = []

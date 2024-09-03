@@ -346,7 +346,7 @@ def determine_1x1conv_as_matmul_config(
     return matmul_config
 
 
-class TTPyCompositeConv(TTPyOp):
+class TTPyCompositeConvSetupDepracated(TTPyOp):
     config_keys = [
         "num_cores_nhw",
         "grid_size",
@@ -804,53 +804,6 @@ class TTPyCompositeConv(TTPyOp):
                 ds_out = activation
             return ds_out
 
-        def conv_(activation):
-            return ttnn.operations.conv2d.optimized_conv(
-                activation,
-                self.weight,
-                bias=self.bias,
-                conv_reader_indices=conv_reader_indices,
-                conv_params=[R, S, U, V, P_H, P_W],
-                output_channels=K,
-                untilize_out=self.untilize_out,
-                has_bias=self.bias is not None,
-                fuse_relu=fuse_relu,
-                math_fidelity=math_fidelity,
-                parallelization_config=opt_conv_parall_conf,
-                block_config=opt_conv_block_conf,
-                extra_padding_for_32_B_alignment=0,
-                memory_config=activation.memory_config() if output_mem_config is None else output_mem_config,
-                dtype=output_dtype,
-                input_tensor_shape=self.input_tensor_shape,
-                use_shallow_conv_variant=self.use_shallow_conv_variant,
-                transpose_mcast=self.transpose_mcast,
-                compute_kernel_config=compute_kernel_config,
-            )
-
-        def composite_conv_with_deallocate_input(activation):
-            utwh_output = self.tt_py_untilize_with_halo_op(activation)
-            activation.deallocate()
-            return conv_(utwh_output)
-
-        def composite_conv(activation):
-            utwh_output = self.tt_py_untilize_with_halo_op(activation)
-            return conv_(utwh_output)
-
-        def composite_conv_with_move_utwh_output_with_deallocate_input(activation):
-            # assert(activation.get_layout() == ttnn.ROW_MAJOR_LAYOUT)
-            utwh_output = self.tt_py_untilize_with_halo_op(activation)
-            activation.deallocate()
-            move_output = ttnn.move(utwh_output)
-            utwh_output.deallocate()
-            return conv_(move_output)
-
-        def composite_conv_with_move_utwh_output(activation):
-            # assert(activation.get_layout() == ttnn.ROW_MAJOR_LAYOUT)
-            utwh_output = self.tt_py_untilize_with_halo_op(activation)
-            move_output = ttnn.move(utwh_output)
-            utwh_output.deallocate()
-            return conv_(move_output)
-
         def conv1x1_as_matmul(activation):
             activation = downsample_if_needed(activation, self.deallocate_activation)
             output = ttnn.linear(
@@ -865,29 +818,6 @@ class TTPyCompositeConv(TTPyOp):
             if self.deallocate_activation:
                 activation.deallocate()
             return output
-
-        if self.use_matmul_for_1x1_conv:
-            self.conv = conv1x1_as_matmul
-        elif self.move_utwh_output:
-            if self.deallocate_input:
-                self.conv = composite_conv_with_move_utwh_output_with_deallocate_input
-            else:
-                self.conv = composite_conv_with_move_utwh_output
-        else:
-            if self.deallocate_input:
-                self.conv = composite_conv_with_deallocate_input
-            else:
-                self.conv = composite_conv
-
-    def __call__(self, activation):
-        # print("Going to run conv with input shape-", self.input_tensor_shape)
-        # print("with output shape = ", self.conv_output_shape)
-        if self.enable_auto_formatting and not activation.is_sharded():
-            activation = self.conv_input_interleaved_to_sharded(activation)
-        activation = self.conv(activation)
-        if self.enable_auto_formatting and activation.is_sharded():
-            activation = self.conv_output_sharded_to_interleaved(activation)
-        return activation
 
     def get_parallelization_config(self):
         return self.opt_conv_parall_conf_auto

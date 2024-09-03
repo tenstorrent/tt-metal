@@ -378,25 +378,19 @@ class ResNet50:
                 else:
                     ttnn_module_args.conv3["use_1d_systolic_array"] = True
 
-            parameters["conv1"], pconfig1 = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.conv1, True)
-            parameters["conv2"], pconfig2 = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.conv2, True)
-            parameters["conv3"], pconfig3 = preprocess_conv2d(conv3_weight, conv3_bias, ttnn_module_args.conv3, True)
-
-            logger.debug(f"pconfig1: {pconfig1.num_cores_nhw}")
-            logger.debug(f"pconfig2: {pconfig2.num_cores_nhw}")
-            logger.debug(f"pconfig3: {pconfig3.num_cores_nhw}")
+            parameters["conv1"] = preprocess_conv2d(conv1_weight, conv1_bias, ttnn_module_args.conv1)
+            parameters["conv2"] = preprocess_conv2d(conv2_weight, conv2_bias, ttnn_module_args.conv2)
+            parameters["conv3"] = preprocess_conv2d(conv3_weight, conv3_bias, ttnn_module_args.conv3)
 
             if model.downsample is not None:
                 ttnn_module_args.downsample[0]["use_dram_for_matmul"] = True
                 downsample_weight, downsample_bias = fold_batch_norm2d_into_conv2d(
                     model.downsample[0], model.downsample[1]
                 )
-                parameters["downsample"], pconfig4 = preprocess_conv2d(
-                    downsample_weight, downsample_bias, ttnn_module_args.downsample[0], True
+                parameters["downsample"] = preprocess_conv2d(
+                    downsample_weight, downsample_bias, ttnn_module_args.downsample[0]
                 )
                 ttnn_module_args["downsample"] = ttnn_module_args.downsample[0]
-
-                logger.debug(f"pconfig4: {pconfig4.num_cores_nhw}")
 
         elif isinstance(model, torchvision.models.resnet.ResNet):
             ttnn_module_args.conv1["activation"] = "relu"  # Fuse relu with conv1

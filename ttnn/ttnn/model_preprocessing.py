@@ -41,7 +41,7 @@ def preprocess_embedding_weight(weight, *, dtype):
     return weight
 
 
-def preprocess_conv2d(weight, bias, ttnn_module_args, return_parallel_config=False):
+def preprocess_conv2d(weight, bias, ttnn_module_args):
     if ttnn_module_args is None:
         raise RuntimeError(f"torch.nn.Conv2d modules need run_model to be provided to preprocess_model_parameters")
 
@@ -53,7 +53,7 @@ def preprocess_conv2d(weight, bias, ttnn_module_args, return_parallel_config=Fal
     if bias is not None:
         bias = ttnn.from_torch(torch.reshape(bias, (1, 1, 1, -1)), dtype=weights_dtype)
 
-    conv = ttnn.Conv2d(
+    conv_setup = ttnn.operations.conv2d.Conv2dSetupDepracated(
         **ttnn_module_args,
         weight=weight,
         bias=bias,
@@ -62,13 +62,10 @@ def preprocess_conv2d(weight, bias, ttnn_module_args, return_parallel_config=Fal
     )
 
     parameters = {}
-    parameters["weight"] = conv.conv.weight
+    parameters["weight"] = conv_setup.conv_setup.weight
     if bias is not None:
-        parameters["bias"] = conv.conv.bias
-    if return_parallel_config:
-        return parameters, conv.get_parallel_config()
-    else:
-        return parameters
+        parameters["bias"] = conv_setup.conv_setup.bias
+    return parameters
 
 
 def fold_batch_norm2d_into_conv2d(conv, bn):
