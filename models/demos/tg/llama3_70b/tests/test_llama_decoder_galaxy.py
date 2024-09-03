@@ -180,7 +180,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos):
             llama_decoder_model.head_dim,
             llama_decoder_model.max_seq_len * 2,
             llama_decoder_model.rope_theta,
-            use_scaled=True,
+            use_scaled=False,
         )
         cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
 

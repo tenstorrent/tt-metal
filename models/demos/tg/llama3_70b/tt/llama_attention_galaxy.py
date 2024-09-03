@@ -580,11 +580,6 @@ class TtLlamaAttention_galaxy:
             key_layer, rot_mats[0], rot_mats[1], self.transformation_mats
         )
 
-        # xs.deallocate(True)
-        # fused_query_key_value.deallocate(True)
-        # query_layer.deallocate(True)
-        # key_layer.deallocate(True)
-
         return query_layer_ret, key_layer_ret, value_layer
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
@@ -637,7 +632,7 @@ class TtLlamaAttention_galaxy:
         )
 
         # SDPA
-        attn_output = ttnn.transformers.scaled_dot_product_attention(
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
             query_layer,
             key_layer,
             value_layer,
@@ -645,14 +640,6 @@ class TtLlamaAttention_galaxy:
             is_causal=True,
             scale=self.scale,
         )
-
-        # single_user_key_layer.deallocate(True)
-        # single_user_value_layer.deallocate(True)
-
-        # deallocate keys and values
-        # query_layer.deallocate(True)
-        # key_layer.deallocate(True)
-        # value_layer.deallocate(True)
 
         return attn_output
 
@@ -689,6 +676,5 @@ class TtLlamaAttention_galaxy:
             num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # attn_output.deallocate(True)
 
         return attn_output

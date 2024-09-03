@@ -352,22 +352,13 @@ class TtLlamaMLP_galaxy:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # w1_out_reduced.deallocate(True)
-        # w3_out_reduced.deallocate(True)
-
         hidden_states = ttnn.reshape(hidden_states, (1, 1, seq_len, -1))
 
         hidden_states = tt_all_reduce(
             hidden_states,
-            self.device_mesh,
+            self.mesh_device,
             cluster_axis=0,
             num_links=2,
         )
-
-        # hidden_states.deallocate(True)
-        # hidden_states_out.deallocate(True)
-        # x.deallocate(True)
-        # w1_out.deallocate(True)
-        # w3_out.deallocate(True)
 
         return hidden_states

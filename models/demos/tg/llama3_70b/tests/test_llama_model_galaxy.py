@@ -168,10 +168,15 @@ def run_test_LlamaModel_inference(
         )
         tt_out = tt_out[:, 0:1, :, : configuration.vocab_size]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
+
+        tt_out = tt_out.float()
         if model_config["LLM_MODE"] == "decode":
             tt_out = tt_out[:batch]
-        tt_out = tt_out.float()
-        pytorch_out = pytorch_out.squeeze()  # [batch, hidden_dim]
+            pytorch_out = pytorch_out.squeeze()  # [batch, hidden_dim]
+        elif model_config["LLM_MODE"] == "prefill":
+            # Take only the last token to compare with PyTorch output
+            tt_out = tt_out[-1, :].unsqueeze(0)
+            pytorch_out = pytorch_out[:, -1, :]
 
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -266,7 +271,7 @@ def run_test_LlamaModel_inference(
 @pytest.mark.parametrize(
     "batch, seq_len",
     [(32, 1), (1, 256), (1, 8192), (1, 32768), (1, 128 * 1024)],
-    ids=["decode", "prefill", "prefill_8k", "prefill_32k", "prefill_128k"],
+    ids=["decode", "prefill_256", "prefill_8k", "prefill_32k", "prefill_128k"],
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",

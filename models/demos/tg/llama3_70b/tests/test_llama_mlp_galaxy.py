@@ -143,7 +143,7 @@ def run_test_LlamaMLP_inference(
         tt_out = tt_LlamaMLP_model(tt_mlp_input)
 
         tt_out = ttnn.to_torch(
-            tt_out, mesh_composer=ConcatMesh2DToTensor(device_mesh, dims=(3, 1), cluster_shape=cluster_shape)
+            tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)
         )
         tt_out = tt_out[:, 0:1, :, :]
 

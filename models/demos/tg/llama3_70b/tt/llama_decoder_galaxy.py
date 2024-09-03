@@ -293,7 +293,6 @@ class TtLlamaDecoder_galaxy:
         )
 
         attn_outs = self.attention(attn_outs, rot_mats, 0, attn_masks, user_id)
-        # attn_norm_out.deallocate(True)
 
         output = xs
         output = ttnn.add(
@@ -302,14 +301,14 @@ class TtLlamaDecoder_galaxy:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        output = self.tt_distributed_rmsnorm(
+        ffn_norm_out = self.tt_distributed_rmsnorm(
             output,
             epsilon=self.norm_eps,
             gamma=self.ffn_norm_sharded,
         )
 
-        ffn_out = self.mlp(output)
-        # ffn_norm_out.deallocate(True)
+        ffn_out = self.mlp(ffn_norm_out)
+
         # residual add
         output = ttnn.add(
             output,
@@ -317,8 +316,4 @@ class TtLlamaDecoder_galaxy:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # attn_outs.deallocate(True)
-        # # layer_inp.deallocate(True)
-        # ffn_out.deallocate(True)
-        # output.deallocate(True)
         return output

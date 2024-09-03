@@ -428,12 +428,11 @@ class TtLlamaModel_galaxy:
 
         lm_head_out = tt_all_reduce(
             lm_head_out,
-            device_mesh=self.device_mesh,
+            mesh_device=self.mesh_device,
             cluster_axis=1,
             dim=0,
             num_links=2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # norm_out.deallocate(True)
 
         return lm_head_out

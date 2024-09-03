@@ -93,7 +93,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         """
         batch = x.size(0)
         seq_len = x.size(1)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta, use_scaled=False)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
         freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
 
         attn_mask = torch.full((seq_len, seq_len), float("-inf"))
@@ -347,7 +347,12 @@ def run_test_LlamaAttention_inference(
         attention_input, start_pos, rot_mat, attn_mask = tt_llama_attention_prepare_inputs(
             tt_LlamaAttention_model, tt_input, start_pos, configuration.rope_theta
         )
-
+        tt_out = tt_LlamaAttention_model(
+            attention_input,
+            rot_mat,
+            start_pos,
+            attn_mask,
+        )
         # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(mesh_device))[0]
 
         tt_out = ttnn.to_torch(
@@ -355,6 +360,9 @@ def run_test_LlamaAttention_inference(
         )
         tt_out = tt_out[:, 0:1, :, :]
         tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [seq, batch, hidden_dim]
+
+        does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+        logger.info(f"Output: {output_pcc}")
 
         all_pccs.append(extract_pcc_from_log(output_pcc))
 
