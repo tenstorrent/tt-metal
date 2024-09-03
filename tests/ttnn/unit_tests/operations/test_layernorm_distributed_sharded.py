@@ -118,7 +118,7 @@ def test_sharded_layernorm(
     # assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
 
 
-@pytest.mark.parametrize("is_rmsnorm", [True])
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("seed", [0])  # Test across 5 different seeds
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize("min_pcc", [0.9997])
@@ -126,7 +126,7 @@ def test_sharded_layernorm(
 @pytest.mark.parametrize("input_width", [1024])
 @pytest.mark.parametrize("input_df", [ttnn.bfloat16])
 @pytest.mark.parametrize("weights_df", [ttnn.bfloat16])
-@pytest.mark.parametrize(("mean", "std"), ([0, 1],))
+@pytest.mark.parametrize(("mean", "std"), ([0, 1], [100, 101]))
 def test_post_allgather_layernorm(
     all_devices,
     input_width,
@@ -150,10 +150,10 @@ def test_post_allgather_layernorm(
     input_shape = (1, 1, 32, input_width)
     weights_shape = (1, 1, 1, input_width)
 
-    # torch_input_tensor = torch.normal(mean, std, size=input_shape, dtype=torch.bfloat16)
-    # torch_weight = torch.normal(mean, std, size=weights_shape, dtype=torch.bfloat16)
-    torch_input_tensor = torch.ones(input_shape, dtype=torch.bfloat16)
-    torch_weight = torch.ones(weights_shape, dtype=torch.bfloat16)
+    torch_input_tensor = torch.normal(mean, std, size=input_shape, dtype=torch.bfloat16)
+    torch_weight = torch.normal(mean, std, size=weights_shape, dtype=torch.bfloat16)
+    # torch_input_tensor = torch.ones(input_shape, dtype=torch.bfloat16)
+    # torch_weight = torch.ones(weights_shape, dtype=torch.bfloat16)
 
     print(f" Mean : {torch_input_tensor.mean()}, Var : {torch_input_tensor.var()}")
 
@@ -217,16 +217,29 @@ def test_post_allgather_layernorm(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=input_df,
     )
-    tt_stats_tensor = ttnn.concat([tt_sum_x_tensor, tt_sum_x2_tensor], -1)
-    # shard to 1 core
-    tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, 64),
-        core_grid=ttnn.CoreGrid(y=1, x=1),
-        strategy=ttnn.ShardStrategy.WIDTH,
-    )
-    tt_stats_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
-        tt_stats_tensor, sharded_mem_config=tt_stats_sharded_config
-    )
+    if is_rmsnorm:
+        tt_stats_tensor = tt_sum_x2_tensor
+        tt_stats_sharded_config = ttnn.create_sharded_memory_config(
+            shape=(1, 1, 32, 32),
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.WIDTH,
+        )
+        tt_stats_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+            tt_stats_tensor, sharded_mem_config=tt_stats_sharded_config
+        )
+
+    else:
+        tt_stats_tensor = ttnn.concat([tt_sum_x_tensor, tt_sum_x2_tensor], -1)
+        # shard to 1 core
+        tt_stats_sharded_config = ttnn.create_sharded_memory_config(
+            shape=(1, 1, 32, 64),
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.WIDTH,
+        )
+        tt_stats_tensor = ttnn.experimental.tensor.interleaved_to_sharded(
+            tt_stats_tensor, sharded_mem_config=tt_stats_sharded_config
+        )
+
     iterations = 1
     prev_tt_output_torch = None
     for iter in range(iterations):
