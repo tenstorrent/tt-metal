@@ -38,10 +38,10 @@ RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
 
 # Copy requirements from tt-metal folders with requirements.txt docs
-COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
+COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 # Copy requirements from tt-metal folders for sweeps (requirements-sweeps.txt)
-COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/requirements-sweeps.txt
-COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt
+COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
+COPY /tt_metal/python_env/* ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 
 RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu \
     && python3 -m pip install setuptools wheel
@@ -61,8 +61,7 @@ RUN cd $TT_METAL_INFRA_DIR \
     && tar -xvf gdb-14.2.tar.gz \
     && cd gdb-14.2 \
     && ./configure \
-    && make -j$(nproc) \
-    && make install
+    && make -j$(nproc)
 ENV PATH="$TT_METAL_INFRA_DIR/gdb-14.2/gdb:$PATH"
 
 # Can only be installed after Clang-17 installed
@@ -72,16 +71,6 @@ RUN apt-get -y update \
     libc++abi-17-dev \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /usr/app
-
-ARG UID=1000
-ARG GID=1000
-
-RUN groupadd -g "${GID}" python \
-    && useradd --create-home --no-log-init -u "${UID}" -g "${GID}" python
-
-RUN chown python:python -R /usr/app
-
-USER python
+RUN mkdir -p /usr/app
 
 CMD ["tail", "-f", "/dev/null"]

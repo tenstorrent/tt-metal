@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - dimitri/8082-run-python-tests-on-wheel # Needs to be changed before the merge
+      - main
     paths:
       - dockerfile/ubuntu-20.04-amd64.Dockerfile
       - scripts/docker/requirements*
@@ -39,7 +39,7 @@ jobs:
           if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
             echo "IMAGE_TAG=latest" >> $GITHUB_ENV
           else
-            echo "IMAGE_TAG=dev-${GITHUB_ACTOR}" >> $GITHUB_ENV
+            echo "IMAGE_TAG=dev-${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
           fi
       - name: Build Docker image
         run: |
