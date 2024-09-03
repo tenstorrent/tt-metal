@@ -37,6 +37,14 @@ RUN cd $TT_METAL_INFRA_DIR \
     && ./llvm.sh 17
 
 # Install compatible gdb debugger for clang-17
+RUN cd $TT_METAL_INFRA \
+    && wget https://github.com/tukaani-project/xz/releases/download/v5.2.13/xz-5.2.13.tar.gz \
+    && tar -xvf xz-5.2.13.tar.gz \
+    && cd xz-5.2.13 \
+    && ./configure \
+    && make -j$(nproc) \
+    && make install
+
 RUN cd $TT_METAL_INFRA_DIR \
     && wget https://ftp.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
     && tar -xvf gdb-14.2.tar.gz \
