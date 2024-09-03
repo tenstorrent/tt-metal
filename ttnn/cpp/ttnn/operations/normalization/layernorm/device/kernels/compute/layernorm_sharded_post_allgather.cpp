@@ -98,6 +98,12 @@ void MAIN {
 
     binary_op_init_common(cb_stats, cb_stats, cb_ex_sqr);
 
+    // #ifdef RMSNORM // TODO: for layernorm
+    //     binary_op_init_common(cb_var, cb_eps, cb_ex_sqr);
+    // #else
+    //     binary_op_init_common(cb_stats, cb_stats, cb_stats_reduced);
+    // #endif
+
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
@@ -177,7 +183,7 @@ void MAIN {
             */
             reduce_init_delta<false>();
             // cb_wait_front(cb_stats, stats_tiles_cols); // no need, we have sharded inputs
-            cb_reserve_back(cb_stats_reduced, stats_tiles);
+            // cb_reserve_back(cb_stats_reduced, stats_tiles);
             // #ifdef RMSNORM
             cb_reserve_back(cb_var, 1);
             // #endif
@@ -218,9 +224,10 @@ void MAIN {
             // 1/[sqrt(Var + eps)],
             unpack_reconfig_data_format(cb_var, cb_eps);    // cb_var is cb_stats in case of RMS norm
             pack_reconfig_data_format(cb_reciprocal);
-            #ifndef RMSNORM
+            // #ifndef RMSNORM
+            // cb_wait_front(cb_var, 1);
+            // #endif
             cb_wait_front(cb_var, 1);
-            #endif
             cb_wait_front(cb_eps, 1);
 
             cb_reserve_back(cb_reciprocal, stats_tiles);
@@ -249,6 +256,9 @@ void MAIN {
             cb_pop_front(cb_var, 1);
             cb_pop_front(cb_eps, 1);
             cb_push_back(cb_reciprocal, stats_tiles);
+            // #ifndef RMSNORM // TODO: for layernorm
+            // cb_pop_front(cb_stats, stats_tiles);
+            // #endif
             tile_regs_release();
 
             // cb_wait_front(cb_reciprocal, 1);
@@ -290,12 +300,18 @@ void MAIN {
     if constexpr(do_gamma == 0 && do_beta == 0) {
         pack_reconfig_data_format(cb_out);
     }
+    // else { // TODO: for layernorm
+    //     pack_reconfig_data_format(cb_im);
+    // }
     // (x - Ex) * 1/[sqrt(Var + eps)]
 
     unpack_reconfig_data_format(cb_xmm, cb_ex2_global);
     mul_bcast_cols_init_short();
     index_h_offset = 0;
     cb_reserve_back(cb_im, num_tiles_per_block);
+    // #ifndef RMSNORM // TODO: for layernorm
+    // cb_wait_front(cb_xmm, num_tiles_per_block);
+    // #endif
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
         cb_wait_front(cb_ex2_global, 1);

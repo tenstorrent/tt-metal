@@ -419,7 +419,15 @@ def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
 
 
 def tt_distributed_layernorm(
-    inp, gamma, beta, epsilon, is_rmsnorm, compute_kernel_config, sharded_program_config, sharded_memory_config
+    inp,
+    gamma,
+    beta,
+    epsilon,
+    is_rmsnorm,
+    compute_kernel_config,
+    sharded_program_config,
+    sharded_memory_config,
+    gathered_stats_sharded_memory_config,
 ):
     n_devices = len(inp)
 
@@ -431,10 +439,21 @@ def tt_distributed_layernorm(
         else:
             tt_stats.append(ttnn.layernorm_pre_all_gather(inp[d], program_config=sharded_program_config))
 
-    if n_devices > 1:
+    if n_devices > 2:  # T3K
         # AllGather stats
         tt_stats = ttnn.aggregate_as_tensor(tt_stats)
-        tt_stats = ttnn.all_gather(tt_stats, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        num_links = 1
+        tt_stats = ttnn.all_gather(
+            tt_stats, dim=3, num_links=num_links, memory_config=gathered_stats_sharded_memory_config
+        )
+        tt_stats = ttnn.get_device_tensors(tt_stats)
+    elif n_devices > 1:  # N300
+        # AllGather stats
+        tt_stats = ttnn.aggregate_as_tensor(tt_stats)
+        num_links = 1
+        tt_stats = ttnn.line_all_gather(
+            tt_stats, dim=3, num_links=num_links, memory_config=gathered_stats_sharded_memory_config
+        )
         tt_stats = ttnn.get_device_tensors(tt_stats)
 
     # Run layernorm part 2
@@ -480,6 +499,8 @@ def run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, input_df, device
     gamma = torch.rand(inp_shape[-1]) * 2 - 1
     beta = torch.rand(inp_shape[-1]) * 2 - 1
 
+    stats_number_of_tiles_per_device = 1 if is_rmsnorm else 2
+
     gamma_chunked = gamma.chunk(n_devices, dim=-1)
     beta_chunked = beta.chunk(n_devices, dim=-1)
     inp_chunked = canon_inp.chunk(n_devices, dim=-1)
@@ -487,16 +508,16 @@ def run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, input_df, device
     inp_shape_per_device = inp_chunked[0].shape
 
     epsilon = 1e-5
-    core_grid = (8, 8)
+    core_grid = (8, 4)
     num_cores = core_grid[0] * core_grid[1]
 
     # reference impl
     out_torch = reference_layernorm(canon_inp, gamma, beta, epsilon, is_rmsnorm)
 
-    # shard to 32 cores
+    # sharded memory config for the input tensor
     sharded_memory_config = ttnn.create_sharded_memory_config(
         shape=inp_shape_per_device,
-        core_grid=ttnn.CoreGrid(y=core_grid[0], x=core_grid[1]),
+        core_grid=ttnn.CoreGrid(y=core_grid[1], x=core_grid[0]),
         strategy=ttnn.ShardStrategy.WIDTH,
     )
 
@@ -506,6 +527,18 @@ def run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, input_df, device
         block_h=1,
         block_w=(inp_shape_per_device[3] // num_cores) // 32,
         inplace=False,
+    )
+
+    # sharded memory config for the gathered stats tensor
+    stats_out_shard_shape = [
+        inp_shape_per_device[0] * inp_shape_per_device[1] * inp_shape_per_device[2],
+        n_devices * stats_number_of_tiles_per_device * 32,
+    ]
+
+    gathered_stats_sharded_memory_config = ttnn.create_sharded_memory_config(
+        shape=stats_out_shard_shape,
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
     )
 
     tt_inp = []
@@ -553,6 +586,7 @@ def run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, input_df, device
             compute_kernel_config=compute_kernel_config,
             sharded_program_config=sharded_program_config,
             sharded_memory_config=sharded_memory_config,
+            gathered_stats_sharded_memory_config=gathered_stats_sharded_memory_config,
         )
         tt_output_host = torch.concat([tt2torch_tensor(tt_o) for tt_o in tt_out], -1)
 
