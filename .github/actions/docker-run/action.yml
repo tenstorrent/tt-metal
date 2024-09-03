@@ -21,13 +21,7 @@ inputs:
   docker_opts:
     description: 'Docker options'
     required: false
-  device:
-    description: "Description of Device as it is used in docker run command."
-    type: string
-    required: false
-    default: |
-      -v /dev/hugepages-1G:/dev/hugepages-1G
-      --device /dev/tenstorrent
+
 runs:
   using: "composite"
   steps:  
@@ -41,9 +35,13 @@ runs:
       shell: bash
       run: |
         if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
-          echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+          echo "BASE_IMAGE_TAG=latest" >> $GITHUB_ENV
+          echo "OUTPUT_IMAGE_TAG=${{ env.ARCH_NAME }}" >> $GITHUB_ENV
         else
-          echo "IMAGE_TAG=dev-${GITHUB_ACTOR}" >> $GITHUB_ENV
+          echo "BASE_IMAGE_TAG=${GITHUB_ACTOR}" >> $GITHUB_ENV
+          echo "OUTPUT_IMAGE_TAG=dev-${GITHUB_ACTOR}.${{ inputs.docker_image_arch }}.${{ github.sha }}" >> $GITHUB_ENV
+          echo "RUNNER UID"
+          echo "${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}"
         fi
     - name: Docker login
       uses: docker/login-action@v3
@@ -57,16 +55,15 @@ runs:
         username: ${{ inputs.docker_username }}
         password: ${{ inputs.docker_password }}
         registry: ghcr.io
-        image: ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}:${{ env.IMAGE_TAG }}
+        image: ghcr.io/${{ github.repository }}/${{ inputs.docker_image }}/${{ inputs.docker_image_arch }}:${{ env.OUTPUT_IMAGE_TAG }}
         options: |
-          -v ${{ github.workspace }}:/github_workspace:ro
+          -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
+          -v ${{ github.workspace }}:/app/mtl
+          -v /home/ubuntu/.cache/huggingface:/home/ubuntu/.cache/huggingface
+          -v /home/ubuntu/.cache/matplotlib:/home/ubuntu/.cache/matplotlib
+          -v /home/ubuntu/.cache/pre-commit:/home/ubuntu/.cache/pre-commit
+          -v /home/ubuntu/.cache/torch:/home/ubuntu/.cache/torch
           --net=host
           ${{ inputs.docker_opts }}
-          -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
-          -e PYTHONPATH=/usr/app
-          -e ARCH_NAME=${{ inputs.docker_image_arch }}
-          ${{ inputs.device }}
         run: |
-          cp -r /github_workspace/* /usr/app/
-          rm -rf tt_metal tt_eager
           ${{ inputs.run_args }}
