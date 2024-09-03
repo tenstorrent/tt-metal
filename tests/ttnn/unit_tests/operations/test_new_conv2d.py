@@ -1869,3 +1869,97 @@ def test_swin_s_conv(
         groups=groups,
         output_layout=output_layout,
     )
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    (
+        (1, 4, 32, 128, 128, 3, 3, 2, 2, 0, 0, 1, True, None, False),
+        (1, 32, 32, 64, 64, 3, 3, 1, 1, 0, 0, 32, True, None, False),
+        # (1, 32, 16, 64, 64, 1, 1, 1, 1, 0, 0, 1, True, None, False), #bias issue
+        # ( 1, 16, 96, 64, 64, 1, 1, 1, 1, 0, 0, 1, True, None, False,), # The width of the first tensor must be equal to the height of the second tensor
+        (1, 96, 96, 64, 64, 3, 3, 2, 2, 0, 0, 96, True, None, False),
+        # (1, 96, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, True, None, False), #bias issue
+        # ( 1, 24, 144, 32, 32, 1, 1, 1, 1, 0, 0, 1, True, None, False,), # The width of the first tensor must be equal to the height of the second tensor
+        (1, 144, 144, 32, 32, 3, 3, 1, 1, 0, 0, 144, True, None, False),
+        # ( 1, 144, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, True, None, False,), # The width of the first tensor must be equal to the height of the second tensor
+        (1, 144, 144, 32, 32, 3, 3, 2, 2, 0, 0, 144, True, None, False),
+        # ( 1, 144, 32, 16, 16, 1, 1, 1, 1, 0, 0, 1, True, None, False,), # The width of the first tensor must be equal to the height of the second tensor
+        (1, 32, 192, 16, 16, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        (1, 192, 192, 16, 16, 3, 3, 1, 1, 0, 0, 192, True, None, False),
+        (1, 192, 32, 16, 16, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        (1, 192, 192, 16, 16, 3, 3, 2, 2, 0, 0, 192, True, None, False),
+        (1, 192, 64, 8, 8, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        (1, 64, 384, 8, 8, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        (1, 384, 384, 8, 8, 3, 3, 1, 1, 0, 0, 384, True, None, False),
+        (1, 384, 64, 8, 8, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        (1, 384, 96, 8, 8, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        (1, 96, 576, 8, 8, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        (1, 576, 96, 8, 8, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        # (1, 576, 576, 8, 8, 3, 3, 1, 1, 0, 0, 576, False, None, False), # low pcc
+        # (1, 576, 576, 8, 8, 3, 3, 2, 2, 0, 0, 576, False, None, False), # low pcc
+        (1, 576, 160, 4, 4, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        (1, 160, 960, 4, 4, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        # (1, 960, 960, 4, 4, 3, 3, 1, 1, 0, 0, 960, False, None, False), # low pcc
+        (1, 960, 160, 4, 4, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        (1, 960, 320, 4, 4, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        (1, 320, 1280, 4, 4, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_conv_mobilenetv2(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    use_shallow_conv_variant,
+    groups,
+    output_layout,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
+        output_layout=output_layout,
+    )
