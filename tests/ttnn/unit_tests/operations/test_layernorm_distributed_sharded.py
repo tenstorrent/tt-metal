@@ -124,7 +124,7 @@ def test_sharded_layernorm(
 @pytest.mark.parametrize("min_pcc", [0.9997])
 @pytest.mark.parametrize("max_atol", [0.38])
 @pytest.mark.parametrize("input_width", [1024])
-@pytest.mark.parametrize("input_df", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("weights_df", [ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1], [100, 101]))
 def test_post_allgather_layernorm(
@@ -207,7 +207,7 @@ def test_post_allgather_layernorm(
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=input_df,
+        dtype=ttnn.bfloat16,
     )
 
     tt_sum_x2_tensor = ttnn.from_torch(
@@ -215,7 +215,7 @@ def test_post_allgather_layernorm(
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=input_df,
+        dtype=ttnn.bfloat16,
     )
     if is_rmsnorm:
         tt_stats_tensor = tt_sum_x2_tensor
