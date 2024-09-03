@@ -468,6 +468,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format = gamma.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().get_dtype()) : tt::DataFormat::Float16_b;
     tt::DataFormat beta_cb_data_format = beta.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().get_dtype()) : tt::DataFormat::Float16_b;
+    tt::DataFormat var_ex2_data_format = cb_data_format;
+    if (rms_norm) {
+        var_ex2_data_format = in_data_format;
+    }
+
     // tile sizes
     uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
@@ -475,12 +480,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t gamma_single_tile_size = tt::tt_metal::detail::TileSize(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tt_metal::detail::TileSize(beta_cb_data_format);
     uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    uint32_t var_ex2_tile_size = tt::tt_metal::detail::TileSize(var_ex2_data_format);
 
     tt::log_debug("in_data_format: {}", in_data_format);
     tt::log_debug("out_data_format: {}", out_data_format);
     tt::log_debug("cb_data_format: {}", cb_data_format);
     tt::log_debug("gamma_cb_data_format: {}", gamma_cb_data_format);
     tt::log_debug("beta_cb_data_format: {}", beta_cb_data_format);
+    tt::log_debug("var_ex2_data_format: {}", var_ex2_data_format);
     tt::log_debug("math_fidelity: {}", math_fidelity);
     tt::log_debug("math_approx_mode: {}", math_approx_mode);
     tt::log_debug("fp32_dest_acc_en: {}", fp32_dest_acc_en);
@@ -574,6 +581,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
+    uint32_t var_ex2_CB_size = block_ht * stats_block_tiles * var_ex2_tile_size;
     if ((is_pre_all_gather || is_post_all_gather) && !rms_norm){
         ex_partial_CB_size = 2 * ex_partial_CB_size;
     }
@@ -858,7 +866,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (is_pre_all_gather) {
         sender_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
         reciever_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
-    } else if(stats.has_value()) {
+    } else if(is_post_all_gather) {
         sender_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
         reciever_reader_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
     }
@@ -1011,7 +1019,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::string compute_kernel_file;
     if (is_pre_all_gather) {
         compute_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_pre_allgather.cpp";
-    } else if (stats.has_value()) {
+    } else if (is_post_all_gather) {
         compute_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_post_allgather.cpp";
     } else {
         compute_kernel_file = "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
@@ -1114,20 +1122,25 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t ex2_cb_index = tt::CB::dataflow4;
 
     CBHandle cb_ex2 = 0;
-    if(stats.has_value()) {
-        ex2_cb_index = tt::CB::c_in7;
-        tt::tt_metal::CircularBufferConfig ex2_cb_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
-            .set_page_size(ex2_cb_index, single_tile_size).set_globally_allocated_address(*stats.value().buffer());
-        cb_ex2 = tt::tt_metal::CreateCircularBuffer(program, sender_cores, ex2_cb_config);
+    if(is_post_all_gather) {
+        if (rms_norm) {
+            ex2_cb_index = tt::CB::c_in7;
+            tt::tt_metal::CircularBufferConfig ex2_cb_config = tt::tt_metal::CircularBufferConfig(var_ex2_CB_size, {{ex2_cb_index, var_ex2_data_format}})
+                .set_page_size(ex2_cb_index, var_ex2_tile_size).set_globally_allocated_address(*stats.value().buffer());
+            cb_ex2 = tt::tt_metal::CreateCircularBuffer(program, sender_cores, ex2_cb_config);
+        } else {
+            ex2_cb_index = tt::CB::dataflow4;
+            tt::tt_metal::CircularBufferConfig ex2_cb_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
+                .set_page_size(ex2_cb_index, single_tile_size);
+            cb_ex2 = tt::tt_metal::CreateCircularBuffer(program, all_to_all_cores, ex2_cb_config);
+        }
 
         uint32_t cb_stats2_index = tt::CB::c_intermed4;
         tt::tt_metal::CircularBufferConfig cb_stats2_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{cb_stats2_index, cb_data_format}})
         .set_page_size(cb_stats2_index, single_tile_size);
         CBHandle cb_stats2 = tt::tt_metal::CreateCircularBuffer(program, sender_cores, cb_stats2_config);
-
     } else {
-        tt::
-        tt_metal::CircularBufferConfig ex2_cb_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig ex2_cb_config = tt::tt_metal::CircularBufferConfig(ex_CB_size, {{ex2_cb_index, cb_data_format}})
             .set_page_size(ex2_cb_index, single_tile_size);
         cb_ex2 = tt::tt_metal::CreateCircularBuffer(program, all_to_all_cores, ex2_cb_config);
     }
