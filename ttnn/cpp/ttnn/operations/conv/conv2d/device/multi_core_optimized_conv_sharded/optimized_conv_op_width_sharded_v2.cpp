@@ -43,6 +43,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     const std::optional<const Tensor> conv_reader_indices,
     sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
+    uint32_t groups,
     bool untilize_out,
     bool has_bias,
     bool fuse_relu,

@@ -230,6 +230,7 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
     if (input_tensor_a.memory_config().is_sharded()) {
         // If conv_reader_indices is passed in, use v2 where we don't generate indices locally
         if (conv_reader_indices.has_value()) {
+            uint32_t groups = 1;
             const auto& input_tensor_a_shape = this->input_tensor_shape;
             sliding_window::SlidingWindowConfig sliding_window_config{
                 .batch_size = input_tensor_a_shape[0],
@@ -238,7 +239,7 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
                 .stride_hw = {conv_params[2], conv_params[3]},
                 .pad_hw = {conv_params[4], conv_params[5]},
             };
-            return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, sliding_window_config, output_channels, untilize_out, has_bias, fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, this->use_shallow_conv_variant, transpose_mcast, output_tensor, this->compute_kernel_config, this->enable_act_double_buffer, this->enable_split_reader, this->enable_subblock_padding);
+            return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, sliding_window_config, output_channels, groups, untilize_out, has_bias, fuse_relu, parallelization_config, block_config, extra_padding_for_32B_alignment, this->use_shallow_conv_variant, transpose_mcast, output_tensor, this->compute_kernel_config, this->enable_act_double_buffer, this->enable_split_reader, this->enable_subblock_padding);
         } else {
             return multi_core_optimized_conv_sharded_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor);
         }
@@ -300,6 +301,7 @@ operation::OpPerformanceModel OptimizedConv::create_op_performance_model(const s
 Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
     sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
+    uint32_t groups,
     bool untilize_out, bool fuse_relu, MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment,
@@ -314,7 +316,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
 ) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
-        [sliding_window_config, output_channels, untilize_out, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding]
+        [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 using ttnn::operations::experimental::auto_format::FormatParams;
                 auto& a = input_tensors.at(0);
@@ -335,7 +337,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                 bool fp32_accum = a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
                 auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
                 return operation::run_without_autoformat(
-                    OptimizedConvNew(sliding_window_config, output_channels, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding
+                    OptimizedConvNew(sliding_window_config, output_channels, groups, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding
                     ),
                     input_tensors,
                     optional_input_tensors);
@@ -463,6 +465,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         input_tensor_a, input_tensor_b, input_tensor_bias,
         sliding_window_config,
         output_channels,
+        groups,
         untilize_out, fuse_relu, math_fidelity,
         parallelization_config,
         block_config, extra_padding_for_32B_alignment,

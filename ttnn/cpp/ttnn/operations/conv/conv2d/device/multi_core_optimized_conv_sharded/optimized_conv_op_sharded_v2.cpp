@@ -45,6 +45,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     const std::optional<const Tensor> conv_reader_indices,
     sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
+    uint32_t groups,
     bool untilize_out,
     bool has_bias,
     bool fuse_relu,
@@ -341,6 +342,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     const std::optional<const Tensor> conv_reader_indices,
     sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
+    uint32_t groups,
     bool untilize_out,
     bool has_bias,
     bool fuse_relu,
@@ -540,7 +542,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     uint32_t input_width = ashape[2];
     uint32_t input_channels = ashape[3];
-    uint32_t groups = sliding_window_config.groups;
     bool is_conv1d = filter_w == 1 && input_width == 1;
     bool is_depthwise_conv = groups == input_channels && groups == output_channels;
 
@@ -1681,6 +1682,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
     const std::optional<const Tensor> conv_reader_indices,
     sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
+    uint32_t groups,
     bool untilize_out,
     bool has_bias,
     bool fuse_relu,
@@ -1705,6 +1707,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
         conv_reader_indices,
         sliding_window_config,
         output_channels,
+        groups,
         untilize_out,
         has_bias,
         fuse_relu,
@@ -1728,6 +1731,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(
         conv_reader_indices,
         sliding_window_config,
         output_channels,
+        groups,
         untilize_out,
         has_bias,
         fuse_relu,
@@ -1749,6 +1753,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     std::optional<const Tensor> bias,
     sliding_window::SlidingWindowConfig sliding_window_config,
     uint32_t output_channels,
+    uint32_t groups,
     bool untilize_out,
     bool fuse_relu,
     MathFidelity math_fidelity,
@@ -1799,6 +1804,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         conv_reader_indices_tensor,
         sliding_window_config,
         output_channels,
+        groups,
         untilize_out,
         bias.has_value(),
         fuse_relu,
@@ -1822,6 +1828,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         conv_reader_indices_tensor,
         sliding_window_config,
         output_channels,
+        groups,
         untilize_out,
         bias.has_value(),
         fuse_relu,
