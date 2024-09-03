@@ -168,6 +168,8 @@ from ttnn.device import (
     pad_to_tile_shape,
 )
 
+from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
+
 from ttnn.multi_device import (
     MeshDevice,
     DispatchCoreType,
