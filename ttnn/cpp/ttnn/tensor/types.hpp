@@ -424,35 +424,38 @@ struct MultiDeviceHostStorage {
         std::vector<OwnedBuffer> buffers;
         std::vector<Shape> shapes;
         mutable std::mutex mtx;
+
+        friend void swap(MultiDeviceHostStorage& first, MultiDeviceHostStorage& second) {
+            std::scoped_lock lock(first.mtx, second.mtx);
+            // enable ADL (not necessary, but good practice)
+            using std::swap;
+
+            swap(first.strategy, second.strategy);
+            swap(first.buffers, second.buffers);
+            swap(first.shapes, second.shapes);
+        }
+
         MultiDeviceHostStorage() = default;
         MultiDeviceHostStorage(DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<Shape> shapes_) : strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
         MultiDeviceHostStorage(MultiDeviceHostStorage &&other) {
-            std::lock_guard<std::mutex> lock(mtx);
-            strategy = other.strategy;
-            buffers = other.buffers;
-            shapes = other.shapes;
+            swap(*this, other);
         }
-
+        // unfotunately we need to have this code written manually.
         MultiDeviceHostStorage(const MultiDeviceHostStorage &other) {
-            std::lock_guard<std::mutex> lock(mtx);
+            std::scoped_lock lock(mtx, other.mtx);
             strategy = other.strategy;
             buffers = other.buffers;
             shapes = other.shapes;
         }
 
         MultiDeviceHostStorage &operator=(const MultiDeviceHostStorage &other) {
-            std::lock_guard<std::mutex> lock(mtx);
-            strategy = other.strategy;
-            buffers = other.buffers;
-            shapes = other.shapes;
+            MultiDeviceHostStorage temp(other);
+            swap(*this, temp);
             return *this;
         }
 
         MultiDeviceHostStorage &operator=( MultiDeviceHostStorage &&other) {
-            std::lock_guard<std::mutex> lock(mtx);
-            strategy = other.strategy;
-            buffers = other.buffers;
-            shapes = other.shapes;
+            swap(*this, other);
             return *this;
         }
 
@@ -480,7 +483,7 @@ struct MultiDeviceHostStorage {
         OwnedBuffer& get_buffer(int buffer_index) {
             std::lock_guard<std::mutex> lock(mtx);
             TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index " + std::to_string(buffer_index));
-            return buffers[buffer_index];;
+            return buffers[buffer_index];
         }
 
         Shape get_tensor_shape(int shape_index) const {
@@ -514,21 +517,32 @@ struct MultiDeviceHostStorage {
         mutable std::mutex shape_mtx;
         MultiDeviceStorage() = default;
 
+        friend void swap(MultiDeviceStorage& first, MultiDeviceStorage& second) {
+            std::scoped_lock lock(first.buffer_mtx, first.shape_mtx, second.buffer_mtx, second.shape_mtx);
+            // enable ADL (not necessary, but good practice)
+            using std::swap;
+
+            swap(first.strategy, second.strategy);
+            swap(first.ordered_device_ids, second.ordered_device_ids);
+            swap(first.buffers, second.buffers);
+            swap(first.shapes, second.shapes);
+        }
+
         MultiDeviceStorage(
             DistributedTensorConfig strategy_,
             std::vector<int> ordered_device_ids_,
             std::unordered_map<int, DeviceBuffer> buffers_,
-            std::unordered_map<int, Shape> shapes_) : strategy(strategy_), ordered_device_ids(ordered_device_ids_), buffers(buffers_), shapes(shapes_) {}
+            std::unordered_map<int, Shape> shapes_)
+                : strategy(std::move(strategy_)),
+                ordered_device_ids(std::move(ordered_device_ids_)),
+                buffers(std::move(buffers_)), shapes(std::move(shapes_)) {}
 
         MultiDeviceStorage(MultiDeviceStorage &&other) {
-            std::scoped_lock buf_lock(buffer_mtx, shape_mtx);
-            ordered_device_ids = other.ordered_device_ids;
-            strategy = other.strategy;
-            buffers = other.buffers;
-            shapes = other.shapes;
+            swap(*this, other);
         }
+
         MultiDeviceStorage(const MultiDeviceStorage &other) {
-            std::scoped_lock buf_lock(buffer_mtx, shape_mtx);
+            std::scoped_lock lock(buffer_mtx, shape_mtx, other.buffer_mtx, other.shape_mtx);
             ordered_device_ids = other.ordered_device_ids;
             strategy = other.strategy;
             buffers = other.buffers;
@@ -536,20 +550,13 @@ struct MultiDeviceHostStorage {
         }
 
         MultiDeviceStorage &operator=(const MultiDeviceStorage &other) {
-            std::scoped_lock buf_lock(buffer_mtx, shape_mtx);
-            ordered_device_ids = other.ordered_device_ids;
-            strategy = other.strategy;
-            buffers = other.buffers;
-            shapes = other.shapes;
+            MultiDeviceStorage tmp(other);
+            swap(*this, tmp);
             return *this;
         }
 
         MultiDeviceStorage &operator=( MultiDeviceStorage &&other) {
-            std::scoped_lock buf_lock(buffer_mtx, shape_mtx);
-            ordered_device_ids = other.ordered_device_ids;
-            strategy = other.strategy;
-            buffers = other.buffers;
-            shapes = other.shapes;
+            swap(*this, other);
             return *this;
         }
 
@@ -649,19 +656,6 @@ template <typename T>
 constexpr void raise_unsupported_storage() {
     static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
 }
-
-inline bool operator==(const Storage &v1, const Storage &v2) {
-    return std::visit(
-        [](const auto &a, const auto &b) -> bool {
-            if constexpr (std::is_same_v<decltype(a), decltype(b)>) {
-                return a == b;
-            } else {
-                return false;
-            }
-        },
-        v1,
-        v2);
-};
 
 }  // namespace tt_metal
 
