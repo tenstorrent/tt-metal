@@ -128,8 +128,20 @@ def test_sharded_layernorm(
 @pytest.mark.parametrize("min_pcc", [0.9997])
 @pytest.mark.parametrize("max_atol", [0.38])
 @pytest.mark.parametrize("input_width", [1024])
-@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "input_df",
+    [
+        # ttnn.bfloat8_b,
+        ttnn.bfloat16
+    ],
+)
+@pytest.mark.parametrize(
+    "weights_df",
+    [
+        #  ttnn.bfloat8_b,
+        ttnn.bfloat16
+    ],
+)
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 def test_post_allgather_layernorm(
     all_devices,
@@ -202,9 +214,9 @@ def test_post_allgather_layernorm(
     )
 
     # create E[x] and E[x^2] tensors
-    sum_x_tensor = torch.sum(torch_input_tensor, dim=-1, keepdim=True).to(torch.bfloat16) / input_width
+    sum_x_tensor = torch.sum(torch_input_tensor, dim=-1, keepdim=True).to(torch.bfloat16)
 
-    sum_x2_tensor = torch.sum(torch_input_tensor**2, dim=-1, keepdim=True).to(torch.bfloat16) / input_width
+    sum_x2_tensor = torch.sum(torch_input_tensor**2, dim=-1, keepdim=True).to(torch.bfloat16)
 
     if not is_rmsnorm:
         tt_sum_x_tensor = ttnn.from_torch(

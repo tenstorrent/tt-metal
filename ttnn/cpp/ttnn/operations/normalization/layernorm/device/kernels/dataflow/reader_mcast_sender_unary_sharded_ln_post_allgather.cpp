@@ -43,9 +43,9 @@ void kernel_main() {
     constexpr uint32_t cb_ex_external = tt::CB::dataflow2;
     constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3;
     constexpr uint32_t cb_stats = tt::CB::c_in7;
-    constexpr uint32_t cb_stats2 = tt::CB::c_intermed4; // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_reciprocal = tt::CB::c_intermed3; // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5;
-    constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3;
+    // constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3;
     constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
     constexpr uint32_t cb_ex2_global = tt::CB::dataflow6; // E[x2] global reduce
 
@@ -127,15 +127,11 @@ void kernel_main() {
 
     };
 
-
-    DPRINT << " Before Ex2 global mcast" << ENDL();
-    cb_wait_front(cb_stats2, stats_tiles*block_h);
-    DPRINT << " Before Ex2pe  global mcast" << ENDL();
+    cb_wait_front(cb_reciprocal, stats_tiles*block_h);
     cb_reserve_back(cb_ex2_global, block_h);
-    global_reduce_sender(cb_stats2, cb_ex2_global);
+    global_reduce_sender(cb_reciprocal, cb_ex2_global);
     cb_push_back(cb_ex2_global, stats_tiles*block_h);
-    cb_pop_front(cb_stats2, stats_tiles*block_h);
+    cb_pop_front(cb_reciprocal, stats_tiles*block_h);
     global_semaphore_set();
-    DPRINT << "Sender core 0,0 done" << ENDL();
 
 }
