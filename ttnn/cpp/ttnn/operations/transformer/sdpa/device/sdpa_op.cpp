@@ -12,7 +12,7 @@ namespace ttnn::operations::transformer {
 void ScaledDotProductAttention::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_FATAL(input_tensors.size() == 3 and optional_input_tensors.size() == 1, "Must have 3 input tensors and mask");
+    TT_FATAL(input_tensors.size() == 3 and optional_input_tensors.size() == 1, "Must have 3 input tensors and optional mask");
 
     for (auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
@@ -21,24 +21,29 @@ void ScaledDotProductAttention::validate(
         TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B);
     }
 
-    auto mask = optional_input_tensors.at(0).value();
-    TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
-    TT_FATAL(input_tensors.at(0).device() == mask.device());
-    TT_FATAL(mask.get_layout() == Layout::TILE);
-    TT_FATAL(mask.get_dtype() == DataType::BFLOAT16 || mask.get_dtype() == DataType::BFLOAT8_B);
+    const auto& mask_option = optional_input_tensors.at(0);
+    if (mask_option.has_value()){
+        auto mask = optional_input_tensors.at(0).value();
+        TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
+        TT_FATAL(input_tensors.at(0).device() == mask.device());
+        TT_FATAL(mask.get_layout() == Layout::TILE);
+        TT_FATAL(mask.get_dtype() == DataType::BFLOAT16 || mask.get_dtype() == DataType::BFLOAT8_B);
 
-    TT_FATAL(mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM);
+        TT_FATAL(mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM);
+    }
 
     const auto q_shape = input_tensors.at(0).get_legacy_shape();
     const auto k_shape = input_tensors.at(1).get_legacy_shape();
     const auto v_shape = input_tensors.at(2).get_legacy_shape();
-    const auto mask_shape = mask.get_legacy_shape();
+    // const auto mask_shape = mask.get_legacy_shape();
 
     // assert all dataformats are the same
     TT_FATAL(
         input_tensors.at(0).get_dtype() == input_tensors.at(1).get_dtype() &&
-        input_tensors.at(0).get_dtype() == input_tensors.at(2).get_dtype() &&
-        input_tensors.at(0).get_dtype() == mask.get_dtype());
+        input_tensors.at(0).get_dtype() == input_tensors.at(2).get_dtype());
+    if (mask_option.has_value()){
+        TT_FATAL(input_tensors.at(0).get_dtype() == mask_option.value().get_dtype());
+    }
 
     if (this->is_causal) {
         // All inputs must be in DRAM
@@ -47,11 +52,10 @@ void ScaledDotProductAttention::validate(
         }
         // Check sequence lengths
         TT_FATAL(q_shape[-2] == k_shape[-2] && q_shape[-2] == v_shape[-2]);
-        TT_FATAL(q_shape[-2] == mask_shape[-2] && q_shape[-2] == mask_shape[-1]);
+
 
         // Check batch size
         TT_FATAL(q_shape[-4] == k_shape[-4] && q_shape[-4] == v_shape[-4]);
-        TT_FATAL(q_shape[-4] == mask_shape[-4]);
 
         // Check hidden size
         TT_FATAL(q_shape[-1] == k_shape[-1] && q_shape[-1] == v_shape[-1]);
@@ -62,11 +66,18 @@ void ScaledDotProductAttention::validate(
         // Check qkv heads
         TT_FATAL(q_shape[-3] >= k_shape[-3]);
 
-        TT_FATAL(mask_shape[-3] == 1);
+        if (mask_option.has_value()){
+            const auto mask_shape = mask_option.value().get_legacy_shape();
+            TT_FATAL(q_shape[-4] == mask_shape[-4]);
+            TT_FATAL(q_shape[-2] == mask_shape[-2] && q_shape[-2] == mask_shape[-1]);
+            TT_FATAL(mask_shape[-3] == 1);
+        }
 
         TT_FATAL(this->output_mem_config.buffer_type == tt::tt_metal::BufferType::DRAM);
 
     } else {
+        const auto mask_shape = mask_option.value().get_legacy_shape();
+
         // Input 0 must be sharded by height. All other inputs must be in DRAM.
         const auto Q_memcfg = input_tensors.at(0).memory_config();
         TT_FATAL(input_tensors.at(0).is_sharded() == true);
