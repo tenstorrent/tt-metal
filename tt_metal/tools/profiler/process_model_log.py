@@ -10,9 +10,15 @@ import pandas as pd
 from tt_metal.tools.profiler.common import PROFILER_OUTPUT_DIR, PROFILER_SCRIPTS_ROOT
 
 
-def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="", has_signposts=False):
+def get_latest_ops_log_filename(output_logs_subdir):
     runDate = sorted(os.listdir(PROFILER_OUTPUT_DIR / output_logs_subdir))[-1]
-    df = pd.read_csv(PROFILER_OUTPUT_DIR / output_logs_subdir / runDate / f"ops_perf_results_{runDate}.csv")
+    filename = PROFILER_OUTPUT_DIR / output_logs_subdir / runDate / f"ops_perf_results_{runDate}.csv"
+    return filename
+
+
+def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="", has_signposts=False):
+    filename = get_latest_ops_log_filename(output_logs_subdir)
+    df = pd.read_csv(filename)
 
     if has_signposts:
         # there are explicit start and stop points in the model we want to measure between
