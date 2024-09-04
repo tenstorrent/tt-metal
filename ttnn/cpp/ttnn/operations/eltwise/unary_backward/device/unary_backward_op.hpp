@@ -129,7 +129,7 @@ std::vector<Tensor> _log1p_bw(const Tensor& grad, const Tensor& input, const std
 std::vector<Tensor> _erfc_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _relu6_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
+std::vector<std::optional<Tensor>> _silu_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad);
 std::vector<Tensor> _selu_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _square_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config);
 
@@ -174,11 +174,11 @@ std::vector<Tensor> _gelu_bw( const Tensor& grad, const Tensor& input, string ap
 
 std::vector<Tensor> _repeat_bw(const Tensor& grad, const Tensor& input, const tt::tt_metal::Shape& shape, const std::optional<MemoryConfig>& output_mem_config);
 
-std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config , const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
+std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config , std::optional<Tensor> input_grad);
 
-std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
-std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
-std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad);
+std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad);
+std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad);
+std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad);
 
 std::vector<Tensor> _prod_bw( const Tensor& grad, const Tensor& input, bool all_dimensions = true, int64_t dim = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config);
@@ -462,8 +462,8 @@ struct OpHandler<UnaryBackwardOpType::ABS_BW> {
 
 template <>
 struct OpHandler<UnaryBackwardOpType::SILU_BW> {
-    static std::vector<Tensor> handle(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-        return _silu_bw(grad, input, output_mem_config);
+    static std::vector<std::optional<Tensor>> handle(uint8_t queue_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+        return _silu_bw(queue_id, grad, input, output_mem_config, input_grad);
     }
 };
 
@@ -658,29 +658,29 @@ struct OpHandler<UnaryBackwardOpType::RDIV_BW> {
 
 template <>
 struct OpHandler<UnaryBackwardOpType::POW_BW> {
-    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
-        return _pow_bw(queue_id, grad, input, exponent, output_mem_config, are_required_outputs, input_grad);
+    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad ) {
+        return _pow_bw(queue_id, grad, input, exponent, output_mem_config, input_grad);
     }
 };
 
 template <>
 struct OpHandler<UnaryBackwardOpType::EXP_BW> {
-    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
-        return _exp_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
+    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad ) {
+        return _exp_bw(queue_id, grad, input, output_mem_config, input_grad);
     }
 };
 
 template <>
 struct OpHandler<UnaryBackwardOpType::TANH_BW> {
-    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
-        return _tanh_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
+    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad ) {
+        return _tanh_bw(queue_id, grad, input, output_mem_config, input_grad);
     }
 };
 
 template <>
 struct OpHandler<UnaryBackwardOpType::SQRT_BW> {
-    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad ) {
-        return _sqrt_bw(queue_id, grad, input, output_mem_config, are_required_outputs, input_grad);
+    static std::vector<std::optional<Tensor>> handle( uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad ) {
+        return _sqrt_bw(queue_id, grad, input, output_mem_config, input_grad);
     }
 };
 

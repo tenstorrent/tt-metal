@@ -579,7 +579,6 @@ void bind_unary_backward_unary_optional_float(
 
         Keyword args:
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            * :attr:`are_required_outputs` (Optional[std::vector<bool>]): List of bool, Default value is [True]
             * :attr:`input_grad` (Optional[ttnn.Tensor]): preallocated output tensor,
             * :attr:`queue_id` (Optional[uint8]): command queue id
 
@@ -605,18 +604,16 @@ void bind_unary_backward_unary_optional_float(
                const ttnn::Tensor& input_tensor,
                float parameter,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_grad,
                const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
-                    queue_id, grad_tensor, input_tensor, parameter, memory_config, are_required_outputs, input_grad);
+                    queue_id, grad_tensor, input_tensor, parameter, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
             py::arg(parameter_name.c_str()),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("are_required_outputs") = std::vector<bool>{true},
             py::arg("input_grad") = std::nullopt,
             py::arg("queue_id") = 0});
 }
@@ -725,7 +722,7 @@ void bind_unary_backward_neg(
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward_unary_optional(
-    py::module& module, const unary_backward_operation_t& operation, std::string_view description) {
+    py::module& module, const unary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<std::optional<Tensor>>
 
@@ -737,9 +734,10 @@ void bind_unary_backward_unary_optional(
 
         Keyword args:
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            * :attr:`are_required_outputs` (Optional[std::vector<bool>]): List of bool, Default value is [True]
             * :attr:`input_grad` (Optional[ttnn.Tensor]): preallocated output tensor,
             * :attr:`queue_id` (Optional[uint8]): command queue id
+
+        {3}
 
         Example:
 
@@ -749,7 +747,8 @@ void bind_unary_backward_unary_optional(
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -760,16 +759,14 @@ void bind_unary_backward_unary_optional(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_grad,
                const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor, memory_config, are_required_outputs, input_grad);
+                return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("are_required_outputs") = std::vector<bool>{true},
             py::arg("input_grad") = std::nullopt,
             py::arg("queue_id") = 0});
 }
@@ -1288,7 +1285,7 @@ void py_module(py::module& module) {
         ttnn::abs_bw,
         R"doc(Performs backward operations for abs on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
 
-    detail::bind_unary_backward_op(
+    detail::bind_unary_backward_unary_optional(
         module,
         ttnn::silu_bw,
         R"doc(Supported dtypes, layouts, and ranks:

@@ -152,9 +152,8 @@ std::vector<Tensor> _rdiv_bw(
 
 // unary_pow:
 // grad_input = grad * exponent * torch.pow(input, exponent - 1)
-std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
-    TT_FATAL(are_required_outputs.at(0) , "input_grad derivative is required output");
     const float ZERO_THRESHOLD = std::numeric_limits<float>::epsilon() * 10.0f;
     TT_FATAL(exponent >= 0.0, "negative exponents are not supported; use recip(pow(input,abs(exponent)))");
     if (std::abs(exponent) < ZERO_THRESHOLD) {
@@ -182,9 +181,8 @@ std::vector<std::optional<Tensor>> _pow_bw(uint8_t queue_id, const Tensor& grad,
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
-    TT_FATAL(are_required_outputs.at(0), "input_grad derivative is a required output");
 
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor exp_result = ttnn::exp(queue_id, input, false, output_mem_config);
@@ -206,9 +204,8 @@ std::vector<std::optional<Tensor>> _exp_bw(uint8_t queue_id, const Tensor& grad,
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
-    TT_FATAL(are_required_outputs.at(0), "input_grad derivative is required output");
 
     Tensor tanh_res = ttnn::tanh(queue_id, input, output_mem_config);
     tanh_res = ttnn::square(queue_id, tanh_res, output_mem_config);
@@ -222,9 +219,8 @@ std::vector<std::optional<Tensor>> _tanh_bw(uint8_t queue_id, const Tensor& grad
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, const std::vector<bool>& are_required_outputs, std::optional<Tensor> input_grad) {
+std::vector<std::optional<Tensor>> _sqrt_bw(uint8_t queue_id, const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config, std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
-    TT_FATAL(are_required_outputs.at(0), "input_grad derivative is required output");
 
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
@@ -744,21 +740,24 @@ std::vector<Tensor> _abs_bw(const Tensor& grad, const Tensor& input, const std::
 
 // Silu
 // result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
-std::vector<Tensor> _silu_bw(const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad_tensor;
-    Tensor grad_sigmoid = ttnn::multiply(grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
-    Tensor add_sub = ttnn::add(
-        ttnn::multiply(ttnn::subtract(ttnn::full_like(input, 1.0f) , ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config),
+std::vector<std::optional<ttnn::Tensor>> _silu_bw(uint8_t cq_id, const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+    if(!input_grad.has_value()){
+        input_grad = grad;
+    }
+    Tensor grad_sigmoid = ttnn::multiply(cq_id, grad, ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor add_sub = ttnn::add(cq_id,
+        ttnn::multiply(cq_id, ttnn::subtract(cq_id, ttnn::full_like(input, 1.0f) , ttnn::sigmoid(input, output_mem_config), std::nullopt, output_mem_config),
             input,
             std::nullopt,
             output_mem_config),
         1.0f,
         std::nullopt,
         output_mem_config);
-    Tensor grad_result = ttnn::multiply(grad_sigmoid, add_sub, std::nullopt, output_mem_config);
+    ttnn::multiply(cq_id, grad_sigmoid, add_sub, std::nullopt, output_mem_config, input_grad);
 
-    grad_tensor.emplace_back(grad_result);
-    return grad_tensor;
+    result.push_back(input_grad.value());
+    return result;
 }
 
 // Selu

@@ -164,10 +164,9 @@ struct ExecuteUnaryBackwardOptionalFloat {
         const Tensor &input_tensor_arg,
         float parameter,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        const std::vector<bool> &are_required_outputs = std::vector<bool>{true},
         std::optional<Tensor> input_grad = std::nullopt) {
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(queue_id, grad_tensor_arg, input_tensor_arg, parameter, output_memory_config, are_required_outputs, input_grad);
+        return OpHandler<unary_backward_op_type>::handle(queue_id, grad_tensor_arg, input_tensor_arg, parameter, output_memory_config, input_grad);
     }
 };
 
@@ -178,10 +177,9 @@ struct ExecuteUnaryBackwardOptional {
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        const std::vector<bool> &are_required_outputs = std::vector<bool>{true},
         std::optional<Tensor> input_grad = std::nullopt) {
         auto output_memory_config = memory_config.value_or(input_tensor_arg.memory_config());
-        return OpHandler<unary_backward_op_type>::handle(queue_id, grad_tensor_arg, input_tensor_arg, output_memory_config, are_required_outputs, input_grad);
+        return OpHandler<unary_backward_op_type>::handle(queue_id, grad_tensor_arg, input_tensor_arg, output_memory_config, input_grad);
     }
 };
 
@@ -327,11 +325,6 @@ constexpr auto relu6_bw = ttnn::register_operation<
     "ttnn::relu6_bw",
     operations::unary_backward::ExecuteUnaryBackwardOp<
         operations::unary_backward::UnaryBackwardOpType::RELU6_BW>>();
-
-constexpr auto silu_bw = ttnn::register_operation<
-    "ttnn::silu_bw",
-    operations::unary_backward::ExecuteUnaryBackwardOp<
-        operations::unary_backward::UnaryBackwardOpType::SILU_BW>>();
 
 constexpr auto selu_bw = ttnn::register_operation<
     "ttnn::selu_bw",
@@ -543,6 +536,11 @@ constexpr auto sqrt_bw = ttnn::register_operation<
     "ttnn::sqrt_bw",
     operations::unary_backward::ExecuteUnaryBackwardOptional<
         operations::unary_backward::UnaryBackwardOpType::SQRT_BW>>();
+
+constexpr auto silu_bw = ttnn::register_operation<
+    "ttnn::silu_bw",
+    operations::unary_backward::ExecuteUnaryBackwardOptional<
+        operations::unary_backward::UnaryBackwardOpType::SILU_BW>>();
 
 constexpr auto prod_bw = ttnn::register_operation<
     "ttnn::prod_bw",
