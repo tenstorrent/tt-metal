@@ -9,6 +9,7 @@ namespace ttnn::operations::experimental::transformer {
 
 // NLP KV Cache Unpad To Sharded op
 void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor> &input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to unpad need to be allocated in buffers on device!");

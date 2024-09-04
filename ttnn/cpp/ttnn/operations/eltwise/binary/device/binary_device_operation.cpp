@@ -48,6 +48,7 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
 
 void BinaryDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::constants;
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
@@ -174,6 +175,7 @@ BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_outpu
 
 BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::constants;
     auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;

@@ -39,8 +39,8 @@ operation::ProgramWithCallbacks moreh_norm_h_impl(const Tensor &input, float p, 
     const auto H = input_shape[-2];
     const auto W = input_shape[-1];
 
-    const auto Ht = H / TILE_HEIGHT;
-    const auto Wt = W / TILE_WIDTH;
+    const auto Ht = H / tt::constants::TILE_HEIGHT;
+    const auto Wt = W / tt::constants::TILE_WIDTH;
 
     const auto num_units = input.volume() / H / W * Wt;
 

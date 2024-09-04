@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks moreh_adamw_(
     const std::optional<const Tensor> max_exp_avg_sq_out,
     const CoreRange core_range,
     const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    uint32_t num_units = param_in.volume() / TILE_HW;
+    uint32_t num_units = param_in.volume() / tt::constants::TILE_HW;
 
     Program program{};
 

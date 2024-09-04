@@ -33,6 +33,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     const uint32_t dst_single_tile_size) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     auto src_buffer_a = a.buffer();
     auto src_buffer_b = b.buffer();
@@ -254,6 +255,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     using namespace tt;
     using namespace tt::tt_metal;
     using ttnn::operations::unary::UnaryWithParam;
+    using namespace tt::constants;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;

@@ -13,7 +13,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/device_operation.hpp"
-
+#include "tt_metal/common/constants.hpp"
 
 
 namespace ttnn::operations::binary {
@@ -34,6 +34,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
@@ -246,6 +247,7 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;

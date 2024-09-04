@@ -237,6 +237,7 @@ Tensor moreh_clip_grad_norm_impl(
     bool error_if_nonfinite,
     const std::optional<std::reference_wrapper<const Tensor>> total_norm,
     const MemoryConfig &output_mem_config) {
+    using namespace tt::constants;
     // Create tmp_pow_sum[1, 1, TILE_HEIGHT, TILE_WIDTH * total_num_inputs]
     const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
     Shape tmp_pow_sum_shape{1, 1, TILE_HEIGHT, TILE_WIDTH * total_num_inputs};

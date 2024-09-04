@@ -14,10 +14,10 @@ Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::option
             fmt::format("Input tensor must be on device. Current storage type: {}.",
                         static_cast<int>(input_tensor.storage_type())));
 
-    TT_FATAL(input_tensor.get_legacy_shape()[-1] % (TILE_WIDTH * 2) == 0,
+    TT_FATAL(input_tensor.get_legacy_shape()[-1] % (tt::constants::TILE_WIDTH * 2) == 0,
             fmt::format("Input X dimension ({}) must be divisible by {} for tiling.",
                         input_tensor.get_legacy_shape()[-1],
-                        TILE_WIDTH * 2));
+                        tt::constants::TILE_WIDTH * 2));
 
     tt::tt_metal::Shape pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
     ttnn::operations::experimental::auto_format::FormatParams input_format_params = {.pad_shape=pad_shape, .pad_value=0.0, .target_layout=Layout::TILE};

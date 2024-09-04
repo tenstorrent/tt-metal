@@ -32,6 +32,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto num_tiles = tmp_pow_sum.volume() / TILE_HW;
+    const auto num_tiles = tmp_pow_sum.volume() / tt::constants::TILE_HW;
 
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(1.0f / norm_type);
 

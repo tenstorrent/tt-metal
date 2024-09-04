@@ -56,6 +56,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd,
     const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

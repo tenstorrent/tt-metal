@@ -72,6 +72,7 @@ void MorehGroupNorm::validate_with_output_tensors(
 }
 
 std::vector<Shape> MorehGroupNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    using namespace tt::constants;
     // mean, rstd (1, 1, N, num_groups)
     const auto output_shape = input_tensors.at(0).get_legacy_shape();
     const auto N = output_shape[0];

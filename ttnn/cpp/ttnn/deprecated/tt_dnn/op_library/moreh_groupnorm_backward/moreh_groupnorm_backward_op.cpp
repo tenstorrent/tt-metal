@@ -172,6 +172,7 @@ void MorehGroupNormBackwardGammaBetaGrad::validate_with_output_tensors(
 
 std::vector<Shape> MorehGroupNormBackwardGammaBetaGrad::compute_output_shapes(
     const std::vector<Tensor> &input_tensors) const {
+    using namespace tt::constants;
     const auto &output_grad = input_tensors.at(0);
     // output_grad (N, C, H, W)
     const auto &output_grad_shape = output_grad.get_legacy_shape();

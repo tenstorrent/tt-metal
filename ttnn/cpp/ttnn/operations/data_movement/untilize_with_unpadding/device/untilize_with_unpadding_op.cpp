@@ -16,7 +16,7 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Can only untilize tile major data");
 
-    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
+    TT_FATAL(input_tensor_a.volume() % tt::constants::TILE_HW == 0);
     for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
         TT_FATAL(input_tensor_a.get_legacy_shape()[i] > 0);
         TT_FATAL(this->output_tensor_end[i] < input_tensor_a.get_legacy_shape()[i]);

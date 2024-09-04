@@ -32,6 +32,7 @@ operation::ProgramWithOptionalOutputTensors moreh_groupnorm_backward_gamma_beta_
     uint32_t num_groups,
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
