@@ -39,6 +39,7 @@
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
+#include "ttnn/operations/moreh/moreh_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -130,6 +131,9 @@ void py_module(py::module& module) {
 
     auto m_experimental = module.def_submodule("experimental", "experimental operations");
     experimental::py_module(m_experimental);
+
+    auto m_moreh = module.def_submodule("moreh", "moreh ops");
+    moreh::py_module(m_moreh);
 }
 
 }  // namespace operations
