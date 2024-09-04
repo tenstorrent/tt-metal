@@ -74,18 +74,16 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
     for i in range(generation_length):
         pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1  # Random inputs
         tt_attention_input = pt_attention_input
-        start_pos = generation_start_pos + i
+        start_pos_ids = [generation_start_pos + i for _ in range(batch)]
         attention_input, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
             tt_attention_input,
             t3k_mesh_device,
         )
 
-        current_pos = start_pos % model_args.sliding_window
         # Run ttnn attention module
         tt_out = tt_model(
             attention_input,
-            start_pos,
-            current_pos,
+            start_pos_ids,
             attn_mask,
             rot_mats,
             transformation_mats,
@@ -109,9 +107,9 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
         logger.info(f"Output PCC: {pcc_message}")
 
         if passing:
-            logger.info(f"[start_pos={start_pos}] Mixtral_Attention Passed!")
+            logger.info(f"[start_pos={start_pos_ids[0]}] Mixtral_Attention Passed!")
         else:
-            logger.warning(f"[start_pos={start_pos}] Mixtral_Attention Failed!")
+            logger.warning(f"[start_pos={start_pos_ids[0]}] Mixtral_Attention Failed!")
             all_tests_pass = False
 
         # Validate KV-cache
@@ -120,8 +118,8 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
             ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=1)) for lp in tt_layer_present_all
         ]
         pytorch_layer_present = [
-            reference_model.cache_k.clone().permute(2, 0, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-            reference_model.cache_v.clone().permute(2, 0, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+            reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
+            reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
         ]
         for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present_all)):
             current_cache = "K_cache" if i == 0 else "V_cache"
