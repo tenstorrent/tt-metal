@@ -359,6 +359,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
         for user in range(batch_size):
             logger.info("[User {}] {}".format(user, "".join(tokenizer.decode(all_outputs[user]))))
 
+    # FIXME #12206
     # if is_ci_env:
     #     # When running in CI, check the output against the expected output to avoid accuracy regressions
     #     if test_prefill_len == 128:
@@ -378,11 +379,6 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
     #         assert user_expect in user_output, f"Output for user {i} does not contain the expected output!"
 
     #     logger.info("[CI-Only] Output token validation passed!")
-
-    # TODO revert this change
-    for i in range(batch_size):
-        user_output = "".join(tokenizer.decode(all_outputs[i]))
-        logger.info(f"[DEBUG][USER {i}] {user_output}")
 
     # Benchmark metrics
     compile_prefill_time = profiler.get_duration("compile_prefill")
