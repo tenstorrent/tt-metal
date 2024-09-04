@@ -137,6 +137,8 @@ inline void llk_pack_untilize_init(std::uint32_t output, const std::uint32_t fac
         TT_SETADCXX(p_setadc::PAC, 1-1, 0x0);
     } else if constexpr(narrow_row) {
         TT_SETADCXX(p_setadc::PAC, row_num_datums-1, 0x0);
+    } else {
+        TT_SETADCXX(p_setadc::PAC, FACE_R_DIM-1, 0x0);
     }
 }
 

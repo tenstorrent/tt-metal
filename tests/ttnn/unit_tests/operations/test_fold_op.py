@@ -248,7 +248,6 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(device, tt_input_ten
     return tt_output_tensor
 
 
-@skip_for_grayskull("Grayskull has pcc issue when transpose used packer untilize")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [224])

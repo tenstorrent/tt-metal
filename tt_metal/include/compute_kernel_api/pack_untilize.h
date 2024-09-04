@@ -59,6 +59,10 @@ ALWI void pack_untilize_uninit(uint32_t ocb = 16) {
     PACK(( llk_pack_init(ocb) ));
     PACK(( llk_init_packer_dest_offset_registers<false>() ));
 
+    #ifdef ARCH_GRAYSKULL
+    PACK(( TT_SETADCXX(p_setadc::PAC, FACE_R_DIM-1, 0x0) ));
+    #endif
+
     #ifdef ARCH_BLACKHOLE
     PACK(( llk_pack_untilize_uninit(ocb) ));
     #endif
