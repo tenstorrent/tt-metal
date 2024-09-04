@@ -14,10 +14,7 @@ void kernel_main() {
     // Different per worker receiver writer
     const uint32_t worker_sender_reader_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_sender_reader_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const bool receiver_enabled = get_arg_val<uint32_t>(arg_idx++) == 1;
-    if (!receiver_enabled) {
-        return;
-    }
+    const bool sender_enabled = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t num_transfers = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_full_chunks = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_pages = get_arg_val<uint32_t>(arg_idx++);
@@ -56,7 +53,8 @@ void kernel_main() {
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(4);
     constexpr uint32_t ring_size = get_compile_time_arg_val(5);
     constexpr bool fuse_op = get_compile_time_arg_val(6);
-    // static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
+
+    ASSERT(half_cb_n_pages > rem_num_pages);
 
     #ifdef SHARDED_MEM_LAYOUT
     constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(7));
@@ -123,7 +121,10 @@ void kernel_main() {
 
     // Each worker receiver writer matches with a specific worker sender reader
     // Used to signal that data has been committed to memory and can be read
-    const uint64_t worker_send_reader_semaphore_noc_addr = get_noc_addr(worker_sender_reader_noc_x, worker_sender_reader_noc_y, sem_addr);
+    uint64_t worker_send_reader_semaphore_noc_addr = -1;
+    if (sender_enabled) {
+        worker_send_reader_semaphore_noc_addr = get_noc_addr(worker_sender_reader_noc_x, worker_sender_reader_noc_y, sem_addr);
+    }
 
     uint32_t input_ring_idx = input_start_ring_idx;
     uint32_t output_base_page_idx = output_start_page_idx;
@@ -147,7 +148,9 @@ void kernel_main() {
                 ASSERT(output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x * output_tensor_shard_grid_height * output_tensor_shard_grid_width);
                 #endif
                 write_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, num_pages, page_size);
-                noc_semaphore_inc(worker_send_reader_semaphore_noc_addr, 1);
+                if (sender_enabled) {
+                    noc_semaphore_inc(worker_send_reader_semaphore_noc_addr, 1);
+                }
             }
         }
         if (rem_num_pages > 0) {
@@ -155,7 +158,9 @@ void kernel_main() {
             ASSERT(output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x * output_tensor_shard_grid_height * output_tensor_shard_grid_width);
             #endif
             write_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size);
-            noc_semaphore_inc(worker_send_reader_semaphore_noc_addr, 1);
+            if (sender_enabled) {
+                noc_semaphore_inc(worker_send_reader_semaphore_noc_addr, 1);
+            }
             ASSERT(num_pages == 0 || num_pages > rem_num_pages);
             ASSERT(half_cb_n_pages > rem_num_pages);
             pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);

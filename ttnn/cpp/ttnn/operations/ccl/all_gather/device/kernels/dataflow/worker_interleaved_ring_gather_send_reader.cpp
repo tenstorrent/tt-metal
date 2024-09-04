@@ -12,12 +12,6 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     const uint32_t src_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t dst_addr = get_arg_val<uint32_t>(arg_idx++);
-    const bool sender_enabled = get_arg_val<uint32_t>(arg_idx++) == 1;
-
-    if (!sender_enabled) {
-        return;
-    }
-
     const uint32_t num_transfers = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_full_chunks = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_pages = get_arg_val<uint32_t>(arg_idx++);
@@ -81,7 +75,8 @@ void kernel_main() {
     constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(22);
     constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(23) != 0;
     #endif
-    // static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
+
+    ASSERT(half_cb_n_pages > rem_num_pages);
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
 

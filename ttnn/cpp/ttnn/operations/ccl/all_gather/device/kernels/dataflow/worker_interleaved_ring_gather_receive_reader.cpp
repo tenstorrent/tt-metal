@@ -13,14 +13,9 @@ void kernel_main() {
     volatile uint32_t *receiver_read_sem_addr = reinterpret_cast<volatile uint32_t *>(get_semaphore(get_compile_time_arg_val(1)));
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(2);
     constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(3);
-    // static_assert (half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than 0");
 
     uint32_t arg_idx = 0;
     const uint32_t eth_receiver_l1_base_addr = get_arg_val<uint32_t>(arg_idx++);
-    const bool receiver_enabled = get_arg_val<uint32_t>(arg_idx++) == 1;
-    if (!receiver_enabled) {
-        return;
-    }
     const uint32_t num_transfers = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_full_chunks = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_pages_per_full_chunk = get_arg_val<uint32_t>(arg_idx++);
@@ -28,6 +23,8 @@ void kernel_main() {
     const uint32_t eth_receiver_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_receiver_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_receiver_l1_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+
+    ASSERT(half_cb_n_pages > rem_num_pages);
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
 

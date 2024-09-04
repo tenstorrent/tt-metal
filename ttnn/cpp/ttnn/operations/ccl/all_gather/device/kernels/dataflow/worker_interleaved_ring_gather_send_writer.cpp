@@ -13,10 +13,6 @@
 void kernel_main() {
     uint32_t arg_idx = 0;
     const uint32_t dst_addr = get_arg_val<uint32_t>(arg_idx++);
-    const bool sender_enabled = get_arg_val<uint32_t>(arg_idx++) == 1;
-    if (!sender_enabled) {
-        return;
-    }
     const uint32_t eth_sender_l1_base_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_sender_l1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_transfers = get_arg_val<uint32_t>(arg_idx++);
@@ -60,7 +56,7 @@ void kernel_main() {
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(5);
     constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(6);
 
-    // static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
+    ASSERT(half_cb_n_pages > rem_num_pages);
 
     #ifdef SHARDED_MEM_LAYOUT
     constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(7));
