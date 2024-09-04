@@ -151,6 +151,14 @@ def run_test_LlamaModel_inference(
         # TT hardware execution -------------------------------------------------------------
         tt_inp_emb, start_pos, rot_mat, attn_mask, cache_idxs = tt_model.prepare_inputs(tt_inp_ids, start_pos)
 
+        # Send to device
+        if model_config["LLM_MODE"] == "decode":
+            tt_inp_emb = ttnn.to_device(
+                tt_inp_emb, t3k_mesh_device, memory_config=model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+            )
+            rot_mat = ttnn.to_device(rot_mat, t3k_mesh_device, memory_config=model_config["ROT_MAT_MM_IN1_MEMCFG"])
+            cache_idxs = ttnn.to_device(cache_idxs, t3k_mesh_device, memory_config=model_config["DRAM_MEMCFG"])
+
         tt_out = tt_model(
             tt_inp_emb,
             rot_mat,

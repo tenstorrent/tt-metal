@@ -45,6 +45,7 @@ class TTArgs:
     emulated: bool = False
     cache_path: str = None
     decode_only: bool = False
+    trace_mode: bool = False
 
 
 @dataclass
@@ -106,7 +107,14 @@ def main(args):
     # Run decode
     with torch.no_grad():
         all_text = run_decode(
-            model_args, tt_args, data_args, model=model, tokenizer=tokenizer, prompt_tokens=tokenized, prompts=prompts
+            model_args,
+            tt_args,
+            data_args,
+            model=model,
+            tokenizer=tokenizer,
+            prompt_tokens=tokenized,
+            prompts=prompts,
+            trace_mode=tt_args.trace_mode,
         )
 
         if data_args.output_at_end:
@@ -217,6 +225,7 @@ def run_decode(
     prompts,
     return_logits=False,
     return_full_logits=False,
+    trace_mode=False,
 ):
     """
     return_logits: return the logits for the last token
@@ -249,10 +258,22 @@ def run_decode(
     latencies = []
     full_logits = []
 
+    # capture trace
+    if trace_mode:
+        trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits = model.capture_trace(
+            tokens[:, prev_pos:min_prompt_len], prev_pos
+        )
+
     for cur_pos in range(min_prompt_len, total_len):
         start = time()
         input_tokens = tokens[:, prev_pos:cur_pos]
-        logits = model.forward(input_tokens, prev_pos)
+        if trace_mode:
+            assert tokens.shape[1] == 1, "Trace mode only supports decoding"
+            logits = model.decode_forward_trace(
+                input_tokens, prev_pos, trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits
+            )
+        else:
+            logits = model.forward(input_tokens, prev_pos)
 
         next_logits = logits[:, -1, :]  # batch, vocab of last token
         next_token = sampling_func(next_logits)

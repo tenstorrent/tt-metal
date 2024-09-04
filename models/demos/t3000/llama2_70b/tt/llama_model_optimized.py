@@ -240,7 +240,8 @@ class TtLlamaModel_optimized:
                 self.hidden_size // self.num_devices,
             )
 
-            xs = ttnn.interleaved_to_sharded(xs, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
+            # xs = ttnn.interleaved_to_sharded(xs, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
+            xs = ttnn.from_device(xs)
 
             rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=batch)
             assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
@@ -249,14 +250,14 @@ class TtLlamaModel_optimized:
                 rot_mat,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
+                # device=self.mesh_device,
                 cache_file_name=cache_name(f"rot_mat_decode_b{batch}_{start_pos}"),
-                memory_config=self.model_config["DRAM_MEMCFG"],
+                # memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
-            rot_mats = ttnn.to_device(rot_mats, self.mesh_device)
-
-            rot_mats = ttnn.interleaved_to_sharded(rot_mats, self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
+            # rot_mats = ttnn.to_device(rot_mats, self.mesh_device)
+            # rot_mats = ttnn.interleaved_to_sharded(rot_mats, self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
+            # rot_mats = ttnn.from_device(rot_mats)
 
             attn_masks = None
 
@@ -265,8 +266,8 @@ class TtLlamaModel_optimized:
                 cache_idxs,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.mesh_device,
-                memory_config=self.model_config["DRAM_MEMCFG"],
+                # device=self.mesh_device,
+                # memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 # cache_file_name=cache_name(f"cache_idxs_decode_b{batch}_{start_pos}"),
             )

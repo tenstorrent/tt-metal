@@ -103,7 +103,14 @@ def run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total
     for cur_pos in range(start_pos + 1, total_len):
         logger.info(f"Generating token: {cur_pos}")
 
-        tt_inp_emb, prev_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tokens[:, prev_pos:cur_pos], prev_pos)
+        tt_inp_emb, prev_pos, rot_mat, attn_mask, cache_idxs = tt_model.prepare_inputs(
+            tokens[:, prev_pos:cur_pos], prev_pos
+        )
+        tt_inp_emb = ttnn.to_device(
+            tt_inp_emb, mesh_device, memory_config=tt_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
+        )
+        rot_mat = ttnn.to_device(rot_mat, mesh_device, memory_config=tt_model.model_config["ROT_MAT_MM_IN1_MEMCFG"])
+        cache_idxs = ttnn.to_device(cache_idxs, mesh_device, memory_config=tt_model.model_config["DRAM_MEMCFG"])
 
         logger.info("Compiling model")
         tt_logits = tt_model(
@@ -111,6 +118,7 @@ def run_inference(tt_model, tokenizer, tokens, mesh_device, configuration, total
             rot_mat,
             prev_pos,
             attn_mask,
+            cache_idxs=cache_idxs,
         )
 
         # del tt_inp_emb
