@@ -101,6 +101,7 @@ bool run_test(Device* device, const Shape& shape, float low, float high, Args...
 }
 
 void test_operation_infrastructure() {
+    using namespace tt::constants;
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
     using ttnn::operations::unary::UnaryWithParam;
@@ -126,6 +127,7 @@ void test_operation_infrastructure() {
 }
 
 void test_shape_padding() {
+    using namespace tt::constants;
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
     using ttnn::operations::unary::UnaryWithParam;

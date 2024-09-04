@@ -15,10 +15,16 @@
 #include "jit_build/settings.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/tt_stl/aligned_allocator.hpp"
 #include "llrt/rtoptions.hpp"
 
 
 namespace tt::tt_metal {
+
+static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;
+
+template <typename T>
+using vector_cache_aligned = std::vector<T, tt::stl::aligned_allocator<T, CACHE_LINE_ALIGNMENT>>;
 
 class JitBuildSettings;
 
@@ -71,7 +77,7 @@ class JitBuildEnv {
 
 // All the state used for a build in an abstract base class
 // Contains everything needed to do a build (all settings, methods, etc)
-class JitBuildState {
+class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
   protected:
     const JitBuildEnv& env_;
 
@@ -88,8 +94,8 @@ class JitBuildState {
     string includes_;
     string lflags_;
 
-    vector<string> srcs_;
-    vector<string> objs_;
+    vector_cache_aligned<std::string> srcs_;
+    vector_cache_aligned<std::string> objs_;
 
     string link_objs_;
 

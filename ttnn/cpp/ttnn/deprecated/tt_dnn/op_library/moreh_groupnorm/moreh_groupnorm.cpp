@@ -48,6 +48,7 @@ operation::ProgramWithCallbacks moreh_groupnorm_impl(
     Tensor &output,
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

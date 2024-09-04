@@ -19,7 +19,7 @@ void HaloDeviceOperation::validate(const std::vector<Tensor> &input_tensors) con
         // skip the untilize, only do halo
         log_debug(tt::LogOp, "Input is ROW_MAJOR, no need to untilize.");
     } else {
-        TT_FATAL(input_tensor.volume() % TILE_HW == 0);
+        TT_FATAL(input_tensor.volume() % tt::constants::TILE_HW == 0);
     }
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Only height, width or block sharded tensors are supported.");
     TT_FATAL(input_tensor.shard_spec().has_value(), "Shard spec should not be empty");

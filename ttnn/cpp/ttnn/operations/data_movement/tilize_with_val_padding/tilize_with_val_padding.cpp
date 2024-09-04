@@ -49,6 +49,7 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     const std::optional<MemoryConfig> &memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
+    using namespace tt::constants;
     auto shape = input_tensor.get_legacy_shape();
 
     shape[2] = tt::round_up(shape[2], TILE_HEIGHT);
