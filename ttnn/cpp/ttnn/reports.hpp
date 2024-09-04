@@ -83,7 +83,7 @@ std::vector<BufferInfo> get_buffers() {
                 bank_id = (bank_id + 1) % num_banks;
             }
         } else {
-            auto buffer_page_mapping = generate_buffer_page_mapping(*buffer);
+            const auto& buffer_page_mapping = *buffer->get_buffer_page_mapping();
             for (int page_index = 0; page_index < num_pages; page_index++) {
                 auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping_[page_index];
                 auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index]];
@@ -158,7 +158,7 @@ std::vector<BufferPageInfo> get_buffer_pages() {
                 bank_id = (bank_id + 1) % num_banks;
             }
         } else {
-            auto buffer_page_mapping = generate_buffer_page_mapping(*buffer);
+            const auto& buffer_page_mapping = *buffer->get_buffer_page_mapping();
             for (int page_index = 0; page_index < num_pages; page_index++) {
                 auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping_[page_index];
                 auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index]];
