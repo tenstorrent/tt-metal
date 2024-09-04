@@ -117,49 +117,37 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     ////////////////////////////////////////////////////////////////////////////
 
     uint32_t z = input_shape[1]; // channels
-    uint32_t num_tiles_dim_2 = input_shape[2] / tt::constants::TILE_HEIGHT; // how many tiles intersect a column of cores
-    uint32_t num_tiles_dim_3 = input_shape[3] / tt::constants::TILE_WIDTH; // how many tiles intersect a row of cores
+    uint32_t num_tiles_y_dim = input_shape[2] / tt::constants::TILE_HEIGHT; // how many tiles along height axis of the input tensor
+    uint32_t num_tiles_x_dim = input_shape[3] / tt::constants::TILE_WIDTH; // how many tiles along width axis of the input tensor
     uint32_t num_cores_x_limit = device->compute_with_storage_grid_size().x;
     uint32_t num_cores_y_limit = device->compute_with_storage_grid_size().y;
 
     // print out all of these
     std::cout << "z: " << z << std::endl;
-    std::cout << "num_tiles_dim_2: " << num_tiles_dim_2 << std::endl;
-    std::cout << "num_tiles_dim_3: " << num_tiles_dim_3 << std::endl;
+    std::cout << "num_tiles_y_dim: " << num_tiles_y_dim << std::endl;
+    std::cout << "num_tiles_x_dim: " << num_tiles_x_dim << std::endl;
     std::cout << "num_cores_x_limit: " << num_cores_x_limit << std::endl;
     std::cout << "num_cores_y_limit: " << num_cores_y_limit << std::endl;
 
-    // parallelize z
-    auto num_cores_z = z;
+    // We are splitting along the width (last dim/dim 3) of the tensor so we
+    // parallelize along height (dim 2) and depth (dim 1).
 
-    // parallelize y
-    auto [num_cores_y, per_core_tiles_y] =
-        get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_3, num_cores_y_limit, /*request_even=*/true);
-    num_cores_y /= num_chunks;
-    per_core_tiles_y *= num_chunks;
+    uint32_t num_cores = (num_cores_x_limit * num_cores_y_limit);
 
-    // parallelize x
-    auto [num_cores_x, per_core_tiles_x] =
-        get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_2, num_cores_x_limit / num_cores_z);
-    num_cores_x /= num_chunks;
-    per_core_tiles_x *= num_chunks;
+    auto [num_cores_used, y_tiles_per_core] = get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_y_dim, num_cores);
 
-    uint32_t per_core_tiles = per_core_tiles_x * per_core_tiles_y * (z / num_cores_z); // FIXME: how is z / num_cores_z not always just 1?
+    uint32_t per_core_tiles = y_tiles_per_core * num_tiles_x_dim * z;
 
     // FIXME: remove debugging stuff
     std::cout << "Num chunks: " << num_chunks << std::endl;
     std::cout << "Per core tiles: " << per_core_tiles << std::endl;
-    std::cout << "per_core_x: " <<  per_core_tiles_x << std::endl;
-    std::cout << "per_core_y: " << per_core_tiles_y << std::endl;
-    std::cout << "num_cores_x: " << num_cores_x << std::endl;
-    std::cout << "num_cores_y: " << num_cores_y << std::endl;
     // endFIXME: remove debugging stuff
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
 
-    uint32_t num_cores_c = num_cores_y;
-    uint32_t num_cores_r = num_cores_x * num_cores_z;
+    uint32_t num_cores_c = num_cores_used / num_cores_x_limit;
+    uint32_t num_cores_r = num_cores_x_limit;
 
     CoreRange all_cores(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
@@ -183,9 +171,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     bool out_is_dram = output_buffers[0]->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    uint32_t num_tiles_per_z = (per_core_tiles_x * num_cores_x) * (per_core_tiles_y * num_cores_y);
-    uint32_t z_stride_read = num_tiles_per_z;
-    uint32_t y_stride_read = per_core_tiles_y * num_cores_y;
+    uint32_t z_stride_read = num_tiles_y_dim * num_tiles_x_dim; // increase z by going through an x-y plane.
+    uint32_t y_stride_read = num_tiles_x_dim; // advance by the width to go down in height
 
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       (std::uint32_t)tile_dtype_is_bfloat16,

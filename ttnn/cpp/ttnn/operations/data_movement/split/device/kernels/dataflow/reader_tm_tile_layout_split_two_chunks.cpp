@@ -13,15 +13,13 @@
 
 void kernel_main() {
     // READER RUNTIME ARGS
-    uint32_t reader_core_id = get_arg_val<uint32_t>(0);
+    uint32_t start_tile = get_arg_val<uint32_t>(0);
     uint32_t in0_tensor_addr = get_arg_val<uint32_t>(1);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
     constexpr uint32_t in0_is_dram = get_compile_time_arg_val(1);
     constexpr uint32_t z = get_compile_time_arg_val(2);
-    constexpr uint32_t per_core_tiles_y = get_compile_time_arg_val(3);
-    constexpr uint32_t per_core_tiles_x = get_compile_time_arg_val(4);
     constexpr uint32_t z_stride = get_compile_time_arg_val(5);
     constexpr uint32_t y_stride = get_compile_time_arg_val(6);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(7);
@@ -45,11 +43,12 @@ void kernel_main() {
     uint32_t tensor_stride = per_core_tiles_x;
     uint32_t tensor_stride_cum = 0;
 #ifdef DEBUG
-    DPRINT << "Reader Tile ID Offset: " << reader_core_id << ENDL() << ENDL();
+    DPRINT << "Reader Start Tile: " << start_tile << ENDL() << ENDL();
     DPRINT << "Reader Z Stride: " << z_stride << ENDL();
     DPRINT << "Reader Y Stride: " << y_stride << ENDL();
 #endif
-    for (uint32_t chunk = 0; chunk < 1; chunk++) {
+
+    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         uint32_t z_stride_cum = 0;
         for (uint32_t k = 0; k < z; k++) {
             uint32_t y_stride_cum = 0;
