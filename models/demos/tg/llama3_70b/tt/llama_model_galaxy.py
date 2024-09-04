@@ -59,6 +59,7 @@ class TtLlamaModel_galaxy:
         self.head_dim = self.hidden_size // self.n_heads
         self.max_seq_len = configuration.max_seq_len
         self.vocab_size = configuration.vocab_size
+        self.padded_vocab_size = 128 * 1024
         self.norm_eps = configuration.norm_eps
         self.llama3 = self.vocab_size == 128256
         self.rope_theta = configuration.rope_theta if self.llama3 else 10000.0
@@ -135,9 +136,15 @@ class TtLlamaModel_galaxy:
         )
         if self.model_config["LLM_MODE"] == "prefill":
             # seq_len is 32 if we slice LM head input
+            hidden_size_per_chip = self.hidden_size // self.cluster_shape[0]
             self.LM_HEAD_PROGCFG = matmul_1d_config_from_tensor_shapes(
-                (1, 1, 32, 2048),
-                (1, 1, 2048, 16 * 1024),
+                (1, 1, 32, hidden_size_per_chip),  # get only last 32 tokens # (1, 1, 32, 2048)
+                (
+                    1,
+                    1,
+                    hidden_size_per_chip,
+                    self.padded_vocab_size // self.cluster_shape[1],
+                ),  # (1, 1, 2048, 16 * 1024)
                 grid=ttnn.CoreGrid(x=8, y=2),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
@@ -262,7 +269,7 @@ class TtLlamaModel_galaxy:
                 cos_gathered,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                # cache_file_name=cache_name(f"cos_gathered_prefill_galaxy_{start_pos}"),
+                cache_file_name=cache_name(f"cos_gathered_prefill_galaxy_{start_pos}"),
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
@@ -271,7 +278,7 @@ class TtLlamaModel_galaxy:
                 sin_gathered,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                # cache_file_name=cache_name(f"sin_gathered_prefill_galaxy_{start_pos}"),
+                cache_file_name=cache_name(f"sin_gathered_prefill_galaxy_{start_pos}"),
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),

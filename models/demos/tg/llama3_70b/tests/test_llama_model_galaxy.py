@@ -20,8 +20,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
     check_mesh_device,
     extract_pcc_from_log,
-    MAX_SEQ_LEN_LLAMA3,
-    MAX_SEQ_LEN_LLAMA3_1,
     BASE_URL,
     UNIT_TEST_START_POS,
     UNIT_TEST_GENERATION_LENGTH,
@@ -86,7 +84,7 @@ def run_test_LlamaModel_inference(
     hugging_face_reference = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=MAX_SEQ_LEN_LLAMA3 if llama_version == "llama3-tg" else MAX_SEQ_LEN_LLAMA3_1,
+        max_seq_len=model_config[llama_version],
         max_batch_size=batch,
         n_layers=n_layers,
         skip_model_load=skip_model_load,
@@ -145,13 +143,13 @@ def run_test_LlamaModel_inference(
 
         start_pos = generation_start_pos + i
 
-        # # PyTorch output --------------------------------------------------------------------
-        # logger.info(f"Running inference on PyTorch")
+        # PyTorch output --------------------------------------------------------------------
+        logger.info(f"Running inference on PyTorch")
         pytorch_out = pytorch_model(
             pt_inp_ids,
             start_pos,
         )
-        # logger.info(f"Finished PyTorch inference")
+        logger.info(f"Finished PyTorch inference")
 
         # TT hardware execution -------------------------------------------------------------
         tt_inp_emb, start_pos, rot_mat, attn_mask = tt_model.prepare_inputs(tt_inp_ids, start_pos)
@@ -161,7 +159,7 @@ def run_test_LlamaModel_inference(
             start_pos,
             attn_mask,
         )
-        # del tt_inp_emb, rot_mat, attn_mask
+        del tt_inp_emb, rot_mat, attn_mask
 
         tt_out = ttnn.to_torch(
             tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 3), cluster_shape=cluster_shape)
@@ -256,7 +254,7 @@ def run_test_LlamaModel_inference(
 @pytest.mark.parametrize(
     "cluster_shape, mesh_device", [pytest.param((4, 8), (8, 4), id="4x8_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("llama_version", ("llama3-tg", "llama3_1-tg"))
+@pytest.mark.parametrize("llama_version", ("llama3-tg", "llama3.1-tg"))
 @pytest.mark.parametrize(
     "pcc,n_layers",
     [
@@ -278,8 +276,8 @@ def run_test_LlamaModel_inference(
     ((32, 2048), (16, 8192), (16, 32 * 1024), (16, 128 * 1024)),
     ids=(
         "short_context",
-        "long_context",
         "mid_long_context",
+        "long_context",
         "super_long_context",
     ),
 )

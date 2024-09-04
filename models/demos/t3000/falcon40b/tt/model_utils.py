@@ -237,10 +237,10 @@ def matmul_2d_config(
     if overwrite_subblock_h is not None:
         out_subblock_h = overwrite_subblock_h
 
+    # print all arguments used in the program config
     # print(
     #     f"per_core_m: {per_core_m}, per_core_k: {per_core_k}, per_core_n: {per_core_n}, out_subblock_h: {out_subblock_h}, out_subblock_w: {out_subblock_w}"
     # )
-    # print all arguments used in the program config
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),

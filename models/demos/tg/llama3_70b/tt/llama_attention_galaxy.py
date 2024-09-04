@@ -551,7 +551,6 @@ class TtLlamaAttention_galaxy:
         fused_query_key_value = tt_all_reduce(
             fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        # fused_query_key_value.deallocate(True)
 
         fused_query_key_value = ttnn.reshape(fused_query_key_value, (1, 1, seq_len, -1))
 
@@ -650,7 +649,6 @@ class TtLlamaAttention_galaxy:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # bsz, 1, seqlen, hidden_size
 
-        # attn_output.deallocate(True)
         _, _, seq_len, _ = attn_output.shape
 
         max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
@@ -665,7 +663,6 @@ class TtLlamaAttention_galaxy:
             program_config=self.SELFOUT_PROGCFG,
         )  # bsz, 1, seqlen, hidden_size
 
-        # attn_output_heads.deallocate(True)
         attn_output = ttnn.reshape(attn_output, (1, 1, seq_len, -1))
 
         # Call all reduce here

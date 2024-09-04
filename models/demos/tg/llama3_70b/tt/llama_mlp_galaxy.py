@@ -142,17 +142,31 @@ class TtLlamaMLP_galaxy:
             )
 
         elif self.model_config["LLM_MODE"] == "prefill":
+            hidden_dim_per_chip = self.hidden_size // self.cluster_shape[0]  # 2048
+            ff_outer_dim_per_chip = (
+                self.state_dict["layers.0.feed_forward.w1.weight"].shape[0] // self.cluster_shape[1]
+            )  # 3584
             self.FF1_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
-                (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 2048),
-                (1, 1, 2048, 3584),  # 3.5 *1024 = 3584
+                (
+                    1,
+                    1,
+                    self.model_config["MAX_MM_SEQ_LEN"],
+                    hidden_dim_per_chip,
+                ),  # (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 2048)
+                (1, 1, hidden_dim_per_chip, ff_outer_dim_per_chip),  # (1, 1, 2048, 3584)
                 grid=ttnn.CoreGrid(x=8, y=4),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,
                 fuse_batch=False,
             )
             self.FF2_PROGCFG = get_matmul_2d_config_from_tensor_shapes(
-                (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 3584),
-                (1, 1, 3584, 2048),
+                (
+                    1,
+                    1,
+                    self.model_config["MAX_MM_SEQ_LEN"],
+                    ff_outer_dim_per_chip,
+                ),  # (1, 1, self.model_config["MAX_MM_SEQ_LEN"], 3584)
+                (1, 1, ff_outer_dim_per_chip, hidden_dim_per_chip),  # (1, 1, 3584, 2048)
                 grid=ttnn.CoreGrid(x=8, y=4),
                 overwrite_subblock_h=1,
                 overwrite_subblock_w=1,

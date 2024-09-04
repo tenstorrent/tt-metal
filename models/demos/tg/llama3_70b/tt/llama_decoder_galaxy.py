@@ -82,14 +82,14 @@ class TtLlamaDecoder_galaxy:
         self.load_weights()
 
     def get_decoder_config(self):
-        if self.model_config["LLM_MODE"] == "decode":
-            self.LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
+        self.LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
+        if self.model_config["LLM_MODE"] == "decode":
             self.LN_PROGCFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=[8, 4],
                 subblock_w=8,
@@ -133,13 +133,6 @@ class TtLlamaDecoder_galaxy:
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
-            )
-        else:  # prefill
-            self.LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
             )
 
     def set_model_config(self, model_config):
