@@ -8,7 +8,11 @@ jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
+  build-docker-artifact:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
   build-artifact:
+    needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   ttnn-unit-tests:

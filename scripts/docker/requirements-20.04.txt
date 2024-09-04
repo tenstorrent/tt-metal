@@ -19,3 +19,5 @@ python3-dev=3.8.2-0ubuntu2
 python3.8-venv
 cargo
 ninja-build
+patchelf
+graphviz

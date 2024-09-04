@@ -17,6 +17,41 @@ class TestLevel(Enum):
     OP_FULL_COMPUTE = 4
 
 
+# Moved from conv_sweep_params.yaml
+# Remove when the issue is fixed https://github.com/tenstorrent/tt-metal/issues/11257
+
+CONV_TB = {
+    # activation - [[N,C,H,W]]
+    "activation_shapes": [
+        [1, 32, 5, 5],
+        [1, 64, 5, 5],
+        [1, 64, 6, 6],
+        [1, 64, 7, 7],
+        [1, 64, 8, 8],
+        [1, 64, 9, 9],
+        [1, 32, 10, 10],
+        [1, 64, 10, 10],
+    ],
+    # kernel sizes - [[K,R,S]]
+    "kernel_sizes": [
+        [32, 1, 1],
+        [32, 3, 3],
+        [32, 5, 5],
+        [32, 7, 7],
+        [64, 1, 1],
+        [64, 3, 3],
+        [64, 5, 5],
+        [64, 7, 7],
+        [128, 1, 1],
+        [128, 3, 3],
+    ],
+    # stride = [stride_h, stride_w]
+    "strides": [[1, 1], [2, 2]],
+    # padding = [[pad_h, pad_w]]
+    "paddings": [[0, 0], [1, 1], [3, 3]],
+}
+
+
 class ConvOpTestParameters:
     def __init__(self, conv_params, test_level):
         self.conv_params = conv_params
@@ -56,15 +91,11 @@ def generate_pytorch_golden(conv_test_params):
 
 def generate_conv_tb():
     # sweep over activation sizes, kernel sizes, stride, padding specified in test bench yaml
-    with open(
-        os.path.join(os.environ["TT_METAL_HOME"], "tests/tt_eager/python_api_testing/conv/conv_sweep_params.yaml"), "r"
-    ) as file:
-        conv_tb = yaml.safe_load(file)
     conv_op_test_bench = []
-    for act_shape in conv_tb["activation_shapes"]:
-        for kernel_size in conv_tb["kernel_sizes"]:
-            for stride in conv_tb["strides"]:
-                for pad in conv_tb["paddings"]:
+    for act_shape in CONV_TB["activation_shapes"]:
+        for kernel_size in CONV_TB["kernel_sizes"]:
+            for stride in CONV_TB["strides"]:
+                for pad in CONV_TB["paddings"]:
                     H = act_shape[2]
                     W = act_shape[3]
                     R = kernel_size[1]

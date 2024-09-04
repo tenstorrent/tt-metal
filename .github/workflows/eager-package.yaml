@@ -50,8 +50,14 @@ jobs:
         if: ${{ inputs.os == 'ubuntu-22.04' }}
         run: |
           echo "DEVICE_CXX=g++" >> $GITHUB_ENV
+      - uses: ./.github/actions/prepare-metal-run
+        with:
+          arch: ${{ inputs.arch }}
       - name: Build Python package distribution
-        run: python -m build
+        run: |
+          TT_FROM_PRECOMPILED=True python -m build
+        # TT_FROM_PRECOMPILED env variable allows us to not re-run `make install` and instead
+        # rely on the artifact that was already compiled.
       - name: Upload distribution as artifact
         uses: actions/upload-artifact@v4
         with:
