@@ -293,7 +293,7 @@ void build_and_run_roundtrip_latency_test(
     }
 
     for (auto [device_ptr, program_ptr] : device_program_map) {
-        tt_metal::EnqueueProgram(device_ptr->command_queue(), *program_ptr, false);
+        tt_metal::EnqueueProgram(device_ptr->command_queue(), program_ptr, false);
     }
 
     for (auto [device_ptr, program_ptr] : device_program_map) {

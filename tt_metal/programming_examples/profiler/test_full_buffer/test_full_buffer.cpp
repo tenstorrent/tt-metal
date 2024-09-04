@@ -50,7 +50,7 @@ void RunFillUpAllBuffers(tt_metal::Device *device, int loop_count, bool fast_dis
     {
         for (int i = 0; i < PROFILER_OP_SUPPORT_COUNT * PROFILER_L1_GUARANTEED_MARKER_COUNT / loop_count; i++)
         {
-            EnqueueProgram(device->command_queue(), program, false);
+            EnqueueProgram(device->command_queue(), &program, false);
         }
     }
     else

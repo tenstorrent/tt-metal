@@ -152,7 +152,7 @@ int main(int argc, char **argv) {
             }
         );
 
-        EnqueueProgram(cq, program, false);
+        EnqueueProgram(cq, &program, false);
         Finish(cq);
 
         /*

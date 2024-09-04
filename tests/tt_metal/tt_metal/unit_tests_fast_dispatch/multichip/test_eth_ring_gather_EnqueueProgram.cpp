@@ -282,7 +282,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         tt::tt_metal::detail::CompileProgram(device, programs.at(device->id()));
         auto& cq = device->command_queue();
 
-        EnqueueProgram(cq, programs.at(device->id()), false);
+        EnqueueProgram(cq, &programs.at(device->id()), false);
         cqs.emplace_back(cq);
     }
     for (auto& cq : cqs) {
@@ -427,7 +427,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
         tt::tt_metal::detail::CompileProgram(device, programs.at(device->id()));
         auto& cq = device->command_queue();
 
-        EnqueueProgram(cq, programs.at(device->id()), false);
+        EnqueueProgram(cq, &programs.at(device->id()), false);
         cqs.emplace_back(cq);
     }
     for (auto& cq : cqs) {

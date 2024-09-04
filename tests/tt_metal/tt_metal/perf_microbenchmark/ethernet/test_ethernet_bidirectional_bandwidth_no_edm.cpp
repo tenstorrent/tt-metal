@@ -165,8 +165,8 @@ void run(
         th1.join();
     } else {
 
-        tt_metal::EnqueueProgram(device0->command_queue(), program0, false);
-        tt_metal::EnqueueProgram(device1->command_queue(), program1, false);
+        tt_metal::EnqueueProgram(device0->command_queue(), &program0, false);
+        tt_metal::EnqueueProgram(device1->command_queue(), &program1, false);
 
         tt_metal::Finish(device0->command_queue());
         tt_metal::Finish(device1->command_queue());

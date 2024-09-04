@@ -583,7 +583,7 @@ void build_and_run_autonomous_stream_test(
     tt::tt_metal::detail::CompileProgram(device, program);
     for (std::size_t i = 0; i < num_loop_iterations; i++) {
         log_debug(tt::LogTest, "Enqueing Program");
-        tt_metal::EnqueueProgram(device->command_queue(), program, true);
+        tt_metal::EnqueueProgram(device->command_queue(), &program, true);
         log_debug(tt::LogTest, "Calling Finish");
         tt_metal::Finish(device->command_queue());
         if (i == 0) {

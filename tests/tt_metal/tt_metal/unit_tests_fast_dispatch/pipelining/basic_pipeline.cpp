@@ -227,7 +227,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     tt_metal::detail::WriteToBuffer(src_buffer, src_vec);
     log_info(LogTest, "Writing to device buffer Done.");
 
-    EnqueueProgram(cq, program, false);
+    EnqueueProgram(cq, &program, false);
     Finish(cq);
 
     log_info(LogTest, "Kernels done.");

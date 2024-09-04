@@ -64,21 +64,21 @@ int main(int argc, char **argv) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     /* Configure program and runtime kernel arguments, then execute */
-    SetRuntimeArgs(program, binary_reader_kernel_id, core, 
+    SetRuntimeArgs(program, binary_reader_kernel_id, core,
         {
-            src0_dram_buffer->address(), 
-            src1_dram_buffer->address(), 
+            src0_dram_buffer->address(),
+            src1_dram_buffer->address(),
             dst_dram_buffer->address(),
-            src0_dram_noc_x, 
+            src0_dram_noc_x,
             src0_dram_noc_y,
-            src1_dram_noc_x, 
+            src1_dram_noc_x,
             src1_dram_noc_y,
-            dst_dram_noc_x, 
+            dst_dram_noc_x,
             dst_dram_noc_y,
         }
     );
 
-    EnqueueProgram(cq, program, false);
+    EnqueueProgram(cq, &program, false);
     Finish(cq);
 
     /* Read in result into a host vector */

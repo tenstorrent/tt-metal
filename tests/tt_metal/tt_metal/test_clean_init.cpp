@@ -113,7 +113,7 @@ int main(int argc, char **argv) {
             runtime_args
         );
 
-        EnqueueProgram(cq, program, false);
+        EnqueueProgram(cq, &program, false);
         tt::log_info("Started program");
         Finish(cq);
         tt::log_info("Finished program");

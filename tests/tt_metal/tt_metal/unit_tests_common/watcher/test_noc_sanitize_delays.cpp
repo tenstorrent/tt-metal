@@ -135,7 +135,7 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord 
         SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
         SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
 
-        EnqueueProgram(cq, program, false);
+        EnqueueProgram(cq, &program, false);
         std::vector<uint32_t> result_vec;
         EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
 

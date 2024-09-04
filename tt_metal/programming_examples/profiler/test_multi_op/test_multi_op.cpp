@@ -36,7 +36,7 @@ void RunCustomCycle(tt_metal::Device *device, int fastDispatch)
 
     for (int i = 0; i < fastDispatch; i++)
     {
-        EnqueueProgram(device->command_queue(), program, false);
+        EnqueueProgram(device->command_queue(), &program, false);
     }
 
 }

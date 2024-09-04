@@ -114,7 +114,7 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyP
     initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
     const bool is_blocking_op = false;
-    EnqueueProgram(cq, program, is_blocking_op);
+    EnqueueProgram(cq, &program, is_blocking_op);
     Finish(cq);
 
     return cb_config_successful(device, program, program_config);
@@ -125,7 +125,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
 
     const std::vector<CBHandle>& cb_handles = initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
-    EnqueueProgram(cq, program, false);
+    EnqueueProgram(cq, &program, false);
     Finish(cq);
 
     const bool is_cb_config_before_update_successful = cb_config_successful(device, program, program_config);
@@ -138,7 +138,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
         UpdateCircularBufferTotalSize(program, cb_handles[cb_id], cb_size);
     }
 
-    EnqueueProgram(cq, program, false);
+    EnqueueProgram(cq, &program, false);
     Finish(cq);
 
     const bool is_cb_config_after_update_successful = cb_config_successful(device, program, program_config_2);
@@ -151,7 +151,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Progr
     bool are_all_semaphore_values_correct = true;
 
     const bool is_blocking_op = false;
-    EnqueueProgram(cq, program, is_blocking_op);
+    EnqueueProgram(cq, &program, is_blocking_op);
     Finish(cq);
 
     uint32_t expected_semaphore_vals_idx = 0;
@@ -257,7 +257,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
 
     tt::tt_metal::detail::CompileProgram(device, program);
     for (uint32_t i = 0; i < num_iterations; i++) {
-        EnqueueProgram(cq, program, false);
+        EnqueueProgram(cq, &program, false);
     }
     Finish(cq);
 
@@ -394,7 +394,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
             SetCommonRuntimeArgs(program, dummy_compute_kernel, dummy_common_args);
         }
 
-        EnqueueProgram(cq, program, false);
+        EnqueueProgram(cq, &program, false);
         Finish(cq);
 
         first = true;
@@ -620,7 +620,7 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
     SetCommonRuntimeArgs(program, 0, common_runtime_args);
 
     // Compile and Launch the Program now.
-    EnqueueProgram(device->command_queue(), program, false);
+    EnqueueProgram(device->command_queue(), &program, false);
     Finish(device->command_queue());
 
     constexpr uint32_t unique_arg_incr_val = 10;
@@ -690,7 +690,7 @@ TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
         auto dummy_reader_kernel = CreateKernel(
             program, "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        EnqueueProgram(device->command_queue(), program, false);
+        EnqueueProgram(device->command_queue(), &program, false);
         Finish(device->command_queue());
     }
 }
@@ -771,7 +771,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCor
 
         local_test_functions::initialize_dummy_kernels(program, cr_set);
 
-        EnqueueProgram(device->command_queue(), program, false);
+        EnqueueProgram(device->command_queue(), &program, false);
 
         Finish(device->command_queue());
 
@@ -834,7 +834,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDi
             program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        EnqueueProgram(device->command_queue(), program, false);
+        EnqueueProgram(device->command_queue(), &program, false);
         Finish(device->command_queue());
     }
 }
@@ -1392,7 +1392,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
     log_info(tt::LogTest, "Running {} programs for cache warmup.", programs.size());
     // This loop caches program and runs
     for (Program& program: programs) {
-        EnqueueProgram(this->device_->command_queue(), program, false);
+        EnqueueProgram(this->device_->command_queue(), &program, false);
     }
 
     // This loops assumes already cached
@@ -1406,7 +1406,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             log_info(tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i+1, NUM_ITERATIONS);
         }
         for (Program& program: programs) {
-            EnqueueProgram(this->device_->command_queue(), program, false);
+            EnqueueProgram(this->device_->command_queue(), &program, false);
         }
     }
 

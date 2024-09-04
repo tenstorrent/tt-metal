@@ -33,7 +33,7 @@ void launch_program(tt_metal::Device *device, tt_metal::Program &program) {
         tt_metal::detail::LaunchProgram(device, program);
     } else {
         CommandQueue &cq = device->command_queue();
-        EnqueueProgram(cq, program, false);
+        EnqueueProgram(cq, &program, false);
         Finish(cq);
     }
 }

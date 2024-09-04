@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
     SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_dram_noc_x, dst_dram_noc_y});
 
-    EnqueueProgram(cq, program, false);
+    EnqueueProgram(cq, &program, false);
     Finish(cq);
 
     /* Read in result into a host vector */

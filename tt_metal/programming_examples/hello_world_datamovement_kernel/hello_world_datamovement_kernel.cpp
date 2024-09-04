@@ -36,7 +36,7 @@ int main(int argc, char **argv) {
 
     SetRuntimeArgs(program, void_dataflow_kernel_noc0_id, core, {});
     SetRuntimeArgs(program, void_dataflow_kernel_noc1_id, core, {});
-    EnqueueProgram(cq, program, false);
+    EnqueueProgram(cq, &program, false);
     printf("Hello, Core {0, 0} on Device 0, I am sending you some data. Standby awaiting communication.\n");
 
     // Wait Until Program Finishes, Print "Hello World!", and Close Device

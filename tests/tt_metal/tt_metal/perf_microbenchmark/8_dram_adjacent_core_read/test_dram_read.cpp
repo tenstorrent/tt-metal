@@ -694,7 +694,7 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
-            EnqueueProgram(device->command_queue(), program, false);
+            EnqueueProgram(device->command_queue(), &program, false);
             Finish(device->command_queue());
             tt_metal::DumpDeviceProfileResults(device, program);
             auto t_end = std::chrono::steady_clock::now();

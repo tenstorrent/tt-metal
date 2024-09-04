@@ -223,9 +223,9 @@ int main(int argc, char **argv) {
 
         // Cache stuff
         for (int i = 0; i < warmup_iterations_g; i++) {
-            EnqueueProgram(cq, program[0], false);
+            EnqueueProgram(cq, &program[0], false);
             if (nfast_kernels_g > 0) {
-                EnqueueProgram(cq, program[1], false);
+                EnqueueProgram(cq, &program[1], false);
             }
         }
         Finish(cq);
@@ -236,9 +236,9 @@ int main(int argc, char **argv) {
 
         auto start = std::chrono::system_clock::now();
         for (int i = 0; i < iterations_g; i++) {
-            EnqueueProgram(cq, program[0], false);
+            EnqueueProgram(cq, &program[0], false);
             for (int j = 0; j < nfast_kernels_g; j++) {
-                EnqueueProgram(cq, program[1], false);
+                EnqueueProgram(cq, &program[1], false);
             }
         }
         if (time_just_finish_g) {

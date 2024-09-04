@@ -2563,21 +2563,14 @@ void HWCommandQueue::terminate() {
 
 void EnqueueAddBufferToProgramImpl(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program) {
+    Program* program) {
     std::visit(
         [program](auto&& b) {
             using buffer_type = std::decay_t<decltype(b)>;
             if constexpr (std::is_same_v<buffer_type, std::shared_ptr<Buffer>>) {
-                std::visit(
-                    [&b](auto&& p) {
-                        using program_type = std::decay_t<decltype(p)>;
-                        if constexpr (std::is_same_v<program_type, std::reference_wrapper<Program>>) {
-                            p.get().add_buffer(b);
-                        } else {
-                            p->add_buffer(b);
-                        }
-                    },
-                    program);
+                if (program != nullptr) {
+                    program->add_buffer(b);
+                }
             }
         },
         buffer);
@@ -2586,15 +2579,9 @@ void EnqueueAddBufferToProgramImpl(
 void EnqueueAddBufferToProgram(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program,
+    Program* program,
     bool blocking) {
     EnqueueAddBufferToProgramImpl(buffer, program);
-    // cq.run_command(CommandInterface{
-    //     .type = EnqueueCommandType::ADD_BUFFER_TO_PROGRAM,
-    //     .blocking = blocking,
-    //     .buffer = buffer,
-    //     .program = program,
-    // });
 }
 
 void EnqueueSetRuntimeArgsImpl(const RuntimeArgsMetadata& runtime_args_md) {
@@ -2788,39 +2775,25 @@ void EnqueueWriteBufferImpl(
 }
 
 void EnqueueProgram(
-    CommandQueue& cq, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program, bool blocking) {
+    CommandQueue& cq, Program* program, bool blocking) {
     detail::DispatchStateCheck(true);
     cq.run_command(
         CommandInterface{.type = EnqueueCommandType::ENQUEUE_PROGRAM, .blocking = blocking, .program = program});
 }
 
 void EnqueueProgramImpl(
-    CommandQueue& cq, std::variant<std::reference_wrapper<Program>, std::shared_ptr<Program>> program, bool blocking) {
+    CommandQueue& cq, Program* program, bool blocking) {
     ZoneScoped;
-    std::visit(
-        [&cq, blocking](auto&& program) {
-            ZoneScoped;
-            using T = std::decay_t<decltype(program)>;
-            Device* device = cq.device();
-            if constexpr (std::is_same_v<T, std::reference_wrapper<Program>>) {
-                detail::CompileProgram(device, program);
-                program.get().allocate_circular_buffers();
-                detail::ValidateCircularBufferRegion(program, device);
-                cq.hw_command_queue().enqueue_program(program, blocking);
-                // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
-                // leaks on device.
-                program.get().release_buffers();
-            } else if constexpr (std::is_same_v<T, std::shared_ptr<Program>>) {
-                detail::CompileProgram(device, *program);
-                program->allocate_circular_buffers();
-                detail::ValidateCircularBufferRegion(*program, device);
-                cq.hw_command_queue().enqueue_program(*program, blocking);
-                // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
-                // leaks on device.
-                program->release_buffers();
-            }
-        },
-        program);
+    if (program != nullptr) {
+        Device* device = cq.device();
+        detail::CompileProgram(device, *program);
+        program->allocate_circular_buffers();
+        detail::ValidateCircularBufferRegion(*program, device);
+        cq.hw_command_queue().enqueue_program(*program, blocking);
+        // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
+        // leaks on device.
+        program->release_buffers();
+    }
 }
 
 void EnqueueRecordEvent(CommandQueue& cq, std::shared_ptr<Event> event) {
@@ -3106,13 +3079,13 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
             break;
         case EnqueueCommandType::ADD_BUFFER_TO_PROGRAM:
             TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");
-            TT_ASSERT(command.program.has_value(), "Must provide a program!");
-            EnqueueAddBufferToProgramImpl(command.buffer.value(), command.program.value());
+            TT_ASSERT(command.program != nullptr, "Must provide a program!");
+            EnqueueAddBufferToProgramImpl(command.buffer.value(), command.program);
             break;
         case EnqueueCommandType::ENQUEUE_PROGRAM:
-            TT_ASSERT(command.program.has_value(), "Must provide a program!");
+            TT_ASSERT(command.program != nullptr, "Must provide a program!");
             TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
-            EnqueueProgramImpl(*this, command.program.value(), command.blocking.value());
+            EnqueueProgramImpl(*this, command.program, command.blocking.value());
             break;
         case EnqueueCommandType::ENQUEUE_TRACE:
             EnqueueTraceImpl(*this, command.trace_id.value(), command.blocking.value());

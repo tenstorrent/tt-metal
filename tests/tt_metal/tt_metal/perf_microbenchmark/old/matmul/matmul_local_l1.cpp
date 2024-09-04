@@ -381,7 +381,7 @@ int main(int argc, char **argv) {
     std::chrono::duration<double, std::nano> duration;
     // took from run_operation.cpp
     auto start = std::chrono::high_resolution_clock::now();
-    EnqueueProgram(device->command_queue(), program, false);
+    EnqueueProgram(device->command_queue(), &program, false);
     Finish(device->command_queue());
     auto end = std::chrono::high_resolution_clock::now();
     duration = end - start;
