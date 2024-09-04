@@ -17,7 +17,7 @@ from tests.ttnn.utils_for_testing import (
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 20
+TIMEOUT = 5
 random.seed(0)
 
 

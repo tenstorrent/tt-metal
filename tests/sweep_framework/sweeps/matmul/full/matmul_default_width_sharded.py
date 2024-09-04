@@ -20,6 +20,9 @@ from tests.ttnn.utils_for_testing import (
 from models.utility_functions import torch_random
 
 
+TIMEOUT = 5
+
+
 def get_width_sharded_specs(k_size_choices: List[int], num_cores_choices: List[int]) -> Tuple[int, int, int]:
     for k_size in k_size_choices:
         for per_core_width, num_cores_width in get_per_core_size_and_num_cores(

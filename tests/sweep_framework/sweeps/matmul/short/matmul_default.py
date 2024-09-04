@@ -12,6 +12,8 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.utility_functions import torch_random
 
 
+TIMEOUT = 5
+
 # TODO: Missing coverage for mixed precision; passed in dtype does nothing in current matmul path
 parameters = {
     "default": {
