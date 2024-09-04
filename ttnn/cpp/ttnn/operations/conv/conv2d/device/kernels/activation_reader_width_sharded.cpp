@@ -22,15 +22,18 @@ inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uin
 }
 #endif
 
+constexpr uint32_t weight_size_h                    = get_compile_time_arg_val(7);
+constexpr uint32_t weight_size_w                    = get_compile_time_arg_val(8);
 //Only a part of the total channel depth (width) is used in one block.
 template<int window_height, int window_width>
 FORCE_INLINE void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr, const uint32_t reader_channel_idx,
         const uint32_t conv_act_c_bytes, const uint32_t conv_act_c_read_bytes, const uint32_t stride_h_bytes, const uint32_t stride_w_bytes) {
 
     uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_bytes);
-    #pragma GCC unroll 3
+    #pragma GCC unroll weight_size_h
     for(uint32_t outer = 0; outer < window_height; outer++) {
         uint32_t act_l1_read_addr_row_offset = act_l1_read_addr_plus_offset;
+        #pragma  GCC unroll weight_size_w
         for (uint32_t inner = 0; inner < window_width; inner++) {
             //Read the partial depth.
             noc_async_read_one_packet_with_state<true>(act_l1_read_addr_row_offset, l1_write_addr_act);
@@ -52,8 +55,7 @@ void kernel_main() {
     constexpr uint32_t dilation_w                       = get_compile_time_arg_val(4);
     constexpr uint32_t conv_act_size_w                  = get_compile_time_arg_val(5);
     constexpr uint32_t conv_act_c_read_bytes            = get_compile_time_arg_val(6);
-    constexpr uint32_t weight_size_h                    = get_compile_time_arg_val(7);
-    constexpr uint32_t weight_size_w                    = get_compile_time_arg_val(8);
+
     constexpr uint32_t act_block_h_datums               = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_num_tiles              = get_compile_time_arg_val(10);
     constexpr uint32_t act_w_num_outer                  = get_compile_time_arg_val(11);
@@ -155,8 +157,8 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-            read_channels<weight_size_h,weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
-            read_channels<weight_size_h,weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
+            read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
+            read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
 
             reader_idx++;
         }
