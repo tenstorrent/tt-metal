@@ -55,8 +55,6 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
         attention_input = prepare_inputs_ttnn(
             tt_attention_input,
             model_args.dim,
-            start_pos,
-            model_args,
             tt_model.mesh_device,
         )
 
