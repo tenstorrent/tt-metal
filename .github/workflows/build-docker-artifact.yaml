@@ -20,7 +20,6 @@ jobs:
       VERBOSE: 1
       IMAGE: tt-metalium/ubuntu-20.04-amd64
       DOCKERFILE: ubuntu-20.04-amd64
-      IMAGE_TAG: ${{ github.sha }}
     environment: dev
     runs-on:
       - build-docker
