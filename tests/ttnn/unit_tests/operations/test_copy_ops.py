@@ -119,7 +119,11 @@ def run_assign_test_opt_tensor(N, C, H, W, memory_config, dtype, device):
 
     opt_tensor = torch.randn(shape, dtype=torch_dtype)
     opt_tensor = ttnn.from_torch(opt_tensor, dtype, layout=ttnn.Layout.TILE, device=device, memory_config=memory_config)
+
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.assign(input, memory_config=memory_config, dtype=dtype, output_tensor=opt_tensor)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+
     assert opt_tensor.shape == input.shape
     assert opt_tensor.dtype == dtype
     assert opt_tensor.memory_config() == memory_config
