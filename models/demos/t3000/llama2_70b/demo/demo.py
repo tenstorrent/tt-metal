@@ -4,6 +4,7 @@
 
 from dataclasses import dataclass
 import os
+import gc
 import json
 import torch
 import torch.nn.functional as F
@@ -379,10 +380,11 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
 @pytest.mark.parametrize(
     "max_output_tokens, output_at_end, top_p, top_k, temperature",
     (
+        (119 * 1024, True, 1, 1, 1.0),
         (128, True, 1, 1, 1.0),
         (128, True, 0.9, 10, 1.0),
     ),
-    ids=("greedy", "sampling"),
+    ids=("128k_greedy", "greedy", "sampling"),
 )
 @pytest.mark.parametrize(
     "ground_truth",
