@@ -542,7 +542,7 @@ namespace ckernel::packer
       TT_SETDMAREG(0, UPPER_HALFWORD(addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
    }
 
-   template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool diagonal = false>
+   template <uint32_t block_ct_dim, uint32_t full_ct_dim, bool diagonal = false, uint32_t row_num_datums = TILE_C_DIM>
    inline void program_packer_untilized_destination(const uint32_t addr, const uint32_t pack_dst_format)
    {
       if constexpr (diagonal) {
@@ -571,9 +571,9 @@ namespace ckernel::packer
          // Each packer packs 8 rows of full_ct_dim*TILE_C_DIM datums
          const uint32_t block_size = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * TILE_C_DIM * (TILE_R_DIM/4));
          constexpr uint32_t offset0 = 0;
-         const uint32_t offset1 = (1*block_size)/16;
-         const uint32_t offset2 = (2*block_size)/16;
-         const uint32_t offset3 = (3*block_size)/16;
+         const uint32_t offset1 = (1*row_num_datums*block_size) / 16 / TILE_C_DIM;
+         const uint32_t offset2 = (2*row_num_datums*block_size) / 16 / TILE_C_DIM;
+         const uint32_t offset3 = (3*row_num_datums*block_size) / 16 / TILE_C_DIM;
 
          TT_SETDMAREG(0, LOWER_HALFWORD(addr+offset0), 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
          TT_SETDMAREG(0, UPPER_HALFWORD(addr+offset0), 0, HI_16(p_gpr_pack::OUTPUT_ADDR+0));
