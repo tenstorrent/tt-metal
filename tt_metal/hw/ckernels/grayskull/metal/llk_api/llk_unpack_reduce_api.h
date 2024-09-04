@@ -45,6 +45,7 @@ inline void llk_unpack_reduce_mop_config() {
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpose=0) {
 
+    DEBUG_STATUS("UPRW");
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
     constexpr std::uint32_t unpA_operand_id = 0;
@@ -78,6 +79,7 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
     cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = (((uint)l1_buffer) >> 4) - 1;  // Set l1 buffer address
 
     _llk_unpack_reduce_init_<type, dim>(within_face_16x16_transpose);
+    DEBUG_STATUS("UPRD");
 }
 
 template <PoolType type, ReduceDim dim>
@@ -88,7 +90,9 @@ inline void llk_unpack_reduce(const std::uint32_t operand, const std::uint32_t t
     std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX(unpack_src_format[operand_id], tile_index);
     std::uint32_t address = base_address + offset_address;
 
+    DEBUG_STATUS("UPRW");
     _llk_unpack_reduce_<type, dim>(
         address
     );
+    DEBUG_STATUS("UPRD");
 }

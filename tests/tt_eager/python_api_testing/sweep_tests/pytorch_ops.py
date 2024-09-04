@@ -1,18 +1,10 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import tt_lib as ttl
 import ttnn
 import torch
 from tt_lib.utils import _nearest_32 as nearest_32, tilize as tilize_util, untilize as untilize_util
-from tests.tt_eager.python_api_testing.sweep_tests.reference_optimizer import (
-    lamb_optimizer_kernel,
-)
-from tests.tt_eager.python_api_testing.sweep_tests.model_tests import TorchConvConv, TorchConvReluConv, BertFeedForward
 
-from ttnn.tracer import trace, visualize
-import random
-import transformers
 
 ################################################
 ################# Helper-Funcs #################
@@ -77,27 +69,12 @@ def var_global(x, *args, **kwargs):
     return torch.var(x, [0, 1, 2, 3], keepdim=True)
 
 
-def ttnn_var_global(x, *args, **kwargs):
-    dim = kwargs.pop("dim")
-    return torch.var(x, dim, keepdim=True)
-
-
 def std_global(x, *args, **kwargs):
     return torch.std(x, [0, 1, 2, 3], keepdim=True)
 
 
-def ttnn_std_global(x, *args, **kwargs):
-    dim = kwargs.pop("dim")
-    return torch.std(x, dim, keepdim=True)
-
-
 def mean_global(x, *args, **kwargs):
     return torch.mean(x, [0, 1, 2, 3], keepdim=True)
-
-
-def ttnn_mean_global(x, *args, **kwargs):
-    dim = kwargs.pop("dim")
-    return torch.mean(x, dim, keepdim=True)
 
 
 def normalize_global(x, *args, **kwargs):
@@ -113,6 +90,12 @@ def sum(x, *args, dim, **kwargs):
 
 
 def where(x, y, z, *args, **kwargs):
+    return torch.where(x > 0, y, z)
+
+
+def where_scalar(x, *args, **kwargs):
+    y = kwargs.pop("scalar_true")
+    z = kwargs.pop("scalar_false")
     return torch.where(x > 0, y, z)
 
 
@@ -177,13 +160,6 @@ def relu6(x, *args, **kwargs):
 
 def prelu(x, *args, **kwargs):
     t_weight = torch.Tensor((kwargs["weight"],))
-    result = torch.nn.functional.prelu(x, t_weight)
-    return result
-
-
-def ttnn_prelu(x, *args, **kwargs):
-    weight = kwargs.pop("scalar")
-    t_weight = torch.ones([1], dtype=x.dtype) * weight
     result = torch.nn.functional.prelu(x, t_weight)
     return result
 
@@ -523,9 +499,8 @@ def polygamma(x, *args, k, **kwargs):
     return torch.special.polygamma(n=k, input=x)
 
 
-def logical_xori(x, *args, **kwargs):
-    value = kwargs.pop("immediate")
-    result = torch.logical_xor(x, torch.tensor(value, dtype=torch.int32))
+def logical_xor_(x, y, *args, **kwargs):
+    result = x.logical_xor_(y)
     return result
 
 
@@ -545,6 +520,69 @@ def log_sigmoid(x, *args, **kwargs):
 def heaviside(x, *args, **kwargs):
     value = kwargs.pop("scalar")
     result = torch.heaviside(x, torch.tensor(value, dtype=x.dtype))
+    return result
+
+
+def bitwise_xor(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_xor(x, value)
+    return result
+
+
+def bitwise_not(x, *args, **kwargs):
+    result = torch.bitwise_not(x)
+    return result
+
+
+def bitwise_and(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_and(x, value)
+    return result
+
+
+def bitwise_or(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_or(x, value)
+    return result
+
+
+def right_shift(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_right_shift(x, value)
+    return result
+
+
+def left_shift(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.bitwise_left_shift(x, value)
+    return result
+
+
+def unary_remainder(x, *args, **kwargs):
+    value = kwargs.pop("scalar")
+    result = torch.remainder(x, value)
+    return result
+
+
+def remainder(x, y, *args, **kwargs):
+    result = torch.remainder(x, y)
+    return result
+
+
+def fmod(x, y, *args, **kwargs):
+    result = torch.fmod(x, y)
+    return result
+
+
+def unary_fmod(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.fmod(x, value)
+    return result
+
+
+def unary_ne(x, *args, **kwargs):
+    value = kwargs.pop("scalar")
+    result = torch.ne(x, value)
     return result
 
 
@@ -605,6 +643,46 @@ def signbit(x, *args, **kwargs):
     return torch.signbit(x)
 
 
+def floor(x, *args, **kwargs):
+    return torch.floor(x)
+
+
+def ceil(x, *args, **kwargs):
+    return torch.ceil(x)
+
+
+def trunc(x, *args, **kwargs):
+    return torch.trunc(x)
+
+
+def frac(x, *args, **kwargs):
+    result = torch.frac(x)
+    return result
+
+
+def floor_div(x, y, *args, **kwargs):
+    result = torch.floor_divide(x, y)
+    return result
+
+
+def unary_floor_div(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.floor_divide(x, value)
+    return result
+
+
+def rfloor_div(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.floor_divide(value, x)
+    return result
+
+
+def round(x, *args, **kwargs):
+    decimals = kwargs.pop("decimals")
+    result = torch.round(x, decimals=decimals)
+    return result
+
+
 def sin(x, *args, **kwargs):
     return torch.sin(x)
 
@@ -662,9 +740,8 @@ def multigammaln(x, *args, **kwargs):
     return torch.special.multigammaln(x, 4)
 
 
-def logical_andi(x, *args, **kwargs):
-    value = kwargs.pop("immediate")
-    result = torch.logical_and(x, torch.tensor(value, dtype=torch.int32))
+def logical_and_(x, y, *args, **kwargs):
+    result = x.logical_and_(y)
     return result
 
 
@@ -680,9 +757,52 @@ def silu(x, *args, **kwargs):
     return torch.nn.functional.silu(x)
 
 
+def div(x, y, *args, accurate_mode, round_mode, **kwargs):
+    if round_mode == "None":
+        return torch.div(x, y)
+    return torch.div(x, y, rounding_mode=round_mode)
+
+
+def div_trunc(x, y, *args, **kwargs):
+    result = torch.div(x, y, rounding_mode="trunc")
+    return result
+
+
+def unary_div_trunc(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.div(x, value, rounding_mode="trunc")
+    return result
+
+
+def unary_rdiv_trunc(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.trunc(value / x)
+    return result
+
+
+def div_no_nan(x, y, *args, **kwargs):
+    result = torch.where(y == 0, 0, x / y)
+    return result
+
+
+def unary_div_no_nan(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    if value == 0:
+        result = torch.zeros_like(x)
+    else:
+        result = x / value
+    return result
+
+
 def div_unary(x, *args, scalar, **kwargs):
     result = torch.div(x, scalar)
     return result
+
+
+def unary_div(x, *args, scalar, accurate_mode, round_mode, **kwargs):
+    if round_mode == "None":
+        return torch.div(x, scalar)
+    return torch.div(x, scalar, rounding_mode=round_mode)
 
 
 def mul_unary(x, *args, scalar, **kwargs):
@@ -835,9 +955,8 @@ def logical_and(x, y, *args, **kwargs):
     return result
 
 
-def logical_noti(x, *args, **kwargs):
-    immediate = kwargs.pop("immediate")
-    result = torch.logical_not(torch.full_like(x, immediate)).to(torch.int32)
+def logical_not_(x, *args, **kwargs):
+    result = x.logical_not_()
     return result
 
 
@@ -863,6 +982,13 @@ def xlogy(x, y, *args, **kwargs):
     return torch.xlogy(x, y)
 
 
+def prod(x, *args, all_dimensions, dim, **kwargs):
+    if all_dimensions:
+        result = torch.prod(x)
+        return result.view(1, 1, 1, 1)
+    return torch.prod(x, dim, keepdim=True)
+
+
 def ldexp(x, y, *args, **kwargs):
     return torch.ldexp(x, y)
 
@@ -879,12 +1005,8 @@ def addalpha(x, y, *args, alpha, **kwargs):
     return torch.add(x, y, alpha=alpha)
 
 
-def lamb_optimizer(x, y, z, w, *args, beta1, beta2, step_size, eps, weight_decay, **kwargs):
-    exp_avg_out, exp_avg_sq_out, param = lamb_optimizer_kernel.lamb_kernel(
-        x, y, z, w, beta1=beta1, beta2=beta2, step_size=step_size, eps=eps, weight_decay=weight_decay
-    )
-
-    return [exp_avg_out, exp_avg_sq_out, param]
+def celu(x, *args, alpha, **kwargs):
+    return torch.celu(x, alpha=alpha)
 
 
 def repeat_interleave(x, *args, repeat, dim, **kwargs):
@@ -943,6 +1065,18 @@ def ne(x, y, *args, **kwargs):
         return x != y
 
 
+def unary_gt(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.gt(x, value)
+    return result
+
+
+def unary_lt(x, *args, **kwargs):
+    value = kwargs.pop("value")
+    result = torch.lt(x, value)
+    return result
+
+
 def max(x, y, *args, **kwargs):
     return torch.max(x, y)
 
@@ -964,18 +1098,8 @@ def max_bw(x, y, z, *args, **kwargs):
     return [in_data.grad, other_data.grad]
 
 
-def minimum(x, y, *args, **kwargs):
-    return torch.minimum(x, y)
-
-
 def min(x, y, *args, **kwargs):
     return torch.min(x, y)
-
-
-def ttnn_min(x, *args, **kwargs):
-    dim = kwargs.pop("dim")
-    print(f"PT: {dim[0]}")
-    return torch.min(x, dim=dim[0], keepdim=True).values
 
 
 def min_bw(x, y, z, *args, **kwargs):
@@ -1024,9 +1148,8 @@ def logical_or(x, y, *args, **kwargs):
     return torch.logical_or(x, y)
 
 
-def logical_ori(x, *args, **kwargs):
-    value = kwargs.pop("immediate")
-    result = torch.logical_or(x, torch.tensor(value, dtype=torch.int32))
+def logical_or_(x, y, *args, **kwargs):
+    result = x.logical_or_(y)
     return result
 
 
@@ -1175,27 +1298,23 @@ def tilize_with_zero_padding(x, *args, **kwargs):
     )
 
 
-def tilize_with_val_padding(x, output_tensor_shape, input_tensor_start, pad_value, *args, **kwargs):
+def tilize_with_val_padding(x, output_tensor_shape, pad_value, *args, **kwargs):
     pad = torch.nn.functional.pad(
         x,
-        tuple(
-            j
-            for i in reversed(range(len(x.shape)))
-            for j in (input_tensor_start[i], output_tensor_shape[i] - x.shape[i])
-        ),
+        tuple(j for i in reversed(range(len(x.shape))) for j in (0, output_tensor_shape[i] - x.shape[i])),
         value=pad_value,
     )
     tilized = tilize_util(pad)
     return tilized
 
 
-def untilize_with_unpadding(x, output_tensor_start, output_tensor_end, *args, **kwargs):
+def untilize_with_unpadding(x, output_tensor_end, *args, **kwargs):
     untilized = untilize_util(x)
     unpad = untilized[
-        output_tensor_start[0] : output_tensor_end[0] + 1,
-        output_tensor_start[1] : output_tensor_end[1] + 1,
-        output_tensor_start[2] : output_tensor_end[2] + 1,
-        output_tensor_start[3] : output_tensor_end[3] + 1,
+        : output_tensor_end[0] + 1,
+        : output_tensor_end[1] + 1,
+        : output_tensor_end[2] + 1,
+        : output_tensor_end[3] + 1,
     ]
     return unpad
 
@@ -1324,6 +1443,53 @@ def eltwise_identity(x, *args, **kwargs):
     return x
 
 
+def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
+    if tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.uint16:
+        return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
+    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.bfloat16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.bfloat16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.int32:
+        return x.to(torch.int32)
+    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.float32:
+        return x.to(torch.bfloat16).to(torch.float32)
+    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.uint16:
+        return torch.clamp(x.to(torch.int32), min=0, max=65535)  # due to no uint16 support
+    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.float32:
+        return x.to(torch.float32)
+    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.int32:
+        return x.to(torch.int32)
+    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.float32:
+        return x.to(torch.float32)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.uint16:
+        return torch.clamp(x.to(torch.bfloat16).to(torch.int32), min=0, max=65535)  # due to no uint16 support
+    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.int32:
+        return x.to(torch.bfloat16).to(torch.int32)
+    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.uint32:
+        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.bfloat16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.uint32:
+        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.float32:
+        return x.to(torch.float32)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.uint32:
+        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.uint32:
+        return torch.clamp(x.to(torch.int32), min=0, max=65535)
+    else:
+        return x
+
+
 def eltwise_rdiv(x, *args, **kwargs):
     dim = kwargs["factor"]
     return dim / x
@@ -1381,13 +1547,6 @@ def pt_embedding_bw(x, y, z, *args, **kwargs):
     return other_data.grad
 
 
-def ttnn_embeddings(x, y, *args, **kwargs):
-    x = x.int()
-    x = torch.clamp(x, min=0, max=y.shape[0] - 1)
-    z = torch.nn.functional.embedding(x, y)
-    return z
-
-
 def rmsnorm_noweights(x, *args, **kwargs):
     eps = 1e-5
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
@@ -1439,8 +1598,8 @@ def complex_abs(x, *args, **kwargs):
     return torch.abs(x)
 
 
-def complex_polar(x, y, *args, **kwargs):
-    return torch.polar(x.to(torch.float32), y.to(torch.float32))
+def complex_polar(x, *args, **kwargs):
+    return torch.polar(x.real.to(torch.float32), x.imag.to(torch.float32))
 
 
 def complex_imag(x, *args, **kwargs):
@@ -1576,7 +1735,7 @@ def addcmul_bw(x, y, z, w, scalar, *args, **kwargs):
     return [in_data.grad, other_data1.grad, other_data2.grad]
 
 
-def addalpha_bw(x, y, z, scalar, *args, **kwargs):
+def addalpha_bw(x, y, z, alpha, *args, **kwargs):
     grad_data = x
     in_data = y
     other_data1 = z
@@ -1587,28 +1746,41 @@ def addalpha_bw(x, y, z, scalar, *args, **kwargs):
     in_data.retain_grad()
     other_data1.retain_grad()
     other_data1.retain_grad()
-    pyt_y = torch.add(in_data, other_data1, alpha=scalar)
+    pyt_y = torch.add(in_data, other_data1, alpha=alpha)
     pyt_y.backward(gradient=grad_data)
 
     return [in_data.grad, other_data1.grad]
 
 
-def ttnn_layernorm_weights_bias(x, y, z, *args, **kwargs):
-    w = x.shape[1]
-    torch_output_tensor = torch.nn.functional.layer_norm(x, normalized_shape=[w], weight=y, bias=z)
-    return torch_output_tensor
+def subalpha_bw(x, y, z, alpha, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data1 = z
+
+    in_data.requires_grad = True
+    other_data1.requires_grad = True
+
+    in_data.retain_grad()
+    other_data1.retain_grad()
+    other_data1.retain_grad()
+    pyt_y = torch.sub(in_data, other_data1, alpha=alpha)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data1.grad]
 
 
-def ttnn_layernorm_weights_bias_residual(x, y, z, w, *args, **kwargs):
-    width = x.shape[1]
-    torch_output_tensor = torch.nn.functional.layer_norm(x + y, normalized_shape=[width], weight=z, bias=w)
-    return torch_output_tensor
+def unary_remainder_bw(x, y, *args, **kwargs):
+    value = kwargs.pop("scalar")
 
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
 
-def ttnn_layernorm_noweights(x, *args, **kwargs):
-    w = x.shape[1]
-    torch_output_tensor = torch.nn.functional.layer_norm(x, normalized_shape=[w])
-    return torch_output_tensor
+    in_data.retain_grad()
+    pyt_y = torch.remainder(in_data, torch.tensor(value))
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
 
 
 def abs_bw(x, y, *args, **kwargs):
@@ -1770,60 +1942,228 @@ def clamp_bw(x, y, scalar, *args, **kwargs):
     return in_data.grad
 
 
-def attention_softmax_nomask(x, *args, **kwargs):
-    torch_output_tensor = ttnn.transformer._torch_attention_softmax(
-        x,
-        head_size=None,
-        attention_mask=None,
-    )
+def fmod_bw(x, y, value, *args, **kwargs):
+    grad_data = x
+    in_data = y
 
-    return torch_output_tensor
+    in_data.requires_grad = True
 
+    pyt_y = torch.fmod(in_data, value)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
 
-def attention_softmax(x, y, *args, scalar, **kwargs):
-    y[y <= 0.50] = 0
-    y[y > 0.50] = 1
-    if scalar < 0:
-        scalar = -scalar
-
-    torch_output_tensor = ttnn.transformer._torch_attention_softmax(
-        x,
-        head_size=None,
-        attention_mask=y,
-    )
-
-    return torch_output_tensor
+    return in_data.grad
 
 
-def rms_norm(hidden_states, weight, *, epsilon=1e-6):
-    variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
-    hidden_states = hidden_states * torch.rsqrt(variance + epsilon)
+def frac_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
 
-    if weight.dtype in [torch.float16, torch.bfloat16]:
-        hidden_states = hidden_states.to(weight.dtype)
+    in_data.requires_grad = True
 
-    return weight * hidden_states
+    pyt_y = torch.frac(in_data)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
 
-
-def ttnn_rmsnorm(x, y, *args, **kwargs):
-    torch_output_tensor = rms_norm(x, y)
-    return torch_output_tensor
+    return in_data.grad
 
 
-def transformer_concatenate_heads(x, *args, **kwargs):
-    torch_output_tensor = ttnn.transformer._torch_concatenate_heads(x)
+def gelu_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
 
-    return torch_output_tensor
+    in_data.requires_grad = True
+
+    fast_and_approx = kwargs.pop("fast_and_approx")
+    approximate = "tanh" if fast_and_approx else "none"
+
+    pyt_y = torch.nn.functional.gelu(in_data, approximate=approximate)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
 
 
-def ttnn_groupnorm(x, y, z, *args, **kwargs):
-    torch_output_tensor = torch.nn.functional.group_norm(x, num_groups=1, weight=y, bias=z)
-    return torch_output_tensor
+def hardshrink_bw(x, y, _lambda, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+
+    pyt_y = torch.nn.functional.hardshrink(in_data, _lambda)
+    in_data.retain_grad()
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def hardtanh_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+
+    if "low" in kwargs and "high" in kwargs:
+        low = kwargs.pop("low")
+        high = kwargs.pop("high")
+        pyt_y = torch.nn.functional.hardtanh(in_data, min_val=low, max_val=high)
+
+        in_data.retain_grad()
+        pyt_y.backward(gradient=grad_data)
+
+    else:
+        pyt_y = torch.nn.functional.hardtanh(in_data)
+
+        in_data.retain_grad()
+        pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def hypot_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = torch.hypot(in_data, other_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
+def i0_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+
+    in_data.requires_grad = True
+    in_data.retain_grad()
+
+    pyt_y = torch.i0(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def ceil_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.ceil(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def celu_bw(x, y, alpha, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.celu(in_data, alpha)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def cosh_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.cosh(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def cos_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.cos(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def complex_polar_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.polar(in_data.real, in_data.imag)
+    pyt_y.backward(gradient=grad_data)
+
+    grad_real = torch.real(in_data.grad)
+    grad_imag = torch.imag(in_data.grad)
+
+    return torch.complex(grad_real, grad_imag)
+
+
+def complex_recip_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.reciprocal(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def complex_mul_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = in_data * other_data
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
+def complex_add_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = in_data + other_data
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
 
 
 def global_avg_pool2d(x, *args, **kwargs):
     output_size = (1, 1)
-    return torch.nn.functional.adaptive_avg_pool2d(x, output_size)
+    x = x.to(torch.float32)
+    output = torch.nn.functional.adaptive_avg_pool2d(x, output_size)
+    return output
 
 
 def upsample(x, *args, scale_factor, **kwargs):
@@ -1897,8 +2237,8 @@ def rotary_embedding(x, *args, **kwargs):
     torch.manual_seed(0)
 
     cache_size = 2048
-    input_dtype = ttl.tensor.DataType.BFLOAT16
-    sincos_dtype = ttl.tensor.DataType.BFLOAT16
+    input_dtype = ttnn.bfloat16
+    sincos_dtype = ttnn.bfloat16
 
     sin_cos_shape = (1, 1, cache_size, 64)
     cos_cached = torch.randn(sin_cos_shape).bfloat16().float()
@@ -1909,119 +2249,221 @@ def rotary_embedding(x, *args, **kwargs):
     return pt_out[0]
 
 
-def preprocessing_model_conv_conv(x, *args, **kwargs):
-    torch.manual_seed(234)
-    num_channels = x.shape[1]
-
-    torch_model = TorchConvConv(num_input_channels=num_channels, num_output_channels=num_channels)
-    torch_model.eval()
-
-    torch_input_tensor = x.to(torch.float32)
-
-    output = torch_model(torch_input_tensor)
-
+def max_pool2d(x, *args, **kwargs):
+    m = torch.nn.MaxPool2d(3, stride=2)
+    output = m(x)
     return output
 
 
-def preprocessing_model_conv_relu_conv(x, *args, **kwargs):
-    torch.manual_seed(234)
-    torch_input_tensor = x.to(torch.float32)
-    num_channels = x.shape[1]
-
-    torch_model = TorchConvReluConv(num_input_channels=num_channels, num_output_channels=num_channels)
-    torch_model.eval()
-
-    output = torch_model(torch_input_tensor)
-
-    return output
+def repeat_2(x, *args, shape, **kwargs):
+    return x.repeat(*shape)
 
 
-def preprocessing_model_bert_1(x, *args, **kwargs):
-    torch.manual_seed(234)
-    model_name = "phiyodr/bert-large-finetuned-squad2"
-
-    # get torch model
-    config = transformers.BertConfig.from_pretrained(model_name)
-    model = BertFeedForward(config).eval()
-    model = model.to(torch.bfloat16)
-
-    # prepare inputs
-    torch_hidden_states = x
-
-    # run model
-    torch_output = model(torch_hidden_states)
-
-    return torch_output
-
-
-def preprocessing_model_bert_2(x, *args, **kwargs):
-    torch.manual_seed(234)
-    model_name = "phiyodr/bert-large-finetuned-squad2"
-
-    # get torch model
-    config = transformers.BertConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 2
-    model = transformers.models.bert.modeling_bert.BertEncoder(config).eval()
-
-    # prepare inputs
-    torch_hidden_states = x.to(torch.float32)
-    torch_attention_mask = None
-
-    # run model
-    torch_output = model(torch_hidden_states, attention_mask=torch_attention_mask).last_hidden_state
-
-    return torch_output
-
-
-def preprocessing_model_bert_3(x, *args, **kwargs):
-    torch.manual_seed(234)
-    model_name = "phiyodr/bert-large-finetuned-squad2"
-
-    # get torch model
-    config = transformers.BertConfig.from_pretrained(model_name)
-    model = transformers.models.bert.modeling_bert.BertAttention(config).eval()
-    model = model.to(torch.bfloat16)
-
-    # prepare inputs
-    torch_hidden_states = x
-    sequence_size = x.shape[1]
-    torch_attention_mask = torch.ones(1, sequence_size, dtype=torch.bfloat16)
-
-    # run model
-    torch_output, *_ = model(torch_hidden_states, attention_mask=torch_attention_mask)
-
-    return torch_output
-
-
-def preprocessing_model_bert_4(x, *args, **kwargs):
-    torch.manual_seed(0)
-    model_name = "phiyodr/bert-large-finetuned-squad2"
-
-    # set parameters
-    batch_size = x.shape[0]
-    sequence_size = x.shape[1]
-    num_hidden_layers = 1
-
-    # get torch model
-    config = transformers.BertConfig.from_pretrained(model_name)
-    if num_hidden_layers is not None:
-        config.num_hidden_layers = num_hidden_layers
+def power_2(x, y, *args, exponent=None, **kwargs):
+    if exponent is None:
+        result = torch.pow(x, y)
     else:
-        pytest.skip("Test mismatches when the default number of hidden layers is used")
-    model = transformers.BertForQuestionAnswering.from_pretrained(model_name, config=config).eval()
+        result = x**exponent
+    return result
 
-    # set inputs
-    torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
-    torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
-    torch_position_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
-    torch_attention_mask = None
 
-    # run model
-    torch_output = model(
-        torch_input_ids,
-        token_type_ids=torch_token_type_ids,
-        position_ids=torch_position_ids,
-        attention_mask=torch_attention_mask,
-    )
+def subtract_and_apply_activation(x, y, *args, **kwargs):
+    activation = kwargs.pop("activation")
+    output = torch.sub(x, y)
 
-    return torch_output.start_logits
+    if activation == "relu":
+        output = torch.relu(output)
+    elif activation == "gelu":
+        output = torch.gelu(output)
+
+    return output
+
+
+def multiply_and_apply_activation(x, y, *args, **kwargs):
+    activation = kwargs.pop("activation")
+    output = torch.mul(x, y)
+
+    if activation == "relu":
+        output = torch.relu(output)
+    elif activation == "gelu":
+        output = torch.gelu(output)
+
+    return output
+
+
+def interleaved_to_sharded_partial(x, num_slices, *args, **kwargs):
+    res = torch.ones(x.shape).bfloat16().float()
+    return res
+
+
+def interleaved_to_sharded_partial_coregrid(x, num_slices, x_core, ycore, *args, **kwargs):
+    res = torch.ones(x.shape).bfloat16().float()
+    return res
+
+
+def log10_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log10(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def log2_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log2(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def log1p_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.log1p(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def log_sigmoid_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.nn.functional.logsigmoid(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def logaddexp_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = torch.logaddexp(in_data, other_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
+def logaddexp2_bw(x, y, z, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    other_data = z
+
+    in_data.requires_grad = True
+    other_data.requires_grad = True
+
+    in_data.retain_grad()
+    other_data.retain_grad()
+
+    pyt_y = torch.logaddexp2(in_data, other_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return [in_data.grad, other_data.grad]
+
+
+def erf_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.erf(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def erfc_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.erfc(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def erfinv_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.erfinv(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def expm1_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.expm1(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def floor_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.floor(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def complex_angle(x, *args, **kwargs):
+    return torch.angle(x)
+
+
+def complex_conj_bw(x, y, *args, **kwargs):
+    grad_data = x
+    in_data = y
+    in_data.requires_grad = True
+
+    in_data.retain_grad()
+    pyt_y = torch.conj(in_data)
+    pyt_y.backward(gradient=grad_data)
+
+    return in_data.grad
+
+
+def topk(x, largest, k, *args, **kwargs):
+    values, indices = torch.topk(x, k, dim=-1, largest=largest, sorted=True)
+    return [values, indices]
+
+
+def argmax(x, *args, **kwargs):
+    dim = kwargs.pop("dim")
+    return torch.argmax(x, dim=dim)

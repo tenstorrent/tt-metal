@@ -8,17 +8,18 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaForMultipleChoice
 
-import tt_lib
 
 from models.experimental.roberta.tt.roberta_for_multiple_choice import TtRobertaForMultipleChoice
 from models.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,
+    skip_for_wormhole_b0,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.skip(reason="Mismatch happening on GS, issue #5943")
 def test_roberta_for_multiple_choice(device):
     """

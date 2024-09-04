@@ -34,7 +34,8 @@ struct DeviceInfo {
 
 DeviceInfo get_device_info(const Device &device) {
     DeviceInfo info{};
-    const auto descriptor = tt::get_core_descriptor_config(device.id(), device.num_hw_cqs());
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device.id());
+    const auto descriptor = tt::get_core_descriptor_config(device.id(), device.num_hw_cqs(), dispatch_core_type);
     info.num_y_cores = device.logical_grid_size().y;
     info.num_x_cores = device.logical_grid_size().x;
     info.num_y_compute_cores = descriptor.compute_grid_size.y;
@@ -64,10 +65,6 @@ struct BufferInfo {
 std::vector<BufferInfo> get_buffers() {
     std::vector<BufferInfo> buffer_infos;
     for (const auto &[key, buffer] : tt::tt_metal::detail::BUFFER_MAP.value()) {
-        if (buffer->buffer_type() != BufferType::L1) {
-            continue;
-        }
-
         auto [device_id, address] = key;
         auto device = buffer->device();
 
@@ -86,10 +83,11 @@ std::vector<BufferInfo> get_buffers() {
                 bank_id = (bank_id + 1) % num_banks;
             }
         } else {
+            auto buffer_page_mapping = generate_buffer_page_mapping(*buffer);
             for (int page_index = 0; page_index < num_pages; page_index++) {
-                auto dev_page_index = buffer->get_host_to_dev_mapped_page_id(page_index);
-                auto core = buffer->get_core_from_dev_page_id(dev_page_index);
-                auto bank_id = device->bank_ids_from_logical_core(core)[0];
+                auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping_[page_index];
+                auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index]];
+                auto bank_id = device->bank_ids_from_logical_core(buffer->buffer_type(), core)[0];
 
                 if (bank_to_num_pages.find(bank_id) == bank_to_num_pages.end()) {
                     bank_to_num_pages[bank_id] = 0;
@@ -128,7 +126,7 @@ struct BufferPageInfo {
 std::vector<BufferPageInfo> get_buffer_pages() {
     std::vector<BufferPageInfo> buffer_page_infos;
     for (const auto &[key, buffer] : tt::tt_metal::detail::BUFFER_MAP.value()) {
-        if (buffer->buffer_type() != BufferType::L1) {
+        if (not buffer->is_l1()) {
             continue;
         }
 
@@ -160,10 +158,11 @@ std::vector<BufferPageInfo> get_buffer_pages() {
                 bank_id = (bank_id + 1) % num_banks;
             }
         } else {
+            auto buffer_page_mapping = generate_buffer_page_mapping(*buffer);
             for (int page_index = 0; page_index < num_pages; page_index++) {
-                auto dev_page_index = buffer->get_host_to_dev_mapped_page_id(page_index);
-                auto core = buffer->get_core_from_dev_page_id(dev_page_index);
-                auto bank_id = device->bank_ids_from_logical_core(core)[0];
+                auto dev_page_index = buffer_page_mapping.host_page_to_dev_page_mapping_[page_index];
+                auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_index]];
+                auto bank_id = device->bank_ids_from_logical_core(buffer->buffer_type(), core)[0];
                 auto page_address = buffer->sharded_page_address(bank_id, dev_page_index);
 
                 BufferPageInfo buffer_page_info = {};

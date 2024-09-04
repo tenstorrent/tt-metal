@@ -35,6 +35,13 @@ T parse_env(const char *env_name, const T &default_value) {
     }
 }
 
+template <typename T>
+T parse_trigger(const char *env_name, const T &default_value) {
+    T retval = parse_env<T>(env_name, default_value);
+    unsetenv(env_name);
+    return retval;
+}
+
 }  // namespace tt
 
 // Explicit specializations

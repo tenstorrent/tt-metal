@@ -4,7 +4,7 @@
 
 from typing import Optional, List, Callable
 import time
-import tt_lib
+import ttnn
 import torch
 import torch.nn as nn
 import math
@@ -22,11 +22,11 @@ from tt_lib.fused_ops.conv import (
     resnet50_optimized_conv,
     resnet50_1x1_conv_s2_as_downsample_and_matmul,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_composite_conv import (
+from ttnn.operations.conv.tt_py_composite_conv import (
     TTPyCompositeConv,
     SlidingWindowOpParamsWithParallelConfig,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import TTPyMaxPool
+from ttnn.operations.pool import TTPyMaxPool
 
 from models.utility_functions import (
     _nearest_32,
@@ -35,7 +35,7 @@ from models.utility_functions import (
 )
 
 hardcoded_matmul_config_linear = {
-    8: tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=2,
         out_subblock_h=1,
@@ -46,7 +46,7 @@ hardcoded_matmul_config_linear = {
         fused_activation=None,
         mcast_in0=True,
     ),
-    16: tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    16: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=2,
         out_subblock_h=1,
@@ -57,7 +57,7 @@ hardcoded_matmul_config_linear = {
         fused_activation=None,
         mcast_in0=True,
     ),
-    20: tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    20: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(8, 4),
         in0_block_w=2,
         out_subblock_h=1,
@@ -74,12 +74,10 @@ hardcoded_matmul_config_linear = {
 def ResnetLinear(
     in_features: int,
     out_features: int,
-    weight: tt_lib.tensor.Tensor,
-    bias: Optional[tt_lib.tensor.Tensor] = None,
+    weight: ttnn.Tensor,
+    bias: Optional[ttnn.Tensor] = None,
     transpose: bool = True,
-    output_mem_config=tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-    ),
+    output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     model_config=None,
     device=None,
     batch_size=None,
@@ -94,9 +92,14 @@ def ResnetLinear(
 
     if transpose:
         assert weight.get_legacy_shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
-        weight_T = tt_lib.tensor.transpose(weight, -2, -1)
+        weight_T = ttnn.transpose(weight, -2, -1)
     else:
-        assert weight.get_legacy_shape() == [1, 1, in_features, out_features], "weight does not have the expected shape"
+        assert weight.get_legacy_shape() == [
+            1,
+            1,
+            in_features,
+            out_features,
+        ], "weight does not have the expected shape"
         weight_T = weight
     if device is not None:
         weight_T = weight_T.to(device)
@@ -105,34 +108,37 @@ def ResnetLinear(
     if batch_size in hardcoded_matmul_config_linear and output_mem_config.is_sharded():
         matmul_config = hardcoded_matmul_config_linear[batch_size]
 
-    def linear_(act):
-        if is_grayskull():
-            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode=True,
-            )
-        else:
-            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
+    if is_grayskull():
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=model_config["MATH_FIDELITY"],
+            math_approx_mode=True,
+        )
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=model_config["MATH_FIDELITY"],
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
-        ## this uses the systolic 1d matmul with bias fused
-        if matmul_config is None:
-            output = tt_lib.tensor.resnet_matmul(act, weight_T, bias, output_mem_config)
-        else:
-            output = tt_lib.operations.primary.matmul_1d(
+    ## this uses the systolic 1d matmul with bias fused
+    if matmul_config is None:
+
+        def linear_(act):
+            return ttnn.linear(act, weight_T, bias=bias, memory_config=output_mem_config)
+
+    else:
+
+        def linear_(act):
+            return ttnn.linear(
                 act,
                 weight_T,
                 bias=bias,
                 program_config=matmul_config,
-                output_mem_config=output_mem_config,
-                output_dtype=model_config["ACTIVATIONS_DTYPE"],
+                memory_config=output_mem_config,
+                dtype=model_config["ACTIVATIONS_DTYPE"],
                 compute_kernel_config=compute_kernel_config,
             )
-        return output
 
     return linear_
 
@@ -148,21 +154,17 @@ def _nearest_y(x, y):
 def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
     if x.get_layout() == target_layout:
         return x
-    if x.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR and target_layout == tt_lib.tensor.Layout.TILE:
-        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
+    if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT and target_layout == ttnn.TILE_LAYOUT:
+        x_padded_shape = ttnn.pad_to_tile_shape(x.get_legacy_shape(), False, False, True, True)
         if x.get_legacy_shape() != x_padded_shape:
-            return tt_lib.tensor.format_input_tensor(
-                x, device, x_padded_shape, pad_value, target_layout, output_mem_config
-            )
+            return ttnn.format_input_tensor(x, device, x_padded_shape, pad_value, target_layout, output_mem_config)
         else:
-            return tt_lib.tensor.tilize(x, output_mem_config, use_multicore=True)
-    elif x.get_layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
+            return ttnn.tilize(x, memory_config=output_mem_config, use_multicore=True)
+    elif x.get_layout() == ttnn.TILE_LAYOUT and target_layout == ttnn.ROW_MAJOR_LAYOUT:
         if x.get_legacy_shape() != x.shape_without_padding():
-            return tt_lib.tensor.format_output_tensor(
-                x, x.shape_without_padding(), device, target_layout, output_mem_config
-            )
+            return ttnn.format_output_tensor(x, x.shape_without_padding(), device, target_layout, output_mem_config)
         else:
-            return tt_lib.tensor.untilize(x, output_mem_config, use_multicore=True)
+            return ttnn.untilize(x, memory_config=output_mem_config, use_multicore=True)
     else:
         assert False
 
@@ -173,10 +175,16 @@ def unpad_from_zero(x, desired_shape):
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
-        if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-            x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            x = x.to(ttnn.ROW_MAJOR_LAYOUT)
         x = x.unpad(
-            (0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1)
+            (0, 0, 0, 0),
+            (
+                desired_shape[0] - 1,
+                desired_shape[1] - 1,
+                desired_shape[2] - 1,
+                desired_shape[3] - 1,
+            ),
         )
         x = x.to_torch().to(torch.float)
     return x
@@ -391,7 +399,7 @@ hardcoded_matmul_config_conv = {
         },
     },
     8: {
-        (25088, 64, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 64, 64): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=4,
@@ -402,7 +410,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (25088, 64, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 64, 256): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=1,
@@ -413,7 +421,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (25088, 256, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 256, 64): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=4,
@@ -424,7 +432,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (25088, 256, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 256, 128): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=2,
@@ -435,7 +443,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (6272, 128, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (6272, 128, 512): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=4,
             out_subblock_h=1,
@@ -446,7 +454,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (6272, 256, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (6272, 256, 512): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=1,
@@ -457,7 +465,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (6272, 512, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (6272, 512, 128): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=16,
             out_subblock_h=2,
@@ -468,7 +476,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (6272, 512, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (6272, 512, 256): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
             in0_block_w=2,
             out_subblock_h=5,
@@ -478,7 +486,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (1568, 256, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (1568, 256, 1024): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
             in0_block_w=1,
             out_subblock_h=1,
@@ -488,7 +496,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (1568, 1024, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (1568, 1024, 256): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
             in0_block_w=4,
             out_subblock_h=5,
@@ -498,7 +506,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (1568, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (1568, 1024, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -508,7 +516,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (1568, 512, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (1568, 512, 1024): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
             in0_block_w=2,
             out_subblock_h=1,
@@ -518,7 +526,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (1568, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (1568, 1024, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -528,7 +536,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (416, 512, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (416, 512, 2048): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
             in0_block_w=2,
             out_subblock_h=1,
@@ -538,7 +546,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (416, 1024, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (416, 1024, 2048): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -548,7 +556,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (416, 2048, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (416, 2048, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
             in0_block_w=8,
             out_subblock_h=2,
@@ -560,7 +568,7 @@ hardcoded_matmul_config_conv = {
         ),
     },
     16: {
-        (50176, 64, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (50176, 64, 64): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=4,
@@ -571,7 +579,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (50176, 64, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (50176, 64, 256): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=1,
@@ -582,7 +590,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (50176, 256, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (50176, 256, 64): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=4,
@@ -593,7 +601,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (50176, 256, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (50176, 256, 128): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=2,
@@ -604,7 +612,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (12544, 128, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (12544, 128, 512): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=4,
             out_subblock_h=1,
@@ -615,7 +623,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (12544, 256, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (12544, 256, 512): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=1,
@@ -626,7 +634,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (12544, 512, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (12544, 512, 128): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=16,
             out_subblock_h=2,
@@ -637,7 +645,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (12544, 512, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (12544, 512, 256): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=2,
             out_subblock_h=4,
@@ -647,7 +655,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3136, 256, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3136, 256, 1024): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=1,
             out_subblock_h=1,
@@ -657,7 +665,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3136, 1024, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3136, 1024, 256): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=4,
             out_subblock_h=3,
@@ -667,7 +675,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3136, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3136, 1024, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=4,
             out_subblock_h=3,
@@ -677,7 +685,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3136, 512, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3136, 512, 1024): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=2,
             out_subblock_h=1,
@@ -687,7 +695,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3136, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3136, 1024, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(9, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -697,7 +705,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (800, 512, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (800, 512, 2048): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(9, 8),
             in0_block_w=2,
             out_subblock_h=1,
@@ -707,7 +715,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (800, 1024, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (800, 1024, 2048): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(9, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -717,7 +725,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (800, 2048, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (800, 2048, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(9, 8),
             in0_block_w=8,
             out_subblock_h=3,
@@ -729,7 +737,7 @@ hardcoded_matmul_config_conv = {
         ),
     },
     20: {
-        (62720, 64, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (62720, 64, 64): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=4,
@@ -740,7 +748,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (62720, 64, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (62720, 64, 256): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=1,
@@ -751,7 +759,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (62720, 256, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (62720, 256, 64): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=4,
@@ -762,7 +770,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (62720, 256, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (62720, 256, 128): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=2,
@@ -773,7 +781,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (15680, 128, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (15680, 128, 512): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=4,
             out_subblock_h=1,
@@ -784,7 +792,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (15680, 256, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (15680, 256, 512): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=1,
@@ -795,7 +803,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (15680, 512, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (15680, 512, 128): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=16,
             out_subblock_h=1,
@@ -806,7 +814,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (15680, 512, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (15680, 512, 256): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(12, 8),
             in0_block_w=2,
             out_subblock_h=1,
@@ -816,7 +824,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3936, 256, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3936, 256, 1024): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(12, 8),
             in0_block_w=1,
             out_subblock_h=1,
@@ -826,7 +834,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3936, 1024, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3936, 1024, 256): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(12, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -836,7 +844,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3936, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3936, 1024, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(12, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -846,7 +854,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3936, 512, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3936, 512, 1024): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(12, 8),
             in0_block_w=2,
             out_subblock_h=1,
@@ -856,7 +864,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3936, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3936, 1024, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(12, 8),
             in0_block_w=4,
             out_subblock_h=4,
@@ -866,7 +874,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (992, 512, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (992, 512, 2048): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=2,
             out_subblock_h=1,
@@ -876,7 +884,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (992, 1024, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (992, 1024, 2048): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -886,7 +894,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (992, 2048, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (992, 2048, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=8,
             out_subblock_h=3,
@@ -938,7 +946,18 @@ hardcoded_conv_blocking_and_parallelization_config = {
     },
     20: {
         (250880, 64): [16 * 4, 1280, 64, 128, 64, 2560, (12, 9), 2560, 64, 98],
-        (62720, 64): [64 * 3, 320, 64, 64, 64, 640, (12, 9), 640, 64, 98],  # try actblock h = 320, subblock h = 64
+        (62720, 64): [
+            64 * 3,
+            320,
+            64,
+            64,
+            64,
+            640,
+            (12, 9),
+            640,
+            64,
+            98,
+        ],  # try actblock h = 320, subblock h = 64
         (15680, 128): [128 * 3, 160, 128, 32, 128, 160, (12, 9), 160, 128, 98],
         (3936, 256): [256, 352, 32, 32, 32, 352, (12, 8), 352, 32, 12],
         (992, 512): [512, 96, 64, 96, 64, 96, (11, 8), 96, 64, 11],
@@ -995,15 +1014,11 @@ class Bottleneck:
         self.conv_halo = conv_halo
         self.model_config = model_config
         if self.storage_in_dram:
-            self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-            )
+            self.memory_config = ttnn.DRAM_MEMORY_CONFIG
         else:
-            self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-            )
+            self.memory_config = ttnn.L1_MEMORY_CONFIG
         if sharded is not None:
-            self.sharded_memory_config = tt_lib.tensor.MemoryConfig(sharded, tt_lib.tensor.BufferType.L1)
+            self.sharded_memory_config = ttnn.MemoryConfig(sharded, ttnn.BufferType.L1)
         else:
             self.sharded_memory_config = self.memory_config
         self.out_memory_config = self.sharded_memory_config if out_sharded else self.memory_config
@@ -1055,7 +1070,7 @@ class Bottleneck:
         )
         self.bn3.eval()
 
-        self.relu = tt_lib.operations.primary.relu
+        self.relu = ttnn.relu
         self.downsample = downsample
         self.stride = stride
 
@@ -1080,7 +1095,7 @@ class Bottleneck:
                 # this downsample conv requires row major input
                 def downsample_conv_op_wrapper(op):
                     def downsample_conv_op_with_formatting(x):
-                        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+                        x = format_tensor(x, ttnn.ROW_MAJOR_LAYOUT, self.device, self.memory_config)
                         x = x.reshape(
                             self.module_input_shape[0],
                             self.module_input_shape[1],
@@ -1102,12 +1117,12 @@ class Bottleneck:
         matmul_config = hardcoded_matmul_config_conv[batch_size][(conv1_as_mm_padded_act_height, inplanes, width)]
         # 1x1 conv with stride 1 padding 0 is run using regular matmul
         if is_grayskull():
-            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
                 math_approx_mode=True,
             )
         else:
-            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
@@ -1125,7 +1140,7 @@ class Bottleneck:
             fuse_relu=True,
             output_mem_config=self.sharded_memory_config,
             weights_dtype=model_config["WEIGHTS_DTYPE"],
-            output_dtype=tt_lib.tensor.DataType.BFLOAT16 if untilize_out else model_config["ACTIVATIONS_DTYPE"],
+            output_dtype=ttnn.bfloat16 if untilize_out else model_config["ACTIVATIONS_DTYPE"],
             compute_kernel_config=compute_kernel_config,
             untilize_out=untilize_out,
         )
@@ -1135,7 +1150,10 @@ class Bottleneck:
         conv2_output_padded_face_size = _nearest_32(
             self.conv2_output_shape[0] * self.conv2_output_shape[1] * self.conv2_output_shape[2]
         )
-        assert (conv2_output_padded_face_size, width) in hardcoded_conv_blocking_and_parallelization_config[batch_size]
+        assert (
+            conv2_output_padded_face_size,
+            width,
+        ) in hardcoded_conv_blocking_and_parallelization_config[batch_size]
         [
             act_block_w,
             act_block_h,
@@ -1190,21 +1208,17 @@ class Bottleneck:
                 and self.module_input_shape[3] == 256
             ):
                 move_utwh_output = True
-            tt_tensor_conv_weight = tt_lib.tensor.Tensor(
+            tt_tensor_conv_weight = ttnn.Tensor(
                 conv2_weight.reshape(-1).tolist(),
                 conv2_weight.shape,
-                model_config["WEIGHTS_DTYPE"]
-                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                else tt_lib.tensor.DataType.FLOAT32,
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                (model_config["WEIGHTS_DTYPE"] if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b else ttnn.float32),
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            tt_tensor_conv_bias = tt_lib.tensor.Tensor(
+            tt_tensor_conv_bias = ttnn.Tensor(
                 conv2_bias.tolist(),
                 [1, 1, 1, conv2_bias.shape[-1]],
-                model_config["WEIGHTS_DTYPE"]
-                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                else tt_lib.tensor.DataType.FLOAT32,
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                (model_config["WEIGHTS_DTYPE"] if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b else ttnn.float32),
+                ttnn.ROW_MAJOR_LAYOUT,
             )
             self.conv2 = TTPyCompositeConv(
                 sliding_window_op_params,
@@ -1253,20 +1267,22 @@ class Bottleneck:
             self.conv3_output_shape[0] * self.conv3_output_shape[1] * self.conv3_output_shape[2]
         )
         matmul_config = None
-        assert (conv3_as_mm_padded_act_height, width, planes * self.expansion) in hardcoded_matmul_config_conv[
-            batch_size
-        ]
+        assert (
+            conv3_as_mm_padded_act_height,
+            width,
+            planes * self.expansion,
+        ) in hardcoded_matmul_config_conv[batch_size]
         # logger.info("Setting matmul config for 1x1 conv (third conv in module)")
         matmul_config = hardcoded_matmul_config_conv[batch_size][
             (conv3_as_mm_padded_act_height, width, planes * self.expansion)
         ]
         if is_grayskull():
-            compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
                 math_approx_mode=True,
             )
         else:
-            compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
@@ -1299,7 +1315,7 @@ class Bottleneck:
                 x.deallocate()
 
         if not self.conv_halo:
-            out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+            out = format_tensor(out, ttnn.ROW_MAJOR_LAYOUT, self.device, self.memory_config)
             out = out.reshape(
                 self.conv1_output_shape[0],
                 self.conv1_output_shape[1],
@@ -1318,19 +1334,19 @@ class Bottleneck:
             if self.deallocate:
                 x.deallocate()
 
-        fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
+        fused_activations = [ttnn.UnaryOpType.RELU]
 
         # logger.info("Running eltwise add")
-        out = tt_lib.operations.primary.add(
+        out = ttnn.add(
             out,
             ds_out,
-            fused_activations,
-            self.out_memory_config,
-            self.model_config["ACTIVATIONS_DTYPE"],
-            self.out_in_place,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            memory_config=self.out_memory_config,
+            activations=fused_activations,
+            output_tensor=out if self.out_in_place else None,
         )
         if self.module_input_shape[0] == 20 and self.module_input_shape[1] == 56 and self.module_input_shape[3] == 64:
-            out = tt_lib.tensor.move_sharded(out)
+            out = ttnn.move(out)
 
         return out
 
@@ -1368,19 +1384,15 @@ class ResNet(nn.Module):
         self.model_config = model_config
         self.reader_patterns_cache = {}
         if self.storage_in_dram:
-            self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-            )
+            self.memory_config = ttnn.DRAM_MEMORY_CONFIG
         else:
-            self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-            )
+            self.memory_config = ttnn.L1_MEMORY_CONFIG
         if sharded:
-            self.height_sharded_memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
+            self.height_sharded_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1
             )
-            self.width_sharded_memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED, tt_lib.tensor.BufferType.L1
+            self.width_sharded_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1
             )
         else:
             self.height_sharded_memory_config = self.memory_config
@@ -1458,33 +1470,42 @@ class ResNet(nn.Module):
             per_core_act_h_ntiles = 80
             self.layer_3_grid_size = (12, 8)
             self.layer_4_grid_size = (11, 8)
-
+        self.end_grid_size = (8, 4)
         self.first_conv_num_cores_nhw = 98
         if sharded:
-            self.fold_grid = tt_lib.tensor.CoreRangeSet(
+            self.fold_grid = ttnn.CoreRangeSet(
                 {
-                    tt_lib.tensor.CoreRange(
-                        tt_lib.tensor.CoreCoord(0, 0),
-                        tt_lib.tensor.CoreCoord(10, 7),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(10, 7),
                     ),
-                    tt_lib.tensor.CoreRange(
-                        tt_lib.tensor.CoreCoord(0, 8),
-                        tt_lib.tensor.CoreCoord(3, 8),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 8),
+                        ttnn.CoreCoord(3, 8),
                     ),
                 }
             )
             self.n_fold_cores = 92
 
-            self.shard_grid = tt_lib.tensor.CoreRangeSet(
+            self.shard_grid = ttnn.CoreRangeSet(
                 {
-                    tt_lib.tensor.CoreRange(
-                        tt_lib.tensor.CoreCoord(0, 0),
-                        tt_lib.tensor.CoreCoord(11, 7),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(11, 7),
                     ),
-                    tt_lib.tensor.CoreRange(
-                        tt_lib.tensor.CoreCoord(0, 8),
-                        tt_lib.tensor.CoreCoord(1, 8),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 8),
+                        ttnn.CoreCoord(1, 8),
                     ),
+                }
+            )
+            self.n_dram_cores = 8
+            self.dram_shard_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 0),
+                    )
                 }
             )
 
@@ -1542,29 +1563,25 @@ class ResNet(nn.Module):
             assert out_block_h == per_core_act_h, "out_block_h != per_core_act_h"
             assert weight_block_w == per_core_weight_w, "weight_block_w != per_core_weight_w"
 
-            tt_tensor_conv_weight = tt_lib.tensor.Tensor(
+            tt_tensor_conv_weight = ttnn.Tensor(
                 conv1_weight.reshape(-1).tolist(),
                 conv1_weight.shape,
-                model_config["WEIGHTS_DTYPE"]
-                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                else tt_lib.tensor.DataType.FLOAT32,
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                (model_config["WEIGHTS_DTYPE"] if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b else ttnn.float32),
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            tt_tensor_conv_bias = tt_lib.tensor.Tensor(
+            tt_tensor_conv_bias = ttnn.Tensor(
                 conv1_bias.tolist(),
                 [1, 1, 1, conv1_bias.shape[-1]],
-                model_config["WEIGHTS_DTYPE"]
-                if model_config["WEIGHTS_DTYPE"] != tt_lib.tensor.DataType.BFLOAT8_B
-                else tt_lib.tensor.DataType.FLOAT32,
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                (model_config["WEIGHTS_DTYPE"] if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b else ttnn.float32),
+                ttnn.ROW_MAJOR_LAYOUT,
             )
             if is_grayskull():
-                compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                     math_fidelity=model_config["MATH_FIDELITY"],
                     math_approx_mode=True,
                 )
             else:
-                compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                     math_fidelity=model_config["MATH_FIDELITY"],
                     math_approx_mode=True,
                     fp32_dest_acc_en=False,
@@ -1611,9 +1628,14 @@ class ResNet(nn.Module):
             )
         self.conv1_output_shape = compute_conv_output_shape(
             self.conv1_params,
-            [batch_size, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes],
+            [
+                batch_size,
+                self.conv_input_face_shape_hw[0],
+                self.conv_input_face_shape_hw[1],
+                self.inplanes,
+            ],
         )
-        self.relu = tt_lib.operations.primary.relu
+        self.relu = ttnn.relu
 
         self.maxpool_config_params = {"kernel_size": 3, "stride": 2, "pad": 1, "dilation": 1}
         self.max_pool_reader_patterns_cache = {}
@@ -1657,7 +1679,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.maxpool_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
+            sharded=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
             out_sharded=True,
             conv_halo=True if sharded else False,
             model_config=model_config,
@@ -1672,8 +1694,8 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer1_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
-            out_sharded=False,
+            sharded=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
+            out_sharded=True,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
             conv_halo=True if sharded else False,
             model_config=model_config,
@@ -1688,8 +1710,8 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer2_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
-            out_sharded=False,
+            sharded=ttnn.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
+            out_sharded=True,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
             model_config=model_config,
             conv_halo=True if sharded else False,
@@ -1705,7 +1727,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer3_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
+            sharded=ttnn.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
             out_sharded=True,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
             model_config=model_config,
@@ -1739,16 +1761,19 @@ class ResNet(nn.Module):
 
         fc_weight = pad_weight(state_dict[f"{self.base_address_with_dot}fc.weight"])
         fc_weight = torch.transpose(fc_weight, 3, 2)
-        fc_weight = tt_lib.tensor.Tensor(
+        fc_weight = ttnn.Tensor(
             fc_weight.reshape(-1).tolist(),
             fc_weight.shape,
             model_config["WEIGHTS_DTYPE"],
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        ).to(tt_lib.tensor.Layout.TILE)
+            ttnn.ROW_MAJOR_LAYOUT,
+        ).to(ttnn.TILE_LAYOUT)
         fc_bias = pad_weight(state_dict[f"{self.base_address_with_dot}fc.bias"])
-        fc_bias = tt_lib.tensor.Tensor(
-            fc_bias.reshape(-1).tolist(), fc_bias.shape, model_config["WEIGHTS_DTYPE"], tt_lib.tensor.Layout.ROW_MAJOR
-        ).to(tt_lib.tensor.Layout.TILE)
+        fc_bias = ttnn.Tensor(
+            fc_bias.reshape(-1).tolist(),
+            fc_bias.shape,
+            model_config["WEIGHTS_DTYPE"],
+            ttnn.ROW_MAJOR_LAYOUT,
+        ).to(ttnn.TILE_LAYOUT)
         self.fc = ResnetLinear(
             512 * block.expansion,
             1024,
@@ -1791,7 +1816,7 @@ class ResNet(nn.Module):
         self.downsample_conv_on_tt = None
         self.norm_layer_after_downsample_conv_on_tt = None
         if sharded is not None:
-            self.ds_conv_output_memory_config = tt_lib.tensor.MemoryConfig(sharded, tt_lib.tensor.BufferType.L1)
+            self.ds_conv_output_memory_config = ttnn.MemoryConfig(sharded, ttnn.BufferType.L1)
         else:
             self.ds_conv_output_memory_config = self.memory_config
         if use_downsample_op_and_mm_for_conv1x1_s2:
@@ -1859,12 +1884,12 @@ class ResNet(nn.Module):
             matmul_config = None
 
             if is_grayskull():
-                compute_kernel_config = tt_lib.tensor.GrayskullComputeKernelConfig(
+                compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                     math_fidelity=model_config["MATH_FIDELITY"],
                     math_approx_mode=True,
                 )
             else:
-                compute_kernel_config = tt_lib.tensor.WormholeComputeKernelConfig(
+                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                     math_fidelity=model_config["MATH_FIDELITY"],
                     math_approx_mode=True,
                     fp32_dest_acc_en=False,
@@ -1902,7 +1927,13 @@ class ResNet(nn.Module):
                     (downsample_output_padded_face_size, self.inplanes, downsample_output_channels)
                 ]
                 assert stride == 2
-                downsample_op_params = [batch_size, layer_input_shape[1], layer_input_shape[2], stride, stride]
+                downsample_op_params = [
+                    batch_size,
+                    layer_input_shape[1],
+                    layer_input_shape[2],
+                    stride,
+                    stride,
+                ]
                 # logger.info("Calling ds op and matmul op, input shape - ", layer_input_shape)
 
                 self.downsample_conv_on_tt = resnet50_1x1_conv_s2_as_downsample_and_matmul(
@@ -2019,7 +2050,7 @@ class ResNet(nn.Module):
         last_layer_shape = layers[-1].conv3_output_shape
         return layers, last_layer_shape
 
-    def preprocessing(self, x: torch.Tensor) -> tt_lib.tensor:
+    def preprocessing(self, x: torch.Tensor) -> ttnn.Tensor:
         if self.sharded:
             x = pad_and_fold_conv_activation_for_unity_stride(x, 3, 3, 2, 2)
             x = torch.permute(x, (0, 2, 3, 1))
@@ -2032,15 +2063,15 @@ class ResNet(nn.Module):
             input_size_to_shard_evenly = _nearest_y(x.shape[2], self.first_conv_num_cores_nhw * 32)
             x = torch.nn.functional.pad(x, (0, 0, 0, input_size_to_shard_evenly - x.shape[2], 0, 0))
 
-            x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
+            x = ttnn.Tensor(x, ttnn.bfloat16)
         else:
             extra_padding_for_32B_alignment = 25
             x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
             x = torch.permute(x, (0, 2, 3, 1))
-            x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
+            x = ttnn.Tensor(x, ttnn.bfloat16)
         return x
 
-    def preprocessing_with_fold(self, x: torch.Tensor) -> tt_lib.tensor:
+    def preprocessing_with_fold(self, x: torch.Tensor) -> ttnn.Tensor:
         if not self.sharded:
             raise ValueError("Preprocessing is only supported for sharded model")
 
@@ -2060,37 +2091,40 @@ class ResNet(nn.Module):
         NHW = x.shape[0] * x.shape[1] * x.shape[2]
         NHW_even = _nearest_y(NHW // stride_h, self.first_conv_num_cores_nhw * 32)
 
-        shard_spec = tt_lib.tensor.ShardSpec(
-            self.fold_grid, [NHW // self.n_fold_cores, x.shape[3]], tt_lib.tensor.ShardOrientation.ROW_MAJOR, False
+        shard_spec = ttnn.ShardSpec(
+            self.fold_grid,
+            [NHW // self.n_fold_cores, x.shape[3]],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         )
         x = torch2tt_tensor(
             x,
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
-            tt_memory_config=tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.BufferType.L1,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
+            tt_memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
                 shard_spec,
             ),
         )
 
         # fold for unity stride on device
-        x = tt_lib.tensor.fold(x, stride_h=stride_h, stride_w=1)
+        x = ttnn.fold(x, stride_h=stride_h, stride_w=1)
 
         shard_shape = [
             NHW_even // self.first_conv_num_cores_nhw,
             x.get_legacy_shape()[3],
         ]
 
-        x = tt_lib.tensor.reshard(
+        x = ttnn.reshard(
             x,
-            tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-                tt_lib.tensor.BufferType.L1,
-                tt_lib.tensor.ShardSpec(
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
                     self.shard_grid,
                     shard_shape,
-                    tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardOrientation.ROW_MAJOR,
                     False,
                 ),
             ),
@@ -2098,11 +2132,15 @@ class ResNet(nn.Module):
 
         return x
 
-    def forward(self, x: tt_lib.tensor) -> tt_lib.tensor:
+    def forward(self, x: ttnn.Tensor, write_event=None, op_event=None, final_out_mem_config=None) -> ttnn.Tensor:
+        x_in = None
         if not self.sharded:
             original_A_cl_host_shape = x.get_legacy_shape()
             x = x.reshape(
-                x.get_legacy_shape()[0], x.get_legacy_shape()[1], 1, x.get_legacy_shape()[2] * x.get_legacy_shape()[3]
+                x.get_legacy_shape()[0],
+                x.get_legacy_shape()[1],
+                1,
+                x.get_legacy_shape()[2] * x.get_legacy_shape()[3],
             )
 
             x = x.to(self.device, self.memory_config)  # to l1
@@ -2113,29 +2151,46 @@ class ResNet(nn.Module):
                 original_A_cl_host_shape[2],
                 original_A_cl_host_shape[3],
             )
-        elif x.storage_type() != tt_lib.tensor.StorageType.DEVICE:
-            shard_spec = tt_lib.tensor.ShardSpec(
+        else:
+            x_shape = x.get_legacy_shape()
+            shard_spec = ttnn.ShardSpec(
                 self.shard_grid,
                 [
-                    x.get_legacy_shape()[2] // self.first_conv_num_cores_nhw,
-                    x.get_legacy_shape()[3],
+                    x_shape[2] // self.first_conv_num_cores_nhw,
+                    x_shape[3],
                 ],
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             )
-            mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1, shard_spec
+            mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                shard_spec,
             )
-            x = x.to(self.device, mem_config)
+            if write_event is not None:
+                ttnn.wait_for_event(0, write_event)
+            if x.storage_type() != ttnn.StorageType.DEVICE:
+                x = x.to(self.device, mem_config)
+            elif x.memory_config().is_sharded():
+                if x.memory_config() != mem_config:
+                    x = ttnn.reshard(x, mem_config)
+                else:
+                    x_in = x
+            else:
+                x = ttnn.interleaved_to_sharded(x, mem_config)
+            if op_event is not None:
+                ttnn.record_event(0, op_event)
 
         x = self.conv1(x)
+        if x_in is not None:
+            x_in.deallocate()
         # Relu is fused with conv1
 
         if self.batch_size == 20:
-            x = tt_lib.tensor.move_sharded(x)
+            x = ttnn.move(x)
 
         if not self.sharded:
-            x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+            x = format_tensor(x, ttnn.ROW_MAJOR_LAYOUT, self.device, self.memory_config)
             x = x.reshape(
                 self.conv1_output_shape[0],
                 self.conv1_output_shape[1],
@@ -2150,14 +2205,14 @@ class ResNet(nn.Module):
             self.maxpool_output_shape[0] * self.maxpool_output_shape[1] * self.maxpool_output_shape[2],
             self.maxpool_output_shape[3],
         )
-        x = tt_lib.tensor.tilize(
+        x = ttnn.tilize(
             x,
-            output_mem_config=self.height_sharded_memory_config,
-            output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            memory_config=self.height_sharded_memory_config,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
             use_multicore=True,
         )
         if self.batch_size == 20:
-            x = tt_lib.tensor.move_sharded(x)
+            x = ttnn.move(x)
 
         x = self.layer1_module1(x)
         x = self.layer1_module2(x)
@@ -2168,16 +2223,30 @@ class ResNet(nn.Module):
         x = self.layer2_module3(x)
         x = self.layer2_module4(x)
         if self.sharded:
-            grid_size = (10, 8)
-            x = tt_lib.tensor.interleaved_to_sharded(
+            x_shape = x.get_legacy_shape()
+            reshard_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(self.layer_3_grid_size[0] - 1, self.layer_3_grid_size[1] - 1),
+                            )
+                        }
+                    ),
+                    [
+                        math.ceil((x_shape[-2] // 32) / self.layer_3_grid_size[0]) * 32,
+                        x_shape[-1] // self.layer_3_grid_size[1],
+                    ],
+                    ttnn.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            )
+            x = ttnn.reshard(
                 x,
-                self.layer_3_grid_size,
-                [
-                    math.ceil((x.get_legacy_shape()[-2] // 32) / self.layer_3_grid_size[0]) * 32,
-                    x.get_legacy_shape()[-1] // self.layer_3_grid_size[1],
-                ],
-                tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                tt_lib.tensor.ShardOrientation.COL_MAJOR,
+                reshard_mem_config,
             )
         x = self.layer3_module1(x)
         x = self.layer3_module2(x)
@@ -2186,43 +2255,82 @@ class ResNet(nn.Module):
         x = self.layer3_module5(x)
         x = self.layer3_module6(x)
         if self.sharded:
-            x = tt_lib.tensor.interleaved_to_sharded(
+            x_shape = x.get_legacy_shape()
+            reshard_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(self.layer_4_grid_size[0] - 1, self.layer_4_grid_size[1] - 1),
+                            )
+                        }
+                    ),
+                    [
+                        math.ceil((x_shape[-2] // 32) / self.layer_4_grid_size[0]) * 32,
+                        x_shape[-1] // self.layer_4_grid_size[1],
+                    ],
+                    ttnn.ShardOrientation.COL_MAJOR,
+                    False,
+                ),
+            )
+            x = ttnn.reshard(
                 x,
-                self.layer_4_grid_size,
-                [
-                    math.ceil((x.get_legacy_shape()[-2] // 32) / self.layer_4_grid_size[0]) * 32,
-                    x.get_legacy_shape()[-1] // self.layer_4_grid_size[1],
-                ],
-                tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-                tt_lib.tensor.ShardOrientation.COL_MAJOR,
+                reshard_mem_config,
             )
         x = self.layer4_module1(x)
         x = self.layer4_module2(x)
         x = self.layer4_module3(x)
 
+        if self.sharded:
+            x_shape = x.get_legacy_shape()
+            reshard_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(self.end_grid_size[0] - 1, self.end_grid_size[1] - 1),
+                            )
+                        }
+                    ),
+                    [
+                        x.volume() // x_shape[-1],
+                        x_shape[-1] // (self.end_grid_size[0] * self.end_grid_size[1]),
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            )
+            x = ttnn.reshard(
+                x,
+                reshard_mem_config,
+            )
+
         unpadded_shape = x.shape_without_padding()
-        x = tt_lib.tensor.untilize_with_unpadding(
+
+        x = ttnn.untilize_with_unpadding(
             x,
-            (0, 0, 0, 0),
-            (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
-            self.memory_config,
+            output_tensor_end=(
+                unpadded_shape[0] - 1,
+                unpadded_shape[1] - 1,
+                unpadded_shape[2] - 1,
+                unpadded_shape[3] - 1,
+            ),
+            memory_config=self.width_sharded_memory_config,
         )
 
+        x_shape = x.get_legacy_shape()
         x = x.reshape(
             self.batch_size,
-            x.get_legacy_shape()[1],
-            (int)(x.get_legacy_shape()[2] / self.batch_size),
-            x.get_legacy_shape()[3],
+            x_shape[1],
+            x_shape[2] // self.batch_size,
+            x_shape[3],
         )
-        if self.sharded:
-            grid_size = (8, 4)
-            x = tt_lib.tensor.interleaved_to_sharded(
-                x,
-                grid_size,
-                [x.volume() // x.get_legacy_shape()[-1], x.get_legacy_shape()[-1] // (grid_size[0] * grid_size[1])],
-                tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
-            )
 
         unpadded_shape = x.get_legacy_shape()
         padded_shape = [
@@ -2232,42 +2340,50 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[3]),
         ]
         if self.sharded:
-            x = tt_lib.tensor.tilize_with_val_padding(
+            x = ttnn.tilize_with_val_padding(
+                x,
+                padded_shape,
+                0,
+                memory_config=self.width_sharded_memory_config,
+                dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            )
+        else:
+            x = ttnn.pad(
                 x,
                 padded_shape,
                 [0, 0, 0, 0],
                 0,
-                output_mem_config=self.width_sharded_memory_config,
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+                memory_config=self.memory_config,
+                use_multicore=True,
             )
-        else:
-            x = tt_lib.tensor.pad(
-                x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
-            )
-            x = tt_lib.tensor.tilize(
+            x = ttnn.tilize(
                 x,
-                output_mem_config=self.memory_config,
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+                memory_config=self.memory_config,
+                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 use_multicore=True,
             )
 
         x = self.avgpool(x, self.width_sharded_memory_config)
 
+        x_shape = x.get_legacy_shape()
         unpadded_shape_end = [
-            x.get_legacy_shape()[0] - 1,
-            x.get_legacy_shape()[1] - 1,
+            x_shape[0] - 1,
+            x_shape[1] - 1,
             1 - 1,
-            x.get_legacy_shape()[3] - 1,
+            x_shape[3] - 1,
         ]
         if self.sharded:
-            x = tt_lib.tensor.untilize_with_unpadding(
-                x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.width_sharded_memory_config
+            x = ttnn.untilize_with_unpadding(
+                x,
+                output_tensor_end=unpadded_shape_end,
+                memory_config=self.width_sharded_memory_config,
             )
         else:
-            x = tt_lib.tensor.untilize(x, self.memory_config, use_multicore=True)
-            x = tt_lib.tensor.unpad(x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.memory_config)
+            x = ttnn.untilize(x, memory_config=self.memory_config, use_multicore=True)
+            x = ttnn.slice(x, (0, 0, 0, 0), unpadded_shape_end, memory_config=self.memory_config)
 
-        x = x.reshape(1, x.get_legacy_shape()[1], self.batch_size * x.get_legacy_shape()[2], x.get_legacy_shape()[3])
+        x_shape = x.get_legacy_shape()
+        x = x.reshape(1, x_shape[1], self.batch_size * x_shape[2], x_shape[3])
 
         unpadded_shape = x.get_legacy_shape()
         padded_shape = [
@@ -2277,39 +2393,42 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[3]),
         ]
         if self.sharded:
-            x = tt_lib.tensor.tilize_with_val_padding(
+            x = ttnn.tilize_with_val_padding(
+                x,
+                padded_shape,
+                0,
+                memory_config=self.width_sharded_memory_config,
+                dtype=self.model_config["ACTIVATIONS_DTYPE"],
+            )
+        else:
+            x = ttnn.pad(
                 x,
                 padded_shape,
                 [0, 0, 0, 0],
                 0,
-                output_mem_config=self.width_sharded_memory_config,
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+                memory_config=self.memory_config,
+                use_multicore=True,
             )
-        else:
-            x = tt_lib.tensor.pad(
-                x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
-            )
-            x = tt_lib.tensor.tilize(
+            x = ttnn.tilize(
                 x,
-                output_mem_config=self.memory_config,
-                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+                memory_config=self.memory_config,
+                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 use_multicore=True,
             )
 
         x = self.fc(x)
-        desired_shape = list(x.shape_without_padding())
-        desired_shape[-1] = 1000
-        x = tt_lib.tensor.untilize_with_unpadding(
+        x_shape = x.shape_without_padding()
+        x = ttnn.untilize_with_unpadding(
             x,
-            [0, 0, 0, 0],
-            (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
-            self.memory_config,
+            output_tensor_end=(x_shape[0] - 1, x_shape[1] - 1, x_shape[2] - 1, 1000 - 1),
+            memory_config=self.memory_config if final_out_mem_config is None else final_out_mem_config,
         )
+        x_shape = x.get_legacy_shape()
         x = x.reshape(
             self.batch_size,
-            x.get_legacy_shape()[1],
-            (int)(x.get_legacy_shape()[2] / self.batch_size),
-            x.get_legacy_shape()[3],
+            x_shape[1],
+            x_shape[2] // self.batch_size,
+            x_shape[3],
         )
 
         return x

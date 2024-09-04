@@ -31,14 +31,15 @@
 #include "risc_common.h"
 #endif
 #include "hostdevcommon/dprint_common.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 
 #include "dprint_buffer.h"
-#if defined(COMPILE_FOR_ERISC)
-#include "ethernet/tunneling.h"
-#endif
+#include "status.h"
 
+#if defined(DEBUG_PRINT_ENABLED)
 #define DPRINT DebugPrinter()
+#else
+#define DPRINT if(0) DebugPrinter()
+#endif
 
 #ifdef UCK_CHLKC_UNPACK
 #define DPRINT_UNPACK(x) x
@@ -81,6 +82,7 @@ struct HEX  { char tmp; } ATTR_PACK; // Analog of cout << std::hex
 struct OCT  { char tmp; } ATTR_PACK; // Analog of cout << std::oct
 struct DEC  { char tmp; } ATTR_PACK; // Analog of cout << std::dec
 struct SETW { char w; SETW(char w) : w(w) {} } ATTR_PACK; // Analog of cout << std::setw()
+struct NOC_LOG_XFER { uint32_t size; NOC_LOG_XFER(uint32_t sz) : size(sz) {} } ATTR_PACK; // For tracking noc transactions.
 struct U32_ARRAY {
     uint32_t* ptr; uint32_t len;
     U32_ARRAY(uint32_t* ptr, uint32_t len) : ptr(ptr), len(len) {}
@@ -140,6 +142,7 @@ template<> uint8_t DebugPrintTypeToId<RAISE>()         { return DPrintRAISE; }
 template<> uint8_t DebugPrintTypeToId<WAIT>()          { return DPrintWAIT; }
 template<> uint8_t DebugPrintTypeToId<BF16>()          { return DPrintBFLOAT16; }
 template<> uint8_t DebugPrintTypeToId<SETPRECISION>()  { return DPrintSETPRECISION; }
+template<> uint8_t DebugPrintTypeToId<NOC_LOG_XFER>()  { return DPrintNOC_LOG_XFER; }
 template<> uint8_t DebugPrintTypeToId<FIXED>()         { return DPrintFIXED; }
 template<> uint8_t DebugPrintTypeToId<DEFAULTFLOAT>()  { return DPrintDEFAULTFLOAT; }
 template<> uint8_t DebugPrintTypeToId<HEX>()           { return DPrintHEX; }
@@ -169,7 +172,7 @@ struct DebugPrinter {
     }
     uint8_t* buf() { return get_debug_print_buffer(); }
     uint8_t* data() { return reinterpret_cast<DebugPrintMemLayout*>(buf())->data; }
-    uint8_t* bufend() { return buf() + PRINT_BUFFER_SIZE; }
+    uint8_t* bufend() { return buf() + DPRINT_BUFFER_SIZE; }
 
     DebugPrinter() {
 #if defined(DEBUG_PRINT_ENABLED)
@@ -206,12 +209,17 @@ void debug_print(DebugPrinter &dp, DebugPrintData data) {
     auto sum_sz = payload_sz + code_sz + sz_sz;
     if (dp.data() + wpos + sum_sz >= dp.bufend()) {
         // buffer is full - wait for the host reader to flush+update rpos
+        DEBUG_STATUS("DPW");
         while (*dp.rpos() < *dp.wpos()) {
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
 #endif
+            // If we've closed the device, we've now disabled printing on it, don't hang.
+            if (*dp.wpos() == DEBUG_PRINT_SERVER_DISABLED_MAGIC)
+                return;
             ; // wait for host to catch up to wpos with it's rpos
         }
+        DEBUG_STATUS("DPD");
         *dp.wpos() = 0;
         // TODO(AP): are these writes guaranteed to be ordered?
         *dp.rpos() = 0;
@@ -289,6 +297,7 @@ template DebugPrinter operator<< <HEX>(DebugPrinter, HEX val);
 template DebugPrinter operator<< <OCT>(DebugPrinter, OCT val);
 template DebugPrinter operator<< <DEC>(DebugPrinter, DEC val);
 template DebugPrinter operator<< <SETPRECISION>(DebugPrinter, SETPRECISION val);
+template DebugPrinter operator<< <NOC_LOG_XFER>(DebugPrinter, NOC_LOG_XFER val);
 template DebugPrinter operator<< <BF16>(DebugPrinter, BF16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);

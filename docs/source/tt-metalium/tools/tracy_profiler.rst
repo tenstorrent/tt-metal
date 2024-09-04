@@ -1,6 +1,9 @@
 Tracy Profiler
 ==============
 
+.. note::
+   Tools are only fully supported on source builds.
+
 Overview
 --------
 
@@ -49,12 +52,11 @@ Profiling Host
 C++
 ~~~
 
-Build with the ``ENABLE_TRACY=1`` flag is required for profiling with tracy.
+Build with the profiler option (i.e. ``ENABLE_TRACY=ON`` cmake option) is required for profiling with tracy.
 
 ..  code-block:: sh
 
-    make clean
-    make build ENABLE_TRACY=1
+    scripts/build_scripts/build_with_profiler_opt.sh
 
 With this build variant, all C++ marked zones will be profiled.
 

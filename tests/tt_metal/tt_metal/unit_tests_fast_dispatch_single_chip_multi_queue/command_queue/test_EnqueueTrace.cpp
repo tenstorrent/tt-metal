@@ -6,7 +6,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
-
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt::tt_metal;
 
@@ -75,8 +75,8 @@ Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
 // the eager mode results
 namespace basic_tests {
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTrace) {
-
+TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTrace) {
+    Setup(2048, 2);
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
@@ -101,25 +101,23 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTrace) {
     vector<uint32_t> trace_output_data;
     trace_output_data.resize(input_data.size());
 
-    Trace trace;
     EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
 
-    BeginTrace(trace);
-    EnqueueProgram(trace.queue(), simple_program, false);
-    EndTrace(trace);
-    // Instantiate a trace on a device queue
-    uint32_t trace_id = InstantiateTrace(trace, command_queue);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
+    EnqueueProgram(command_queue, simple_program, false);
+    EndTraceCapture(this->device_, command_queue.id(), tid);
 
-    EnqueueTrace(command_queue, trace_id, true);
+    EnqueueTrace(command_queue, tid, true);
     EnqueueReadBuffer(data_movement_queue, output, trace_output_data.data(), true);
     EXPECT_TRUE(eager_output_data == trace_output_data);
 
     // Done
     Finish(command_queue);
+    ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceLoops) {
-
+TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceLoops) {
+    Setup(4096, 2);
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
@@ -141,19 +139,19 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceLoops) {
         trace_outputs[i].resize(input_data.size());
     }
 
+    // Compile
+    EnqueueProgram(command_queue, simple_program, true);
+
     // Trace mode execution
-    Trace trace;
-    uint32_t trace_id;
+    uint32_t trace_id = 0;
     bool trace_captured = false;
     for (auto i = 0; i < num_loops; i++) {
         EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
 
         if (not trace_captured) {
-            BeginTrace(trace);
-            EnqueueProgram(trace.queue(), simple_program, false);
-            EndTrace(trace);
-            // Instantiate a trace on a device queue
-            trace_id = InstantiateTrace(trace, command_queue);
+            trace_id = BeginTraceCapture(this->device_, command_queue.id());
+            EnqueueProgram(command_queue, simple_program, false);
+            EndTraceCapture(this->device_, command_queue.id(), trace_id);
             trace_captured = true;
         }
 
@@ -166,9 +164,11 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceLoops) {
 
     // Done
     Finish(command_queue);
+    ReleaseTrace(this->device_, trace_id);
 }
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
+TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceBenchmark) {
+    Setup(6144, 2);
     Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
@@ -180,7 +180,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
     // Keep this queue in passthrough mode for now
     CommandQueue& command_queue = this->device_->command_queue(0);
 
-    Program simple_program = create_simple_unary_program(input, output);
+    auto simple_program = create_simple_unary_program(input, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
@@ -223,19 +223,15 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
     }
 
     // Capture trace on a trace queue
-    Trace trace;
-    CommandQueue& trace_queue = BeginTrace(trace);
-    EnqueueProgram(trace_queue, simple_program, false);
-    EndTrace(trace);
-
-    // Instantiate a trace on a device bound command queue
-    uint32_t trace_id = InstantiateTrace(trace, command_queue);
+    uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
+    EnqueueProgram(command_queue, simple_program, false);
+    EndTraceCapture(this->device_, command_queue.id(), tid);
 
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         tt::ScopedTimer timer("Trace loop " + std::to_string(i));
         EnqueueWriteBuffer(command_queue, input, input_data.data(), kNonBlocking);
-        EnqueueTrace(command_queue, trace_id, kNonBlocking);
+        EnqueueTrace(command_queue, tid, kNonBlocking);
         EnqueueReadBuffer(command_queue, output, trace_outputs[i].data(), kNonBlocking);
     }
     Finish(command_queue);
@@ -244,6 +240,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, EnqueueOneProgramTraceBenchmark) {
     for (auto i = 0; i < num_loops; i++) {
         EXPECT_TRUE(trace_outputs[i] == trace_outputs[0]);
     }
+    ReleaseTrace(this->device_, tid);
 }
 
 } // end namespace basic_tests

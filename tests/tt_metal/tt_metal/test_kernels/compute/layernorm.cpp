@@ -100,15 +100,15 @@ void MAIN {
 
         /*
          * E[x]
-         * means = tensor.reduce(x, RSUM, RW, 1.0/W) # -> NCH1
+         * means = tensor.sum(x, 3, scalar=1.0/W) # -> NCH1
          */
         ACQ();
         cb_reserve_back(cb_ex, 1*onetile);
-        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+        reduce_init_delta<false>();
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt+blk);
             for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_x, cb_scaler, wt+j, scaler0, dst0);
+                reduce_tile(cb_x, cb_scaler, wt+j, scaler0, dst0);
             }
             // we don't pop cb_x until we compute Ex
         }
@@ -160,15 +160,15 @@ void MAIN {
          * TODO(AP): can save space here by reusing CB
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+        reduce_init_delta<false>();
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
         //cb_wait_front(cb_xmm, Wt);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // reduce
             for (uint32_t wtr = 0; wtr<blk; wtr++)
-                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_xmm2, cb_scaler, wt+wtr, scaler0, dst0);
-                //reduce_tile(REDUCE_OP, REDUCE_DIM, cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
+                reduce_tile(cb_xmm2, cb_scaler, wt+wtr, scaler0, dst0);
+                //reduce_tile(cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
         }
         cb_pop_front(cb_xmm2, Wt);
         pack_tile(dst0, cb_ex2);

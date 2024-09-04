@@ -13,6 +13,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
+#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -75,7 +76,7 @@ bool dram_ping(
         tt_metal::detail::ReadFromDeviceDRAMChannel(device, channel, dram_byte_address, byte_size, dest_channel_data);
         pass &= (dest_channel_data == inputs);
         if (not pass) {
-            cout << "Mismatch at Channel: " << channel << std::endl;
+            std::cout << "Mismatch at Channel: " << channel << std::endl;
         }
     }
     return pass;
@@ -87,9 +88,13 @@ TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
-    CoreCoord unharvested_logical_grid_size(12, 10);
-    if (arch == tt::ARCH::WORMHOLE_B0) {
-        unharvested_logical_grid_size = CoreCoord(8, 10);
+    CoreCoord unharvested_logical_grid_size;
+    switch (arch) {
+        case tt::ARCH::GRAYSKULL: unharvested_logical_grid_size = CoreCoord(12, 10);  break;
+        case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
+        case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
+        default:
+            TT_THROW("Unsupported arch {}", get_env_arch_name());
     }
     auto logical_grid_size = device->logical_grid_size();
     if (logical_grid_size == unharvested_logical_grid_size) {
@@ -224,7 +229,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
             host_input[0] = bank_id + 1;
             bank_id_to_value[bank_id] = host_input.at(0);
             CoreCoord logical_core = this->devices_.at(id)->logical_core_from_bank_id(bank_id);
-            uint32_t write_address = l1_address + this->devices_.at(id)->l1_bank_offset_from_bank_id(bank_id);
+            uint32_t write_address = l1_address + this->devices_.at(id)->bank_offset(BufferType::L1, bank_id);
             tt_metal::detail::WriteToDeviceL1(this->devices_.at(id), logical_core, write_address, host_input);
         }
 
@@ -247,7 +252,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
         std::vector<uint32_t> output;
         for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
             CoreCoord logical_core = this->devices_.at(id)->logical_core_from_bank_id(bank_id);
-            uint32_t read_address = l1_address + this->devices_.at(id)->l1_bank_offset_from_bank_id(bank_id);
+            uint32_t read_address = l1_address + this->devices_.at(id)->bank_offset(BufferType::L1, bank_id);
             tt_metal::detail::ReadFromDeviceL1(this->devices_.at(id), logical_core, read_address, size_bytes, output);
             ASSERT_TRUE(output.size() == host_input.size());
             uint32_t expected_value =
@@ -276,4 +281,42 @@ TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
         }
         EXPECT_EQ(channels.size(), device_group.size());
     }
+}
+
+// Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
+TEST_F(DeviceFixture, TestL1ToPCIeAt16BAlignedAddress) {
+    tt_metal::Program program = tt_metal::CreateProgram();
+    Device *device = this->devices_.at(0);
+    EXPECT_TRUE(device->is_mmio_capable());
+    CoreCoord logical_core(0, 0);
+
+    uint32_t base_l1_src_address = L1_UNRESERVED_BASE + L1_ALIGNMENT;
+    uint32_t base_pcie_dst_address = CQ_START + L1_ALIGNMENT;
+
+    uint32_t size_bytes = 2048 * 128;
+    std::vector<uint32_t> src = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));
+    EXPECT_EQ(L1_ALIGNMENT, 16);
+    uint32_t num_16b_writes = size_bytes / L1_ALIGNMENT;
+
+    tt_metal::detail::WriteToDeviceL1(device, logical_core, base_l1_src_address, src);
+
+    auto pcie_writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp",
+        logical_core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {base_l1_src_address, base_pcie_dst_address, num_16b_writes}
+        }
+    );
+
+    tt_metal::detail::LaunchProgram(device, program);
+
+    std::vector<uint32_t> result(size_bytes/sizeof(uint32_t));
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+    tt::Cluster::instance().read_sysmem(result.data(), size_bytes, base_pcie_dst_address, mmio_device_id, channel);
+
+    EXPECT_EQ(src, result);
 }

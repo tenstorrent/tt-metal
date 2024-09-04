@@ -7,7 +7,7 @@ test-list:
         interval: [1, 1, 32, 32]
         num-dims: [2, 3, 4]
         num-shapes: 1
-        num-samples: 64
+        num-samples: 128
         args-sampling-strategy: "all"
       datagen:
         function: gen_rand
@@ -20,7 +20,7 @@ test-list:
       args-gen: gen_dim_args
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
+        data-type: ["BFLOAT16", "BFLOAT8_B"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: std_sweep.csv

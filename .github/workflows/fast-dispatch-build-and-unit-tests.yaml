@@ -2,133 +2,90 @@ name: "[internal] Fast dispatch unit tests impl"
 
 on:
   workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 45
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - grayskull
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - E150
+          - N150
+          - N300
+          - BH
+      timeout:
+        required: false
+        type: number
+        default: 45
 
 jobs:
-  fd-ttnn-tests:
-    uses: ./.github/workflows/ttnn-post-commit.yaml
-    secrets: inherit
-  fd-model-tests:
-    uses: ./.github/workflows/models-post-commit.yaml
-    secrets: inherit
-  fd-cpp-tests:
-    uses: ./.github/workflows/cpp-post-commit.yaml
-    secrets: inherit
   fd-tests:
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-info: [
-          # E150
-          {arch: grayskull, runs-on: ["grayskull"], name: E150},
-          # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], name: N150},
-          # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
-        ]
         test-group: [
-          {name: eager unit tests 1, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv --splits 4 --group 1 },
-          {name: eager unit tests 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv --splits 4 --group 2 },
-          {name: eager unit tests 3, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv --splits 4 --group 3 },
-          {name: eager unit tests 4, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv --splits 4 --group 4 },
-          {name: sweep, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -vvv},
+          {name: eager unit tests 1, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 },
+          {name: eager unit tests 2, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2 },
+          {name: eager unit tests 3, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 3 },
+          {name: eager unit tests 4, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 4 },
+          {name: eager unit tests 5, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 5 },
+          {name: eager unit tests 6, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 6 },
+          {name: eager unit tests 7, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 7 },
+          {name: eager trace tests, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/trace_testing/ -xvvv},
+          {name: sweep, cmd: pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv},
         ]
-    name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
+    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
-      CONFIG: ci
+      ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ${{ matrix.runner-info.runs-on }}
+    runs-on:
+      - ${{ inputs.runner-label }}
+      - cloud-virtual-machine
+      - in-service
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+          arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: 45
+        timeout-minutes: ${{ inputs.timeout }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
-  build-docs:
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        runner-info: [
-          # E150
-          {arch: grayskull, runs-on: ["grayskull"]},
-          # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
-          # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
-        ]
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ${{ matrix.runner-info.runs-on }}
-    steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
         with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
-      - name: Build Docs
-        timeout-minutes: 15
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_build_docs.sh
-
-  multi-queue-single-device-tests:
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        runner-info: [
-          {arch: grayskull, runs-on: ["grayskull"]},
-        ]
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
-      LOGURU_LEVEL: INFO
-      CONFIG: ci
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ${{ matrix.runner-info.runs-on }}
-    steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dyanmic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U0593J2RQRZ # Bill Teng
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
         with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
-      - name: multi-queue-single-device
-        timeout-minutes: 5
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode fast-multi-queue-single-device
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"

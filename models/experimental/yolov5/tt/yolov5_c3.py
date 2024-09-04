@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 
 from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv
 from models.experimental.yolov5.tt.yolov5_bottleneck import TtYolov5Bottleneck
@@ -72,8 +71,4 @@ class TtYolov5C3(torch.nn.Module):
         )
 
     def forward(self, x):
-        return self.cv3(
-            tt_lib.tensor.concat(
-                (self.m(self.cv1(x)), self.cv2(x)), 1
-            )
-        )
+        return self.cv3(ttnn.concat((self.m(self.cv1(x)), self.cv2(x)), 1))

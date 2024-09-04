@@ -6,15 +6,15 @@ import torch
 from torch import nn
 from torchvision import transforms, datasets
 
-import tt_lib
+import ttnn
 from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
 
 def ttLinear(weight, bias):
     def linear_(activation):
-        weight_T = tt_lib.tensor.transpose(weight, -2, -1)
-        output = tt_lib.tensor.matmul(activation, weight_T)
-        output_plus_bias = tt_lib.tensor.add(output, bias)
+        weight_T = ttnn.transpose(weight, -2, -1)
+        output = ttnn.matmul(activation, weight_T)
+        output_plus_bias = ttnn.add(output, bias)
         return output_plus_bias
 
     return linear_
@@ -46,28 +46,28 @@ def run_linear_test(in_features, out_features, device):
     inputs_targ = torch.zeros(1, 1, 32, inputs_reshape.shape[3])
     inputs_targ[:, :, :1, :] = inputs_reshape
     tilized_inputs = tilize_to_list(inputs_targ)
-    inputs_tt = tt_lib.tensor.Tensor(
+    inputs_tt = ttnn.Tensor(
         tilized_inputs,
         inputs_targ.shape,
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
     weight_tt = tilize_to_list(weight_tt)
     bias_tt = tilize_to_list(bias_tt)
-    weight_tt = tt_lib.tensor.Tensor(
+    weight_tt = ttnn.Tensor(
         weight_tt,
         [1, 1, out_features, in_features],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
-    bias_tt = tt_lib.tensor.Tensor(
+    bias_tt = ttnn.Tensor(
         bias_tt,
         [1, 1, 32, out_features],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 

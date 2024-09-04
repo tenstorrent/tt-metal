@@ -7,7 +7,7 @@ import torch.nn as nn
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
-import tt_lib
+import ttnn
 from models.helper_funcs import Linear as TtLinear
 
 
@@ -37,9 +37,9 @@ class TtFFN(nn.Module):
             self.linear_2_bias,
         )
 
-        self.activation = tt_lib.tensor.gelu
+        self.activation = ttnn.gelu
 
-    def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear1(input)
         x = self.activation(x)
         x = self.linear2(x)

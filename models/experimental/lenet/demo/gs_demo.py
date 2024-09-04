@@ -4,10 +4,11 @@
 
 import torch
 from loguru import logger
-import tt_lib
+import ttnn
 
 from models.experimental.lenet.tt.lenet import lenet5
 from models.experimental.lenet.lenet_utils import load_torch_lenet, prepare_image
+
 
 def test_gs_demo(device, mnist_sample_input, model_location_generator):
     sample_image = mnist_sample_input
@@ -17,11 +18,11 @@ def test_gs_demo(device, mnist_sample_input, model_location_generator):
     with torch.no_grad():
         tt_lenet = lenet5(num_classes, device, model_location_generator)
 
-        tt_image = tt_lib.tensor.Tensor(
+        tt_image = ttnn.Tensor(
             image.reshape(-1).tolist(),
             image.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
 
         tt_output = tt_lenet(tt_image)

@@ -1,4 +1,3 @@
----
 name: "[post-commit] Python wheel build and test"
 
 on:
@@ -26,14 +25,8 @@ jobs:
         arch: [grayskull, wormhole_b0]
     runs-on: ${{ matrix.os }}
     environment: production
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          lfs: false
       - uses: ./.github/actions/install-metal-deps
         with:
           os: ${{ matrix.os }}
@@ -42,57 +35,35 @@ jobs:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
       - name: Set up end-to-end tests environment
         run: ./tests/scripts/set_up_end_to_end_tests_env.sh
-      - name: Set up dynamic env vars
-        working-directory: tests/end_to_end_tests
-        run: |
-          source env/bin/activate
-          python3 -m tt_metal.scripts.get_home_dir --short
-          echo "TT_METAL_HOME=$(python3 -m tt_metal.scripts.get_home_dir --short)" >> $GITHUB_ENV
       - name: Activate env and run release tests - host
         shell: bash
         run: |
-          echo $TT_METAL_HOME
           source tests/end_to_end_tests/env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type eager_host_side
+          cd tests/end_to_end_tests
+          pytest -c conftest.py . -m eager_host_side
   test-eager-package-silicon:
     needs: build-eager-package
     strategy:
       matrix:
         os: [ubuntu-20.04]
         runner-hw-info: [
-          {arch: grayskull},
-          {arch: wormhole_b0},
+          {arch: grayskull, type: E150},
+          {arch: wormhole_b0, type: N150},
+          {arch: wormhole_b0, type: N300}
         ]
-    runs-on: ["Linux", "${{ matrix.runner-hw-info.arch }}"]
+    runs-on: ["cloud-virtual-machine", "${{ matrix.runner-hw-info.type }}", "in-service"]
     environment: production
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-hw-info.arch }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          lfs: false
       - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.runner-hw-info.arch }}
       - name: Set up end-to-end tests environment
         run: ./tests/scripts/set_up_end_to_end_tests_env.sh
-      - name: Set up dynamic env vars
-        working-directory: tests/end_to_end_tests
-        run: |
-          source env/bin/activate
-          python3 -m tt_metal.scripts.get_home_dir --short
-          echo "TT_METAL_HOME=$(python3 -m tt_metal.scripts.get_home_dir --short)" >> $GITHUB_ENV
-      - name: Set up kernel builds
-        working-directory: tests/end_to_end_tests
-        run: |
-          echo $TT_METAL_HOME
-          source env/bin/activate
-          python3 -m tt_metal.scripts.set_up_kernels prepare
       - name: Activate env and run release tests - silicon
+        timeout-minutes: 2
         shell: bash
         run: |
-          echo $TT_METAL_HOME
           source tests/end_to_end_tests/env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.runner-hw-info.arch }} --pipeline-type eager_package_silicon
+          cd tests/end_to_end_tests
+          pytest -c conftest.py . -m eager_package_silicon

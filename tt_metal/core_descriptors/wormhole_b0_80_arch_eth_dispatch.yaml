@@ -7,9 +7,20 @@
 
 galaxy:
   1:
-    l1_bank_size:
-      1376256
+    compute_with_storage_grid_range: # Logical only start and end [x, y]
+      start: [0, 0]
+      end: [7, 7]
 
+    storage_cores:
+      []
+
+    dispatch_cores:
+      [[0, 10], [0, 11], [0, 12], [0, 13]]
+
+    dispatch_core_type:
+      "ethernet"
+
+  2:
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [7, 7]
@@ -25,9 +36,6 @@ galaxy:
 
 nebula_x1:
   1:
-    l1_bank_size:
-      1376256
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [7, 7]
@@ -42,9 +50,6 @@ nebula_x1:
       "ethernet"
 
   2:
-    l1_bank_size:
-      1376256
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [7, 7]
@@ -60,9 +65,6 @@ nebula_x1:
 
 nebula_x2:
   1:
-    l1_bank_size:
-      749568
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [7, 7]
@@ -71,15 +73,12 @@ nebula_x2:
       []
 
     dispatch_cores:
-      [[0, 10], [0, 11], [0, 12], [0, 13]]
+      [[0, 4], [0, 5], [0, 10], [0, 11], [0, 12], [0, 13]]
 
     dispatch_core_type:
       "ethernet"
 
   2:
-    l1_bank_size:
-      749568
-
     compute_with_storage_grid_range: # Logical only start and end [x, y]
       start: [0, 0]
       end: [7, 7]
@@ -88,7 +87,7 @@ nebula_x2:
       []
 
     dispatch_cores:
-      [[0, 10], [0, 11], [0, 12], [0, 13]]
+      [[0, 4], [0, 5], [0, 10], [0, 11], [0, 12], [0, 13]]
 
     dispatch_core_type:
       "ethernet"

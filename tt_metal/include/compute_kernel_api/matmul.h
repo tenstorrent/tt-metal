@@ -28,16 +28,15 @@ namespace ckernel {
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t |  Any positive value will indicate tranpose is set   | False    |
  */
 ALWI void mm_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, const uint32_t transpose=0) {
-    UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id) ));
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose) ));
 
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose) ));
     MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>()  ));
+    MATH(( llk_math_hw_configure_disaggregated() ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id) ));
     PACK(( llk_pack_init(out_cb_id)  ));
-    PACK(( llk_setup_outputs()  ));
     PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>()  ));
 }
 
@@ -60,6 +59,23 @@ ALWI void mm_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_c
 ALWI void matmul_tiles(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst, const uint32_t transpose) {
     UNPACK(( llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index) ));
     MATH(( llk_math_matmul<MATH_FIDELITY>(idst, transpose)  ));
+}
+
+/**
+ * Performs tile-sized matrix multiplication *C=A\*B* between the tiles
+ * located in SRCA and SRCB and writes the result to DST. The DST register buffer
+ * must be in acquired state via *acquire_dst* call. This call is blocking and
+ * is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
+ */
+template <uint32_t num_faces = 4>
+ALWI void matmul_tiles_math(uint32_t idst) {
+    MATH(( llk_math_matmul<MATH_FIDELITY, num_faces>(idst)  ));
 }
 
 /**
@@ -112,7 +128,6 @@ ALWI void mm_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, 
  * | kt_dim         | the inner dim of the input matrices in tiles                  | uint32_t | 1 to 2^32-1                                         | False    |
  */
 ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, const uint32_t transpose = 0, uint32_t ct_dim = 1, uint32_t rt_dim = 1, uint32_t kt_dim = 1) {
-    UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id) ));
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim) ));
 
@@ -121,7 +136,6 @@ ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id) ));
     PACK(( llk_pack_init<false, false>(out_cb_id)  ));
-    PACK(( llk_setup_outputs()  ));
     PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>()  ));
 }
 

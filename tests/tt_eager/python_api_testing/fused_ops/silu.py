@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib as ttl
+import ttnn
 
 
 def SiLU(x):
-    xs = ttl.tensor.sigmoid(x)
-    xs = ttl.tensor.mul(xs, x)
+    xs = ttnn.sigmoid(x)
+    xs = ttnn.multiply(xs, x)
     return xs

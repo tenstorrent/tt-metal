@@ -8,10 +8,10 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/common/test_tiles.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/programming_examples/matmul_common/work_split.hpp"
 #include "tt_metal/programming_examples/matmul_common/bmm_op.hpp"
 #include "tt_metal/common/tilize_untilize.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -19,7 +19,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 
-void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& output,
+void golden_matmul(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std::vector<bfloat16>& output,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B) {
     std::uint32_t idx_c = 0;
     std::uint32_t idx_a = 0;
@@ -90,7 +90,6 @@ void matmul_multi_core(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16
     */
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
-    //uint32_t single_tile_size = detail::TileSize(cb_data_format);
     uint32_t single_tile_size = 2 * 32 * 32;
 
     uint32_t dram_buffer_A_size = single_tile_size * Mt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels

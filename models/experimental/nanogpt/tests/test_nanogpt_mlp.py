@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from models.experimental.nanogpt.nanogpt_utils import get_tt_cache_path, store_weights
 from pathlib import Path
 import os
@@ -20,17 +20,19 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
     comp_allclose,
     comp_pcc,
+    skip_for_wormhole_b0,
 )
 
 
 @pytest.mark.parametrize(
     "dtype",
-    (tt_lib.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
 )
 @pytest.mark.parametrize(
     "pcc",
     ((0.99,),),
 )
+@skip_for_wormhole_b0()
 def test_nanogpt_mlp(device, pcc, dtype, reset_seeds):
     model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
     config = model_hf.config

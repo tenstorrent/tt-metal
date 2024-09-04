@@ -10,7 +10,7 @@ from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 from models.utility_functions import is_wormhole_b0
-import tt_lib as ttl
+import ttnn
 import numpy as np
 
 fns = [
@@ -64,6 +64,11 @@ shapes = [
 class TestStats:
     @pytest.mark.parametrize("fn_kind", fns)
     def test_run_stats_ops(self, input_shapes_and_pcc, fn_kind, device, function_level_defaults):
+        if fn_kind in ["normalize_hw", "normalize_global"]:
+            is_ttnn_op = True
+        else:
+            is_ttnn_op = False
+
         input_shapes, accepted_pcc = input_shapes_and_pcc
         input_shapes = [input_shapes]
         datagen_func = [
@@ -74,18 +79,16 @@ class TestStats:
         accepted_pcc = accepted_pcc[fns.index(fn_kind)]
         comparison_func = partial(comparison_funcs.comp_pcc, pcc=accepted_pcc)
         run_single_pytorch_test(
-            f"stats-{fn_kind}",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
+            f"stats-{fn_kind}", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=is_ttnn_op
         )
 
 
 class TestEPS:
     def test_basic_gs(self):
-        assert ttl.device.EPS_GS == 0.001953125
+        assert ttnn.device.EPS_GS == 0.001953125
 
     def test_basic_whb0(self):
-        assert np.isclose(ttl.device.EPS_WHB0, 1.19209e-07)
+        assert np.isclose(ttnn.device.EPS_WHB0, 1.19209e-07)
+
+    def test_basic_bh(self):
+        assert np.isclose(ttnn.device.EPS_BH, 1.19209e-07)

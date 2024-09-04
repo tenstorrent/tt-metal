@@ -4,9 +4,8 @@
 
 import pytest
 from loguru import logger
-
+import ttnn
 import numpy as np
-import tt_lib as ttl
 from tt_lib.utils import _nearest_32, _nearest_y
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.conv.pytorch_conv_tb import (
@@ -59,11 +58,11 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
 
     # Prepare activations
     A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
-    A = A_cl_host.to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK))
+    A = A_cl_host.to(device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.SINGLE_BANK))
 
     # Prepare weights
     B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
-    B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK))
+    B_tiled = B_tiled_host.to(device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.SINGLE_BANK))
 
     if conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE:
         print("Ran test till tensor creation only. Did not run full op compute.")
@@ -72,7 +71,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     assert conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE
 
     # Run TT metal OP
-    out = ttl.tensor.conv_with_address_map(
+    out = ttnn.experimental.tensor.conv_with_address_map(
         A,
         B_tiled,
         None,
@@ -86,7 +85,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     )
     out = out.cpu()
     assert out.get_legacy_shape() == conv_output_shape
-    assert out.get_layout() == ttl.tensor.Layout.ROW_MAJOR
+    assert out.get_layout() == ttnn.ROW_MAJOR_LAYOUT
 
     # Copy output to host and convert tt tensor to pytorch tensor
     out_result = torch.tensor(out.to_torch())

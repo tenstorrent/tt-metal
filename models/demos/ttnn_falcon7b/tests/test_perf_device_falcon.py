@@ -10,7 +10,7 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [1, "BFLOAT16-L1-falcon_7b-layers_32-prefill_seq256", 3.27],
+        [1, "BFLOAT16-L1-falcon_7b-layers_32-prefill_seq256", 3.666],
         [32, "BFLOAT16-L1-falcon_7b-layers_32-decode_batch32", 139],
     ],
 )

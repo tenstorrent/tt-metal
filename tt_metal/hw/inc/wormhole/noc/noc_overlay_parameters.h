@@ -414,6 +414,7 @@
 // Set when stream is in data forwarding state.
 #define       MSG_FWD_ONGOING                    (WAIT_PREV_PHASE_DATA_FLUSH+WAIT_PREV_PHASE_DATA_FLUSH_WIDTH)
 #define       MSG_FWD_ONGOING_WIDTH                1
+// 0 is idle. 1/2 is auto cfg. 3 is waiting for phase advance. 4 is waiting for data send. 5 is phase active
 #define       STREAM_CURR_STATE                  (MSG_FWD_ONGOING+MSG_FWD_ONGOING_WIDTH)
 #define       STREAM_CURR_STATE_WIDTH              4
 

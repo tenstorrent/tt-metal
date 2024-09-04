@@ -18,8 +18,7 @@ depending on the most up-to-date installation methods.
 
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
-    make build
-    make programming_examples/matmul_single_core
+    ./build_metal.sh
     ./build/programming_examples/matmul_single_core
 
 Host Code
@@ -250,5 +249,5 @@ Conclusion
 
 Those are the additional steps for getting ``matmul_single_core`` operations up
 and running on the compute engine. To see a more complicated example using as
-many cores as possible, please refer to please refer to the :ref:`Matmul
+many cores as possible, please refer to the :ref:`Matmul
 multi-core example<MatMul_Multi_Core example>`.

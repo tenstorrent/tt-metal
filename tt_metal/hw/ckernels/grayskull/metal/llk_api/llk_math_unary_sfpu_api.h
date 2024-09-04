@@ -11,12 +11,14 @@
 #include "llk_math_eltwise_unary_sfpu_heaviside.h"
 #include "llk_math_eltwise_unary_sfpu_power.h"
 #include "llk_math_eltwise_unary_sfpu_rsqrt.h"
+#include "llk_math_eltwise_unary_sfpu_tiled_prod.h"
 #include "llk_math_eltwise_unary_sfpu_sigmoid.h"
 #include "llk_math_eltwise_unary_sfpu_sign.h"
 #include "llk_math_eltwise_unary_sfpu_signbit.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
 #include "llk_math_eltwise_unary_sfpu_topk.h"
 #include "llk_math_eltwise_unary_sfpu_trigonometry.h"
+#include "llk_math_eltwise_unary_sfpu_unary_comp.h"
 
 namespace ckernel {
 

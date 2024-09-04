@@ -117,15 +117,15 @@ void MAIN {
          * compute E[(x)^2]
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+        reduce_init_delta<false>();
         ACQ();
         cb_wait_front(cb_x2, Wt);
         //cb_wait_front(cb_xmm, Wt);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // reduce
             for (uint32_t wtr = 0; wtr<blk; wtr++)
-                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_x2, cb_scaler, wt+wtr, scaler0, dst0);
-                //reduce_tile(REDUCE_OP, REDUCE_DIM, cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
+                reduce_tile(cb_x2, cb_scaler, wt+wtr, scaler0, dst0);
+                //reduce_tile(cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
         }
         cb_pop_front(cb_x2, Wt);
         reduce_revert_delta();

@@ -14,7 +14,6 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "math.hpp"
 
-using namespace std;
 enum TensorLayout {
     LIN_ROW_MAJOR = 0, // standard element-wise row-major
     TILED32_SWIZZLED = 1, // row-major of tiles 32x32, each tile is row-major-swizzled
@@ -25,6 +24,7 @@ template <class T, template <typename...> typename BufferType>
 std::vector<T> convert_to_tile_layout(const BufferType<T>& data) {
     ZoneScoped;
     std::vector<T> result;
+    TT_ASSERT(data.size() / (32 * 32) > 0);
     TT_ASSERT(data.size() % (32 * 32) == 0);
     int num_tiles = data.size() / (32 * 32);
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
@@ -68,6 +68,7 @@ template <class T, template <typename...> typename BufferTyp>
 std::vector<T> convert_to_flat_layout(const BufferTyp<T>& data) {
     ZoneScoped;
     std::vector<T> result;
+    TT_ASSERT(data.size() / (32 * 32) > 0);
     TT_ASSERT(data.size() % (32 * 32) == 0);
     int num_tiles = data.size() / (32 * 32);
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
@@ -92,30 +93,38 @@ std::vector<T> convert_to_flat_layout(const BufferTyp<T>& data) {
 template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> untilize_nchw(const BufferType<T>& in, const std::vector<std::uint32_t>& shape) {
     ZoneScoped;
-    TT_ASSERT(shape.size() == 4);
-    TT_ASSERT(shape[2] % 32 == 0 && shape[3] % 32 == 0);
+    TT_ASSERT(shape[shape.size() - 2] % 32 == 0 && shape[shape.size() - 1] % 32 == 0);
 
     std::vector<T> result;
     // Untilize into row major
-    int N = shape[0], C = shape[1], H = shape[2], W = shape[3];
-    result.resize(N*C*H*W);
+    int H = shape[shape.size() - 2], W = shape[shape.size() - 1];
+    auto batch_size = 1;
+    for (int i = 0; i < shape.size() - 2; i++) {
+        batch_size *= shape[i];
+    }
+    result.resize(batch_size * H * W);
     uint32_t linear = 0;
-    for (int n = 0; n < N; n++)
-    for (int c = 0; c < C; c++)
-    for (int hs32 = 0; hs32 < H; hs32 += 32) // iterate over h with stride 32
-    for (int ws32 = 0; ws32 < W; ws32 += 32) // iterate over w with stride 32
-    for (int h32 = 0; h32 < 32; h32++) // hs32 + h32 = h
-    for (int w32 = 0; w32 < 32; w32++) { // ws32 + w32 = w
-        T val = in[linear];
-        auto w = w32 + ws32;
-        auto h = h32 + hs32;
-        auto offs = w + h*W + c*H*W + n*C*H*W;
-        result[offs] = val;
-        linear ++;
+    for (auto batch_index = 0; batch_index < batch_size; batch_index++) {
+        for (int hs32 = 0; hs32 < H; hs32 += 32) {        // iterate over h with stride 32
+            for (int ws32 = 0; ws32 < W; ws32 += 32) {    // iterate over w with stride 32
+                for (int h32 = 0; h32 < 32; h32++) {      // hs32 + h32 = h
+                    for (int w32 = 0; w32 < 32; w32++) {  // ws32 + w32 = w
+                        T val = in[linear];
+                        auto w = w32 + ws32;
+                        auto h = h32 + hs32;
+                        auto offs = w + h * W + batch_index * H * W;
+                        result[offs] = val;
+                        linear++;
+                    }
+                }
+            }
+        }
     }
 
     return result;
 }
+
+inline std::uint32_t round_up_to_mul16(std::uint32_t val) { return ((val & 15) == 0) ? val : (val | 15)+1; }
 
 inline std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) == 0) ? val : (val | 31)+1; }
 
@@ -123,42 +132,46 @@ inline std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) =
 template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, const std::vector<std::uint32_t>& shape) {
     ZoneScoped;
-    int N = shape[0], C = shape[1], H = shape[2], W = shape[3];
-    int NCHW = N*C*H*W;
+    int H = shape[shape.size() - 2], W = shape[shape.size() - 1];
+    auto batch_size = 1;
+    for (int i = 0; i < shape.size() - 2; i++) {
+        batch_size *= shape[i];
+    }
+    int input_volume = batch_size * H * W;
     int OH = round_up_to_mul32(H);
     int OW = round_up_to_mul32(W);
     std::vector<T> tilized_result;
-    tilized_result.resize(N*C*OH*OW);
+    tilized_result.resize(batch_size * OH * OW);
     std::fill(tilized_result.begin(), tilized_result.end(), 0);
     int out_index = 0;
-    for (int n = 0; n < N; n++)
-    for (int c = 0; c < C; c++)
-    for (int hs32 = 0; hs32 < H; hs32 += 32)
-    for (int ws32 = 0; ws32 < W; ws32 += 32)
-    for (int h32 = 0; h32 < 32; h32++)
-    for (int w32 = 0; w32 < 32; w32++) {
-        auto w = w32+ws32;
-        auto h = h32+hs32;
-        auto in_offs = w + h*W + c*H*W + n*C*H*W;
-        auto val = (w >= W || h >= H || c >= C || in_offs >= NCHW) ? 0 : in_rowmajor[in_offs];
-        int out_w = (out_index % OW);
-        int out_h = (out_index / OW) % OH;
-        int out_c = (out_index / (OH*OW)) % C;
-        int out_n = (out_index / (C*OH*OW));
-        TT_ASSERT(w < OW);
-        TT_ASSERT(h < OH);
-        TT_ASSERT(out_n < N);
-        int out_offs = out_w + out_h*OW + out_c*OH*OW + out_n*C*OH*OW;
-        tilized_result[out_offs] = val;
-        out_index++;
+    for (auto batch_index = 0; batch_index < batch_size; batch_index++) {
+        for (int hs32 = 0; hs32 < H; hs32 += 32) {
+            for (int ws32 = 0; ws32 < W; ws32 += 32) {
+                for (int h32 = 0; h32 < 32; h32++) {
+                    for (int w32 = 0; w32 < 32; w32++) {
+                        auto w = w32 + ws32;
+                        auto h = h32 + hs32;
+                        auto in_offs = w + h * W + batch_index * H * W;
+                        auto val = (w >= W || h >= H || in_offs >= input_volume) ? 0 : in_rowmajor[in_offs];
+                        int out_w = (out_index % OW);
+                        int out_h = (out_index / OW) % OH;
+                        TT_ASSERT(w < OW);
+                        TT_ASSERT(h < OH);
+                        int out_offs = out_w + out_h * OW + batch_index * OH * OW;
+                        tilized_result[out_offs] = val;
+                        out_index++;
+                    }
+                }
+            }
+        }
     }
-    TT_ASSERT(tilized_result.size() == N*C*OH*OW);
+    TT_ASSERT(tilized_result.size() == batch_size * OH * OW);
 
     return tilized_result;
 }
 
 struct TensAddr {
-    vector<std::uint32_t> sh;
+    std::vector<std::uint32_t> sh;
 
     std::uint32_t numel() const {
         std::uint32_t prod = 1;
@@ -167,7 +180,7 @@ struct TensAddr {
         return prod;
     }
 
-    TensAddr(vector<std::uint32_t> shape) : sh(shape) {}
+    TensAddr(std::vector<std::uint32_t> shape) : sh(shape) {}
     int offs(int n, int c, int h, int w) {
         TT_ASSERT(std::uint32_t(n) < sh[0] && std::uint32_t(c) < sh[1] && std::uint32_t(h) < sh[2] && std::uint32_t(w) < sh[3]);
         return w + sh[3]*h + sh[2]*sh[3]*c + sh[1]*sh[2]*sh[3]*n;
@@ -176,7 +189,7 @@ struct TensAddr {
 
 template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> convert_layout(
-    const BufferType<T>& inp, const vector<uint32_t>& shape, TensorLayout inL, TensorLayout outL) {
+    const BufferType<T>& inp, const std::vector<uint32_t>& shape, TensorLayout inL, TensorLayout outL) {
     ZoneScoped;
     switch (inL) {
         case TILED32_SWIZZLED:
@@ -209,5 +222,5 @@ inline std::vector<T> convert_layout(
         default:
             TT_ASSERT(false && "Unsupported conversion");
     }
-    return vector<T>();
+    return std::vector<T>();
 }

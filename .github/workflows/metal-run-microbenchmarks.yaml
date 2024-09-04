@@ -14,17 +14,17 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, runs-on: ["perf-grayskull", "self-reset"]},
+          {arch: grayskull, runs-on: ["E150", "pipeline-perf", "bare-metal", "in-service"]},
           # Do not run N150 on microbenchmarks for now as we do not have the machines for it
-          # {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "self-reset"]},
+          # {arch: wormhole_b0, runs-on: ["pipeline-perf", "N150", "bare-metal", "in-service"]},
           # N300
-          {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "self-reset"]},
+          {arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"]},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       # Use BM for microbenchmarks
       ARCH_NAME: ${{ matrix.runner-info.arch }}
-      CONFIG: ci
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
@@ -33,9 +33,11 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
-        run: ./scripts/build_scripts/build_with_profiler_opt.sh
+        run: |
+          ./scripts/build_scripts/build_with_profiler_opt.sh
+          ./create_venv.sh
       - name: Build tests
-        run: make tests
+        run: cmake --build build --target tests -- -j`nproc`
       - name: Run microbenchmark tests
         timeout-minutes: 90
         run: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type microbenchmarks

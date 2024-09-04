@@ -8,7 +8,7 @@ import sys
 
 import torch
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import print_diff_argmax
 import pytest
 from loguru import logger
@@ -20,9 +20,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 
 
 def run_concat(shapes, dim, device, layout, dtype, input_mem_config, output_mem_config):
-    if layout == ttl.tensor.Layout.ROW_MAJOR and dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat8_b:
         pytest.skip("Illegal config")
-    if layout == ttl.tensor.Layout.TILE:
+    if layout == ttnn.TILE_LAYOUT:
         for shape in shapes:
             if shape[-2] % 32 != 0 or shape[-1] % 32 != 0:
                 pytest.skip("Illegal config")
@@ -32,7 +32,7 @@ def run_concat(shapes, dim, device, layout, dtype, input_mem_config, output_mem_
         shape = torch.Size(shapes[i])
         inputs.append(torch.rand(shape).to(torch.bfloat16))
         tt_inputs.append(
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 inputs[i],
                 dtype,
             )
@@ -42,11 +42,11 @@ def run_concat(shapes, dim, device, layout, dtype, input_mem_config, output_mem_
 
     tt_cpu = torch.concat(inputs, dim)
 
-    tt = ttl.tensor.concat(tt_inputs, dim, output_mem_config)
+    tt = ttnn.concat(tt_inputs, dim, memory_config=output_mem_config)
 
-    tt_dev = tt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
-    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if dtype == ttnn.bfloat8_b:
         passing, output = comp_pcc(tt_cpu, tt_dev)
     else:
         passing, output = comp_equal(tt_cpu, tt_dev)
@@ -78,34 +78,34 @@ def run_concat(shapes, dim, device, layout, dtype, input_mem_config, output_mem_
 @pytest.mark.parametrize(
     "layout, dtype",
     (
-        (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT16),
-        (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT8_B),
-        (ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.DataType.BFLOAT16),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ),
 )
 @pytest.mark.parametrize(
     "input_mem_config",
     (
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.DRAM,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.DRAM,
         ),
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.L1,
         ),
     ),
 )
 @pytest.mark.parametrize(
     "output_mem_config",
     (
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.DRAM,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.DRAM,
         ),
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.L1,
         ),
     ),
 )
@@ -129,34 +129,34 @@ def test_concat(shapes, dim, device, layout, dtype, input_mem_config, output_mem
 @pytest.mark.parametrize(
     "layout, dtype",
     (
-        (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT16),
-        (ttl.tensor.Layout.TILE, ttl.tensor.DataType.BFLOAT8_B),
-        (ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.DataType.BFLOAT16),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ),
 )
 @pytest.mark.parametrize(
     "input_mem_config",
     (
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.DRAM,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.DRAM,
         ),
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.L1,
         ),
     ),
 )
 @pytest.mark.parametrize(
     "output_mem_config",
     (
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.DRAM,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.DRAM,
         ),
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.L1,
         ),
     ),
 )
@@ -164,7 +164,7 @@ def test_concat_with_program_cache(
     shapes, dim, device, layout, dtype, input_mem_config, output_mem_config, use_program_cache, function_level_defaults
 ):
     run_concat(shapes, dim, device, layout, dtype, input_mem_config, output_mem_config)
-    tmp = ttl.tensor.empty([1, 256, 32, 32], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, device)
+    tmp = ttnn.empty([1, 256, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
     run_concat(shapes, dim, device, layout, dtype, input_mem_config, output_mem_config)
 
 
@@ -175,25 +175,25 @@ def test_concat_with_program_cache(
             (1, 1, 16, 16),
             (8, 16),
             (8, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ),
         (
             (1, 1, 160, 32),
             (80, 32),
             (80, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ),
         (
             (1, 1, 160, 32),
             (80, 32),
             (80, 64),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(0, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         ),
         (
             (1, 1, 235200, 16),
             (4800, 16),
             (4800, 32),
-            ttl.tensor.CoreRangeSet({ttl.tensor.CoreRange(ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(6, 6))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 6))}),
         ),
     ),
 )
@@ -201,36 +201,36 @@ def test_sharded_concat(input_shape, shard_shape, output_shard_shape, shard_grid
     num_inputs = 2
     inputs = []
     tt_inputs = []
-    input_shard_scheme = ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-    input_shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
-    shard_spec = ttl.tensor.ShardSpec(shard_grid, shard_shape, input_shard_orientation, False)
-    sharded_mem_config = ttl.tensor.MemoryConfig(input_shard_scheme, ttl.tensor.BufferType.L1, shard_spec)
+    input_shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    input_shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, input_shard_orientation, False)
+    sharded_mem_config = ttnn.MemoryConfig(input_shard_scheme, ttnn.BufferType.L1, shard_spec)
 
-    output_shard_spec = ttl.tensor.ShardSpec(shard_grid, output_shard_shape, input_shard_orientation, False)
-    output_sharded_mem_config = ttl.tensor.MemoryConfig(input_shard_scheme, ttl.tensor.BufferType.L1, output_shard_spec)
+    output_shard_spec = ttnn.ShardSpec(shard_grid, output_shard_shape, input_shard_orientation, False)
+    output_sharded_mem_config = ttnn.MemoryConfig(input_shard_scheme, ttnn.BufferType.L1, output_shard_spec)
 
     total_elements = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]
     for i in range(num_inputs):
         shape = torch.Size(input_shape)
         inputs.append(i * 1000 * total_elements + torch.arange(0, shape.numel()).reshape(shape).to(torch.bfloat16))
         tt_inputs.append(
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 inputs[i],
-                ttl.tensor.DataType.BFLOAT16,
+                ttnn.bfloat16,
             )
-            .to(ttl.tensor.Layout.ROW_MAJOR)
+            .to(ttnn.ROW_MAJOR_LAYOUT)
             .to(device, sharded_mem_config)
         )
 
-    dram_memory_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.DRAM,
+    dram_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttnn.BufferType.DRAM,
     )
 
     dim = 3
-    tt_output_interleaved = ttl.tensor.concat(tt_inputs, dim, output_sharded_mem_config)
+    tt_output_interleaved = ttnn.concat(tt_inputs, dim, memory_config=output_sharded_mem_config)
 
-    tt_dev = tt_output_interleaved.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_output_interleaved.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
     tt_cpu = torch.concat(inputs, dim)
     passing, output = comp_equal(tt_cpu, tt_dev)
     logger.info(output)

@@ -26,9 +26,6 @@ def test_mean(device, batch_size, h, w, dim):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=True)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-
+    output_tensor = ttnn.mean(input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor)

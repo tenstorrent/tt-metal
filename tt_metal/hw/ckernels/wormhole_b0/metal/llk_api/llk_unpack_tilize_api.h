@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -86,6 +86,7 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
 
     std::uint32_t base_address = cb_interface[operand_id].fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
+    DEBUG_STATUS("UPTW");
     _llk_unpack_tilize_(
         base_address,
         tile_index,
@@ -95,6 +96,7 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
         num_faces,
         narrow_tile
     );
+    DEBUG_STATUS("UPTD");
 }
 
 inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles) {
@@ -137,22 +139,31 @@ inline void llk_unpack_tilizeA_B_hw_configure_disaggregated(const std::uint32_t 
     llk_unpack_tilizeA_B_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_tilizeA_B_params, within_face_16x16_transpose);
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
 inline void llk_unpack_tilizeA_B_mop_config(const bool narrow_tile = false, const std::uint32_t num_faces = 4) {
-    static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
+    static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, (zero_srcA ? 0b010001 : 0b1), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr uint unpack_srcb = TT_OP_UNPACR(SrcB, (zero_srcA ? 0b010001 : (reload_srcB ? 0b0 : 0b1)), 0, 0, 0, 1, (zero_srcA ? 0 : 1), p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Skip face ptr inc if same face is reloaded into srcB
     static constexpr uint unpack_neginf_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_NEGINFSRC); // Needed for max pool
+    static constexpr uint unpack_zero_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);     // Needed for dot product
+    static constexpr uint unpack_srcb_2_face = TT_OP_UNPACR(SrcB, 0b100010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
+    static constexpr uint unpack_srca_dat_valid = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
+    static constexpr uint unpack_srcb_dat_valid = TT_OP_UNPACR(SrcB, (reload_srcB ? 0b0 : 0b1), 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
 
-    constexpr uint32_t innerloop = 1;
-    const uint32_t outerloop = (num_faces>2) ? num_faces/2 : num_faces;
-    ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
+    const uint32_t innerloop = zero_srcA ? (num_faces>2 ? 2 : (num_faces-1)) : 1;
+    const uint32_t outerloop = zero_srcA ? 1 : (num_faces>2) ? num_faces/2 : num_faces;
+    ckernel_template tmp(outerloop, innerloop, unpack_srca, ((zero_srcA && num_faces==2) ? unpack_srcb_2_face : unpack_srcb));
     if constexpr (neginf_srcA) {
         tmp.set_start_op(unpack_neginf_srca);
+    } else if constexpr (zero_srcA) {
+        if (num_faces < 4) {
+            tmp.set_start_op(unpack_zero_srca);
+            tmp.set_end_ops(unpack_srca_dat_valid, unpack_srcb_dat_valid);
+        }
     }
     tmp.program(instrn_buffer);
 }
 
-template <bool neginf_srcA = false, std::uint32_t reload_srcB = false>
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
 inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim, const std::uint32_t num_faces = 4, const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpB_face_r_dim = FACE_R_DIM) {
 
     const std::uint32_t operand_id = get_operand_id(operandA); // Use operandA to get operand_id tile dims must be the same for both operands
@@ -179,9 +190,10 @@ inline void llk_unpack_tilizeA_B_init(const std::uint32_t operandA, const std::u
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0]
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
 
-    llk_unpack_tilizeA_B_mop_config<neginf_srcA,reload_srcB>(narrow_tile, num_faces);
+    llk_unpack_tilizeA_B_mop_config<neginf_srcA,reload_srcB,zero_srcA>(narrow_tile, num_faces);
 }
 
+template <bool zero_srcA = false>
 inline void llk_unpack_tilizeA_B(
     std::uint32_t operandA,
     std::uint32_t operandB,
@@ -221,11 +233,20 @@ inline void llk_unpack_tilizeA_B(
     // Program srcA and srcB base addresses
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
+    DEBUG_STATUS("UPTW");
     for (std::uint32_t n = 0; n < num_loops; n++) {
         std::uint32_t address_a = base_address_a + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
 
         // Clear z/w start counters
-        TTI_SETADCZW(UNP0, 0, 0, 0, 0, 0b1111);
+        if constexpr (zero_srcA) {
+            if (num_faces==4 && n==1) {
+                TTI_SETADCZW(UNP0, 0, 0, 0, 0, 0b1011);
+            } else {
+                TTI_SETADCZW(UNP0, 0, 0, 0, 0, 0b1111);
+            }
+        } else {
+            TTI_SETADCZW(UNP0, 0, 0, 0, 0, 0b1111);
+        }
 
         // Wait for free context
         wait_for_next_context(2);
@@ -243,7 +264,22 @@ inline void llk_unpack_tilizeA_B(
         }
 
         // Run MOP
-        ckernel::ckernel_template::run(instrn_buffer);
+        if constexpr (zero_srcA) {
+            if (num_faces==4) {
+                if (n==0) {
+                    TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
+                    ckernel::ckernel_template::run(instrn_buffer);
+                } else {
+                    ckernel::ckernel_template::run(instrn_buffer);
+                    TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID);
+                    TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
+                }
+            } else {
+                ckernel::ckernel_template::run(instrn_buffer);
+            }
+        } else {
+            ckernel::ckernel_template::run(instrn_buffer);
+        }
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
@@ -251,15 +287,18 @@ inline void llk_unpack_tilizeA_B(
         // Switch unpacker config context
         switch_config_context(unp_cfg_context);
     }
+    DEBUG_STATUS("UPTD");
 }
 
+template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false>
 inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA,
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
     std::uint32_t tile_idx_b,
-    std::uint32_t num_faces = 4) {
+    std::uint32_t num_faces = 4,
+    std::uint32_t unpA_face_r_dim = FACE_R_DIM /*unused*/) {
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
-        llk_unpack_tilizeA_B(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
+        llk_unpack_tilizeA_B<zero_srcA>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
     }
 }

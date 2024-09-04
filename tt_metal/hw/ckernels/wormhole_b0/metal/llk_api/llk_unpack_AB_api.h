@@ -21,7 +21,6 @@ inline void llk_unpack_AB_hw_configure(
     // unpA -> srcA
     // unpB -> srcB
     const uint32_t num_faces = get_operand_num_faces(unpA_operand_id);  // num faces in unpA and unpB are the same
-
     const uint32_t face_r_dim = get_operand_face_r_dim(unpA_operand_id);  // face r dim in unpA and unpB are the same
 
     _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, stoch_rnd_mode>(
@@ -81,7 +80,9 @@ inline void llk_unpack_AB(
     std::uint32_t offset_address_b = cb_interface[operandB_id].fifo_page_size * tile_index_b;
     std::uint32_t address_b = base_address_b + offset_address_b;
 
+    DEBUG_STATUS("UABW");
     _llk_unpack_AB_<BType>(address_a, address_b, transpose_of_faces > 0);
+    DEBUG_STATUS("UABD");
 }
 
 template <ReduceDim dim, BroadcastType BType = BroadcastType::NONE>

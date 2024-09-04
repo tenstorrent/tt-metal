@@ -15,7 +15,6 @@ uint32_t per_core_block_r_tiles = get_compile_time_arg_val(1);
 uint32_t per_core_block_c_tiles = get_compile_time_arg_val(2);
 llk_pack_init();
 llk_pack_hw_configure_disaggregated<false>(16);
-llk_setup_outputs();
 llk_pack_dest_init<DstTileFaceLayout::RowMajor, false>();
 
 for (uint32_t block = 0; block < per_core_num_blocks; block++) {

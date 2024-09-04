@@ -28,8 +28,8 @@ class BankManager {
    public:
     BankManager() {}
 
-    BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_descriptors, uint64_t size_bytes, uint64_t alloc_offset=0);
-    BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_descriptor, uint64_t size_bytes, uint64_t interleaved_address_limit, uint64_t alloc_offset=0);
+    BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_descriptors, uint64_t size_bytes, uint32_t alignment_bytes, uint64_t alloc_offset=0);
+    BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_descriptor, uint64_t size_bytes, uint64_t interleaved_address_limit, uint32_t alignment_bytes, uint64_t alloc_offset=0);
     BankManager&& operator=(BankManager&& that);
     ~BankManager();
     uint32_t num_banks() const;
@@ -54,8 +54,6 @@ class BankManager {
    private:
     void deallocate_buffer_(uint64_t address);
 
-    constexpr static uint32_t min_allocation_size_bytes_ = 32;
-
     // Types of buffers allocated in the banks
     BufferType buffer_type_;
     std::unordered_set<uint64_t> allocated_buffers_;
@@ -64,9 +62,10 @@ class BankManager {
     std::unordered_map<uint32_t, int64_t> bank_id_to_bank_offset_;
     std::unique_ptr<Algorithm> allocator_;
     uint64_t interleaved_address_limit_;
+    uint32_t alignment_bytes_;
     void validate_bank_id(uint32_t bank_id) const;
 
-    void init_allocator(uint64_t size_bytes, uint64_t offset);
+    void init_allocator(uint64_t size_bytes, uint32_t alignment_bytes, uint64_t offset);
 };
 
 // Functions used to initiate allocator and allocate buffers
@@ -82,13 +81,12 @@ uint32_t dram_channel_from_bank_id(const Allocator &allocator, uint32_t bank_id)
 
 CoreCoord logical_core_from_bank_id(const Allocator &allocator, uint32_t bank_id);
 
-int32_t l1_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_id);
-
-int32_t dram_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_id);
+int32_t bank_offset(const Allocator &allocator, BufferType buffer_type, uint32_t bank_id);
 
 const std::vector<uint32_t> &bank_ids_from_dram_channel(const Allocator &allocator, uint32_t dram_channel);
 
-const std::vector<uint32_t> &bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core);
+const std::vector<uint32_t> &bank_ids_from_logical_core(
+    const Allocator &allocator, BufferType buffer_type, const CoreCoord &logical_core);
 
 Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type);
 
@@ -100,6 +98,10 @@ uint64_t base_alloc(const AllocatorConfig & config, BankManager &bank_manager, u
 
 uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up, std::optional<uint32_t> num_shards = std::nullopt);
 
+void disable_allocs(Allocator &allocator);
+
+void enable_allocs(Allocator &allocator);
+
 void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType &buffer_type);
 void deallocate_buffers(Allocator &allocator);
 
@@ -110,15 +112,17 @@ void clear(Allocator &allocatator);
 struct Allocator {
     Allocator(const AllocatorConfig &alloc_config, const allocator::AllocDescriptor &alloc_descriptor);
 
+    bool disabled_allocs = false;
     allocator::BankManager dram_manager;
     allocator::BankManager l1_manager;
-
+    allocator::BankManager l1_small_manager;
+    allocator::BankManager trace_buffer_manager;
     // TODO: Track lowest l1 addresses!
 
     std::unordered_map<uint32_t, uint32_t> bank_id_to_dram_channel;
     std::unordered_map<uint32_t, std::vector<uint32_t>> dram_channel_to_bank_ids;
     std::unordered_map<uint32_t, CoreCoord> bank_id_to_logical_core;
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> logical_core_to_bank_ids;
+    std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<uint32_t>>> logical_core_to_bank_ids;
 
     AllocatorConfig config;
     // Callbacks to invoke during initialization and allocation

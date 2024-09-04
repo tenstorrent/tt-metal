@@ -71,7 +71,7 @@ inline void reduce_h(uint32_t out_nelems,
                      uint32_t out_cb_id) {
     cb_wait_front(in_cb_id, in_ntiles_hwc * out_nelems);
     cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
-    reduce_init_delta<false>(PoolType::MAX, ReduceDim::REDUCE_COL, out_cb_id);
+    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_COL>(out_cb_id);
     uint32_t base_tile_id = 0;
     for (uint32_t c_i = 0; c_i < in_ntiles_c * out_nelems; ++c_i) {
         // add to accumulator all the in_ntiles_hw in a column of tiles
@@ -79,7 +79,7 @@ inline void reduce_h(uint32_t out_nelems,
         uint32_t dst_i = 0; // TODO [AS]: Use more than one dst tile at a time
         for (uint32_t hw_i = 0; hw_i < in_ntiles_hw; ++hw_i) {
             uint32_t tile_i = base_tile_id + hw_i;
-            reduce_tile(PoolType::MAX, ReduceDim::REDUCE_COL, in_cb_id, in_scalar_cb_id, tile_i, 0, dst_i);
+            reduce_tile(in_cb_id, in_scalar_cb_id, tile_i, 0, dst_i);
         }
         pack_tile(dst_i, out_cb_id);
         release_dst(tt::DstMode::Half);

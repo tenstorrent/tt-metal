@@ -13,7 +13,7 @@ from models.utility_functions import (
 )
 from models.experimental.swin.swin_helper_funcs import linear as TtLinear
 from models.experimental.swin.swin_utils import meshgrid
-import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
 
@@ -69,9 +69,9 @@ class TtSwinSelfAttention(nn.Module):
         self.value_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.bias"], self.device)
 
     def const_tensor(self, shape, value):
-        return tt_lib.tensor.full(shape, value)
+        return ttnn.full(shape, value)
 
-    def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def transpose_for_scores(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # x must be 4d originaly
         # 1 is appended to the beggining
         # so create tensor shape by ommiting the first dimension
@@ -80,16 +80,16 @@ class TtSwinSelfAttention(nn.Module):
             self.attention_head_size,
         ]
         x = fallback_ops.reshape(x, *new_x_shape)
-        x = tt_lib.tensor.permute(x, (0, 2, 1, 3))
+        x = ttnn.permute(x, (0, 2, 1, 3))
         return x
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        hidden_states: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.Tensor]:
         _, batch_size, dim, num_channels = hidden_states.get_legacy_shape()
         mixed_query_layer = TtLinear(hidden_states, self.query_weight, self.query_bias)
 
@@ -98,15 +98,15 @@ class TtSwinSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_transposed = tt_lib.tensor.transpose(key_layer, -2, -1)
+        key_layer_transposed = ttnn.transpose(key_layer, -2, -1)
 
-        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed)
+        attention_scores = ttnn.matmul(query_layer, key_layer_transposed)
 
         attention_head_size_tt = self.const_tensor(attention_scores.get_legacy_shape(), self.attention_head_size)
-        attention_head_size_tt = tt_lib.tensor.sqrt(attention_head_size_tt)
-        attention_head_size_tt = tt_lib.tensor.recip(attention_head_size_tt)
+        attention_head_size_tt = ttnn.sqrt(attention_head_size_tt)
+        attention_head_size_tt = ttnn.reciprocal(attention_head_size_tt)
 
-        attention_scores = tt_lib.tensor.mul(attention_scores, attention_head_size_tt)
+        attention_scores = ttnn.mul(attention_scores, attention_head_size_tt)
         """
         The index value must be long or byte or bool, hence using pytorch tensor
         """
@@ -119,15 +119,13 @@ class TtSwinSelfAttention(nn.Module):
             self.window_size[0] * self.window_size[1],
             1,
         )
-        attention_scores = tt_lib.tensor.permute(attention_scores, (1, 2, 3, 0))
-        attention_scores = tt_lib.tensor.bcast(
+        attention_scores = ttnn.permute(attention_scores, (1, 2, 3, 0))
+        attention_scores = ttnn.add(
             attention_scores,
             relative_position_bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.W,
         )
 
-        attention_scores = tt_lib.tensor.permute(attention_scores, (3, 0, 1, 2))
+        attention_scores = ttnn.permute(attention_scores, (3, 0, 1, 2))
 
         attention_scores = tt_to_torch_tensor(attention_scores)
 
@@ -158,8 +156,8 @@ class TtSwinSelfAttention(nn.Module):
         # Mask heads if we want to
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
-        context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
-        context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
+        context_layer = ttnn.matmul(attention_probs, value_layer)
+        context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
 
         new_context_layer_shape = tuple(context_layer.get_legacy_shape())[:-2] + (self.all_head_size,)
         context_layer = fallback_ops.reshape(

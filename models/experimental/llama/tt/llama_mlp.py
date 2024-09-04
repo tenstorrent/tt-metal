@@ -4,7 +4,7 @@
 
 import torch
 from torch import nn
-import tt_lib
+import ttnn
 
 from models.experimental.llama.llama_utils import linear
 from models.utility_functions import torch_to_tt_tensor_rm
@@ -40,9 +40,9 @@ class TtLlamaMLP(nn.Module):
         )
 
         if hidden_act == "silu":  # silu
-            self.act_fn = tt_lib.tensor.silu
+            self.act_fn = ttnn.silu
 
-    def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # gate proj
         gate = linear(x, self.out_gate_proj, self.bias, self.device)
         # apply silu activation function
@@ -52,7 +52,7 @@ class TtLlamaMLP(nn.Module):
         up = linear(x, self.out_up_proj, self.bias, self.device)
 
         # product
-        prod = tt_lib.tensor.mul(gate, up)
+        prod = ttnn.mul(gate, up)
 
         # down
         hidden_states = linear(prod, self.out_down_proj, self.bias, self.device)

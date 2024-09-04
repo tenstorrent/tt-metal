@@ -6,7 +6,12 @@ on:
     - cron: "0 4 * * *"
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+
   stress-build-and-unit-tests:
+    needs: build-artifact
     timeout-minutes: 1440
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
@@ -15,18 +20,18 @@ jobs:
       matrix:
         runner-info: [
           # E150
-          {arch: grayskull, runs-on: ["grayskull", "cloud-virtual-machine"], machine-type: "virtual_machine"},
+          {arch: grayskull, runs-on: ["cloud-virtual-machine", "E150", "in-service"], machine-type: "virtual_machine", name: "E150"},
           # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "cloud-virtual-machine", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], machine-type: "virtual_machine"},
+          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N150", "in-service"], machine-type: "virtual_machine", name: "N150"},
           # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "cloud-virtual-machine", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], machine-type: "virtual_machine"},
+          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N300", "in-service"], machine-type: "virtual_machine", name: "N300"},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
-      CONFIG: ci
       TT_METAL_SLOW_DISPATCH_MODE: 1
       TT_METAL_WATCHER: 60
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
@@ -34,13 +39,15 @@ jobs:
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
-      - name: Build tt-metal CPP tests
-        run: make tests
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
       - name: Run pre/post regression tests in a loop
         run: |
-          source build/python_env/bin/activate
+          source python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type stress_post_commit --dispatch-mode slow
       - name: Upload watcher log
         if: always()

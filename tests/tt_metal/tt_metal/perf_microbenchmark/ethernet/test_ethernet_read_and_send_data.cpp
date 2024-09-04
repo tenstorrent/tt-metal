@@ -13,6 +13,8 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -72,8 +74,8 @@ struct BankedConfig {
     size_t num_pages;
     size_t size_bytes;
     size_t page_size_bytes;
-    BufferType input_buffer_type;// = BufferType::L1;
-    BufferType output_buffer_type;// = BufferType::L1;
+    tt_metal::BufferType input_buffer_type;// = tt_metal::BufferType::L1;
+    tt_metal::BufferType output_buffer_type;// = tt_metal::BufferType::L1;
     tt::DataFormat l1_data_format;// = tt::DataFormat::Float16_b;
 };
 
@@ -86,6 +88,7 @@ bool RunWriteBWTest(
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
 
+    const size_t eth_channel_sync_ack_addr,
     const size_t src_eth_l1_byte_address,
     const size_t dst_eth_l1_byte_address,
 
@@ -136,14 +139,14 @@ bool RunWriteBWTest(
             .num_pages = num_pages,
             .size_bytes = input_buffer_size_bytes,
             .page_size_bytes = input_buffer_page_size,
-            .input_buffer_type = source_is_dram ? BufferType::DRAM : BufferType::L1,
-            .output_buffer_type = dest_is_dram ? BufferType::DRAM : BufferType::L1,
+            .input_buffer_type = source_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
+            .output_buffer_type = dest_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
             .l1_data_format = tt::DataFormat::Float16_b};
     auto input_buffer =
             CreateBuffer(
                 InterleavedBufferConfig{sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
 
-    bool input_is_dram = test_config.input_buffer_type == BufferType::DRAM;
+    bool input_is_dram = test_config.input_buffer_type == tt_metal::BufferType::DRAM;
     tt_metal::detail::WriteToBuffer(input_buffer, inputs);
     const uint32_t dram_input_buf_base_addr = input_buffer->address();
 
@@ -158,7 +161,7 @@ bool RunWriteBWTest(
             CreateBuffer(
                 InterleavedBufferConfig{receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
-    bool output_is_dram = test_config.output_buffer_type == BufferType::DRAM;
+    bool output_is_dram = test_config.output_buffer_type == tt_metal::BufferType::DRAM;
     tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
     const uint32_t dram_output_buffer_base_addr = output_buffer->address();
 
@@ -228,6 +231,7 @@ bool RunWriteBWTest(
         eth_receiver_kernel,
         eth_receiver_core,
         {
+            uint32_t(eth_channel_sync_ack_addr),
             uint32_t(dst_eth_l1_byte_address),
             uint32_t(src_eth_l1_byte_address),
             dram_output_buffer_base_addr,
@@ -317,8 +321,9 @@ int main(int argc, char** argv) {
     const auto& device_0 = test_fixture.devices_.at(0);
     const auto& device_1 = test_fixture.devices_.at(1);
     const size_t precomputed_source_addresses_buffer_address = (size_t)nullptr;
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
-    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 32;
+    const size_t eth_channel_sync_ack_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t src_eth_l1_byte_address = eth_channel_sync_ack_addr + 16;
+    const size_t dst_eth_l1_byte_address = eth_channel_sync_ack_addr + 16;
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
     assert (active_eth_cores.size() > 0);
@@ -342,6 +347,7 @@ int main(int argc, char** argv) {
             device_1,
             eth_sender_core,
             eth_receiver_core,
+            eth_channel_sync_ack_addr,
             src_eth_l1_byte_address,
             dst_eth_l1_byte_address,
             precomputed_source_addresses_buffer_address,

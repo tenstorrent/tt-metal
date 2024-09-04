@@ -1,0 +1,60 @@
+name: "(TG) TG nightly tests"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 21 * * *"
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '["wormhole_b0"]'
+    secrets: inherit
+  tg-nightly-tests:
+    needs: build-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { name: "tg_llama3_70b_tests", arch: wormhole_b0, cmd: run_tg_llama3_70b_tests, timeout: 90, owner_id: U03FJB5TM5Y}, # Colman Glagovich
+        ]
+    name: ${{ matrix.test-group.name }}
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    environment: dev
+    runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "pipeline-functional"]
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: ./.github/actions/retry-command
+        with:
+          timeout-seconds: 100
+          max-retries: 10
+          backoff-seconds: 60
+          command: ./.github/scripts/cloud_utils/mount_weka.sh
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run demo regression tests
+        shell: bash {0}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          source ${{ github.workspace }}/tests/scripts/tg/run_tg_nightly_tests.sh
+          ${{ matrix.test-group.cmd }}
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}

@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 from transformers import BertForQuestionAnswering
 
-import tt_lib
+import ttnn
 
 from tt_lib.utils import pad_activation
 from models.utility_functions import comp_pcc, comp_allclose
@@ -48,13 +48,13 @@ def run_ffn_inference(
     pytorch_out = pytorch_ffn_model(ffn_input)
 
     pad_ffn_input = pad_activation(ffn_input)
-    tilized_ffn_input = tt_lib.tensor.Tensor(
+    tilized_ffn_input = ttnn.Tensor(
         pad_ffn_input,
         model_config["OP8_LAYERNORM_OUTPUT_DTYPE"],
-    ).to(tt_lib.tensor.Layout.TILE)
+    ).to(ttnn.TILE_LAYOUT)
     if model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"].is_sharded():
         tilized_ffn_input = tilized_ffn_input.to(device)
-        tilized_ffn_input = tt_lib.tensor.interleaved_to_sharded(
+        tilized_ffn_input = ttnn.interleaved_to_sharded(
             tilized_ffn_input,
             model_config["GRID_SIZE"],
             model_config["SHARD_SIZE"],
@@ -66,8 +66,8 @@ def run_ffn_inference(
 
     tt_out = tt_ffn_model(tilized_ffn_input)
     if tt_out.is_sharded():
-        tt_out = tt_lib.tensor.sharded_to_interleaved(tt_out)
-    tt_out = tt_out.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_out = ttnn.sharded_to_interleaved(tt_out)
+    tt_out = tt_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")

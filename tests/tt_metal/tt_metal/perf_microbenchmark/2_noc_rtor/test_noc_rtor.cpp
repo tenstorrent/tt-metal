@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
     uint32_t num_cores_r = 0;
     uint32_t num_cores_c = 0;
     uint32_t num_tiles = 204800;
-    uint32_t noc_index;
+    uint32_t noc_index = 0;
     uint32_t access_type = 0;
     uint32_t num_tests = 10;
     bool use_device_profiler = false;
@@ -95,11 +95,11 @@ int main(int argc, char** argv) {
     }
 
     if (use_device_profiler) {
-#if !defined(PROFILER)
+#if !defined(TRACY_ENABLE)
         log_error(
             LogTest,
             "Metal library and test code should be build with "
-            "'ENABLE_PROFILER=1' to use device profiler");
+            "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
 #endif
         auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
         TT_FATAL(

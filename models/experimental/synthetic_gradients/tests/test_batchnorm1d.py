@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from torchvision import transforms, datasets
 
-import tt_lib
+import ttnn
 from models.utility_functions import tilize_to_list, untilize, comp_allclose_and_pcc
 
 epsilon = 1e-5
@@ -14,13 +14,13 @@ epsilon = 1e-5
 
 def batchnorm1d_inference(gamma, beta, running_mean, running_var, epsilon):
     def batchnorm1d_inference_(X):
-        var_plus_eps = tt_lib.tensor.add(epsilon, running_var)
-        sqrt_var = tt_lib.tensor.sqrt(var_plus_eps)
-        sqrt_inv = tt_lib.tensor.recip(sqrt_var)
-        x_minus_mean = tt_lib.tensor.sub(X, running_mean)
-        x_div_sqrt = tt_lib.tensor.mul(x_minus_mean, sqrt_inv)
-        x_gamma = tt_lib.tensor.mul(x_div_sqrt, gamma)
-        Y = tt_lib.tensor.add(x_gamma, beta)
+        var_plus_eps = ttnn.add(epsilon, running_var)
+        sqrt_var = ttnn.sqrt(var_plus_eps)
+        sqrt_inv = ttnn.reciprocal(sqrt_var)
+        x_minus_mean = ttnn.sub(X, running_mean)
+        x_div_sqrt = ttnn.mul(x_minus_mean, sqrt_inv)
+        x_gamma = ttnn.mul(x_div_sqrt, gamma)
+        Y = ttnn.add(x_gamma, beta)
         return Y
 
     return batchnorm1d_inference_
@@ -59,11 +59,11 @@ def run_btchnorm_inference(bn_size, device):
     weight_bn_tt = torch.zeros(1, 1, 32, bn_size)
     weight_bn_tt[:, :, :1, :] = weight_bn_src
     tilized_weight_bn_tt = tilize_to_list(weight_bn_tt)
-    gamma = tt_lib.tensor.Tensor(
+    gamma = ttnn.Tensor(
         tilized_weight_bn_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
@@ -71,11 +71,11 @@ def run_btchnorm_inference(bn_size, device):
     bias_bn_tt = torch.zeros(1, 1, 32, bn_size)
     bias_bn_tt[:, :, :1, :] = bias_bn_src
     tilized_bias_bn_tt = tilize_to_list(bias_bn_tt)
-    beta = tt_lib.tensor.Tensor(
+    beta = ttnn.Tensor(
         tilized_bias_bn_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
@@ -83,11 +83,11 @@ def run_btchnorm_inference(bn_size, device):
     running_mean_bn_tt = torch.zeros(1, 1, 32, bn_size)
     running_mean_bn_tt[:, :, :1, :] = running_mean_bn_src
     tilized_running_mean_tt = tilize_to_list(running_mean_bn_tt)
-    running_mean_tt = tt_lib.tensor.Tensor(
+    running_mean_tt = ttnn.Tensor(
         tilized_running_mean_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
@@ -95,11 +95,11 @@ def run_btchnorm_inference(bn_size, device):
     running_var_bn_tt = torch.zeros(1, 1, 32, bn_size)
     running_var_bn_tt[:, :, :1, :] = running_var_bn_src
     tilized_running_var_tt = tilize_to_list(running_var_bn_tt)
-    running_var_tt = tt_lib.tensor.Tensor(
+    running_var_tt = ttnn.Tensor(
         tilized_running_var_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
@@ -107,11 +107,11 @@ def run_btchnorm_inference(bn_size, device):
     epsilon_tor = torch.zeros(1, 1, 32, bn_size)
     epsilon_tor[:, :, :1, :] = epsilon_torch
     tilized_eps_tt = tilize_to_list(epsilon_tor)
-    eps_tt = tt_lib.tensor.Tensor(
+    eps_tt = ttnn.Tensor(
         tilized_eps_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
@@ -119,11 +119,11 @@ def run_btchnorm_inference(bn_size, device):
     inputs_bn_tt = torch.zeros(1, 1, 32, bn_size)
     inputs_bn_tt[:, :, :1, :] = inputs_bn_src
     tilized_inputs_tt = tilize_to_list(inputs_bn_tt)
-    X_tt = tt_lib.tensor.Tensor(
+    X_tt = ttnn.Tensor(
         tilized_inputs_tt,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 

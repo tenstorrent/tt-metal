@@ -9,6 +9,7 @@
 #include <functional>
 #include "common/core_coord.h"
 #include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/common_runtime_address_map.h"
 #include "dev_mem_map.h"
 
 namespace tt::tt_metal {
@@ -40,6 +41,8 @@ struct AllocatorConfig {
     CoreCoord worker_grid_size = {};
     size_t worker_l1_size = 0;
     size_t l1_bank_size = 0;
+    size_t l1_small_size = 0;
+    size_t trace_region_size = 0;
     std::unordered_map<CoreCoord, AllocCoreType> core_type_from_noc_coord_table = {};
     std::unordered_map<int, int> worker_log_to_physical_routing_x = {};
     std::unordered_map<int, int> worker_log_to_physical_routing_y = {};
@@ -54,9 +57,7 @@ enum class MemoryAllocator {
     L1_BANKING = 1,
 };
 
-// L1 write barrier
-// Host writes (4B value) to and reads from this address across all L1s to ensure previous writes have been committed
-constexpr static std::uint32_t STORAGE_ONLY_RESERVED_SIZE = ((MEM_MAILBOX_END + ADDRESS_ALIGNMENT - 1) / ADDRESS_ALIGNMENT) * ADDRESS_ALIGNMENT;
+constexpr static std::uint32_t STORAGE_ONLY_RESERVED_SIZE = ((MEM_MAILBOX_END + ALLOCATOR_ALIGNMENT - 1) / ALLOCATOR_ALIGNMENT) * ALLOCATOR_ALIGNMENT;
 // Storage only cores only need to reserve mailbox space to hold barriers
 constexpr static std::uint32_t STORAGE_ONLY_UNRESERVED_BASE = STORAGE_ONLY_RESERVED_SIZE;
 

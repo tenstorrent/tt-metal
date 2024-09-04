@@ -8,7 +8,7 @@ from loguru import logger
 import random
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
@@ -43,18 +43,18 @@ def run_eltwise_isposinf_test(input_shape, dtype, dlayout, in_mem_config, out_me
 test_sweep_args = [
     (
         (7, 14, 32, 160),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE],
+        [ttnn.bfloat16],
+        [ttnn.TILE_LAYOUT],
         [None],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         16305027,
     ),
     (
         (3, 9, 232, 74),
-        [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
+        [ttnn.bfloat16],
+        [ttnn.ROW_MAJOR_LAYOUT],
         [None],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         15734261,
     ),
 ]

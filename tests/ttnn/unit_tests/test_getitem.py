@@ -83,7 +83,7 @@ def test_getitem_scalar_output():
 
     with pytest.raises(RuntimeError) as e:
         input_tensor[0, 0]
-    assert "ttnn.Tensor.__getitem__: returned a scalar!" in str(e.value)
+    assert "ttnn.Tensor.__getitem__: cannot return a scalar!" in str(e.value)
 
 
 @pytest.mark.parametrize("batch_sizes", [(), (1, 1)])

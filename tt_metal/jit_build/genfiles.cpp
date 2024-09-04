@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 
 #include "common/utils.hpp"
@@ -15,11 +17,13 @@
 
 #include "noc/noc_parameters.h"
 
+namespace fs = std::filesystem;
+
 using namespace std;
 
 namespace tt::tt_metal {
 
-static void gen_trisc_cpp(const string& src_name, const string& dst_name, vector<string>& prolog)
+static void gen_kernel_cpp(const string& src_name, const string& dst_name, vector<string>& prolog)
 {
     std::ofstream out(dst_name);
     for (auto s: prolog)
@@ -27,6 +31,36 @@ static void gen_trisc_cpp(const string& src_name, const string& dst_name, vector
     out << "#include \"" << src_name << "\"\n";
 }
 
+static string get_absolute_path(const string& file_path_string) {
+    fs::path file_path(file_path_string);
+
+    // If the path doesn't exist as a absolute/relative path, then it must be relative to TT_METAL_HOME.
+    if (!fs::exists(file_path)) {
+        file_path = fs::path(llrt::OptionsG.get_root_dir() + file_path_string);
+        if (!fs::exists(file_path)) {
+            TT_FATAL("Kernel file {} doesn't exist!", file_path_string);
+        }
+    }
+
+    // Convert to absolute path and return
+    return fs::absolute(file_path).string();
+}
+
+void jit_build_genfiles_kernel_include(const JitBuildEnv& env,
+                                   const JitBuildSettings& settings,
+                                   const string& input_hlk_file_path) {
+    // Note: assumes dirs (and descriptors) already created
+    log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
+
+    string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
+    string kernel_header = out_dir + "kernel_includes.hpp";
+
+    // Get absolute path of kernel file to include
+    string abs_file_path = get_absolute_path(input_hlk_file_path);
+
+    vector<string> prolog;
+    gen_kernel_cpp(abs_file_path, kernel_header, prolog);
+}
 void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
                                    const JitBuildSettings& settings,
                                    const string& input_hlk_file_path)
@@ -45,6 +79,9 @@ void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
     string pack_cpp           = pack_base + ".cpp";
     string pack_llk_args_h    = pack_base + "_llk_args.h";
 
+    // Get absolute path of kernel file to include
+    string abs_file_path = get_absolute_path(input_hlk_file_path);
+
     vector<string> unpack_prolog;
     unpack_prolog.push_back("#define TRISC_UNPACK\n");
     unpack_prolog.push_back("#include \"defines_generated.h\"\n");
@@ -56,9 +93,9 @@ void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
     pack_prolog.push_back("#include \"defines_generated.h\"\n");
 
     // TODO(pgk) - is this really worth it?
-    std::thread t0( [&]() { gen_trisc_cpp(input_hlk_file_path, unpack_cpp, unpack_prolog); } );
-    std::thread t1( [&]() { gen_trisc_cpp(input_hlk_file_path, math_cpp, math_prolog); } );
-    std::thread t2( [&]() { gen_trisc_cpp(input_hlk_file_path, pack_cpp, pack_prolog); } );
+    std::thread t0( [&]() { gen_kernel_cpp(abs_file_path, unpack_cpp, unpack_prolog); } );
+    std::thread t1( [&]() { gen_kernel_cpp(abs_file_path, math_cpp, math_prolog); } );
+    std::thread t2( [&]() { gen_kernel_cpp(abs_file_path, pack_cpp, pack_prolog); } );
     t0.join(); t1.join(); t2.join();
 
     // Here we generate an auxiliary header with defines added via add_define() call
@@ -143,14 +180,14 @@ static std::string create_formats_array_string(std::string array_type, std::stri
 }
 
 static std::pair<std::vector<DataFormat>, std::vector<DataFormat>>
-generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en) {
+generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool preserve_fp32_precision) {
 
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr,
-        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en);
+        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, preserve_fp32_precision);
 
     TT_ASSERT(src_formats.size() == 24 && dst_formats.size() == 24,
         "There must be 8 unpack src/dst formats for each input, param, and intermediate operands.");
@@ -199,9 +236,8 @@ generate_pack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_
 static void emit_pack_data_formats(std::string pack_data_format_descs, std::vector<DataFormat> src_formats_all_cbs, std::vector<DataFormat> dst_formats_all_cbs) {
     ofstream file_stream;
     file_stream.open(pack_data_format_descs);
-    // TODO: we should be emitting "unsigned char", no reason to use 4B per data format
-    file_stream << create_formats_array_string("constexpr std::int32_t", "pack_src_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(src_formats_all_cbs));
-    file_stream << create_formats_array_string("constexpr std::int32_t", "pack_dst_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(dst_formats_all_cbs));
+    file_stream << create_formats_array_string("constexpr unsigned char", "pack_src_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(src_formats_all_cbs));
+    file_stream << create_formats_array_string("constexpr unsigned char", "pack_dst_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(dst_formats_all_cbs));
 
     // budabackend-style format array
     // file_stream << create_formats_array_string("const std::int32_t", "pack_src_format", 16, data_format_vec_to_string(src_formats));
@@ -265,8 +301,12 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
             (pack_exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
     }
 
-    if (tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) && options.fp32_dest_acc_en){
-        unpack_conditional_dst_format = DataFormat::Tf32;
+    if ((tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) || options.preserve_fp32_precision) && options.fp32_dest_acc_en){
+        if (options.preserve_fp32_precision) {
+            unpack_conditional_dst_format = DataFormat::Float32;
+        } else {
+            unpack_conditional_dst_format = DataFormat::Tf32;
+        }
     }
 
     tt::check_valid_in_out_data_formats(
@@ -276,7 +316,7 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
         desc.intermediate_buf_dataformat_arr);
 
     vector<DataFormat> unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs;
-    tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en);
+    tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.preserve_fp32_precision);
 
     vector<DataFormat> pack_src_formats_all_cbs, pack_dst_formats_all_cbs;
     tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) = generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, arch);
@@ -355,9 +395,6 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env,
     }
 }
 
-#define NOC_X(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x-1-(x)))
-#define NOC_Y(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y-1-(y)))
-
 std::string generate_bank_to_noc_coord_descriptor_string(
     tt_xy_pair grid_size,
     std::vector<CoreCoord>& dram_bank_map,
@@ -388,6 +425,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#include <noc/noc_parameters.h>" << endl;
     ss << endl;
 
+    ss << "#define LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT " << std::bit_width(ALLOCATOR_ALIGNMENT) - 1 << endl;
     ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;
     ss << "#define NUM_L1_BANKS " << l1_bank_map.size() << endl;
 
@@ -414,10 +452,14 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << endl;
     ss << "extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];" << endl;
     ss << "extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];" << endl;
-    ss << "extern int32_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y];" << endl;
     ss << "extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];" << endl;
     ss << "extern int32_t bank_to_l1_offset[NUM_L1_BANKS];" << endl;
+#if defined(TRACY_ENABLE)
+    ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC))" << endl;
+    ss << "extern uint8_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y];" << endl;
     ss << "extern uint16_t profiler_core_count_per_dram;" << endl;
+    ss << "#endif" << endl;
+#endif
 
     ss << endl;
     ss << "#else // !KERNEL_BUILD (FW_BUILD)" << endl;
@@ -427,9 +469,9 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     for (unsigned int noc = 0; noc < 2; noc++) {
         ss << "    {" << "\t// noc=" << noc << endl;
         for (unsigned int bank_id = 0; bank_id < dram_bank_map.size(); bank_id++) {
-            uint16_t noc_x = NOC_X(noc, grid_size.x, dram_bank_map[bank_id].x);
-            uint16_t noc_y = NOC_Y(noc, grid_size.y, dram_bank_map[bank_id].y);
-            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << (NOC_ADDR_LOCAL_BITS - 32);
+            uint16_t noc_x = NOC_0_X(noc, grid_size.x, dram_bank_map[bank_id].x);
+            uint16_t noc_y = NOC_0_Y(noc, grid_size.y, dram_bank_map[bank_id].y);
+            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
             ss << "        " << xy << "," << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
         ss << "    }," << endl;
@@ -443,7 +485,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "};" << endl;
     ss << endl;
 
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     /*
      * This part is adding the 2D array for sharing the flat IDs soc descriptor has assigned to every NOC coordinate,
      * and the ceiled number of cores per DRAM banks.
@@ -454,17 +496,18 @@ std::string generate_bank_to_noc_coord_descriptor_string(
      * For DRAM banks in particular, integer division of flat_id/core_count_per_dram gives the dram bank id and the modulo
      * is the offset.
      * */
+    ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC))" << endl;
     ss << "uint16_t profiler_core_count_per_dram __attribute__((used)) = ";
     ss << core_count_per_dram <<  ";" << endl;
     ss << endl;
 
-    ss << "int32_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y] __attribute__((used)) = {" << endl;
+    ss << "uint8_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y] __attribute__((used)) = {" << endl;
     for (unsigned int x = 0; x < grid_size.x; x++) {
         ss << "    {" << endl;
         for (unsigned int y = 0; y < grid_size.y; y++) {
             CoreCoord core = {x,y};
             if (profiler_flat_id_map.find(core) == profiler_flat_id_map.end()){
-                ss << "        " << -1 << "," << endl;
+                ss << "        " << 255 << "," << endl;
             }
             else{
                 ss << "        " << profiler_flat_id_map.at(core) << "," << endl;
@@ -474,6 +517,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     }
     ss << "};" << endl;
     ss << endl;
+    ss << "#endif" << endl;
 
 #endif
 
@@ -482,9 +526,9 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     for (unsigned int noc = 0; noc < 2; noc++) {
         ss << "    {" << "\t// noc=" << noc << endl;
         for (unsigned int bank_id = 0; bank_id < l1_bank_map.size(); bank_id++) {
-            uint16_t noc_x = NOC_X(noc, grid_size.x, l1_bank_map[bank_id].x);
-            uint16_t noc_y = NOC_Y(noc, grid_size.y, l1_bank_map[bank_id].y);
-            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << (NOC_ADDR_LOCAL_BITS - 32);
+            uint16_t noc_x = NOC_0_X(noc, grid_size.x, l1_bank_map[bank_id].x);
+            uint16_t noc_y = NOC_0_Y(noc, grid_size.y, l1_bank_map[bank_id].y);
+            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
             ss << "        " << xy << "," << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
         ss << "    }," << endl;
@@ -538,7 +582,8 @@ static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& co
     string end_of_line = " \\\n    ( \\";
     for (const auto& core : cores) {
         ss << end_of_line << endl;
-        ss << "    ((x) == NOC_X((uint32_t)" << core.x << ") && (y) == NOC_Y((uint32_t)" << core.y << "))";
+        ss << "    ((x) == NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << core.x
+           << ") && (y) == NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << core.y << "))";
         end_of_line = " || \\";
     }
     ss << ")" << endl;
@@ -556,7 +601,7 @@ static string generate_noc_addr_ranges_string(
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
     const std::vector<uint32_t>& harvested_rows,
-    const CoreCoord& enqueue_program_physical_dispatch_core) {
+    bool has_pcie_cores) {
 
     stringstream ss;
 
@@ -584,20 +629,20 @@ static string generate_noc_addr_ranges_string(
     ss << "#define NOC_DRAM_ADDR_END (NOC_DRAM_ADDR_BASE + NOC_DRAM_ADDR_SIZE)" << endl;
     ss << endl;
 
-    if (pcie_addr_base == pcie_addr_size) {
+    if (not has_pcie_cores) {
         // If the address range is 0, then there are no PCIe cores (non-mmio device)
-        ss << "#define NOC_PCIE_XY_P(x, y) false" << endl;
+        ss << "#define NOC_PCIE_XY_P(noc_idx, x, y) false" << endl;
     } else {
-        ss << "#define NOC_PCIE_XY_P(x, y)";
+        ss << "#define NOC_PCIE_XY_P(noc_idx, x, y)";
         ss << generate_noc_core_xy_range_define(pcie_cores);
     }
     ss << endl;
 
-    ss << "#define NOC_DRAM_XY_P(x, y)";
+    ss << "#define NOC_DRAM_XY_P(noc_idx, x, y)";
     ss << generate_noc_core_xy_range_define(dram_cores);
     ss << endl;
 
-    ss << "#define NOC_ETH_XY_P(x, y)";
+    ss << "#define NOC_ETH_XY_P(noc_idx, x, y)";
     if (ethernet_cores.size() == 0) {
         ss << " false" << endl;
     } else {
@@ -605,38 +650,35 @@ static string generate_noc_addr_ranges_string(
     }
     ss << endl;
 
-    ss << "#define NOC_HARVESTED_Y_P(y)";
+    ss << "#define NOC_HARVESTED_Y_P(noc_idx, y)";
     if (harvested_rows.size() == 0) {
         ss << " false" << endl;
     } else {
         string join = " \\\n    ( \\\n";
         for (const auto& y : harvested_rows) {
-            ss << join << "     (NOC_Y((y)) == " << y << ")";
+            ss << join << "     (NOC_0_Y(noc_idx, noc_size_y, (y)) == " << y << ")";
             join = " || \\\n";
         }
         ss << ")" << endl;
     }
     ss << endl;
 
-    ss << "#define NOC_WORKER_XY_P(x, y) \\" << endl;
-    ss << "    (!NOC_PCIE_XY_P(x, y) && \\" << endl;
-    ss << "     !NOC_DRAM_XY_P(x, y) && \\" << endl;
-    ss << "     !NOC_ETH_XY_P(x, y) && \\" << endl;
-    ss << "     !NOC_HARVESTED_Y_P(y) && \\" << endl;
-    ss << "     ((noc_index == 0) ? \\" << endl;
-    ss << "      ((x) >= NOC_X((uint32_t)" << 1 << ") && \\" << endl;
-    ss << "       (x) <= NOC_X((uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
-    ss << "       (y) >= NOC_Y((uint32_t)" << 1 << ") && \\" << endl;
-    ss << "       (y) <= NOC_Y((uint32_t)" << grid_size.y - 1 << ")) : \\" << endl;
-    ss << "      ((x) <= NOC_X((uint32_t)" << 1 << ") && \\" << endl;
-    ss << "       (x) >= NOC_X((uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
-    ss << "       (y) <= NOC_Y((uint32_t)" << 1 << ") && \\" << endl;
-    ss << "       (y) >= NOC_Y((uint32_t)" << grid_size.y - 1<< "))))";
+    ss << "#define NOC_WORKER_XY_P(noc_idx, x, y) \\" << endl;
+    ss << "    (!NOC_PCIE_XY_P(noc_idx, x, y) && \\" << endl;
+    ss << "     !NOC_DRAM_XY_P(noc_idx, x, y) && \\" << endl;
+    ss << "     !NOC_ETH_XY_P(noc_idx, x, y) && \\" << endl;
+    ss << "     !NOC_HARVESTED_Y_P(noc_idx, y) && \\" << endl;
+    ss << "     ((noc_idx == 0) ? \\" << endl;
+    ss << "     ((x) >= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << 1 << ") && \\" << endl;
+    ss << "      (x) <= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
+    ss << "      (y) >= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << 1 << ") && \\" << endl;
+    ss << "      (y) <= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << grid_size.y - 1 << ")) : \\" << endl;
+    ss << "     ((x) <= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << 1 << ") && \\" << endl;
+    ss << "      (x) >= NOC_0_X(noc_idx, noc_size_x, (uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
+    ss << "      (y) <= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << 1 << ") && \\" << endl;
+    ss << "      (y) >= NOC_0_Y(noc_idx, noc_size_y, (uint32_t)" << grid_size.y - 1 << "))))" << endl;
     ss << endl;
     ss << endl;
-
-    ss << "#define DISPATCH_CORE_X " << enqueue_program_physical_dispatch_core.x << endl;
-    ss << "#define DISPATCH_CORE_Y " << enqueue_program_physical_dispatch_core.y << endl;
 
     return ss.str();
 }
@@ -652,10 +694,10 @@ void jit_build_genfiles_noc_addr_ranges_header(
     const std::vector<CoreCoord>& ethernet_cores,
     CoreCoord grid_size,
     const std::vector<uint32_t>& harvested_rows,
-    const CoreCoord& enqueue_program_physical_dispatch_core) {
+    bool has_pcie_cores) {
 
     string output_string = generate_noc_addr_ranges_string(pcie_addr_base, pcie_addr_size, dram_addr_base, dram_addr_size,
-                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows, enqueue_program_physical_dispatch_core);
+                                                           pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows, has_pcie_cores);
 
     ofstream file_stream_br(path + "/brisc/noc_addr_ranges_gen.h");
     file_stream_br << output_string;

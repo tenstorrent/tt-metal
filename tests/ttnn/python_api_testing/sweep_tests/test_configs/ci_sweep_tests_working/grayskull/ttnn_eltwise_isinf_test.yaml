@@ -2,12 +2,13 @@
 test-list:
   - ttnn-eltwise-isinf:
       shape:
-        start-shape: [1, 1, 32, 32]
+        start-shape: [1, 1, 1, 1]
         end-shape: [6, 12, 256, 256]
-        interval: [1, 1, 32, 32]
+        interval: [1, 1, 1, 1]
         num-dims: [2, 3, 4]
         num-shapes: 1
         num-samples: 128
+        args-sampling-strategy: "all"
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
@@ -18,6 +19,7 @@ test-list:
       comparison:
         function: comp_equal
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       output-file: eltwise_isinf_sweep.csv
       args:
         data-layout: ["TILE"]

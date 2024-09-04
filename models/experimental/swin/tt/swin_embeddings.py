@@ -6,13 +6,15 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
+import ttnn
+
 from models.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )
 
 
-import tt_lib
+import ttnn
 from models.experimental.swin.tt.swin_patch_embedding import TtSwinPatchEmbeddings
 from tt_lib.fallback_ops import fallback_ops
 
@@ -42,13 +44,13 @@ class TtSwinEmbeddings(nn.Module):
         self.norm = fallback_ops.LayerNorm(gamma, beta, normalized_shape=config.embed_dim, eps=config.layer_norm_eps)
 
     def const_tensor(self, shape, value):
-        return tt_lib.tensor.full(shape, value)
+        return ttnn.full(shape, value)
 
     def forward(
         self,
-        pixel_values: Optional[tt_lib.tensor.Tensor],
-        bool_masked_pos: Optional[tt_lib.tensor.Tensor] = None,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+        pixel_values: Optional[ttnn.Tensor],
+        bool_masked_pos: Optional[ttnn.Tensor] = None,
+    ) -> Tuple[ttnn.Tensor]:
         embeddings, output_dimensions = self.patch_embeddings(pixel_values)
         embeddings = self.norm(embeddings)
         _, batch_size, seq_len, _ = embeddings.get_legacy_shape()
@@ -62,17 +64,17 @@ class TtSwinEmbeddings(nn.Module):
             mask_tokens = torch_to_tt_tensor_rm(mask_tokens, self.device)
             mask = torch_to_tt_tensor_rm(mask, self.device)
 
-            mask_tokens = tt_lib.tensor.mul(mask_tokens, mask)
+            mask_tokens = ttnn.mul(mask_tokens, mask)
 
             unit_tensor = self.const_tensor(mask.get_legacy_shape(), 1)
-            mask = tt_lib.tensor.sub(unit_tensor, mask)
+            mask = ttnn.sub(unit_tensor, mask)
 
-            embeddings = tt_lib.tensor.mul(embeddings, mask)
-            embeddings = tt_lib.tensor.add(embeddings, mask_tokens)
+            embeddings = ttnn.mul(embeddings, mask)
+            embeddings = ttnn.add(embeddings, mask_tokens)
 
         if self.position_embeddings is not None:
             self.position_embeddings = torch_to_tt_tensor_rm(self.position_embeddings, self.device)
         if self.position_embeddings is not None:
-            embeddings = tt_lib.tensor.add(embeddings, self.position_embeddings)
+            embeddings = ttnn.add(embeddings, self.position_embeddings)
 
         return embeddings, output_dimensions

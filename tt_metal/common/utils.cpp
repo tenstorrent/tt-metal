@@ -7,6 +7,9 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "llrt/rtoptions.hpp"
 
+#include <filesystem>
+namespace fs = std::filesystem;
+
 namespace tt
 {
 namespace utils
@@ -20,8 +23,8 @@ namespace utils
         if (getenv("TT_METAL_BACKEND_DUMP_RUN_CMD") or verbose) {
             {
                 std::lock_guard<std::mutex> lk(io_mutex);
-                cout << "===== RUNNING SYSTEM COMMAND:" << std::endl;
-                cout << cmd << std::endl << std::endl;
+                std::cout << "===== RUNNING SYSTEM COMMAND:" << std::endl;
+                std::cout << cmd << std::endl << std::endl;
             }
             ret = system(cmd.c_str());
             // {

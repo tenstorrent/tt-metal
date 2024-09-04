@@ -9,6 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
 
 class N300DeviceFixture : public ::testing::Test {
    protected:
@@ -23,11 +24,14 @@ class N300DeviceFixture : public ::testing::Test {
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 2 and
             tt::tt_metal::GetNumPCIeDevices() == 1) {
+            vector<chip_id_t> ids;
             for (unsigned int id = 0; id < num_devices_; id++) {
-                auto* device = tt::tt_metal::CreateDevice(id);
-                devices_.push_back(device);
+                ids.push_back(id);
             }
-            tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+
+            const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+            tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+            devices_ = tt::DevicePool::instance().get_all_active_devices();
 
         } else {
             GTEST_SKIP();

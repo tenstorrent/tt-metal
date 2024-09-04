@@ -21,12 +21,10 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
- ALWI void exp_tile_init(bool fast_and_approx=false) {
-    if ( fast_and_approx )
-        MATH(( llk_math_eltwise_unary_sfpu_exponential_init<true>() ));
-    else
-        MATH(( llk_math_eltwise_unary_sfpu_exponential_init<false>() ));
- }
+template <bool fast_and_approx = false>
+ALWI void exp_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_exponential_init<fast_and_approx>() ));
+}
 
 /**
  * Performs element-wise computation of exponential on each element of a tile
@@ -41,11 +39,9 @@ namespace ckernel {
  * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | fast_and_approx | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
-ALWI void exp_tile(uint32_t idst, bool fast_and_approx=false) {
-    if ( fast_and_approx )
-        MATH(( llk_math_eltwise_unary_sfpu_exponential<true>(idst) ));
-    else
-        MATH(( llk_math_eltwise_unary_sfpu_exponential<false>(idst) ));
- }
+template <bool fast_and_approx = false>
+ALWI void exp_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_exponential<fast_and_approx>(idst) ));
+}
 
 } // namespace ckernel

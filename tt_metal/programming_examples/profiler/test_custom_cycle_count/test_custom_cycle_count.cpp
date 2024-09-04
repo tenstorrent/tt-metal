@@ -4,10 +4,11 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt;
 
-bool RunCustomCycle(tt_metal::Device *device, int loop_count, bool dumpProfile = false)
+bool RunCustomCycle(tt_metal::Device *device, int loop_count)
 {
     bool pass = true;
 

@@ -7,9 +7,10 @@ import torch
 from typing import Optional
 from functools import partial
 
-import tt_lib
+import ttnn
 from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel
 from models.demos.metal_BERT_large_11.tt.ffn import TtFeedForwardModel
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
 from tt_lib.utils import pad_weight
 
 
@@ -25,37 +26,37 @@ class TtBertEncoder:
         layer_name = f"bert.encoder.layer.{encoder_idx}.output"
 
         if tt_cache_path is not None:
-            self.attention_output_weight = tt_lib.tensor.load_tensor(
+            self.attention_output_weight = ttnn.load_tensor(
                 str(
                     tt_cache_path
                     / f"{attn_layer_name}.dense.weight_{self.model_config['OP7_SELFOUT_WEIGHTS_DTYPE'].name}.bin"
                 )
             ).to(device, self.model_config["OP7_SELFOUT_WEIGHTS_MEMCFG"])
-            self.attention_output_bias = tt_lib.tensor.load_tensor(
+            self.attention_output_bias = ttnn.load_tensor(
                 str(
                     tt_cache_path
                     / f"{attn_layer_name}.dense.bias_{self.model_config['OP7_SELFOUT_BIAS_DTYPE'].name}.bin"
                 )
             ).to(device, self.model_config["OP7_SELFOUT_BIAS_MEMCFG"])
-            self.mha_gamma = tt_lib.tensor.load_tensor(
+            self.mha_gamma = ttnn.load_tensor(
                 str(
                     tt_cache_path
                     / f"{attn_layer_name}.LayerNorm.weight_{self.model_config['OP8_LAYERNORM_GAMMA_DTYPE'].name}.bin"
                 )
             ).to(device, self.model_config["OP8_LAYERNORM_GAMMA_MEMCFG"])
-            self.mha_beta = tt_lib.tensor.load_tensor(
+            self.mha_beta = ttnn.load_tensor(
                 str(
                     tt_cache_path
                     / f"{attn_layer_name}.LayerNorm.bias_{self.model_config['OP8_LAYERNORM_BETA_DTYPE'].name}.bin"
                 )
             ).to(device, self.model_config["OP8_LAYERNORM_BETA_MEMCFG"])
-            self.ffn_gamma = tt_lib.tensor.load_tensor(
+            self.ffn_gamma = ttnn.load_tensor(
                 str(
                     tt_cache_path
                     / f"{layer_name}.LayerNorm.weight_{self.model_config['OP11_LAYERNORM_GAMMA_DTYPE'].name}.bin"
                 )
             ).to(device, self.model_config["OP8_LAYERNORM_GAMMA_MEMCFG"])
-            self.ffn_beta = tt_lib.tensor.load_tensor(
+            self.ffn_beta = ttnn.load_tensor(
                 str(
                     tt_cache_path
                     / f"{layer_name}.LayerNorm.bias_{self.model_config['OP11_LAYERNORM_BETA_DTYPE'].name}.bin"
@@ -70,29 +71,29 @@ class TtBertEncoder:
                 )
             )
             self.attention_output_weight = (
-                tt_lib.tensor.Tensor(
+                ttnn.Tensor(
                     self.attention_output_weight.reshape(-1).tolist(),
                     self.attention_output_weight.shape,
                     model_config["OP7_SELFOUT_WEIGHTS_DTYPE"],
-                    tt_lib.tensor.Layout.ROW_MAJOR,
+                    ttnn.ROW_MAJOR_LAYOUT,
                 )
-                .to(tt_lib.tensor.Layout.TILE)
+                .to(ttnn.TILE_LAYOUT)
                 .to(device, model_config["OP7_SELFOUT_WEIGHTS_MEMCFG"])
             )
             self.attention_output_bias = pad_weight(state_dict[f"{attn_layer_name}.dense.bias"])
             self.attention_output_bias = (
-                tt_lib.tensor.Tensor(
+                ttnn.Tensor(
                     self.attention_output_bias.reshape(-1).tolist(),
                     self.attention_output_bias.shape,
                     model_config["OP7_SELFOUT_BIAS_DTYPE"],
-                    tt_lib.tensor.Layout.ROW_MAJOR,
+                    ttnn.ROW_MAJOR_LAYOUT,
                 )
-                .to(tt_lib.tensor.Layout.TILE)
+                .to(ttnn.TILE_LAYOUT)
                 .to(device, model_config["OP7_SELFOUT_BIAS_MEMCFG"])
             )
 
             # Weights pre-transposed on host​. No on-the fly transpose of W.
-            # self.attention_output_weight = tt_lib.tensor.transpose(
+            # self.attention_output_weight = ttnn.transpose(
             #     self.attention_output_weight,
             #     -2, -1,
             # )
@@ -101,36 +102,36 @@ class TtBertEncoder:
             gamma0 = state_dict[f"{attn_layer_name}.LayerNorm.weight"]
             beta0 = state_dict[f"{attn_layer_name}.LayerNorm.bias"]
             mha_gamma = gamma0.reshape(1, 1, -1, 32)
-            self.mha_gamma = tt_lib.tensor.Tensor(
+            self.mha_gamma = ttnn.Tensor(
                 mha_gamma.reshape(-1).tolist(),
                 mha_gamma.shape,
                 model_config["OP8_LAYERNORM_GAMMA_DTYPE"],
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                ttnn.ROW_MAJOR_LAYOUT,
             ).to(device, model_config["OP8_LAYERNORM_GAMMA_MEMCFG"])
             mha_beta = beta0.reshape(1, 1, -1, 32)
-            self.mha_beta = tt_lib.tensor.Tensor(
+            self.mha_beta = ttnn.Tensor(
                 mha_beta.reshape(-1).tolist(),
                 mha_beta.shape,
                 model_config["OP8_LAYERNORM_BETA_DTYPE"],
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                ttnn.ROW_MAJOR_LAYOUT,
             ).to(device, model_config["OP8_LAYERNORM_BETA_MEMCFG"])
 
             # FFN layernorm
             gamma1 = state_dict[f"{layer_name}.LayerNorm.weight"]
             beta1 = state_dict[f"{layer_name}.LayerNorm.bias"]
             ffn_gamma = gamma1.reshape(1, 1, -1, 32)
-            self.ffn_gamma = tt_lib.tensor.Tensor(
+            self.ffn_gamma = ttnn.Tensor(
                 ffn_gamma.reshape(-1).tolist(),
                 ffn_gamma.shape,
                 model_config["OP11_LAYERNORM_GAMMA_DTYPE"],
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                ttnn.ROW_MAJOR_LAYOUT,
             ).to(device, model_config["OP11_LAYERNORM_GAMMA_MEMCFG"])
             ffn_beta = beta1.reshape(1, 1, -1, 32)
-            self.ffn_beta = tt_lib.tensor.Tensor(
+            self.ffn_beta = ttnn.Tensor(
                 ffn_beta.reshape(-1).tolist(),
                 ffn_beta.shape,
                 model_config["OP11_LAYERNORM_BETA_DTYPE"],
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                ttnn.ROW_MAJOR_LAYOUT,
             ).to(device, model_config["OP11_LAYERNORM_BETA_MEMCFG"])
 
         # FFN sub-graph
@@ -141,20 +142,20 @@ class TtBertEncoder:
         if "OP7_SELFOUT_CONFIG" in model_config:
 
             def op7_mm_plus_bias(mha_res, attention_output_weight, attention_output_bias):
-                mha_out = tt_lib.operations.primary.matmul(
+                mha_out = ttnn.linear(
                     mha_res,
                     attention_output_weight,
                     bias=attention_output_bias,
                     program_config=model_config["OP7_SELFOUT_CONFIG"],
-                    output_mem_config=model_config["OP7_SELFOUT_OUTPUT_MEMCFG"],
-                    output_dtype=model_config["OP7_SELFOUT_OUTPUT_DTYPE"],
+                    memory_config=model_config["OP7_SELFOUT_OUTPUT_MEMCFG"],
+                    dtype=model_config["OP7_SELFOUT_OUTPUT_DTYPE"],
                 )
                 return mha_out
 
         else:
 
             def op7_mm_plus_bias(mha_res, attention_output_weight, attention_output_bias):
-                mha_out = tt_lib.tensor.bert_large_selfout_matmul(
+                mha_out = custom_matmuls.bert_large_selfout_matmul(
                     mha_res,
                     attention_output_weight,
                     bias=attention_output_bias,
@@ -164,40 +165,34 @@ class TtBertEncoder:
                 return mha_out
 
         self.op7_mm_plus_bias = op7_mm_plus_bias
-        self.mha_ln_program_config = model_config.get(
-            "OP8_LAYERNORM_CONFIG", tt_lib.operations.primary.LayerNormDefaultProgramConfig()
-        )
-        self.ffn_ln_program_config = model_config.get(
-            "OP11_LAYERNORM_CONFIG", tt_lib.operations.primary.LayerNormDefaultProgramConfig()
-        )
+        self.mha_ln_program_config = model_config.get("OP8_LAYERNORM_CONFIG", ttnn.LayerNormDefaultProgramConfig())
+        self.ffn_ln_program_config = model_config.get("OP11_LAYERNORM_CONFIG", ttnn.LayerNormDefaultProgramConfig())
 
     def op8_add_layernorm(self, activation, mha_out):
-        mha_out_add_and_norm = tt_lib.operations.primary.add_layernorm(
+        mha_out_add_and_norm = ttnn.layer_norm(
             activation,
-            mha_out,
-            self.layer_norm_eps,
-            self.mha_gamma,
-            self.mha_beta,
+            residual_input_tensor=mha_out,
+            epsilon=self.layer_norm_eps,
+            weight=self.mha_gamma,
+            bias=self.mha_beta,
             program_config=self.mha_ln_program_config,
-            output_mem_config=self.model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"],
         )
         return mha_out_add_and_norm
 
     def op11_add_layernorm(self, mha_out_add_and_norm, ffn_out):
-        ffn_out_add_and_norm = tt_lib.operations.primary.add_layernorm(
+        ffn_out_add_and_norm = ttnn.layer_norm(
             mha_out_add_and_norm,
-            ffn_out,
-            self.layer_norm_eps,
-            self.ffn_gamma,
-            self.ffn_beta,
+            residual_input_tensor=ffn_out,
+            epsilon=self.layer_norm_eps,
+            weight=self.ffn_gamma,
+            bias=self.ffn_beta,
             program_config=self.ffn_ln_program_config,
-            output_mem_config=self.model_config["OP11_LAYERNORM_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["OP11_LAYERNORM_OUTPUT_MEMCFG"],
         )
         return ffn_out_add_and_norm
 
-    def __call__(
-        self, activation: tt_lib.tensor.Tensor, attention_mask: Optional[tt_lib.tensor.Tensor] = None
-    ) -> tt_lib.tensor.Tensor:
+    def __call__(self, activation: ttnn.Tensor, attention_mask: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         # MHA - OP1 - OP6 ------------------------------->
         mha_res = self.mha(activation, attention_mask)
         # Don't deallocate activations here since it is used by more ops

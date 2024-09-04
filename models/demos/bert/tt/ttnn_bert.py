@@ -14,6 +14,8 @@ def bert_attention(
     *,
     parameters,
 ):
+    fallback_reshape = ttnn.get_fallback_function(ttnn.reshape)
+
     num_heads = config.num_attention_heads
     batch_size, sequence_size, hidden_size = hidden_states.shape
     head_size = hidden_size // num_heads
@@ -21,21 +23,21 @@ def bert_attention(
     query = hidden_states @ parameters.self.query.weight
     query = query + parameters.self.query.bias
     query = ttnn.to_layout(query, layout=ttnn.ROW_MAJOR_LAYOUT)
-    query = ttnn.reshape(query, (batch_size, sequence_size, num_heads, head_size))
+    query = fallback_reshape(query, (batch_size, sequence_size, num_heads, head_size))
     query = ttnn.to_layout(query, layout=ttnn.TILE_LAYOUT)
     query = ttnn.permute(query, (0, 2, 1, 3))
 
     key = hidden_states @ parameters.self.key.weight
     key = key + parameters.self.key.bias
     key = ttnn.to_layout(key, layout=ttnn.ROW_MAJOR_LAYOUT)
-    key = ttnn.reshape(key, (batch_size, sequence_size, num_heads, head_size))
+    key = fallback_reshape(key, (batch_size, sequence_size, num_heads, head_size))
     key = ttnn.to_layout(key, layout=ttnn.TILE_LAYOUT)
     key = ttnn.permute(key, (0, 2, 3, 1))
 
     value = hidden_states @ parameters.self.value.weight
     value = value + parameters.self.value.bias
     value = ttnn.to_layout(value, layout=ttnn.ROW_MAJOR_LAYOUT)
-    value = ttnn.reshape(value, (batch_size, sequence_size, num_heads, head_size))
+    value = fallback_reshape(value, (batch_size, sequence_size, num_heads, head_size))
     value = ttnn.to_layout(value, layout=ttnn.TILE_LAYOUT)
     value = ttnn.permute(value, (0, 2, 1, 3))
 
@@ -49,7 +51,7 @@ def bert_attention(
     context_layer = attention_probs @ value
     context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
     context_layer = ttnn.to_layout(context_layer, ttnn.ROW_MAJOR_LAYOUT)
-    context_layer = ttnn.reshape(context_layer, (batch_size, sequence_size, hidden_size))
+    context_layer = fallback_reshape(context_layer, (batch_size, sequence_size, hidden_size))
     context_layer = ttnn.to_layout(context_layer, ttnn.TILE_LAYOUT)
 
     self_output = context_layer
@@ -230,7 +232,7 @@ def preprocess_inputs(
     position_ids = ttnn.from_torch(position_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if attention_mask is not None:
-        attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape)
+        attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape, torch.float32)
         attention_mask = attention_mask.expand((batch_size, -1, -1, -1))
         attention_mask = torch.clamp(attention_mask, min=-100000)
         attention_mask = ttnn.from_torch(

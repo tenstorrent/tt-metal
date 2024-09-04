@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstddef>
+#include <dev_msgs.h>
 
 #define DPRINT_TYPES                 \
     DPRINT_PREFIX(CSTR)              \
@@ -30,9 +31,10 @@
     DPRINT_PREFIX(WAIT)              \
     DPRINT_PREFIX(BFLOAT16)          \
     DPRINT_PREFIX(SETPRECISION)      \
-    DPRINT_PREFIX(FIXED) \
+    DPRINT_PREFIX(NOC_LOG_XFER)      \
+    DPRINT_PREFIX(FIXED)             \
     DPRINT_PREFIX(DEFAULTFLOAT)      \
-    DPRINT_PREFIX(HEX)   \
+    DPRINT_PREFIX(HEX)               \
     DPRINT_PREFIX(OCT)               \
     DPRINT_PREFIX(DEC)               \
     DPRINT_PREFIX(TILESLICE)         \
@@ -77,7 +79,7 @@ struct DebugPrintMemLayout {
         uint16_t core_x ATTR_ALIGN2;
         uint16_t core_y ATTR_ALIGN2;
     } aux ATTR_ALIGN4;
-    uint8_t data[PRINT_BUFFER_SIZE-sizeof(Aux)];
+    uint8_t data[DPRINT_BUFFER_SIZE-sizeof(Aux)];
 
     static size_t rpos_offs() { return offsetof(DebugPrintMemLayout::Aux, rpos) + offsetof(DebugPrintMemLayout, aux); }
 
@@ -106,4 +108,4 @@ enum TypedU32_ARRAY_Format {
     TypedU32_ARRAY_Format_COUNT,
 };
 
-static_assert(sizeof(DebugPrintMemLayout) == PRINT_BUFFER_SIZE);
+static_assert(sizeof(DebugPrintMemLayout) == DPRINT_BUFFER_SIZE);

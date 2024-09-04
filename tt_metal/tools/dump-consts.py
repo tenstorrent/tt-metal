@@ -69,7 +69,9 @@ def main():
     with open(elf_file_path, "rb") as f:
         elffile = ELFFile(f)
         if not elffile.has_dwarf_info():
-            print("ELF file has no DWARF info.")
+            print(
+                "ELF file has no DWARF info. To instruct the compiler to generate DWARF info, add TT_METAL_RISCV_DEBUG_INFO=1 to your environment."
+            )
             return
 
         dwarfinfo = elffile.get_dwarf_info()

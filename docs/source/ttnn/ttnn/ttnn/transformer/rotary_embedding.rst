@@ -1,6 +1,6 @@
-.. _ttnn.transformer.rotary_embedding:
+.. _ttnn.experimental.rotary_embedding:
 
-ttnn.transformer.rotary_embedding
+ttnn.experimental.rotary_embedding
 ##################################
 
-.. autofunction:: ttnn.transformer.rotary_embedding
+.. autofunction:: ttnn.experimental.rotary_embedding

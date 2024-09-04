@@ -6,15 +6,15 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_allclose
 from loguru import logger
 
-TILE_HEIGHT = 32
-TILE_WIDTH = 32
+
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
-def to_cpu(npu_tensor, shape, *, cpu_layout=ttl.tensor.Layout.ROW_MAJOR):
+def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.ROW_MAJOR_LAYOUT):
     if npu_tensor is None:
         return None
     if not isinstance(shape, (list, tuple)):
@@ -27,15 +27,15 @@ def to_npu(
     cpu_tensor,
     device,
     *,
-    npu_layout=ttl.tensor.Layout.TILE,
-    npu_dtype=ttl.tensor.DataType.BFLOAT16,
+    npu_layout=ttnn.TILE_LAYOUT,
+    npu_dtype=ttnn.bfloat16,
     shape=None,
 ):
     if cpu_tensor is None:
         return None
     if shape is not None:
         cpu_tensor = cpu_tensor.view(shape)
-    npu_tensor = ttl.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
+    npu_tensor = ttnn.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     return npu_tensor
 
 
@@ -106,13 +106,13 @@ def tt_groupnorm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_me
         npu_rstd = to_npu(npu_rstd, device)
 
     # Forward
-    npu_output, npu_mean, npu_rstd = ttl.operations.primary.moreh_groupnorm(
+    npu_output, npu_mean, npu_rstd = ttnn.experimental.operations.primary.moreh_groupnorm(
         npu_input,
         num_groups,
         eps,
         npu_gamma,
         npu_beta,
-        are_needed_outputs=(True, compute_mean_rstd, compute_mean_rstd),
+        are_required_outputs=(True, compute_mean_rstd, compute_mean_rstd),
         mean=npu_mean,
         rstd=npu_rstd,
     )
@@ -170,13 +170,13 @@ def tt_groupnorm_backward(
         npu_db = to_npu(npu_db, device)
 
     # Backward
-    npu_dx, npu_dg, npu_db = ttl.operations.primary.moreh_groupnorm_backward(
+    npu_dx, npu_dg, npu_db = ttnn.experimental.operations.primary.moreh_groupnorm_backward(
         npu_output_grad,
         npu_input,
         npu_mean,
         npu_rstd,
         num_groups,
-        are_needed_outputs=(input_requires_grad, gamma_requires_grad, beta_requires_grad),
+        are_required_outputs=(input_requires_grad, gamma_requires_grad, beta_requires_grad),
         gamma=npu_gamma,
         input_grad=npu_dx,
         gamma_grad=npu_dg,
@@ -226,7 +226,6 @@ def make_input_tensors(input_shape, affine, do_backward=False):
     return input, gamma, beta, output_grad
 
 
-@pytest.mark.skip("Watcher error, see issue #6319")
 @pytest.mark.parametrize(
     "N",
     [
@@ -242,24 +241,13 @@ def make_input_tensors(input_shape, affine, do_backward=False):
     ],
 )
 @pytest.mark.parametrize(
-    "H",
-    [
-        23,
-        512,
-    ],
-)
-@pytest.mark.parametrize(
-    "W",
-    [
-        23,
-        512,
-    ],
+    "HW",
+    [[23, 23], [512, 512]],
 )
 @pytest.mark.parametrize(
     "eps",
     [
         1e-05,
-        1e-12,
     ],
 )
 @pytest.mark.parametrize(
@@ -276,9 +264,10 @@ def make_input_tensors(input_shape, affine, do_backward=False):
         False,
     ],
 )
-def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, compute_mean_rstd, device):
+def test_moreh_groupnorm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device):
     torch.manual_seed(2024)
 
+    H, W = HW
     C, num_groups = C_num_groups
     input_shape = (N, C, H, W)
     cpu_input, cpu_beta, cpu_gamma, _ = make_input_tensors(input_shape, affine)
@@ -319,7 +308,6 @@ def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, compute_mean_rstd, 
         assert actual_rstd is None
 
 
-@pytest.mark.skip("Watcher error, see issue #6319")
 @pytest.mark.parametrize(
     "N",
     [
@@ -335,24 +323,13 @@ def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, compute_mean_rstd, 
     ],
 )
 @pytest.mark.parametrize(
-    "H",
-    [
-        23,
-        512,
-    ],
-)
-@pytest.mark.parametrize(
-    "W",
-    [
-        23,
-        512,
-    ],
+    "HW",
+    [[23, 23], [512, 512]],
 )
 @pytest.mark.parametrize(
     "eps",
     [
         1e-05,
-        # 1e-12,
     ],
 )
 @pytest.mark.parametrize(
@@ -384,8 +361,9 @@ def test_moreh_groupnorm(N, C_num_groups, H, W, eps, affine, compute_mean_rstd, 
     ],
 )
 def test_moreh_groupnorm_backward(
-    N, C_num_groups, H, W, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
+    N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
 ):
+    H, W = HW
     if not affine and (gamma_requires_grad or beta_requires_grad):
         pytest.skip("gamma_requires_grad and beta_requires_grad are only valid when affine is True.")
 

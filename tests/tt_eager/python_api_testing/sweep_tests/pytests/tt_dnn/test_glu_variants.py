@@ -31,7 +31,10 @@ output_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
 @pytest.mark.parametrize("input_mem_config", input_mem_cfgs)
 @pytest.mark.parametrize("output_mem_config", output_mem_cfgs)
 class TestGLUVariants:
-    @pytest.mark.parametrize("fn_kind", ["glu", "reglu", "geglu", "swiglu"])
+    @pytest.mark.parametrize(
+        "fn_kind",
+        ["glu", "reglu", "geglu", "swiglu"],
+    )
     def test_all_glu_ops(
         self,
         input_shapes,

@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/constants.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tensor/owned_buffer_functions.hpp"
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "tt_numpy/functions.hpp"
 
 using tt::tt_metal::DataType;
@@ -52,51 +52,51 @@ int main() {
 
     {
         Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-        auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
+        auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
         TT_FATAL(allclose);
     }
 
     {
         Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-        auto allclose = run_test<host_function<std::minus<float>>>(shape, tt::tt_metal::sub, device);
+        auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
         TT_FATAL(allclose);
     }
 
     {
         Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-        auto allclose = run_test<host_function<std::multiplies<float>>>(shape, tt::tt_metal::mul, device, 1e-2f, 1e-3f);
+        auto allclose = run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
         TT_FATAL(allclose);
     }
 
     auto run_binary_ops = [&] {
         {
             Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-            auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
+            auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose);
         }
 
         {
             Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
-            auto allclose = run_test<host_function<std::minus<float>>>(shape, tt::tt_metal::sub, device);
+            auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
             TT_FATAL(allclose);
         }
 
         {
             Shape shape = {1, 1, tt::constants::TILE_HEIGHT * 2, tt::constants::TILE_WIDTH * 2};
-            auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
+            auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose);
         }
 
         {
             Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
             auto allclose =
-                run_test<host_function<std::multiplies<float>>>(shape, tt::tt_metal::mul, device, 1e-2f, 1e-3f);
+                run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
             TT_FATAL(allclose);
         }
 
         {
             Shape shape = {1, 1, tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 4};
-            auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
+            auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose);
         }
     };
@@ -112,7 +112,7 @@ int main() {
 
     run_binary_ops();
 
-    TT_FATAL(device->num_program_cache_entries() == 4,
+    TT_FATAL(device->num_program_cache_entries() == 3,
         "There are {} entries",
         device->num_program_cache_entries());
 

@@ -8,8 +8,7 @@ import sys
 from loguru import logger
 
 import numpy as np
-
-import tt_lib as ttl
+import ttnn
 from tt_lib.utils import (
     tilize_to_list,
     tilize,
@@ -91,6 +90,7 @@ def test_run_optimized_conv(
     has_bias,
     fuse_relu,
 ):
+    pytest.skip("TODO: Delete this test suite")
     if has_bias and untilize_out:
         ## bias is only supported without untilize out
         pytest.skip()
@@ -152,24 +152,24 @@ def test_run_optimized_conv(
         # Run TT metal OP
         if not has_bias:
             bias_device = None
-        out = ttl.tensor.optimized_conv(
+        out = ttnn.operations.conv2d.optimized_conv(
             A,
             B_tiled,
-            bias_device,
-            None,
-            [R, S, stride_h, stride_w, pad_h, pad_w],
-            K,
-            untilize_out,
-            has_bias,
-            fuse_relu,
-            ttl.tensor.MathFidelity.HiFi4,
-            ttl.tensor.OptimizedConvParallelizationConfig(
+            bias=bias_device,
+            conv_reader_indices=None,
+            conv_params=[R, S, stride_h, stride_w, pad_h, pad_w],
+            output_channels=K,
+            untilize_out=untilize_out,
+            has_bias=has_bias,
+            fuse_relu=fuse_relu,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            parallelization_config=ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
                 grid_size=(num_cores_x, num_cores_y),
-                num_cores_nhw=num_cores_x,
+                num_cores_nhw=num_cores_y,
                 per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
                 per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
             ),
-            ttl.tensor.OptimizedConvBlockConfig(
+            block_config=ttnn.operations.conv2d.OptimizedConvBlockConfig(
                 act_block_h_ntiles=act_block_h,
                 act_block_w_ntiles=act_block_w,
                 out_subblock_h_ntiles=out_subblock_h,
@@ -179,11 +179,11 @@ def test_run_optimized_conv(
         if not untilize_out:
             out_unpadded_shape = [1, 1, N * OH * OW, K]
             assert out_unpadded_shape == list(out.shape_without_padding())
-            out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
+            out = ttnn.format_output_tensor(out, out.shape_without_padding(), device, ttnn.ROW_MAJOR_LAYOUT)
             out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
         out = out.cpu()
         assert list(out.get_legacy_shape()) == conv_output_shape
-        assert out.get_layout() == ttl.tensor.Layout.ROW_MAJOR
+        assert out.get_layout() == ttnn.ROW_MAJOR_LAYOUT
 
         # Copy output to host and convert tt tensor to pytorch tensor
         out_result = out.to_torch().float()

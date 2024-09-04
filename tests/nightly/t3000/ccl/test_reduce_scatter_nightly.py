@@ -1,0 +1,1 @@
+../../../ttnn/unit_tests/operations/test_reduce_scatter_nightly.py

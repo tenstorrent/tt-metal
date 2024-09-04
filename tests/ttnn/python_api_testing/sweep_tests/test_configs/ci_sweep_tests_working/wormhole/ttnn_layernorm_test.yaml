@@ -19,7 +19,8 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_ttnn_layernorm_args
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]

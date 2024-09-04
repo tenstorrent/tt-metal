@@ -7,8 +7,6 @@ import torch
 
 from loguru import logger
 
-import tt_lib
-
 from models.experimental.vovnet.tt.vovnet import vovnet_for_image_classification
 from models.utility_functions import (
     Profiler,

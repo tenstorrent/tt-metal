@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Union
 import time
-import tt_lib
+import ttnn
 import torch
 import numpy as np
 from loguru import logger
@@ -13,7 +14,7 @@ import struct
 import pytest
 
 from tt_lib.fused_ops.conv import conv as TtConv
-from tt_lib.device import Arch
+from ttnn.device import Arch
 
 
 ### Math operations ###
@@ -103,10 +104,20 @@ class Profiler:
 
         return sum(self.times[key]) / len(self.times[key])
 
-    def print(self):
+    def print(self, units="s"):
         for key in self.times:
             average = self.get(key)
-            print(f"{key}: {average:.3f}s")
+            if units == "s":
+                pass
+            elif units == "ms":
+                average *= 1000
+            elif units == "us":
+                average *= 1000000
+            elif units == "ns":
+                average *= 1000000000
+            else:
+                raise ValueError(f"Invalid units: {units}")
+            print(f"{key}: {average:.3f}{units}")
 
 
 profiler = Profiler()
@@ -117,58 +128,61 @@ def enable_persistent_kernel_cache():
     """
     Enables persistent compiled kernel caching - disables recompiling the kernels for the duration of running process if built_kernels/.../hash directory with kernel binaries is present.
     """
-    tt_lib.device.EnablePersistentKernelCache()
+    logger.warning(
+        "Persistent kernel cache is enabled. Cache invalidation may fail after a rebase and may require deleting the built directory."
+    )
+    ttnn.device.EnablePersistentKernelCache()
 
 
 def disable_persistent_kernel_cache():
     """
     Disables persistent compiled kernel caching. This is the default state.
     """
-    tt_lib.device.DisablePersistentKernelCache()
+    ttnn.device.DisablePersistentKernelCache()
 
 
 def enable_compilation_reports():
     """
     Enables generating reports of compilation statistics in .reports/tt_metal dir
     """
-    return tt_lib.device.EnableCompilationReports()
+    return ttnn.device.EnableCompilationReports()
 
 
 def disable_compilation_reports():
     """
     Disables generating reports of compilation statistics
     """
-    return tt_lib.device.DisableCompilationReports()
+    return ttnn.device.DisableCompilationReports()
 
 
 def enable_memory_reports():
     """
     Enables generating reports of memory allocation statistics in .reports/tt_metal dir
     """
-    return tt_lib.device.EnableMemoryReports()
+    return ttnn.device.EnableMemoryReports()
 
 
 def disable_memory_reports():
     """
     Disables generating reports of memory allocation statistics
     """
-    return tt_lib.device.DisableMemoryReports()
+    return ttnn.device.DisableMemoryReports()
 
 
 ### Tensor conversion ###
 def torch2tt_tensor(
     py_tensor: torch.Tensor,
     tt_device,
-    tt_layout=tt_lib.tensor.Layout.TILE,
-    tt_memory_config=tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED),
-    tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
+    tt_layout=ttnn.TILE_LAYOUT,
+    tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),
+    tt_dtype=ttnn.bfloat16,
 ):
     size = list(py_tensor.size())
 
     while len(size) < 4:
         size.insert(0, 1)
 
-    tt_tensor = tt_lib.tensor.Tensor(py_tensor.reshape(size), tt_dtype)
+    tt_tensor = ttnn.Tensor(py_tensor.reshape(size), tt_dtype)
     tt_tensor = tt_tensor.to(tt_layout)
 
     if tt_device is not None:
@@ -179,15 +193,39 @@ def torch2tt_tensor(
     return tt_tensor
 
 
+def tt_tensors_to_torch_tensors(
+    tt_tensors_device: ttnn.Tensor, mesh_device: Union[ttnn.MeshDevice, ttnn.Device], concat_dim: int = 0
+):
+    # Convert tensors to interleaved
+    if tt_tensors_device.is_sharded():
+        tt_tensors_device = ttnn.sharded_to_interleaved(tt_tensors_device)
+
+    # Convert tensors to RM layout
+    if tt_tensors_device.layout == ttnn.TILE_LAYOUT:
+        # Convert to bfloat16 to ensure untilize works
+        if tt_tensors_device.dtype != ttnn.bfloat16:
+            tt_tensors_device = ttnn.clone(
+                tt_tensors_device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+        # Untilize using singlecore since multicore version runs out of l1 memory (Issue #9022)
+        tt_tensors_device = ttnn.untilize(tt_tensors_device, use_multicore=False)
+
+    tt_tensors_device = ttnn.to_torch(
+        tt_tensors_device, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=concat_dim), device=mesh_device
+    )
+
+    return tt_tensors_device
+
+
 def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
-    if tt_output.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-        tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
+    if tt_output.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        tt_output = tt_output.to(ttnn.ROW_MAJOR_LAYOUT)
     return tt_output.to_torch()
 
 
 def tt_to_torch_tensor(tt_tensor):
-    tt_output = tt_tensor.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_output = tt_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     return tt_output.to_torch()
 
 
@@ -197,7 +235,7 @@ def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):
         while len(shape) < 4:
             shape.insert(0, 1)
 
-    tt_tensor = tt_lib.tensor.Tensor(py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16)
+    tt_tensor = ttnn.Tensor(py_tensor.reshape(shape), ttnn.bfloat16)
     if put_on_device:
         tt_tensor = tt_tensor.to(device)
     return tt_tensor
@@ -209,11 +247,11 @@ def torch_to_tt_tensor(py_tensor, device):
         shape.insert(0, 1)
 
     tt_tensor = (
-        tt_lib.tensor.Tensor(py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16)
+        ttnn.Tensor(py_tensor.reshape(shape), ttnn.bfloat16)
         .to(
-            tt_lib.tensor.Layout.TILE
+            ttnn.TILE_LAYOUT
         )  # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
-        .to(device)  # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
+        .to(device)  # move TT Tensor from host to TT accelerator device (device is of type ttnn.device.Device)
     )
 
     return tt_tensor
@@ -223,8 +261,8 @@ def torch_to_tt_tensor(py_tensor, device):
 def pad_by_zero(
     x: torch.Tensor,
     device=None,
-    tt_memory_config=tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED),
-    tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
+    tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),
+    tt_dtype=ttnn.bfloat16,
 ):
     initial_shape = x.shape
     pad_shape = list(x.shape)
@@ -242,8 +280,8 @@ def pad_by_zero(
                 _nearest_32(pad_shape[-2]) - pad_shape[-2],
             ),
         )
-        x = tt_lib.tensor.Tensor(x, tt_dtype)
-        x = x.to(tt_lib.tensor.Layout.TILE)
+        x = ttnn.Tensor(x, tt_dtype)
+        x = x.to(ttnn.TILE_LAYOUT)
         if device is not None:
             x = x.to(device, tt_memory_config)
 
@@ -257,8 +295,8 @@ def unpad_from_zero(x, desired_shape):
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
-        if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-            x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            x = x.to(ttnn.ROW_MAJOR_LAYOUT)
         x = x.unpad(
             (0, 0, 0, 0),
             (
@@ -308,8 +346,8 @@ def pad_weight(x):
     """
     This function pads a weight/bias with 0s as a pre-preprocessing step to tilization.
 
-    tt_tensor = tt_lib.tensor.Tensor(
-        py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16
+    tt_tensor = ttnn.Tensor(
+        py_tensor.reshape(shape), ttnn.bfloat16
     In the 2d case, it pads a vector to the right with 0s, and in the 2+d case,
     it pads the bottom and right corners of the last two dimensions.
 
@@ -617,6 +655,18 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
     return passing, output
 
 
+def comp_equal(golden, calculated):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
+    atol_delta = torch.max(torch.abs(golden - calculated)).item()
+    rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
+    return (
+        torch.equal(golden, calculated),
+        f"Max ATOL Delta: {atol_delta}, Max RTOL Delta: {rtol_delta}",
+    )
+
+
 def get_oom_of_float(float_lst):
     """
     Given a list of floats, returns a list of the order or magnitudes
@@ -874,8 +924,8 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
         if N == 1:
             return run_conv_on_device_batch_one(x)
         # need to move on CPU
-        if isinstance(x, tt_lib.tensor.Tensor):
-            xx = x.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        if isinstance(x, ttnn.Tensor):
+            xx = x.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         else:
             xx = x
 
@@ -883,15 +933,15 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
             run_conv_on_device_batch_one(torch_to_tt_tensor_rm(xx[batch_idx, :, :, :], device))
             for batch_idx in range(N)
         ]
-        conv_concat = tt_lib.tensor.concat(partial_convs, 0)
+        conv_concat = ttnn.concat(partial_convs, 0)
         return conv_concat
 
     def run_conv_on_device_batch_one(x):
         [N, C, H, W] = x.get_legacy_shape()
         if channel_transpose:
             # n c h w -> n h w c
-            x = tt_lib.tensor.transpose(x, 1, -2)
-            x = tt_lib.tensor.transpose(x, -2, -1)  # wh
+            x = ttnn.transpose(x, 1, -2)
+            x = ttnn.transpose(x, -2, -1)  # wh
 
         logger.info("Running Conv with following parameters on device -")
         logger.info(
@@ -922,16 +972,16 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
         )
 
         logger.info("Going to run conv on tt device")
-        if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-            x = tt_lib.tensor.untilize(x)
+        if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.untilize(x)
         else:
             x_padded_shape = list(x.get_legacy_shape())
             x_padded_shape[-1] = roundup(x.get_legacy_shape()[-1], 16)
-            x = tt_lib.tensor.pad(x, x_padded_shape, [0, 0, 0, 0], 0)
+            x = ttnn.pad(x, x_padded_shape, [0, 0, 0, 0], 0)
         x = conv_on_device(x)
         if channel_transpose:
-            x = tt_lib.tensor.transpose(x, -2, -1)
-            x = tt_lib.tensor.transpose(x, 1, -2)
+            x = ttnn.transpose(x, -2, -1)
+            x = ttnn.transpose(x, 1, -2)
 
         logger.info("conv on tt device done")
         return x
@@ -943,6 +993,16 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
 def is_e75(device):
     compute_grid_size = device.compute_with_storage_grid_size()
     return (device.arch() == Arch.GRAYSKULL) and (compute_grid_size.x * compute_grid_size.y == 88)
+
+
+def is_x2_harvested(device):
+    grid = device.compute_with_storage_grid_size()
+    return device.arch() == Arch.WORMHOLE_B0 and (grid.x, grid.y) == (8, 7)
+
+
+def is_blackhole():
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return "blackhole" in ARCH_NAME
 
 
 def is_wormhole_b0():
@@ -963,6 +1023,14 @@ def skip_for_grayskull(reason_str="not working for Grayskull"):
     return pytest.mark.skipif(is_grayskull(), reason=reason_str)
 
 
+def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
+    return pytest.mark.skipif(not is_wormhole_b0(), reason=reason_str)
+
+
+def run_for_grayskull(reason_str="only runs for Grayskull"):
+    return pytest.mark.skipif(not is_grayskull(), reason=reason_str)
+
+
 def get_devices_for_t3000(all_devices, num_devices):
     """
     all_devices comes from fixture which devices in order from 0 to 7.
@@ -975,7 +1043,7 @@ def get_devices_for_t3000(all_devices, num_devices):
         return all_devices[:num_devices]
     elif num_devices == 8:
         # TODO: Generalize this for different arch
-        hamiltonian_ring_indices = [0, 7, 6, 1, 2, 5, 4, 3]
+        hamiltonian_ring_indices = [0, 4, 5, 1, 2, 6, 7, 3]
         return [all_devices[i] for i in hamiltonian_ring_indices]
     else:
         raise NotImplementedError("Only supports 1, 2, 3, 4, and 8 chip configurations!")

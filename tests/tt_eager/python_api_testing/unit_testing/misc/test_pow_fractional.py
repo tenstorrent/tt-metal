@@ -5,7 +5,7 @@
 import math
 import torch
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_pcc
 from loguru import logger
 
@@ -19,13 +19,13 @@ def test_pow_fractional_composite(device):
     x = torch.randn((N, C, H, W)).bfloat16().float()
 
     xt = (
-        ttl.tensor.Tensor(
+        ttnn.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.TILE_LAYOUT)
         .to(device)
     )
 
@@ -33,14 +33,14 @@ def test_pow_fractional_composite(device):
     yt = y
     yt_floor = math.floor(yt)
     yt_trunc = yt - yt_floor
-    pow_trunc_log = ttl.tensor.mul_unary(ttl.tensor.log(xt), yt_trunc)
-    pow_frac = ttl.tensor.exp(pow_trunc_log)
-    xtt = ttl.tensor.mul(ttl.tensor.pow(xt, yt_floor), pow_frac)
+    pow_trunc_log = ttnn.multiply(ttnn.log(xt), yt_trunc)
+    pow_frac = ttnn.exp(pow_trunc_log)
+    xtt = ttnn.mul(ttnn.pow(xt, yt_floor), pow_frac)
     assert list(xtt.get_legacy_shape()) == [N, C, H, W]
-    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
-    xtt_fp = ttl.tensor.pow(xt, yt)
-    fp_tt_got_back = xtt_fp.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    xtt_fp = ttnn.pow(xt, yt.item())
+    fp_tt_got_back = xtt_fp.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     pt_ref = torch.pow(x, y)
 

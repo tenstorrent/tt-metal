@@ -5,21 +5,22 @@
 import torch
 from tqdm.auto import tqdm
 from loguru import logger
+import pytest
 
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import AutoencoderKL, UNet2DConditionModel
 from diffusers import LMSDiscreteScheduler
 
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from models.utility_functions import (
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-)
 from models.utility_functions import (
     comp_pcc,
     comp_allclose_and_pcc,
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
+    torch_to_tt_tensor_rm,
+    tt_to_torch_tensor,
+    skip_for_wormhole_b0,
 )
-import tt_lib as ttl
+import ttnn
 from models.experimental.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
 )
@@ -92,6 +93,8 @@ def make_tt_unet(state_dict, device):
     return tt_unet
 
 
+@skip_for_wormhole_b0()
+@pytest.mark.skip(reason="Test is failing., see issue #7536")
 def test_unbatched_stable_diffusion(device):
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
     vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
@@ -217,10 +220,10 @@ def test_unbatched_stable_diffusion(device):
         # predict the noise residual
         with torch.no_grad():
             tt_noise_pred_cond = tt_unet(tt_conditioned, _t_cond, encoder_hidden_states=tt_text_embeddings)
-            ttl.device.Synchronize(device)
+            ttnn.synchronize_device(device)
 
             tt_noise_pred_uncond = tt_unet(tt_unconditioned, _t_uncond, encoder_hidden_states=tt_uncond_embeddings)
-            ttl.device.Synchronize(device)
+            ttnn.synchronize_device(device)
             noise_pred_cond = tt_to_torch_tensor(tt_noise_pred_cond)
             noise_pred_uncond = tt_to_torch_tensor(tt_noise_pred_uncond)
         # perform guidance

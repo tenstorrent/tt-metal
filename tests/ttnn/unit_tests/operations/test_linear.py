@@ -122,26 +122,16 @@ def test_linear_with_core_grid(
     else:
         bias = None
 
-    if batch_size == 1:
-        with pytest.raises(RuntimeError) as exception:
-            output_tensor = ttnn.linear(
-                input_tensor_a,
-                input_tensor_b,
-                bias=bias,
-                core_grid=ttnn.CoreGrid(y=batch_size, x=6),
-            )
-        assert "1D mcast for in0 or in1 is not implemented yet" in str(exception.value)
-    else:
-        output_tensor = ttnn.linear(
-            input_tensor_a,
-            input_tensor_b,
-            bias=bias,
-            core_grid=ttnn.CoreGrid(y=batch_size, x=6),
-        )
+    output_tensor = ttnn.linear(
+        input_tensor_a,
+        input_tensor_b,
+        bias=bias,
+        core_grid=ttnn.CoreGrid(y=batch_size, x=6),
+    )
 
-        output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
 
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -149,7 +139,7 @@ def test_linear_with_core_grid(
 @pytest.mark.parametrize("k_size", [1024, 2048])
 @pytest.mark.parametrize("n_size", [1024, 2048])
 @pytest.mark.parametrize("activation", [None, "relu", "silu"])
-def test_wide_linear_with_argument_for_using_1D_systolic_array_set_to_true(
+def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     device, batch_size, m_size, k_size, n_size, activation
 ):
     torch.manual_seed(0)
@@ -165,7 +155,7 @@ def test_wide_linear_with_argument_for_using_1D_systolic_array_set_to_true(
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, use_1d_systolic_array=True, activation=activation)
+    output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, core_grid=device.core_grid, activation=activation)
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
@@ -188,17 +178,11 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    program_config = ttnn.create_matmul_1d_systolic_array_program_config(
-        input_shape_a=input_tensor_a.shape,
-        input_shape_b=input_tensor_b.shape,
-        core_grid=device.core_grid,
-        activation=activation,
-    )
-
     output_tensor = ttnn.linear(
         input_tensor_a,
         input_tensor_b,
-        program_config=program_config,
+        activation=activation,
+        core_grid=device.core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)

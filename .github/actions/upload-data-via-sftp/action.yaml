@@ -1,0 +1,27 @@
+name: "Upload data via SFTP"
+description: "Upload data SFTP server for later analysis"
+inputs:
+  ssh-private-key:
+    description: "The Slack ID of the person to be tagged."
+    required: true
+  sftp-batchfile:
+    description: "Text batchfile containing SFTP commands"
+    required: true
+  username:
+    description: "Username of account on server"
+    required: true
+  hostname:
+    description: "Hostname of server"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create key file
+      shell: bash
+      run: |
+        echo "${{ inputs.ssh-private-key }}" > id_key
+        chmod go-rwx id_key
+    - name: Upload files
+      shell: bash
+      run: sftp  -oStrictHostKeyChecking=no -i id_key -b ${{ inputs.sftp-batchfile }} ${{ inputs.username }}@${{ inputs.hostname }}

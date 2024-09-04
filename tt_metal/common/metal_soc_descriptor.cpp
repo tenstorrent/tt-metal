@@ -31,6 +31,17 @@ CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_channel(int dram_
     return this->preferred_eth_dram_core.at(dram_chan);
 };
 
+CoreCoord metal_SocDescriptor::get_logical_core_for_dram_channel(int dram_chan) const {
+    const uint32_t num_dram_channels = this->get_num_dram_channels();
+    TT_FATAL(
+        dram_chan < num_dram_channels,
+        "dram_chan={} must be within range of num_dram_channels={}",
+        dram_chan,
+        num_dram_channels
+    );
+    return CoreCoord(dram_chan, 0);
+}
+
 size_t metal_SocDescriptor::get_address_offset(int dram_chan) const {
     TT_ASSERT(
         dram_chan < this->dram_address_offsets.size(),
@@ -72,9 +83,21 @@ const std::vector<CoreCoord>& metal_SocDescriptor::get_logical_ethernet_cores() 
     return this->logical_ethernet_cores;
 }
 
+int metal_SocDescriptor::get_dram_channel_from_logical_core(const CoreCoord &logical_coord) const {
+    const uint32_t num_dram_channels = this->get_num_dram_channels();
+    TT_FATAL(
+        (logical_coord.x < num_dram_channels) and
+        (logical_coord.y == 0),
+        "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
+        logical_coord.str(),
+        CoreCoord(num_dram_channels, 1)
+    );
+    return logical_coord.x;
+}
+
 CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(const CoreCoord &logical_coord) const {
     const auto &eth_chan_map = this->logical_eth_core_to_chan_map;
-    TT_ASSERT(
+    TT_FATAL(
         (eth_chan_map.find(logical_coord) != eth_chan_map.end()),
         "Bounds-Error -- Logical_core={} is outside of ethernet logical grid",
         logical_coord.str());
@@ -85,7 +108,7 @@ CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const Cor
     const auto &phys_eth_map = this->physical_ethernet_cores;
     auto it = std::find(phys_eth_map.begin(), phys_eth_map.end(), physical_coord);
 
-    TT_ASSERT(
+    TT_FATAL(
         (it != phys_eth_map.end()),
         "Bounds-Error -- Physical_core={} is outside of ethernet physical grid",
         physical_coord.str());
@@ -95,7 +118,7 @@ CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const Cor
 }
 
 CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreCoord &logical_coord) const {
-    TT_ASSERT(
+    TT_FATAL(
         (logical_coord.x < this->worker_grid_size.x) and
         (logical_coord.y < this->worker_grid_size.y),
         "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
@@ -109,12 +132,21 @@ CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreC
     return physical_tensix_core;
 }
 
+CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const CoreCoord &logical_coord) const {
+    return this->get_preferred_worker_core_for_dram_channel(this->get_dram_channel_from_logical_core(logical_coord));
+}
+
 CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const {
     switch (core_type) {
         case CoreType::ETH: return this->get_physical_ethernet_core_from_logical(logical_coord);
         case CoreType::WORKER: return this->get_physical_tensix_core_from_logical(logical_coord);
+        case CoreType::DRAM: return this->get_physical_dram_core_from_logical(logical_coord);
         default: TT_THROW("Undefined conversion for core type.");
     }
+}
+
+CoreCoord metal_SocDescriptor::get_dram_grid_size() const {
+    return CoreCoord(this->get_num_dram_channels(), 1);
 }
 
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
@@ -302,7 +334,7 @@ void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
 }
 
 void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     for (auto &core : this->physical_workers)
     {
         this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x,core.y}, 0);
@@ -340,7 +372,7 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 // virtual coordinates because UMD APIs expect virtual coordinates.
 metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask) :
     tt_SocDescriptor(other) {
-    this->trisc_sizes = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};  // TODO: Read trisc size from yaml
+    this->trisc_sizes = {MEM_TRISC0_FIRMWARE_SIZE, MEM_TRISC1_FIRMWARE_SIZE, MEM_TRISC2_FIRMWARE_SIZE};  // TODO: Read trisc size from yaml
     this->generate_physical_descriptors_from_virtual(harvesting_mask);
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();

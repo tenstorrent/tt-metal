@@ -1,0 +1,19 @@
+name: "(Single-card) Demo tests"
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "0 0 * * 1,2,3,4,5"
+    - cron: "0 */4 * * 0,6"
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '["wormhole_b0"]'
+    secrets: inherit
+  single-card-demo-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml

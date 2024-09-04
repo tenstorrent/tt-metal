@@ -136,11 +136,11 @@ int main(int argc, char **argv) {
         TT_ASSERT(input_size != 0, "--input-size should not be zero");
 
         if (use_device_profiler) {
-#if !defined(PROFILER)
+#if !defined(TRACY_ENABLE)
             log_error(
                 LogTest,
                 "Metal library and test code should be build with "
-                "'ENABLE_PROFILER=1' to use device profiler");
+                "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
 #endif
             auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
             TT_FATAL(

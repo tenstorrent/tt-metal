@@ -7,7 +7,8 @@ from loguru import logger
 import pytest
 import torch
 
-import tt_lib as ttl
+import ttnn
+
 
 from tt_lib.utils import (
     pad_weight,
@@ -25,7 +26,6 @@ def rmsnorm(x, gamma, beta, eps):
 def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(1234)
 
-    tensor = ttl.tensor
     dev = device
 
     epsf = 1e-2
@@ -43,46 +43,46 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
         if test_id >= 1:
             gamma = torch.rand(1, 1, 1, W) * 2 - 1
             gammah32 = tilize_to_list(pad_weight(gamma))
-            ttgamma = tensor.Tensor(
+            ttgamma = ttnn.Tensor(
                 gammah32,
                 [1, 1, 32, W],
                 dtype,
-                tensor.Layout.TILE,
+                ttnn.TILE_LAYOUT,
                 dev,
                 in0_mem_config,
             )
         if test_id >= 2:
             beta = torch.rand(1, 1, 1, W) * 2.0 - 1.1
             betah32 = tilize_to_list(pad_weight(beta))
-            ttbeta = tensor.Tensor(
+            ttbeta = ttnn.Tensor(
                 betah32,
                 [1, 1, 32, W],
                 dtype,
-                tensor.Layout.TILE,
+                ttnn.TILE_LAYOUT,
                 dev,
                 in0_mem_config,
             )
 
         x = torch.rand((N, C, H, W)) * 2 - 0.95
 
-        ttx = tensor.Tensor(
+        ttx = ttnn.Tensor(
             tilize_to_list(x),
             [N, C, H, W],
             dtype,
-            tensor.Layout.TILE,
+            ttnn.TILE_LAYOUT,
             dev,
             in0_mem_config,
         )
 
         if test_id == 0:
             logger.info("Running RMSN_NOGB")
-            ttz = tensor.rmsnorm(ttx, epsf, output_mem_config=out_mem_config)
+            ttz = ttnn.rms_norm(ttx, epsilon=epsf, memory_config=out_mem_config)
         elif test_id == 1:
             logger.info("Running RMSN_G")
-            ttz = tensor.rmsnorm(ttx, epsf, ttgamma, output_mem_config=out_mem_config)
+            ttz = ttnn.rms_norm(ttx, epsilon=epsf, weight=ttgamma, memory_config=out_mem_config)
         elif test_id == 2:
             logger.info("Running RMSN_GB")
-            ttz = tensor.rmsnorm(ttx, epsf, ttgamma, ttbeta, out_mem_config)
+            ttz = ttnn.rms_norm(ttx, epsilon=epsf, weight=ttgamma, bias=ttbeta, memory_config=out_mem_config)
         else:
             assert False
         logger.info("Done")
@@ -108,22 +108,22 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
     ids=["BFLOAT16"],
 )
 @pytest.mark.parametrize(

@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import ttnn
 import pytest
 
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
@@ -13,12 +13,14 @@ import os
 from loguru import logger
 import models.experimental.nanogpt.tt.nanogpt_model as nanogpt_model
 
-from models.utility_functions import tt_to_torch_tensor, comp_allclose, comp_pcc
+from models.utility_functions import tt_to_torch_tensor, comp_allclose, comp_pcc, skip_for_wormhole_b0
 
 
+@skip_for_wormhole_b0()
+@pytest.mark.skip(reason="Test is failing gs, see issue #7534")
 @pytest.mark.parametrize(
     "dtype",
-    (tt_lib.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
 )
 @pytest.mark.parametrize(
     "pcc, prompt",

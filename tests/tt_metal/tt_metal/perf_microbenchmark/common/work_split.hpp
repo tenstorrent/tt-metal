@@ -8,7 +8,7 @@
 // Contains utility functions for partitioning work between multiple cores.
 //
 
-// cloned from tt_eager/tt_dnn/op_library/work_split.hpp
+// cloned from ttnn/experimental/tt_dnn/op_library/work_split.hpp
 
 #pragma once
 
@@ -18,59 +18,6 @@
 
 namespace tt {
 namespace tt_metal {
-
-// splits the tiles evenly between num_cores,
-// with option of padding where necessary
-struct TilesSplit {
-    int num_cores_;
-    int total_tiles_;
-    int tpc_;  // unclipped tiles per core
-
-    inline TilesSplit(int num_cores, int total_tiles) : num_cores_(num_cores), total_tiles_(total_tiles) {
-        tpc_ = div_up(total_tiles_, num_cores_);
-    }
-
-    // number of tiles per core for div_up split
-    inline uint32_t get_tpc() const { return tpc_; }
-
-    // number of tiles per core for close to even split with multiples of 8 going
-    // to each core
-    inline uint32_t get_clipped_tpc(int icore) const {
-        auto result = (tpc_ * (icore + 1) > total_tiles_) ? (total_tiles_ - tpc_ * (icore + 1)) : tpc_;
-        return result;
-    }
-};
-
-struct CoreGridDesc {
-    uint32_t x_, y_;
-    CoreGridDesc(Device *dev) {
-        auto gs = dev->compute_with_storage_grid_size();
-        x_ = gs.x;
-        y_ = gs.y;
-        TT_ASSERT(x_ > 0 && y_ > 0);
-    }
-    uint32_t total_cores() const { return x_ * y_; }
-    CoreCoord wrap_core(int icore) const {
-        TT_ASSERT(icore < total_cores());
-        CoreCoord core = {(std::size_t)icore % x_, (std::size_t)icore / x_};
-        return core;
-    }
-
-    int numcores_dividing_numtiles(int num_tiles, int block_size = 1) {
-        // since we will be splitting num_tiles into num_cores we need to find
-        // num_cores such that num_tiles % num_cores = 0, so that it's evenly
-        // divided since we don't support leftovers at the moment
-        // TODO(AP): optimize if needed, O(max_cores) atm
-        uint32_t max_cores = total_cores();
-        TT_ASSERT(max_cores % block_size == 0 || max_cores == 1);
-        if (max_cores > num_tiles)
-            max_cores = num_tiles;
-        for (int j = max_cores; j >= 1; j--)
-            if (num_tiles % j == 0)
-                return j;
-        return 1;
-    }
-};
 
 // Given a number of tiles and number of cores available
 // Set the largest number of cores less than the number of tiles
@@ -173,21 +120,21 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
         auto last_block_group_2 = (*core_group_2_set.rbegin());
         auto last_block_all_cores = (*all_cores.ranges().rbegin());
         // Case where only the last column is divided between core group 1 and 2
-        if (last_block_group_2.end.x == last_block_all_cores.end.x &&
-            last_block_group_2.end.y != last_block_all_cores.end.y) {
+        if (last_block_group_2.end_coord.x == last_block_all_cores.end_coord.x &&
+            last_block_group_2.end_coord.y != last_block_all_cores.end_coord.y) {
             CoreRange leftover_block(
-                {last_block_group_2.end.x, last_block_group_2.end.y + 1}, last_block_all_cores.end);
+                {last_block_group_2.end_coord.x, last_block_group_2.end_coord.y + 1}, last_block_all_cores.end_coord);
             core_group_1_set.insert(leftover_block);
         } else {
             // Case where a middle column is divided between core group 1 and 2
-            if (last_block_group_2.end.y != num_cores_y - 1) {
+            if (last_block_group_2.end_coord.y != num_cores_y - 1) {
                 CoreRange leftover_stick(
-                    {last_block_group_2.end.x, last_block_group_2.end.y + 1},
-                    {last_block_group_2.end.x, num_cores_y - 1});
+                    {last_block_group_2.end_coord.x, last_block_group_2.end_coord.y + 1},
+                    {last_block_group_2.end_coord.x, num_cores_y - 1});
                 core_group_1_set.insert(leftover_stick);
             }
             // Remaining columns of cores that does less work
-            CoreRange leftover_block({last_block_group_2.end.x + 1, 0}, last_block_all_cores.end);
+            CoreRange leftover_block({last_block_group_2.end_coord.x + 1, 0}, last_block_all_cores.end_coord);
             core_group_1_set.insert(leftover_block);
         }
         units_per_core_group_2 = units_per_core_group_1 + 1;

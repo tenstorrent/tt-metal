@@ -5,7 +5,7 @@
 from loguru import logger
 import torch
 import pytest
-import tt_lib
+import ttnn
 from models.utility_functions import comp_pcc
 from models.demos.resnet.tt.metalResnetBlock50 import (
     compute_conv_output_shape,
@@ -215,7 +215,7 @@ hardcoded_matmul_config_conv = {
         },
     },
     8: {
-        (25088, 64, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 64, 64): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=4,
@@ -226,7 +226,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (25088, 64, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 64, 256): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=1,
@@ -237,7 +237,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (25088, 256, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 256, 64): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=4,
@@ -248,7 +248,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (25088, 256, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (25088, 256, 128): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=2,
@@ -259,7 +259,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (6272, 128, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (6272, 128, 512): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=4,
             out_subblock_h=1,
@@ -270,7 +270,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (6272, 256, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (6272, 256, 512): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=1,
@@ -281,7 +281,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (6272, 512, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (6272, 512, 128): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=16,
             out_subblock_h=2,
@@ -292,7 +292,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (6272, 512, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (6272, 512, 256): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
             in0_block_w=2,
             out_subblock_h=5,
@@ -302,7 +302,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (1568, 256, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (1568, 256, 1024): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
             in0_block_w=1,
             out_subblock_h=1,
@@ -312,7 +312,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (1568, 1024, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (1568, 1024, 256): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
             in0_block_w=4,
             out_subblock_h=5,
@@ -322,7 +322,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (1568, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (1568, 1024, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -332,7 +332,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (1568, 512, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (1568, 512, 1024): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
             in0_block_w=2,
             out_subblock_h=1,
@@ -342,7 +342,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (1568, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (1568, 1024, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -352,7 +352,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (416, 512, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (416, 512, 2048): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
             in0_block_w=2,
             out_subblock_h=1,
@@ -362,7 +362,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (416, 1024, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (416, 1024, 2048): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -372,7 +372,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (416, 2048, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (416, 2048, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
             in0_block_w=8,
             out_subblock_h=2,
@@ -384,7 +384,7 @@ hardcoded_matmul_config_conv = {
         ),
     },
     16: {
-        (50176, 64, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (50176, 64, 64): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=4,
@@ -395,7 +395,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (50176, 64, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (50176, 64, 256): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=2,
             out_subblock_h=1,
@@ -406,7 +406,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (50176, 256, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (50176, 256, 64): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=4,
@@ -417,7 +417,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (50176, 256, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (50176, 256, 128): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=2,
@@ -428,7 +428,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (12544, 128, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (12544, 128, 512): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=4,
             out_subblock_h=1,
@@ -439,7 +439,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (12544, 256, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (12544, 256, 512): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=8,
             out_subblock_h=1,
@@ -450,7 +450,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (12544, 512, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        (12544, 512, 128): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=16,
             out_subblock_h=2,
@@ -461,7 +461,7 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (12544, 512, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (12544, 512, 256): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=2,
             out_subblock_h=4,
@@ -471,7 +471,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3136, 256, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3136, 256, 1024): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=1,
             out_subblock_h=1,
@@ -481,7 +481,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3136, 1024, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3136, 1024, 256): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=4,
             out_subblock_h=3,
@@ -491,7 +491,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3136, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3136, 1024, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=4,
             out_subblock_h=3,
@@ -501,7 +501,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3136, 512, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3136, 512, 1024): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(11, 8),
             in0_block_w=2,
             out_subblock_h=1,
@@ -511,7 +511,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (3136, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (3136, 1024, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(9, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -521,7 +521,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (800, 512, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (800, 512, 2048): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(9, 8),
             in0_block_w=2,
             out_subblock_h=1,
@@ -531,7 +531,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (800, 1024, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (800, 1024, 2048): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(9, 8),
             in0_block_w=4,
             out_subblock_h=1,
@@ -541,7 +541,7 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
-        (800, 2048, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        (800, 2048, 512): ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(9, 8),
             in0_block_w=8,
             out_subblock_h=3,
@@ -659,22 +659,20 @@ hardcoded_conv_blocking_and_parallelization_config = {
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["weights_BFLOAT16", "weights_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "output_dtype",
-    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["output_BFLOAT16", "output_BFLOAT8_B"],
 )
 def test_resnet50_conv(
     device, use_program_cache, N, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w, weights_dtype, output_dtype
 ):
-    output_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-    )
+    output_mem_config = ttnn.L1_MEMORY_CONFIG
     if (
-        output_dtype == tt_lib.tensor.DataType.BFLOAT16
+        output_dtype == ttnn.bfloat16
         and N > 8
         and [K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w] == [1024, 512, 28, 28, 1, 1, 2, 2, 0, 0]
     ):
@@ -684,10 +682,8 @@ def test_resnet50_conv(
         assert C % 32 == 0
         assert K % 32 == 0
         torch.manual_seed(0)
-        memory_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
-            tt_lib.tensor.BufferType.DRAM if N > 8 else tt_lib.tensor.BufferType.L1,
-        )
+        memory_config = (ttnn.DRAM_MEMORY_CONFIG if N > 8 else ttnn.L1_MEMORY_CONFIG,)
+
         conv_input_shape = [N, C, H, W]
         conv_weight_shape = [K, C, R, S]
         conv_bias_shape = [1, 1, 1, K]
@@ -726,7 +722,7 @@ def test_resnet50_conv(
                 output_mem_config=output_mem_config,
                 weights_dtype=weights_dtype,
                 output_dtype=output_dtype,
-                # math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+                # math_fidelity=ttnn.MathFidelity.HiFi4,
             )
         else:
             assert (conv_as_mm_padded_act_height, K) in hardcoded_conv_blocking_and_parallelization_config[N]
@@ -767,14 +763,14 @@ def test_resnet50_conv(
                 output_mem_config=output_mem_config,
                 weights_dtype=weights_dtype,
                 output_dtype=output_dtype,
-                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+                math_fidelity=ttnn.MathFidelity.HiFi4,
             )
 
-        conv_input_on_device = tt_lib.tensor.Tensor(
+        conv_input_on_device = ttnn.Tensor(
             conv_input_pyt_nhwc.reshape(-1).tolist(),
             conv_input_pyt_nhwc.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
         ).to(device, memory_config)
 
         if is_1x1_conv:
@@ -785,15 +781,15 @@ def test_resnet50_conv(
                 conv_input_shape_nhwc[0] * conv_input_shape_nhwc[1] * conv_input_shape_nhwc[2],
                 conv_input_shape_nhwc[3],
             )
-            conv_input_on_device = format_tensor(conv_input_on_device, tt_lib.tensor.Layout.TILE, device, memory_config)
+            conv_input_on_device = format_tensor(conv_input_on_device, ttnn.TILE_LAYOUT, device, memory_config)
 
         output_on_device = conv(conv_input_on_device)
         if output_mem_config.is_sharded():
-            output_on_device = tt_lib.tensor.sharded_to_interleaved(output_on_device, memory_config)
+            output_on_device = ttnn.sharded_to_interleaved(output_on_device, memory_config)
 
         # convert tiled output to RM
-        assert output_on_device.get_layout() == tt_lib.tensor.Layout.TILE
-        output_on_device = format_tensor(output_on_device, tt_lib.tensor.Layout.ROW_MAJOR, device, memory_config)
+        assert output_on_device.get_layout() == ttnn.TILE_LAYOUT
+        output_on_device = format_tensor(output_on_device, ttnn.ROW_MAJOR_LAYOUT, device, memory_config)
         output_on_device = output_on_device.reshape(
             conv_output_shape[0],
             conv_output_shape[1],
@@ -803,7 +799,7 @@ def test_resnet50_conv(
 
         # Copy to host and Compare against pytorch
         out = output_on_device.cpu()
-        assert out.get_layout() == tt_lib.tensor.Layout.ROW_MAJOR
+        assert out.get_layout() == ttnn.ROW_MAJOR_LAYOUT
 
         out_result = out.to_torch()
         # NHWC to NCHW

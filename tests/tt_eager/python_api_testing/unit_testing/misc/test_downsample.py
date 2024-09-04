@@ -6,7 +6,7 @@ import pytest
 import math
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn
 from tt_lib.utils import (
     tilize_to_list,
     tilize,
@@ -25,6 +25,7 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 import torch
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, stride_h, stride_w, num_cores, grid_size, height_sharded",
     (
@@ -39,7 +40,7 @@ import torch
         (16, 1024, 1024, 14, 14, 2, 2, 56, (9, 8), False),
     ),
 )
-@pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_run_downsample(
     device,
     use_program_cache,
@@ -55,7 +56,7 @@ def test_run_downsample(
     height_sharded,
     dtype,
 ):
-    if batch_size > 8 and dtype != ttl.tensor.DataType.BFLOAT8_B:
+    if batch_size > 8 and dtype != ttnn.bfloat8_b:
         pytest.skip("Batch > 8 must be run fully bfp8")
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -87,18 +88,13 @@ def test_run_downsample(
     #        logger.info(f"A_pyt_nhwc_2d[{i}][{j}]={A_pyt_nhwc[0][0][i][j]}")
     # logger.info("A_pyt_nhwc_2d[32][0]=", A_pyt_nhwc[0][0][32][0])
     a_activation_shape_nhwc = [batch_size, input_height, input_width, input_channels]
-    A_cl_host = ttl.tensor.Tensor(A_pyt_nhwc, dtype).reshape(
-        1, 1, batch_size * input_height * input_width, input_channels
-    )
+    A_cl_host = ttnn.Tensor(A_pyt_nhwc, dtype).reshape(1, 1, batch_size * input_height * input_width, input_channels)
     num_cores_height_slices = num_cores if height_sharded else grid_size[0]
     input_shape = [1, 1, _nearest_y(batch_size * input_height * input_width, 32), input_channels]
     A_cl_host = A_cl_host.pad(input_shape, (0, 0, 0, 0), 0.0)
-    A_interleaved = A_cl_host.to(ttl.tensor.Layout.TILE).to(
+    A_interleaved = A_cl_host.to(ttnn.TILE_LAYOUT).to(
         device,
-        ttl.tensor.MemoryConfig(
-            memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
-        ),
+        ttnn.L1_MEMORY_CONFIG,
     )
     assert A_interleaved.get_legacy_shape()[0] == 1 and A_interleaved.get_legacy_shape()[1] == 1
 
@@ -112,17 +108,15 @@ def test_run_downsample(
     logger.debug(f"input_2d_height={input_2d_height}")
     logger.debug(f"input_2d_width={input_2d_width}")
     sharded_memory_layout = (
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED if height_sharded else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharded else ttnn.TensorMemoryLayout.BLOCK_SHARDED
     )
-    sharded_memory_orientation = (
-        ttl.tensor.ShardOrientation.ROW_MAJOR if height_sharded else ttl.tensor.ShardOrientation.COL_MAJOR
-    )
+    sharded_memory_orientation = ttnn.ShardOrientation.ROW_MAJOR if height_sharded else ttnn.ShardOrientation.COL_MAJOR
     input_shard_width = input_2d_width if height_sharded else ((int)(input_2d_width / grid_size[1]))
     logger.debug(f"grid_size={grid_size}")
     logger.debug(f"shard_memory_layout={sharded_memory_layout}")
     logger.debug(f"input_shard_height={input_shard_height}, input_shard_width={input_shard_width}")
 
-    A_sharded = ttl.tensor.interleaved_to_sharded(
+    A_sharded = ttnn.interleaved_to_sharded(
         A_interleaved,
         grid_size,
         [input_shard_height, input_shard_width],
@@ -140,21 +134,19 @@ def test_run_downsample(
     )
 
     downsample_params = [batch_size, input_height, input_width, stride_h, stride_w]
-    sharded_memory_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
-    )
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
     # Run downsample op
-    A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params, output_dtype=dtype)
-    A_downsampled = ttl.tensor.sharded_to_interleaved(
+    A_downampled_sharded = ttnn.downsample(A_sharded, downsample_params, dtype=dtype)
+    A_downsampled = ttnn.sharded_to_interleaved(
         A_downampled_sharded,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.L1_MEMORY_CONFIG,
     )
     out = A_downsampled
     out_shape = [1, 1, _nearest_y(batch_size * output_height * output_width, 32), input_channels]
     assert out_shape == list(out.get_legacy_shape())
     out_shape_unpadded = [1, 1, batch_size * output_height * output_width, input_channels]
     assert out_shape_unpadded == list(out.shape_without_padding())
-    out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
+    out = ttnn.format_output_tensor(out, out.shape_without_padding(), device, ttnn.ROW_MAJOR_LAYOUT)
     out = out.cpu()
 
     out_debug = out
@@ -179,7 +171,7 @@ def test_run_downsample(
             golden = out_debug[0][0][i][j]
             atol_delta = torch.abs(golden - calculated).item()
             rtol_delta = torch.abs(golden - calculated) / torch.abs(calculated)
-            if dtype == ttl.tensor.DataType.BFLOAT8_B:
+            if dtype == ttnn.bfloat8_b:
                 fail = atol_delta > 0.1
             else:
                 fail = atol_delta > 0.1 or rtol_delta > 0.1
@@ -195,7 +187,7 @@ def test_run_downsample(
     logger.debug(f"Num errors: {num_errors}")
 
     out = out.reshape(batch_size, output_height, output_width, input_channels)
-    assert out.get_layout() == ttl.tensor.Layout.ROW_MAJOR
+    assert out.get_layout() == ttnn.ROW_MAJOR_LAYOUT
 
     # Copy output to host and convert tt tensor to pytorch tensor
     out_result = out.to_torch().float()
@@ -205,7 +197,7 @@ def test_run_downsample(
     # logger.debug (f'OUTPUT: {out_result}')
     # logger.debug (f'GOLDEN: {out_golden}')
 
-    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+    if dtype == ttnn.bfloat8_b:
         passing, output_info = comp_allclose_and_pcc(
             out_golden, out_result, rtol=0, atol=4e-3, pcc=0.9999
         )  # For LowFi we need 0.99976

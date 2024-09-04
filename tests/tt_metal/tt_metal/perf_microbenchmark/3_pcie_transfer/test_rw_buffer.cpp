@@ -29,6 +29,7 @@ using std::chrono::microseconds;
 //   ./test_rw_buffer
 //     --buffer-type <0 for DRAM, 1 for L1>
 //     --transfer-size <size in bytes>
+//     --page-size <size in bytes>
 //     --num-tests <count of tests>
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
@@ -36,10 +37,13 @@ using std::chrono::microseconds;
 int main(int argc, char** argv) {
     bool pass = true;
     bool bypass_check = false;
+    bool skip_read = false;
+    bool skip_write = false;
     std::vector<double> h2d_bandwidth;
     std::vector<double> d2h_bandwidth;
     int32_t buffer_type = 0;
     uint32_t transfer_size;
+    uint32_t page_size;
 
     try {
         // Input arguments parsing
@@ -53,24 +57,33 @@ int main(int argc, char** argv) {
             std::tie(transfer_size, input_args) = test_args::get_command_option_uint32_and_remaining_args(
                 input_args, "--transfer-size", 512 * 1024 * 1024);
 
+            std::tie(page_size, input_args) =
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--page-size", 2048);
+
             std::tie(num_tests, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-tests", 10);
 
             std::tie(bypass_check, input_args) =
                 test_args::has_command_option_and_remaining_args(input_args, "--bypass-check");
 
+            std::tie(skip_read, input_args) =
+                test_args::has_command_option_and_remaining_args(input_args, "--skip-read");
+
+            std::tie(skip_write, input_args) =
+                test_args::has_command_option_and_remaining_args(input_args, "--skip-write");
+
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
         }
+
+        TT_ASSERT(transfer_size % page_size == 0, "Transfer size {}B should be divisible by page size {}B", transfer_size, page_size);
 
         // Device setup
         int device_id = 0;
         tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
         // Application setup
-        uint32_t single_tile_size = 2 * 1024;
-        auto page_size = single_tile_size;
         auto buffer = tt_metal::Buffer(
             device, transfer_size, page_size, buffer_type == 0 ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
 
@@ -81,14 +94,15 @@ int main(int argc, char** argv) {
         log_info(
             LogTest,
             "Measuring host-to-device and device-to-host bandwidth for "
-            "buffer_type={}, transfer_size={}bytes ",
+            "buffer_type={}, transfer_size={} bytes, page_size={} bytes",
             buffer_type == 0 ? "DRAM" : "L1",
-            transfer_size);
+            transfer_size,
+            page_size);
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             // Execute application
-            {
+            if (!skip_write) {
                 auto t_begin = std::chrono::steady_clock::now();
                 EnqueueWriteBuffer(device->command_queue(), buffer, src_vec, false);
                 Finish(device->command_queue());
@@ -103,7 +117,7 @@ int main(int argc, char** argv) {
                     h2d_bandwidth[i]);
             }
 
-            {
+            if (!skip_read) {
                 auto t_begin = std::chrono::steady_clock::now();
                 EnqueueReadBuffer(device->command_queue(), buffer, result_vec, true);
                 auto t_end = std::chrono::steady_clock::now();

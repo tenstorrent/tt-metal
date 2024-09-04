@@ -64,8 +64,60 @@
 #include "compute_kernel_api/eltwise_unary/identity.h"
 #endif
 
+#if SFPU_OP_TYPECAST_INCLUDE
+#include "compute_kernel_api/eltwise_unary/typecast.h"
+#endif
+
+#if SFPU_OP_BITWISE_XOR_INCLUDE
+#include "compute_kernel_api/eltwise_unary/bitwise_xor.h"
+#endif
+
+#if SFPU_OP_BITWISE_NOT_INCLUDE
+#include "compute_kernel_api/eltwise_unary/bitwise_not.h"
+#endif
+
+#if SFPU_OP_RIGHT_SHIFT_INCLUDE
+#include "compute_kernel_api/eltwise_unary/right_shift.h"
+#endif
+
+#if SFPU_OP_BITWISE_AND_INCLUDE
+#include "compute_kernel_api/eltwise_unary/bitwise_and.h"
+#endif
+
+#if SFPU_OP_BITWISE_OR_INCLUDE
+#include "compute_kernel_api/eltwise_unary/bitwise_or.h"
+#endif
+
+#if SFPU_OP_FLOOR_INCLUDE
+#include "compute_kernel_api/eltwise_unary/floor.h"
+#endif
+
+#if SFPU_OP_LEFT_SHIFT_INCLUDE
+#include "compute_kernel_api/eltwise_unary/left_shift.h"
+#endif
+
+#if SFPU_OP_REMAINDER_INCLUDE
+#include "compute_kernel_api/eltwise_unary/remainder.h"
+#endif
+
+#if SFPU_OP_FMOD_INCLUDE
+#include "compute_kernel_api/eltwise_unary/fmod.h"
+#endif
+
+#if SFPU_OP_CEIL_INCLUDE
+#include "compute_kernel_api/eltwise_unary/ceil.h"
+#endif
+
 #if SFPU_OP_BINOP_WITH_SCALAR_INCLUDE
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#endif
+
+#if SFPU_OP_SOFTPLUS_INCLUDE
+#include "compute_kernel_api/eltwise_unary/softplus.h"
+#endif
+
+#if SFPU_OP_DROPOUT_INCLUDE
+#include "compute_kernel_api/eltwise_unary/dropout.h"
 #endif
 
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE

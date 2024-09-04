@@ -38,3 +38,5 @@ prune tt_metal/**/.github/
 prune docs/doxygen_build/
 prune docs/build/
 exclude .pre-commit-config.yaml
+
+recursive-include runtime *

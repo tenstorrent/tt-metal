@@ -2,24 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/constants.hpp"
-#include "tensor/tensor.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tt_metal/host_api.hpp"
-
-#include "tt_numpy/functions.hpp"
-
-#include "tt_dnn/op_library/operation.hpp"
-
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
-#include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_dnn/op_library/transformer_tms/transformer_tms.hpp"
-#include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
-#include "tt_dnn/op_library/softmax/softmax_op.hpp"
-
 #include <chrono>
 
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "tt_metal/common/constants.hpp"
+#include "tt_metal/host_api.hpp"
+#include "tt_numpy/functions.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/normalization/layernorm/layernorm.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
+#include "ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads.hpp"
+
 using Parameters = std::map<std::string, Tensor>;
+using ttnn::operations::unary::UnaryWithParam;
+using ttnn::operations::unary::UnaryOpType;
 
 MemoryConfig l1_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::L1};
 MemoryConfig dram_memory_config = tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED,.buffer_type=tt::tt_metal::BufferType::DRAM};
@@ -28,7 +28,7 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
 
     auto batch_size = hidden_states.get_legacy_shape()[0];
 
-    auto fused_qkv_matmul_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+    auto fused_qkv_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 4,
         .out_subblock_h = 4,
@@ -38,20 +38,22 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .transpose_mcast = false,
         .fused_activation = std::nullopt,
     };
-    auto fused_qkv_matmul_output = tt::operations::primary::matmul(
+    auto fused_qkv_matmul_output = ttnn::operations::matmul::matmul(
         hidden_states,
         parameters.at(fmt::format("fused_qkv_weight_{}", encoder_index)),
         parameters.at(fmt::format("fused_qkv_bias_{}", encoder_index)),
-        fused_qkv_matmul_program_config,
-        l1_memory_config
+        ttnn::operations::matmul::Matmul{
+            fused_qkv_matmul_program_config,
+            /*bcast_batch=*/std::nullopt,
+            l1_memory_config}
     );
 
 
-    auto&& [query, key, value] = tt::operations::primary::transformers::split_query_key_value_and_split_heads(fused_qkv_matmul_output, CoreCoord{12, batch_size}, l1_memory_config);
+    auto&& [query, key, value] = ttnn::experimental::split_query_key_value_and_split_heads(fused_qkv_matmul_output, CoreCoord{12, batch_size}, l1_memory_config);
     fused_qkv_matmul_output.deallocate();
 
 
-    auto pre_softmax_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseProgramConfig{
+    auto pre_softmax_bmm_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 1,
         .out_subblock_h = 4,
@@ -59,15 +61,23 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .per_core_M = 12,
         .per_core_N = 12,
     };
-    auto pre_softmax_bmm_matmul = tt::operations::primary::matmul(query, key, pre_softmax_bmm_program_config, dram_memory_config);
+    auto pre_softmax_bmm_matmul = ttnn::operations::matmul::matmul(
+            query,
+            key,
+            /*bias=*/std::nullopt,
+            ttnn::operations::matmul::Matmul{
+            pre_softmax_bmm_program_config,
+            /*bcast_batch=*/std::nullopt,
+            dram_memory_config}
+            );
     query.deallocate();
     key.deallocate();
 
 
-    pre_softmax_bmm_matmul = tt::operations::primary::transformers::scale_mask_softmax_in_place(pre_softmax_bmm_matmul, 1.0f / std::sqrt(head_size), attention_mask);
+    pre_softmax_bmm_matmul = ttnn::scale_mask_softmax_in_place(pre_softmax_bmm_matmul, 1.0f / std::sqrt(head_size), attention_mask);
 
 
-    auto post_softmax_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseProgramConfig{
+    auto post_softmax_bmm_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 2,
         .out_subblock_h = 4,
@@ -75,16 +85,24 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .per_core_M = 12,
         .per_core_N = 2,
     };
-    auto post_softmax_bmm_output = tt::operations::primary::matmul(pre_softmax_bmm_matmul, value, post_softmax_bmm_program_config, l1_memory_config);
+    auto post_softmax_bmm_output = ttnn::operations::matmul::matmul(
+            pre_softmax_bmm_matmul,
+            value,
+            /*bias=*/std::nullopt,
+            ttnn::operations::matmul::Matmul{
+            post_softmax_bmm_program_config,
+            /*bcast_batch=*/std::nullopt,
+            l1_memory_config}
+            );
     pre_softmax_bmm_matmul.deallocate();
     value.deallocate();
 
 
-    auto concat_heads_output = tt::operations::primary::transformers::concatenate_heads(post_softmax_bmm_output, CoreCoord{12, batch_size}, l1_memory_config);
+    auto concat_heads_output = ttnn::experimental::concatenate_heads(post_softmax_bmm_output, CoreCoord{12, batch_size}, l1_memory_config);
     post_softmax_bmm_output.deallocate();
 
 
-    auto selfout_bmm_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+    auto selfout_bmm_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 4,
         .out_subblock_h = 6,
@@ -94,29 +112,31 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .transpose_mcast = false,
         .fused_activation = std::nullopt,
     };
-    auto selfout_bmm_output = tt::operations::primary::matmul(
+    auto selfout_bmm_output = ttnn::operations::matmul::matmul(
         concat_heads_output,
         parameters.at(fmt::format("selfout_weight_{}", encoder_index)),
         parameters.at(fmt::format("selfout_bias_{}", encoder_index)),
-        selfout_bmm_program_config,
-        l1_memory_config
+        ttnn::operations::matmul::Matmul{
+            selfout_bmm_program_config,
+            /*bcast_batch=*/std::nullopt,
+            l1_memory_config}
     );
     concat_heads_output.deallocate();
 
 
-    auto attention_layernorm_output = tt::operations::primary::add_layernorm(
+    auto attention_layernorm_output = ttnn::layer_norm(
         hidden_states,
-        selfout_bmm_output,
         1e-12,
         parameters.at(fmt::format("attention_layernorm_weight_{}", encoder_index)),
         parameters.at(fmt::format("attention_layernorm_bias_{}", encoder_index)),
+        selfout_bmm_output,
         l1_memory_config
     );
     hidden_states.deallocate();
     selfout_bmm_output.deallocate();
 
 
-    auto ff1_matmul_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+    auto ff1_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 4,
         .out_subblock_h = 6,
@@ -124,18 +144,20 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .per_core_M = 12,
         .per_core_N = 11,
         .transpose_mcast = false,
-        .fused_activation = UnaryWithParam{.op_type=UnaryOpType::GELU, .param=1.0f},
+        .fused_activation = UnaryWithParam(UnaryOpType::GELU,1.0f),
     };
-    auto ff1_matmul_output = tt::operations::primary::matmul(
+    auto ff1_matmul_output = ttnn::operations::matmul::matmul(
         attention_layernorm_output,
         parameters.at(fmt::format("ff1_weight_{}", encoder_index)),
         parameters.at(fmt::format("ff1_bias_{}", encoder_index)),
-        ff1_matmul_program_config,
-        dram_memory_config
+        ttnn::operations::matmul::Matmul{
+            ff1_matmul_program_config,
+            /*bcast_batch=*/std::nullopt,
+            dram_memory_config}
     );
 
 
-    auto ff2_matmul_program_config = tt::operations::primary::MatmulMultiCoreReuseMultiCastProgramConfig{
+    auto ff2_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},
         .in0_block_w = 4,
         .out_subblock_h = 6,
@@ -145,22 +167,24 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
         .transpose_mcast = false,
         .fused_activation = std::nullopt,
     };
-    auto ff2_matmul_output = tt::operations::primary::matmul(
+    auto ff2_matmul_output = ttnn::operations::matmul::matmul(
         ff1_matmul_output,
         parameters.at(fmt::format("ff2_weight_{}", encoder_index)),
         parameters.at(fmt::format("ff2_bias_{}", encoder_index)),
-        ff2_matmul_program_config,
-        l1_memory_config
+        ttnn::operations::matmul::Matmul{
+            ff2_matmul_program_config,
+            /*bcast_batch=*/std::nullopt,
+            l1_memory_config}
     );
     ff1_matmul_output.deallocate();
 
 
-    auto feedforward_layernorm_output = tt::operations::primary::add_layernorm(
+    auto feedforward_layernorm_output = ttnn::layer_norm(
         attention_layernorm_output,
-        ff2_matmul_output,
         1e-12,
         parameters.at(fmt::format("feedforward_layernorm_weight_{}", encoder_index)),
         parameters.at(fmt::format("feedforward_layernorm_bias_{}", encoder_index)),
+        ff2_matmul_output,
         l1_memory_config
     );
     attention_layernorm_output.deallocate();
@@ -172,11 +196,10 @@ Tensor encoder(Tensor&& hidden_states, const Tensor& attention_mask, const Param
 
 Tensor qa_head(Tensor&& hidden_states, const Parameters& parameters) {
 
-    auto output = matmul(hidden_states, parameters.at("qa_head_weight"));
+    auto output = ttnn::operations::matmul::matmul(hidden_states, parameters.at("qa_head_weight"), /*bias=*/std::nullopt, ttnn::operations::matmul::Matmul{});
     hidden_states.deallocate();
 
-
-    return bcast(output, parameters.at("qa_head_bias"), tt::tt_metal::BcastOpMath::ADD, tt::tt_metal::BcastOpDim::H, l1_memory_config);
+    return ttnn::add(output, parameters.at("qa_head_bias"), std::nullopt, l1_memory_config);
 }
 
 
@@ -226,7 +249,11 @@ void test_bert() {
         parameters.emplace(fmt::format("feedforward_layernorm_bias_{}", encoder_index), tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::ROW_MAJOR).to(device, dram_memory_config));
     };
     parameters.emplace("qa_head_weight", tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, hidden_size, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config));
-    parameters.emplace("qa_head_bias", tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config));
+    parameters.emplace(
+        "qa_head_bias",
+        ttnn::reshape(
+            tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, TILE_WIDTH}, Layout::TILE).to(device, dram_memory_config),
+            ttnn::Shape{tt::tt_metal::Shape{{1, 1, 1, TILE_WIDTH}, {1, 1, TILE_HEIGHT, TILE_WIDTH}}}));
 
     auto run_bert = [&]() {
         tt::log_debug(tt::LogTest, "run_bert started");

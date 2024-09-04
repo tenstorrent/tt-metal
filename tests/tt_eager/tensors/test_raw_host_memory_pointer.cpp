@@ -8,12 +8,12 @@
 
 #include "common/bfloat16.hpp"
 #include "common/constants.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tensor/owned_buffer_functions.hpp"
-#include "tensor/tensor.hpp"
-#include "tensor/tensor_impl.hpp"
-#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
-#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_numpy/functions.hpp"
 
@@ -91,7 +91,7 @@ void test_raw_host_memory_pointer() {
             on_destruction_callback},
         shape,
         DataType::BFLOAT16,
-        Layout::ROW_MAJOR);
+        Layout::TILE);
     /* Borrow Data from Numpy End */
 
     /* Sanity Check Start */
@@ -115,7 +115,7 @@ void test_raw_host_memory_pointer() {
     /*  Run and Print Start   */
     Tensor a_dev = a_cpu.to(device);
 
-    Tensor c_dev = tt::tt_metal::sqrt(a_dev);
+    Tensor c_dev = ttnn::sqrt(a_dev);
 
     tt::tt_metal::memcpy(tensor_for_printing, c_dev);
 
@@ -162,7 +162,7 @@ void test_raw_host_memory_pointer() {
             on_destruction_callback},
         shape,
         DataType::BFLOAT16,
-        Layout::ROW_MAJOR);
+        Layout::TILE);
 
     bfloat16 d_value = 8.0f;
     for (auto& element : borrowed_buffer::get_as<bfloat16>(d_cpu)) {
@@ -172,10 +172,9 @@ void test_raw_host_memory_pointer() {
     Tensor d_dev = a_dev;
     memcpy(d_dev, d_cpu);
 
-    Tensor e_dev = tt::tt_metal::add(c_dev, d_dev);
+    Tensor e_dev = ttnn::add(c_dev, d_dev);
 
     tt::tt_metal::memcpy(tensor_for_printing, e_dev);
-    tensor_for_printing.print();
 
     for (auto& element : owned_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_ASSERT(element == bfloat16(10.0f));

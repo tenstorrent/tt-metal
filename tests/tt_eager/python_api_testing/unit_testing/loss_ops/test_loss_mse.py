@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib
+import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
@@ -22,8 +22,8 @@ from loguru import logger
 @pytest.mark.parametrize(
     "memcfg",
     (
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     ),
 )
 class TestMSELoss:
@@ -32,18 +32,14 @@ class TestMSELoss:
         ref_data = torch.randn(input_shapes).bfloat16()
         pred_data = torch.randn(input_shapes).bfloat16()
 
-        ref_tensor = (
-            tt_lib.tensor.Tensor(ref_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-        )
+        ref_tensor = ttnn.Tensor(ref_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-        pred_tensor = (
-            tt_lib.tensor.Tensor(pred_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-        )
+        pred_tensor = ttnn.Tensor(pred_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-        tt_output_tensor_on_device = tt_lib.tensor.mseloss(
-            ref_tensor, pred_tensor, tt_lib.tensor.LossReductionMode.NONE, memcfg
+        tt_output_tensor_on_device = ttnn.mse_loss(
+            ref_tensor, pred_tensor, reduction=ttnn.LossReductionMode.NONE, memory_config=memcfg
         )
-        tt_mse_output = tt_output_tensor_on_device.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_mse_output = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
         loss = torch.nn.MSELoss(reduction="none")
         pt_mse_output = loss(ref_data.to(torch.float32), pred_data.to(torch.float32))
@@ -57,23 +53,19 @@ class TestMSELoss:
         ref_data = torch.randn(input_shapes).bfloat16()
         pred_data = torch.randn(input_shapes).bfloat16()
 
-        ref_tensor = (
-            tt_lib.tensor.Tensor(ref_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-        )
+        ref_tensor = ttnn.Tensor(ref_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-        pred_tensor = (
-            tt_lib.tensor.Tensor(pred_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-        )
+        pred_tensor = ttnn.Tensor(pred_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-        tt_output_tensor_on_device = tt_lib.tensor.mseloss(
-            ref_tensor, pred_tensor, tt_lib.tensor.LossReductionMode.SUM, memcfg
+        tt_output_tensor_on_device = ttnn.mse_loss(
+            ref_tensor, pred_tensor, reduction=ttnn.LossReductionMode.SUM, memory_config=memcfg
         )
-        tt_mse_output = tt_output_tensor_on_device.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_mse_output = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
         loss = torch.nn.MSELoss(reduction="sum")
         pt_mse_output = loss(ref_data.to(torch.float32), pred_data.to(torch.float32))
         comp_pass_a, comp_out_a = comparison_funcs.comp_allclose(
-            pt_mse_output, torch.tensor(tt_mse_output[0, 0, 0, 0]), atol=4, rtol=1e-1
+            pt_mse_output, torch.tensor(tt_mse_output[0, 0, 0, 0]), atol=1e-1, rtol=1e-1
         )
 
         logger.debug(comp_out_a)
@@ -86,23 +78,19 @@ class TestMSELoss:
         ref_data = torch.randn(input_shapes).bfloat16()
         pred_data = torch.randn(input_shapes).bfloat16()
 
-        ref_tensor = (
-            tt_lib.tensor.Tensor(ref_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-        )
+        ref_tensor = ttnn.Tensor(ref_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-        pred_tensor = (
-            tt_lib.tensor.Tensor(pred_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-        )
+        pred_tensor = ttnn.Tensor(pred_data, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-        tt_output_tensor_on_device = tt_lib.tensor.mseloss(
-            ref_tensor, pred_tensor, tt_lib.tensor.LossReductionMode.MEAN, memcfg
+        tt_output_tensor_on_device = ttnn.mse_loss(
+            ref_tensor, pred_tensor, reduction=ttnn.LossReductionMode.MEAN, memory_config=memcfg
         )
-        tt_mse_output = tt_output_tensor_on_device.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_mse_output = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
         loss = torch.nn.MSELoss(reduction="mean")
         pt_mse_output = loss(ref_data.to(torch.float32), pred_data.to(torch.float32))
         comp_pass_a, comp_out_a = comparison_funcs.comp_allclose(
-            pt_mse_output, torch.tensor(tt_mse_output[0, 0, 0, 0]), atol=4, rtol=1e-1
+            pt_mse_output, torch.tensor(tt_mse_output[0, 0, 0, 0]), atol=1e-1, rtol=1e-1
         )
 
         logger.debug(comp_out_a)

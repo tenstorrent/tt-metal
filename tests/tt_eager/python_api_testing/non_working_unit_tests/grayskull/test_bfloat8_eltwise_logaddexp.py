@@ -6,7 +6,7 @@ from loguru import logger
 import random
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -55,37 +55,37 @@ test_sweep_args = [
     (
         (2, 5, 64, 224),
         (2, 5, 64, 224),
-        [ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT8_B],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [ttnn.bfloat8_b, ttnn.bfloat8_b],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         [
             "SYSTEM_MEMORY",
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         2474385,
     ),
     (
         (4, 7, 32, 96),
         (4, 7, 32, 96),
-        [ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         17155532,
     ),
     (
         (2, 11, 160, 224),
         (2, 11, 160, 224),
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [ttnn.bfloat16, ttnn.bfloat8_b],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         14073508,
     ),
 ]

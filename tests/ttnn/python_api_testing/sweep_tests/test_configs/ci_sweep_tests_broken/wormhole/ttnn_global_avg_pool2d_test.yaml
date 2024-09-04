@@ -18,7 +18,7 @@ test-list:
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16"]
+        data-type: ["BFLOAT16", "BFLOAT8_B", "UINT16", "UINT32"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: global_avg_pool2d_sweep.csv

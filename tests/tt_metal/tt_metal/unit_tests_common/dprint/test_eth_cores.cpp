@@ -30,10 +30,19 @@ SETW:
 HEX/OCT/DEC:
 1e240361100123456)";
 
-static void RunTest(DPrintFixture* fixture, Device* device) {
+static void RunTest(DPrintFixture* fixture, Device* device, bool active) {
     // Try printing on all ethernet cores on this device
     int count = 0;
-    for (const auto& core : device->get_active_ethernet_cores(true)) {
+    std::unordered_set<CoreCoord> test_cores;
+    tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
+    if (active) {
+        test_cores = device->get_active_ethernet_cores(true);
+        config.eth_mode = Eth::SENDER;
+    } else {
+        test_cores = device->get_inactive_ethernet_cores();
+        config.eth_mode = Eth::IDLE;
+    }
+    for (const auto& core : test_cores) {
         // Set up program and command queue
         Program program = Program();
 
@@ -43,7 +52,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
             core,
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+            config);
 
         // Run the program
         log_info(
@@ -75,6 +84,30 @@ TEST_F(DPrintFixture, TestPrintEthCores) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
-        this->RunTestOnDevice(RunTest, device);
+        this->RunTestOnDevice(
+            [](DPrintFixture *fixture, Device *device){
+                RunTest(fixture, device, true);
+            },
+            device
+        );
+    }
+}
+TEST_F(DPrintFixture, TestPrintIEthCores) {
+    if (!this->IsSlowDispatch()) {
+        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
+        GTEST_SKIP();
+    }
+    for (Device* device : this->devices_) {
+        // Skip if no ethernet cores on this device
+        if (device->get_inactive_ethernet_cores().size() == 0) {
+            log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
+            continue;
+        }
+        this->RunTestOnDevice(
+            [](DPrintFixture *fixture, Device *device){
+                RunTest(fixture, device, false);
+            },
+            device
+        );
     }
 }

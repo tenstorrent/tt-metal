@@ -1,38 +1,41 @@
 name: "ttnn - Run sweeps"
 
 on:
-  schedule:
-    - cron: "0 1,7,13,19 * * *"
   workflow_dispatch:
-  workflow_call:
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+
   ttnn-sweeps:
+    needs: build-artifact
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        arch: [grayskull]
+        arch: [grayskull, wormhole_b0]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
+      ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
+      ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: model-runner-${{ matrix.arch }}
+    timeout-minutes: 720
+    runs-on: ${{ matrix.arch }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
-      - name: Run ttnn sweeps
-        timeout-minutes: 30
-        run: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ttnn_sweeps
-      - name: Assert that csvs exist in expected ttnn results folder
-        run: ls -hal tests/ttnn/sweep_tests/results/*.csv
-      - name: Upload ttnn sweep reports csvs
-        uses: actions/upload-artifact@v4
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: ttnn-sweeps-report-csv-${{ matrix.arch }}
-          path: tests/ttnn/sweep_tests/results/*.csv
+          arch: ${{ matrix.arch }}
+      - name: Run ttnn sweeps
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          python tests/sweep_framework/runner.py --elastic cloud

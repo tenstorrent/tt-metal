@@ -9,7 +9,7 @@ from loguru import logger
 import torch.nn as nn
 import torch
 
-import tt_lib as ttl
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.stable_diffusion.tt.cross_attention import TtCrossAttention
 from models.experimental.stable_diffusion.tt.feedforward import TtFeedForward
@@ -62,9 +62,7 @@ class TtBasicTransformerBlock(nn.Module):
         self.host = host
         self.only_cross_attention = only_cross_attention
         self.base_address = base_address
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         self.use_ada_layer_norm_zero = (num_embeds_ada_norm is not None) and norm_type == "ada_norm_zero"
         self.use_ada_layer_norm = (num_embeds_ada_norm is not None) and norm_type == "ada_norm"
@@ -145,10 +143,10 @@ class TtBasicTransformerBlock(nn.Module):
                 )
 
                 self.norm1 = partial(
-                    ttl.tensor.layernorm,
-                    gamma=norm1_gamma,
-                    beta=norm1_beta,
-                    eps=1e-05,
+                    ttnn.layer_norm,
+                    weight=norm1_gamma,
+                    bias=norm1_beta,
+                    epsilon=1e-05,
                 )
 
         if cross_attention_dim is not None:
@@ -179,10 +177,10 @@ class TtBasicTransformerBlock(nn.Module):
                 )
 
                 self.norm2 = partial(
-                    ttl.tensor.layernorm,
-                    gamma=norm2_gamma,
-                    beta=norm2_beta,
-                    eps=1e-05,
+                    ttnn.layer_norm,
+                    weight=norm2_gamma,
+                    bias=norm2_beta,
+                    epsilon=1e-05,
                 )
 
         else:
@@ -211,21 +209,21 @@ class TtBasicTransformerBlock(nn.Module):
             )
 
             self.norm3 = partial(
-                ttl.tensor.layernorm,
-                gamma=norm3_gamma,
-                beta=norm3_beta,
-                eps=1e-05,
+                ttnn.layer_norm,
+                weight=norm3_gamma,
+                bias=norm3_beta,
+                epsilon=1e-05,
             )
 
     def forward(
         self,
-        hidden_states: ttl.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         encoder_hidden_states=None,
         timestep=None,
         attention_mask=None,
         cross_attention_kwargs=None,
         class_labels=None,
-    ) -> ttl.tensor.Tensor:
+    ) -> ttnn.Tensor:
         if self.use_ada_layer_norm:
             assert False, "AdaLayerNorm not supported and not used in stable diffusion"
         elif self.use_ada_layer_norm_zero:
@@ -247,7 +245,7 @@ class TtBasicTransformerBlock(nn.Module):
         if self.use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttl.tensor.add(
+        hidden_states = ttnn.add(
             attn_output,
             hidden_states,
         )
@@ -263,7 +261,7 @@ class TtBasicTransformerBlock(nn.Module):
                 **cross_attention_kwargs,
             )
 
-            hidden_states = ttl.tensor.add(
+            hidden_states = ttnn.add(
                 attn_output,
                 hidden_states,
             )
@@ -277,7 +275,7 @@ class TtBasicTransformerBlock(nn.Module):
         if self.use_ada_layer_norm_zero:
             assert False, "AdaLayerNormZero not supported and not used in stable diffusion"
 
-        hidden_states = ttl.tensor.add(
+        hidden_states = ttnn.add(
             ff_output,
             hidden_states,
         )
@@ -318,9 +316,7 @@ class TtTransformer2DModel(nn.Module):
         self.use_linear_projection = use_linear_projection
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         inner_dim = num_attention_heads * attention_head_dim
 
@@ -442,7 +438,7 @@ class TtTransformer2DModel(nn.Module):
 
     def forward(
         self,
-        hidden_states: ttl.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         encoder_hidden_states=None,
         timestep=None,
         class_labels=None,
@@ -482,11 +478,11 @@ class TtTransformer2DModel(nn.Module):
 
                 inner_dim = hidden_states.get_legacy_shape()[1]
 
-                hidden_states = ttl.tensor.permute(hidden_states, (0, 2, 3, 1))
+                hidden_states = ttnn.permute(hidden_states, (0, 2, 3, 1))
                 hidden_states = fallback_ops.reshape(hidden_states, 1, batch, height * width, inner_dim)
             else:
                 inner_dim = hidden_states.get_legacy_shape()[1]
-                hidden_states = ttl.tensor.permute(hidden_states, (0, 2, 3, 1))
+                hidden_states = ttnn.permute(hidden_states, (0, 2, 3, 1))
                 hidden_states = fallback_ops.reshape(hidden_states, 1, batch, height * width, inner_dim)
 
                 hidden_states = self.proj_in(hidden_states)
@@ -505,15 +501,15 @@ class TtTransformer2DModel(nn.Module):
         if self.is_input_continuous:
             if not self.use_linear_projection:
                 hidden_states = fallback_ops.reshape(hidden_states, batch, height, width, inner_dim)
-                hidden_states = ttl.tensor.permute(hidden_states, (0, 3, 1, 2))
+                hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
 
                 hidden_states = self.proj_out(hidden_states)
             else:
                 hidden_states = self.proj_out(hidden_states)
                 hidden_states = fallback_ops.reshape(hidden_states, batch, height, width, inner_dim)
-                hidden_states = ttl.tensor.permute(hidden_states, (0, 3, 1, 2))
+                hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
 
-            output = ttl.tensor.add(
+            output = ttnn.add(
                 hidden_states,
                 residual,
             )

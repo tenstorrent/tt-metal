@@ -38,7 +38,7 @@ inline void llk_math_calculate_sfpu(
     uint param5 = 0) {
     if constexpr (operation == SfpuType::exp_with_base) {
         constexpr bool zero_negative = true;
-        _calculate_exponential_<APPROXIMATION_MODE, zero_negative, true, ITERATIONS>(param0);
+        _calculate_exponential_<APPROXIMATION_MODE, zero_negative, true, ITERATIONS>(ITERATIONS, param0);
     } else if constexpr (operation == SfpuType::tanh) {
         _calculate_tanh_<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::hardtanh) {

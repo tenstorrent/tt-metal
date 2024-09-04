@@ -3,56 +3,42 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/device.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
 
 namespace ttnn {
 
 namespace device {
 
-namespace device_pool {
-
-// Definition of the global device vector
-std::vector<Device*> devices;
-
-} // device_pool
-
-Device &open_device(int device_id) {
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    device_pool::devices.resize(num_devices, nullptr);
-    TT_ASSERT(device_id < num_devices);
-    if (device_pool::devices[device_id] == nullptr) {
-        device_pool::devices[device_id] = CreateDevice(device_id, 1);
-    }
-    return *device_pool::devices[device_id];
+Device &open_device(int device_id, size_t l1_small_size, size_t trace_region_size, tt::tt_metal::DispatchCoreType dispatch_core_type) {
+    tt::DevicePool::initialize({device_id}, 1, l1_small_size, trace_region_size, dispatch_core_type, {});
+    return *(tt::DevicePool::instance().get_active_device(device_id));
 }
 
 bool is_device_open(int device_id){
-    return device_id < device_pool::devices.size() && device_pool::devices[device_id] != nullptr;
+    return tt::DevicePool::instance().is_device_active(device_id);
 }
 
 void enable_program_cache(Device &device) {
-    TT_ASSERT(device.id() < device_pool::devices.size());
-    TT_ASSERT(device_pool::devices[device.id()] != nullptr);
-
-    device_pool::devices[device.id()]->enable_program_cache();
+    device.enable_program_cache();
 }
 
 void disable_and_clear_program_cache(Device &device) {
-    TT_ASSERT(device.id() < device_pool::devices.size());
-    TT_ASSERT(device_pool::devices[device.id()] != nullptr);
-
-    device_pool::devices[device.id()]->disable_and_clear_program_cache();
+    device.disable_and_clear_program_cache();
 }
 
 void close_device(Device &device) {
-    TT_ASSERT(device.id() < device_pool::devices.size());
+    tt::DevicePool::instance().close_device(device.id());
 
-    size_t offset = device.id();
-    if (device_pool::devices[offset] != nullptr) {
-        tt::tt_metal::detail::DeallocateBuffers(device_pool::devices[offset]);
-        device_pool::devices[offset]->close();
-        delete device_pool::devices[offset];
-        device_pool::devices[offset] = nullptr;
-    }
+}
+
+bool is_wormhole_or_blackhole(tt::ARCH arch) {
+    return arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE;
+}
+
+void deallocate_buffers(Device* device) {
+        device->push_work([device] () mutable {
+            device->deallocate_buffers();
+        });
 }
 
 }  // namespace device

@@ -21,6 +21,8 @@ from tests.scripts.common import (
     get_git_home_dir_str,
     filter_empty,
     void_for_whb0,
+    void_for_gs,
+    void_for_bh,
 )
 from tests.scripts.cmdline_args import (
     get_tt_metal_arguments_from_cmdline_args,
@@ -28,12 +30,14 @@ from tests.scripts.cmdline_args import (
 )
 
 TT_EAGER_COMMON_TEST_ENTRIES = (
+    void_for_gs(TestEntry("tt_eager/tests/ops/ccl/test_ccl_helpers", "ops/ccl/test_ccl_helpers")),
+    void_for_gs(TestEntry("tt_eager/tests/ops/ccl/test_ccl_tensor_slicers", "ops/ccl/test_ccl_tensor_slicers")),
     TestEntry("tt_eager/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"),
     TestEntry("tt_eager/tests/ops/test_bcast_op", "ops/test_bcast_op"),
-    TestEntry("tt_eager/tests/ops/test_reduce_op", "ops/test_reduce_op"),
     TestEntry("tt_eager/tests/ops/test_transpose_op", "ops/test_transpose_op"),
+    TestEntry("tt_eager/tests/ops/test_sliding_window_ops", "ops/test_sliding_window_ops"),
     TestEntry("tt_eager/tests/ops/test_bmm_op", "ops/test_bmm_op"),
-    void_for_whb0(TestEntry("tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op")),
+    void_for_bh(void_for_whb0(TestEntry("tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"))),
     void_for_whb0(
         TestEntry(
             "tt_eager/tests/ops/test_transpose_wh_single_core",
@@ -68,7 +72,6 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
     TestEntry("tt_eager/tests/ops/test_layernorm_op", "ops/test_layernorm_op"),
     TestEntry("tt_eager/tests/ops/test_softmax_op", "ops/test_softmax_op"),
     TestEntry("tt_eager/tests/ops/test_average_pool", "ops/test_average_pool"),
-    TestEntry("tt_eager/tests/ops/test_multi_queue_api", "ops/test_multi_queue_api"),
     TestEntry(
         "tt_eager/tests/tensors/test_host_device_loopback",
         "tensors/test_host_device_loopback",
@@ -80,7 +83,9 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
     # void_for_whb0(TestEntry("tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert")),
 )
 
-TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES = (void_for_whb0(TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu")),)
+TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES = (
+    void_for_bh(void_for_whb0(TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu"))),
+)
 
 
 def run_single_tt_eager_test(test_entry, timeout):

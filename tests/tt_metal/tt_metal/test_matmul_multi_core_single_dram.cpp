@@ -345,9 +345,9 @@ int main(int argc, char **argv) {
                 TT_FATAL(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
                 TT_FATAL(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
 
-                auto dram_src0_noc_xy = device->core_from_dram_channel(dram_src0_channel_id);
-                auto dram_src1_noc_xy = device->core_from_dram_channel(dram_src1_channel_id);
-                auto dram_dst_noc_xy = device->core_from_dram_channel(dram_dst_channel_id);
+                auto dram_src0_noc_xy = device->dram_core_from_dram_channel(dram_src0_channel_id);
+                auto dram_src1_noc_xy = device->dram_core_from_dram_channel(dram_src1_channel_id);
+                auto dram_dst_noc_xy = device->dram_core_from_dram_channel(dram_dst_channel_id);
 
                 auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
                 auto activations_tile_layout = convert_to_tile_layout(activations_tilized);

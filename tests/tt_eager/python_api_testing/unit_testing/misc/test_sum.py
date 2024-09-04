@@ -4,7 +4,7 @@
 
 import torch
 import pytest
-import tt_lib as ttl
+import ttnn
 
 
 @pytest.mark.parametrize(
@@ -31,23 +31,22 @@ def test_sum_for_dim_hw(device, use_program_cache, shape_dim):
     value = x.sum(dim=dim, keepdim=True)[0, 0, 0, 0]
     # print(f"x.sum = {value}")
 
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-    tt_npu = ttl.tensor.sum(dev_x, dim)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
+    tt_npu = ttnn.sum(dev_x, dim)
+    tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev[0, 0, 0, 0], torch.Tensor([value]).bfloat16()[0])
 
 
 @pytest.mark.parametrize(
-    "shape_dim",
+    "shape",
     (
-        ((1, 1, 32, 32), 3),
-        ((1, 1, 32, 32), 2),
-        ((32, 32, 32, 32), 1),
-        ((32, 32, 32, 32), 0),
+        (1, 1, 32, 32),
+        (1, 1, 32, 32),
+        (32, 32, 32, 32),
+        (32, 32, 32, 32),
     ),  # single tile
 )
-def test_sum_global(device, use_program_cache, shape_dim):
-    shape, dim = shape_dim
+def test_sum_global(device, use_program_cache, shape):
     torch.manual_seed(0)
 
     N = shape[0]
@@ -60,7 +59,7 @@ def test_sum_global(device, use_program_cache, shape_dim):
 
     value = x.sum()
 
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-    tt_npu = ttl.tensor.global_sum(dev_x)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
+    tt_npu = ttnn.sum(dev_x)
+    tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev[0, 0, 0, 0].bfloat16(), torch.Tensor([value]).bfloat16()[0])

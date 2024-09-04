@@ -16,6 +16,7 @@ from tests.ttnn.unit_tests.operations.test_conv2d import run_conv
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, bias, use_1d_systolic_array, config_override",
     (
@@ -118,7 +119,7 @@ from tests.ttnn.unit_tests.operations.test_conv2d import run_conv
         # (2, 48, 3, 640, 640, 6, 6, 2, 2, 2, 2, 0, True, None),
         (2, 96, 48, 320, 320, 3, 3, 2, 2, 1, 1, 0, True, {"act_block_h": 128}),
         (2, 48, 96, 160, 160, 1, 1, 1, 1, 0, 0, 0, True, None),
-        (2, 48, 48, 160, 160, 1, 1, 1, 1, 0, 0, 0, True, None),
+        # (2, 48, 48, 160, 160, 1, 1, 1, 1, 0, 0, 0, True, None), K mismatch: in0 K=48, in1 K=64
         (2, 192, 96, 160, 160, 3, 3, 2, 2, 1, 1, 0, True, None),
         (2, 96, 192, 80, 80, 1, 1, 1, 1, 0, 0, 0, True, None),
         (2, 96, 96, 80, 80, 1, 1, 1, 1, 0, 0, 0, True, None),
@@ -198,8 +199,8 @@ from tests.ttnn.unit_tests.operations.test_conv2d import run_conv
         # (2, 48, 3, 640, 640, 6, 6, 2, 2, 2, 2, 0, False, None),
         (2, 96, 48, 320, 320, 3, 3, 2, 2, 1, 1, 0, True, {"act_block_h": 32}),
         (2, 48, 96, 160, 160, 1, 1, 1, 1, 0, 0, 0, True, None),
-        (2, 48, 48, 160, 160, 1, 1, 1, 1, 0, 0, 0, True, None),
-        (2, 48, 48, 160, 160, 3, 3, 1, 1, 1, 1, 0, False, {"act_block_h": 32}),
+        # (2, 48, 48, 160, 160, 1, 1, 1, 1, 0, 0, 0, True, None), K mismatch: in0 K=48, in1 K=64
+        # (2, 48, 48, 160, 160, 3, 3, 1, 1, 1, 1, 0, False, {"act_block_h": 32}), K mismatch: in0 K=48, in1 K=64
         (2, 96, 96, 160, 160, 1, 1, 1, 1, 0, 0, 0, True, None),
         (2, 192, 96, 160, 160, 3, 3, 2, 2, 1, 1, 0, False, {"act_block_h": 64}),
         (2, 96, 192, 80, 80, 1, 1, 1, 1, 0, 0, 0, False, None),

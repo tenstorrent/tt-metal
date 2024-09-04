@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_eager/tt_dnn/op_library/ccl/edm/erisc_async_datamover.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/ccl/edm/erisc_async_datamover.hpp"
 
 #define DONT_STRIDE_IN_ETH_BUFFER 0
 
@@ -88,11 +88,12 @@ void kernel_main() {
     // Handshake first before timestamping to make sure we aren't measuring any
     // dispatch/setup times for the kernels on both sides of the link.
 
-    const std::uint32_t local_eth_l1_src_addr = get_arg_val<uint32_t>(0);
-    const std::uint32_t remote_eth_l1_dst_addr = get_arg_val<uint32_t>(1);
-    const std::uint32_t dest_addr = get_arg_val<uint32_t>(2);
-    const std::uint32_t page_size = get_arg_val<uint32_t>(3);
-    const std::uint32_t num_pages = get_arg_val<uint32_t>(4);
+    const std::uint32_t eth_channel_sync_ack_addr = get_arg_val<uint32_t>(0);
+    const std::uint32_t local_eth_l1_src_addr = get_arg_val<uint32_t>(1);
+    const std::uint32_t remote_eth_l1_dst_addr = get_arg_val<uint32_t>(2);
+    const std::uint32_t dest_addr = get_arg_val<uint32_t>(3);
+    const std::uint32_t page_size = get_arg_val<uint32_t>(4);
+    const std::uint32_t num_pages = get_arg_val<uint32_t>(5);
     erisc::datamover::eth_setup_handshake(remote_eth_l1_dst_addr, false);
 
     const InterleavedAddrGen<dest_is_dram> dest_address_generator = {
@@ -134,7 +135,7 @@ void kernel_main() {
             bool did_something = false;
 
             bool received = erisc::datamover::deprecated::receiver_eth_accept_payload_sequence(
-                                noc_writer_buffer_wrptr, noc_writer_buffer_ackptr, eth_receiver_rdptr, eth_receiver_ackptr);
+                                noc_writer_buffer_wrptr, noc_writer_buffer_ackptr, eth_receiver_rdptr, eth_receiver_ackptr, eth_channel_sync_ack_addr);
             num_receives_acked = received ? num_receives_acked + 1 : num_receives_acked;
             did_something = received || did_something;
 

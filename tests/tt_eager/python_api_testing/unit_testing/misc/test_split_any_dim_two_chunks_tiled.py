@@ -7,9 +7,7 @@ import sys
 from loguru import logger
 import random
 import numpy as np
-
-
-import tt_lib as ttl
+import ttnn
 
 from models.utility_functions import (
     comp_pcc,
@@ -24,20 +22,20 @@ import os
 @pytest.mark.parametrize(
     "in_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     ),
     ids=["in_DRAM", "in_L1"],
 )
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
     ),
     ids=["out_DRAM", "out_L1"],
 )
-@pytest.mark.parametrize("dim", (2,))  # 0, 1 ),
+@pytest.mark.parametrize("dim", (2, 3))  # 0, 1 ),
 @pytest.mark.parametrize(
     "refshape",
     (
@@ -57,7 +55,7 @@ import os
         "1x2x64x10240",
     ],
 )
-def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dtype=ttl.tensor.DataType.BFLOAT16):
+def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dtype=ttnn.bfloat16):
     profile_location = "splitTwoChunks/"
     os.system(f"rm -rf {profile_location}")
 
@@ -105,25 +103,25 @@ def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dty
 
     if tiled:
         a_t = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 A.flatten().tolist(),
                 a_shape,
                 dtype,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device, in_mem_config)
         )
     else:
         assert False
-        a_t = ttl.tensor.Tensor(
+        a_t = ttnn.Tensor(
             A.flatten().tolist(),
             a_shape,
             dtype,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         ).to(device)
 
-    dev_buffers = ttl.tensor.split_dim_two_chunks_tiled(a_t, dim, out_mem_config)
+    dev_buffers = ttnn.split(a_t, 2, dim, memory_config=out_mem_config)
 
     # Check memory of inputs and outputs
     logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")
@@ -134,7 +132,7 @@ def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dty
     for index, buff in enumerate(dev_buffers):
         logger.debug(f"buff{index} is on: {buff.memory_config().buffer_type}")
         assert list(buff.get_legacy_shape()) == chunk_shape
-        tt_host_rm_buff = buff.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+        tt_host_rm_buff = buff.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
         pyt_got_back_rm_buff = tt_host_rm_buff.to_torch()
         pyt_buff_list.append(pyt_got_back_rm_buff)
 

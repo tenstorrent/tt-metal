@@ -3,18 +3,16 @@
   "ubuntu-20.04": [
     "git",
     "git-lfs",
-    "clang-6.0=1:6.0.1-14",
     "pandoc",
-    "libtbb-dev",
-    "libcapstone-dev",
-    "pkg-config"
+    "pkg-config",
+    "ninja-build"
   ],
   "ubuntu-22.04": [
     "git",
-    "git-lfs",
+    "git-lfs",    
     "pandoc",
-    "libtbb-dev",
-    "libcapstone-dev",
-    "pkg-config"
+    "pkg-config",
+    "ninja-build",
+    "g++-12"
   ]
 }

@@ -12,7 +12,7 @@ BRISC
 BRISCs
 BUF
 BUFs
-BeginTrace
+BeginTraceCapture
 BertIntermediate
 BinaryOpType
 BorrowedStorage
@@ -62,7 +62,7 @@ DumpDeviceProfileResults
 ENDL
 ETH
 EltwiseUnary
-EndTrace
+EndTraceCapture
 EnqueueProgram
 EnqueueReadBuffer
 EnqueueRecordEvent
@@ -84,7 +84,6 @@ Grayskull
 HW
 HiFi
 HostDataType
-InstantiateTrace
 InterleavedBufferConfig
 Jupyter
 KernelHandle
@@ -136,6 +135,8 @@ RISCVs
 RISCs
 ReadFromDevice
 ReduceDim
+RepeatTrace
+ReplayTrace
 ResNet
 RuntimeArgs
 SETPRECISION
@@ -169,7 +170,6 @@ UnaryOpType
 UpdateCircularBufferPageSize
 UpdateCircularBufferTotalSize
 UpdateDynamicCircularBufferAddress
-UpdateRuntimeArgs
 VC
 VCs
 WH
@@ -469,6 +469,7 @@ softplus
 softshrink
 softsign
 sqrt
+square
 sr
 src
 srca
@@ -525,6 +526,7 @@ untilize
 untilized
 untilizing
 upsample
+downsample
 vBool
 vConst
 vConstFloatPrgm

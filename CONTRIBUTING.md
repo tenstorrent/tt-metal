@@ -3,37 +3,39 @@
 Table of Contents
 =================
 
-* [Table of Contents](#table-of-contents)
-   * [Contributing to tt-metal](#contributing-to-tt-metal)
-   * [Machine setup](#machine-setup)
-      * [Hugepages setup](#hugepages-setup)
-   * [Developing tt-metal](#developing-tt-metal)
-      * [Setting up Git](#setting-up-git)
-      * [Setting logger level](#setting-logger-level)
-      * [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
-      * [Cleaning the dev environment with make nuke](#cleaning-the-dev-environment-with-make-nuke)
-   * [Tests in tt-metal](#running-tests-on-tt-metal)
-      * [Running post-commit regressions](#running-post-commit-regressions)
-      * [Adding post-commit tests](#adding-post-commit-tests)
-      * [Running model performance tests](#running-model-performance-tests)
-      * [Running C++ Integration Tests (Legacy)](#running-c-integration-tests-legacy)
-      * [Running Googlegtest (gtest) C++ tests](#running-googletest-gtest-c-tests)
-      * [Running Python integration tests](#running-python-integration-tests)
-   * [Debugging tips](#debugging-tips)
-   * [Contribution standards](#contribution-standards)
-      * [File structure and formats](#file-structure-and-formats)
-      * [CI/CD Principles](#cicd-principles)
-      * [Using CI/CD for development](#using-cicd-for-development)
-      * [Documentation](#documentation)
-      * [Git rules and guidelines](#git-rules-and-guidelines)
-      * [Code reviews](#code-reviews)
-      * [New feature and design specifications](#new-feature-and-design-specifications)
-      * [Release flows](#release-flows)
-      * [Logging, assertions, and exceptions](#logging-assertions-and-exceptions)
-   * [Hardware troubleshooting](#hardware-troubleshooting)
-      * [Resetting an accelerator board](#resetting-an-accelerator-board)
+- [Table of Contents](#table-of-contents)
+  - [Contributing to tt-metal](#contributing-to-tt-metal)
+  - [Machine setup](#machine-setup)
+    - [Hugepages setup](#hugepages-setup)
+  - [Developing tt-metal](#developing-tt-metal)
+    - [Setting up Git](#setting-up-git)
+    - [Setting logger level](#setting-logger-level)
+    - [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
+  - [Tests in tt-metal](#tests-in-tt-metal)
+    - [Running post-commit regressions](#running-post-commit-regressions)
+    - [Adding post-commit tests](#adding-post-commit-tests)
+    - [Running model performance tests](#running-model-performance-tests)
+    - [Running C++ Integration Tests (Legacy)](#running-c-integration-tests-legacy)
+    - [Running Googletest (gtest) C++ tests](#running-googletest-gtest-c-tests)
+    - [Running Python integration tests](#running-python-integration-tests)
+  - [Debugging guide](#debugging-guide)
+    - [Debugging host-side code](#debugging-host-side-code)
+    - [Debugging device-side code](#debugging-device-side-code)
+    - [Debugging device hangs](#debugging-device-hangs)
+  - [Contribution standards](#contribution-standards)
+    - [File structure and formats](#file-structure-and-formats)
+    - [CI/CD Principles](#cicd-principles)
+    - [Using CI/CD for development](#using-cicd-for-development)
+    - [Documentation](#documentation)
+    - [Git rules and guidelines](#git-rules-and-guidelines)
+    - [Code reviews](#code-reviews)
+    - [New feature and design specifications](#new-feature-and-design-specifications)
+    - [Release flows](#release-flows)
+    - [Logging, assertions, and exceptions](#logging-assertions-and-exceptions)
+  - [Hardware troubleshooting](#hardware-troubleshooting)
+    - [Resetting an accelerator board](#resetting-an-accelerator-board)
 
-<!-- Created by https://github.com/ekalinin/github-markdown-toc -->
+<!-- Created by https://luciopaiva.com/markdown-toc/ -->
 
 <!-- tocstop -->
 
@@ -45,7 +47,7 @@ If you are interested in making a contribution, then please familiarize
 yourself with our technical contribution standards as set forth in this guide.
 
 Next, please request appropriate write permissions by [opening an
-issue](https://github.com/tenstorrent-metal/tt-metal/issues/new/choose) for
+issue](https://github.com/tenstorrent/tt-metal/issues/new/choose) for
 GitHub permissions.
 
 All contributions require:
@@ -171,14 +173,6 @@ $ cd ${TT_METAL_HOME} && ./docs/spellcheck.sh update
 Commit your changes and the personal dictionary, at docs/aspell-dictionary.pws,
 that is changed.
 
-### Cleaning the dev environment with `make nuke`
-
-Normally, `make clean` only clears out build artifacts. It does **not** delete
-the built Python dev environment stored at `build/python_env/`.
-
-To delete absolutely everything including the Python environment, use `make
-nuke`.
-
 ## Tests in tt-metal
 
 Ensure you're in a developer Python environment with necessary environment variables
@@ -198,8 +192,8 @@ You must run post-commit regressions before you commit something.
 These regressions will also run after every pushed commit to the GitHub repo.
 
 ```
-make build
-make tests
+cmake --build build --target install
+cmake --build build --target tests
 ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit
 ```
 
@@ -249,7 +243,7 @@ a specific one you'd like to run.
 
 1. Build the API integration tests using the make command,
 ```
-make tests
+cmake --build build --target tests
 ```
 2. Run the test binaries from the path **${TT_METAL_HOME}/build/test/tt_metal**
 
@@ -265,7 +259,7 @@ fast dispatch, you can
 
 1. Build the unit tests:
    ```
-   make tests
+   cmake --build build --target tests
    ```
 2. Run the test:
    ```
@@ -298,27 +292,143 @@ running such tests.
    ```
    $ export PYTHONPATH=${PYTHONPATH}:${TT_METAL_HOME}
    ```
+## Debugging guide
 
-## Debugging tips
+### Debugging host-side code
 
-- To print within a kernel the following must be added:
-  - In the C++ python binding API file: `#include "tt_metal/impl/debug/dprint_server.hpp"`
-  - In the same file, before launching your kernel : `    tt_start_debug_print_server(<device>, {<pci slot>}, {{<physical core coordinates>}});`
-  - Note for core 0,0 it is 1,1
-  - You can get the physical core given a logical core with the following call: `device->worker_core_from_logical_core(<logical_core>);`
-  - In the kernel: `#include "debug/dprint.h"`
-  - To print in the kernel : `DPRINT << <variable to print> << ENDL();`
-- To use GDB to debug the C++ python binding itself:
-  - Build with debug symbols `make build CONFIG=debug`
-  - Ensure the python file you wish to debug, is standalone and has a main function
-  - Run `gdb --args python <python file> `
-  - You can add breakpoints for future loaded libraries
-- To log the compile time arguments passed with `-D` during the kernel build phase:
-  - Run with Watcher enabled. Please refer to the [Watcher documentation](docs/source/tools/watcher.rst)
-  - Files with the kernel configurations will be automatically generated. For example: `built/0/kernels/kernel_args.csv`
+- GDB can be used to debug Metalium C++ host APIs and C++ Python binding files.
+  - Build with debug symbols: `CONFIG=Debug ./build_metal.sh`
+  - To debug Metalium C++ host APIs, run `gdb --args <generated binary>`
+  - To debug the C++ binding file itself:
+    - Ensure the python file you wish to debug is standalone and has a main function.
+    - Run `gdb --args python <python file>`
+  - Breakpoints can be added for future loaded libraries. For example, to add a breakpoint to `Device` object construtor:
+```
+(gdb) b device.cpp:Device::Device
+No source file named device.cpp.
+Make breakpoint pending on future shared library load? (y or [n]) y
+Breakpoint 1 (device.cpp:Device::Device) pending.
+(gdb) r
+...
+Breakpoint 1, tt::tt_metal::Device::Device (this=0x3c, device_id=21845, num_hw_cqs=24 '\030', l1_small_size=140737349447680, l1_bank_remap=<>, minimal=119) at tt-metal/tt_metal/impl/device/device.cpp
+71      Device::Device(
+```
+- To log the compiler defines passed in with `-D` during the kernel build phase:
+  - Run with [Watcher](docs/source/tt-metalium/tools/watcher.rst) enabled, `export TT_METAL_WATCHER=1`
+  - Files with the kernel configurations are generated as `<tt-metal dir>/built/<device id>/kernels/kernel_args.csv`
 - To examine the compile time arguments of a kernel:
   - Within your kernel, assign the arguments to **constexpr** like this: `constexpr uint32_t in1_mcast_sender_noc_y = get_compile_time_arg_val(0);`
-  - Run `dump-constexprs.py` script on the generated ELF file. E.g. `python tt_metal/tools/dump-consts.py built/0/kernels/command_queue_producer/1129845549852061924/brisc/brisc.elf --function kernel_main`
+  - Run `dump-constexprs.py` script on the generated ELF file. E.g. `python tt_metal/tools/dump-consts.py built/0/kernels/command_queue_producer/1129845549852061924/brisc/brisc.elf --function kernel_main`. Note: debug information (DWARF) must be present in ELF files (compiler option `-g`). To enable, add TT_METAL_RISCV_DEBUG_INFO=1 environment variable.
+
+### Debugging device-side code
+
+- For developing device-side code, it is recommended to always run with [Watcher](docs/source/tt-metalium/tools/watcher.rst) enabled. Set the environment variable to 10 to have the watcher server update every 10 seconds: `export TT_METAL_WATCHER=10`
+  - Running with watcher enabled will include code that validates NoC transactions, as well as on-device assertions.
+  - Watcher will flag illegal NoC transactions that may seem to run ok without watcher, this is expected (e.g., 0 length transactions are not considered safe but appear safe in practice).
+  - If watcher detects an error, an appropriate message will be displayed, the problematic core will be stalled, and the program will exit. For more information on watcher debug features, see the [Watcher documentation](docs/source/tt-metalium/tools/watcher.rst).
+  - Once the design has been "proven", disable watcher for performance testing.
+- To print within a kernel, use the [Debug Print API](docs/source/tt-metalium/tools/kernel_print.rst):
+  - Define the environment variable to specify which cores to print from, `export TT_METAL_DPRINT_CORES=(0,0)-(4,4)` to print from a 5x5 grid of cores.
+  - In the kernel, `#include "debug/dprint.h"`, and to print a variable `x`, `DPRINT << x << ENDL();`
+  - For more information on kernel printing, see the [Kernel Debug Print documentation](docs/source/tt-metalium/tools/kernel_print.rst).
+
+### Debugging device hangs
+
+#### Using watcher
+
+- Try to always develop with [Watcher](docs/source/tt-metalium/tools/watcher.rst) enabled. It can catch certain errors and asserts and report them, as well as providing useful debug information in the case of a hang.
+- If watcher is enabled when your program hangs, make sure that `Watcher checking device <n>` is being printed, then kill your program.
+  - Make sure that the watcher didn't explicitly catch any errors and print them on `stdout`. For example, the following is printed if the watcher catches a NoC transaction with bad alignment:
+```
+TT_METAL_WATCHER=10 ./your_program
+...
+                 Always | WARNING  | Watcher detected NOC error and stopped device: bad alignment in NOC transaction.
+                 Always | WARNING  | Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1): brisc using noc0 tried to access DRAM core w/ physical coords (x=0,y=11) DRAM[addr=0x00003820,len=102400], misaligned with local L1[addr=0x00064010]
+                 Always | INFO     | Last waypoint: NARW,   W,   W,   W,   W
+                 Always | INFO     | While running kernels:
+                 Always | INFO     |  brisc : tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp
+                 Always | INFO     |  ncrisc: blank
+                 Always | INFO     |  triscs: blank
+                   Test | INFO     | Reported error: Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1): brisc using noc0 tried to access DRAM core w/ physical coords (x=0,y=11) DRAM[addr=0x00003820,len=102400], misaligned with local L1[addr=0x00064010]
+                 Always | FATAL    | Watcher detected NOC error and stopped device: bad alignment in NOC transaction.
+```
+  - If no such error is reported, but the program is hanging, check the watcher log generated in `generated/watcher/watcher.log`. There is a legend at the top of the log showing how to interpret it, and a sample portion of a log is shown below:
+```
+Legend:
+    Comma separated list specifices waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2
+    I=initialization sequence
+    W=wait (top of spin loop)
+    R=run (entering kernel)
+    D=done (finished spin loop)
+    X=host written value prior to fw launch
+
+    A single character status is in the FW, other characters clarify where, eg:
+        NRW is "noc read wait"
+        NWD is "noc write done"
+    noc<n>:<risc>{a, l}=an L1 address used by NOC<n> by <riscv> (eg, local src address)
+    noc<n>:<riscv>{(x,y), a, l}=NOC<n> unicast address used by <riscv>
+    noc<n>:<riscv>{(x1,y1)-(x2,y2), a, l}=NOC<n> multicast address used by <riscv>
+    rmsg:<c>=brisc host run message, D/H device/host dispatch; brisc NOC ID; I/G/D init/go/done; | separator; B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC
+    smsg:<c>=slave run message, I/G/D for NCRISC, TRISC0, TRISC1, TRISC2
+    k_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)
+...
+Dump #7 at 8.992s
+Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 1,y= 0) phys(x= 2,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 2,y= 0) phys(x= 3,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 3,y= 0) phys(x= 4,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 4,y= 0) phys(x= 6,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 5,y= 0) phys(x= 7,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 6,y= 0) phys(x= 8,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 7,y= 0) phys(x= 9,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 0,y= 7) phys(x= 1,y=10):  NTW,UAPW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|2|0
+Device 0 worker core(x= 1,y= 7) phys(x= 2,y=10):  NTW, HQW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|1|0
+Device 0 worker core(x= 2,y= 7) phys(x= 3,y=10):  NTW, HQW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|3|0
+Device 0 worker core(x= 3,y= 7) phys(x= 4,y=10):  NTW,UAPW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|7|0
+Device 0 worker core(x= 4,y= 7) phys(x= 6,y=10): NABD,   W,   W,   W,   W  rmsg:H0G|Bnt smsg:DDDD k_ids:4|0|0
+Device 0 worker core(x= 5,y= 7) phys(x= 7,y=10): NABD,   W,   W,   W,   W  rmsg:H0G|Bnt smsg:DDDD k_ids:6|0|0
+Device 0 worker core(x= 6,y= 7) phys(x= 8,y=10):   GW,   W,   W,   W,   W  rmsg:H0D|bnt smsg:DDDD k_ids:0|0|0
+Device 0 worker core(x= 7,y= 7) phys(x= 9,y=10):   GW,   W,   W,   W,   W  rmsg:H0D|bnt smsg:DDDD k_ids:0|0|0
+k_id[0]: blank
+k_id[1]: tt_metal/impl/dispatch/kernels/cq_prefetch.cpp
+k_id[2]: tt_metal/impl/dispatch/kernels/cq_dispatch.cpp
+k_id[3]: tt_metal/impl/dispatch/kernels/cq_prefetch.cpp
+k_id[4]: tt_metal/impl/dispatch/kernels/packet_mux.cpp
+k_id[5]: tt_metal/impl/dispatch/kernels/eth_tunneler.cpp
+k_id[6]: tt_metal/impl/dispatch/kernels/packet_demux.cpp
+k_id[7]: tt_metal/impl/dispatch/kernels/cq_dispatch.cpp
+k_id[13]: tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout.cpp
+k_id[14]: tests/tt_metal/tt_metal/test_kernels/dataflow/writer_matmul_tile_layout.cpp
+k_id[15]: tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp
+```
+  - In the log above, relevant debug information is displayed for each code. Of particular note is the `k_ids` field, and the waypoint status.
+    - The `k_ids` field reports the kernel currently running on the core, using the mapping at the end of the dump. Checking which kernels are running at the time of the hang (the latest dump in the log) shows which files to debug further, and should be included in any filed issues.
+    - The waypoint field show the latest waypoint that each kernel has run past. The typical application of these is to put a waypoint before and after any kernel code that could hang, which can be used to pinpoint a hang from the log.
+    - Further debug features are available, such as a debug ring buffer on each core. For more information, see the [Watcher documentation](docs/source/tt-metalium/tools/watcher.rst).
+  - If you're able to deterministically reproduce the hang, the relevant kernel code can be instrumented with more debug features and iterated on to find the source of the hang.
+    - For multicast operations, you should check that the parameters are correct and you are calling the right variant of the method. Some examples of what to watch out for are the following:
+      - The number of destinations has to be non-zero.
+      - If the source node is in the destination set, you need to use the `loopback_src` variant of the method.
+      - The `loopback_src` variant will not do anything if the set of destination nodes consists entirely of the source node.
+- If a hang happens only when watcher is disabled, it is likely that the extra code added by watcher is affecting a timing-related issue. In this case you can try disabling certain watcher features to attempt to bring the timing closer.
+  - The most invasive watcher features is the NoC sanitization, try disabling it with:
+```
+TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 ./your_program
+```
+  - If you still cannot reproduce the hang, try disabling the debug status and assert features. This will reduce visiblity into the hang, but is better than nothing:
+```
+TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_DEBUG_STATUS=1 ./your_program
+TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_WATCHER_DISABLE_DEBUG_STATUS=1 TT_METAL_WATCHER_DISABLE_ASSERT=1 ./your_program
+```
+
+#### Using watcher hang dump tool
+  - If the hang is not reproducible with watcher enabled, or for whatever reason watcher cannot be enabled for the run that hangs, then you can use the `watcher_dump` tool to poll watcher data after the fact. Even if the initial program is not run with watcher features, this can at least show the kernels that were running on each core at the time of the hang.
+```
+# Note that if the PCIe or ethernet connection to a chip goes down then this tool won't be able to access on-device data.
+./build/tools/watcher_dump --devices=<ids of devices to dump>
+cat generated/watcher/watcher.log  # See k_ids field for each core in the last dump in the log
+```
+  - In the future, this tool will be expanded to show more debug information available from the host side.
 
 ## Contribution standards
 
@@ -375,11 +485,11 @@ running such tests.
   not all, of the post-commit test suite. They must pass, but are not enough to
   ensure your PR will not be reverted.
 - To run any CI pipeline on GitHub Actions, please navigate to the [actions
-  page](https://github.com/tenstorrent-metal/tt-metal/actions).
+  page](https://github.com/tenstorrent/tt-metal/actions).
 
   Next, you can navigate to any pipeline on the left side of the view. For
   example, you can run the entire post-commit CI suite by clicking on
-  on the link to [all post-commit workflows](https://github.com/tenstorrent-metal/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
+  on the link to [all post-commit workflows](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
   selecting your branch, and pressing "Run workflow".
 
   ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/_static/all-post-commit-workflows-button.png)
@@ -423,12 +533,21 @@ running such tests.
 - Merge commits are not allowed in our main branch. We enforce a linear
   history.
 
+- You can use either of the following methods to merge your branch on the
+  GitHub UI:
+  - Squash and merge
+  - Rebase and merge
+
+  If you use squashing, when GitHub asks you to enter a new commit message,
+  ensure that your commit message follows our required format as outlined above
+  in this section. Failure to do so is a violation of our standards.
+
 ### Code reviews
 
 - A PR must be opened for any code change with the following criteria:
   - Be approved, by a maintaining team member and any codeowners whose modules
     are relevant for the PR.
-  - Pass any required post-commit pipelines rebased on the latest main. These
+  - Pass any required post-commit pipelines, updated to the latest main. These
     pipelines will generally, but not always, be defined in
     `.github/workflows/all-post-commit-workflows.yaml`.
   - Pass any acceptance criteria mandated in the original issue.
@@ -451,6 +570,7 @@ running such tests.
 
 - Any release must be externally-available artifacts generated by a workflow
   on a protected branch.
+- Demo models and tags conform to the rules set forth in the models [README](./models/README.md).
 
 ### Logging, assertions, and exceptions
 
@@ -464,9 +584,9 @@ running such tests.
 If a Tenstorrent chip seems to hang and/or is producing unexpected behaviour,
 you may try a software reset of the board.
 
-For Grayskull: `tt-smi -tr all`
+For single-card: `tt-smi -r 0`
 
-For Wormhole: `tt-smi -wr all wait`
+For T3000 (QuietBox, LoudBox etc.): `tt-smi -r 0,1,2,3`
 
 If the software reset does not work, unfortunately you will have to power cycle
 the board. This usually means rebooting the host of a board.

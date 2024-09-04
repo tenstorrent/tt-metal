@@ -1,11 +1,11 @@
 ---
 test-list:
-  - ttnn-nextafter:
+  - eltwise-nextafter:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
-        num-dims: [3]
+        num-dims: [4]
         num-shapes: 2
         num-samples: 128
         args-sampling-strategy: "all"

@@ -4,7 +4,7 @@
 
 import torch
 import torch.nn as nn
-import tt_lib
+import ttnn
 from typing import Optional, Tuple, Union
 
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
@@ -56,47 +56,47 @@ class TtWhisperAttention(nn.Module):
         self.v_proj_bias = torch2tt_tensor(
             state_dict[f"{base_address}.v_proj.bias"],
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.q_proj_weight = torch2tt_tensor(
             state_dict[f"{base_address}.q_proj.weight"],
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.q_proj_bias = torch2tt_tensor(
             state_dict[f"{base_address}.q_proj.bias"],
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.out_proj_weight = torch2tt_tensor(
             state_dict[f"{base_address}.out_proj.weight"],
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         self.out_proj_bias = torch2tt_tensor(
             state_dict[f"{base_address}.out_proj.bias"],
             self.device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
         self.cached_q_proj_shape = None
         self.q_proj_mul_const = None
 
     # Copied from transformers.models.bart.modeling_bart.BartAttention._shape with BART->whisper
-    def _shape(self, tt_tensor: tt_lib.tensor.Tensor, seq_len: int, bsz: int):
+    def _shape(self, tt_tensor: ttnn.Tensor, seq_len: int, bsz: int):
         tt_tensor = fallback_ops.reshape(tt_tensor, bsz, seq_len, self.num_heads, self.head_dim)
-        tt_tensor = tt_lib.tensor.transpose(tt_tensor, 1, -2)
+        tt_tensor = ttnn.transpose(tt_tensor, 1, -2)
         return tt_tensor
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        key_value_states: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_value: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
+        hidden_states: ttnn.Tensor,
+        key_value_states: Optional[ttnn.Tensor] = None,
+        past_key_value: Optional[Tuple[ttnn.Tensor]] = None,
+        attention_mask: Optional[ttnn.Tensor] = None,
         layer_head_mask: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[tt_lib.tensor.Tensor], Optional[Tuple[tt_lib.tensor.Tensor]],]:
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor], Optional[Tuple[ttnn.Tensor]],]:
         # if key_value_states are provided this layer is used as a cross-attention layer for the decoder
         is_cross_attention = key_value_states is not None
 
@@ -114,11 +114,11 @@ class TtWhisperAttention(nn.Module):
         if q_proj_shape == self.cached_q_proj_shape:
             q_proj_mul_const = self.q_proj_mul_const
         else:
-            self.q_proj_mul_const = tt_lib.tensor.full(q_proj_shape, self.scaling)
+            self.q_proj_mul_const = ttnn.full(q_proj_shape, self.scaling)
             self.cached_q_proj_shape = q_proj_shape
             q_proj_mul_const = self.q_proj_mul_const
 
-        query_states = tt_lib.tensor.mul(q_proj_output, q_proj_mul_const)
+        query_states = ttnn.mul(q_proj_output, q_proj_mul_const)
 
         if (
             is_cross_attention
@@ -139,8 +139,8 @@ class TtWhisperAttention(nn.Module):
             key_states = self._shape(linear(hidden_states, self.k_proj_weight, self.k_proj_bias), -1, bsz)
             value_states = self._shape(linear(hidden_states, self.v_proj_weight, self.v_proj_bias), -1, bsz)
 
-            key_states = tt_lib.tensor.concat([past_key_value[0], key_states], dim=-2)
-            value_states = tt_lib.tensor.concat([past_key_value[1], value_states], dim=-2)
+            key_states = ttnn.concat([past_key_value[0], key_states], dim=-2)
+            value_states = ttnn.concat([past_key_value[1], value_states], dim=-2)
 
         else:
             # self_attention
@@ -165,9 +165,9 @@ class TtWhisperAttention(nn.Module):
         key_states = fallback_ops.reshape(key_states, *proj_shape)
         value_states = fallback_ops.reshape(value_states, *proj_shape)
 
-        key_states_transposed = tt_lib.tensor.transpose(key_states, -2, -1)
+        key_states_transposed = ttnn.transpose(key_states, -2, -1)
         src_len = key_states.get_legacy_shape()[-2]
-        attn_weights = tt_lib.tensor.bmm(query_states, key_states_transposed)
+        attn_weights = ttnn.matmul(query_states, key_states_transposed)
 
         if attn_weights.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, src_len]:
             raise ValueError(
@@ -198,12 +198,7 @@ class TtWhisperAttention(nn.Module):
 
             layer_head_mask_reshaped = fallback_ops.reshape(layer_head_mask, 1, -1, 1, 1)
             attn_weights = fallback_ops.reshape(attn_weights, bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = tt_lib.tensor.bcast(
-                attn_weights,
-                layer_head_mask_reshaped,
-                tt_lib.tensor.BcastOpMath.MUL,
-                tt_lib.tensor.BcastOpDim.HW,
-            )
+            attn_weights = ttnn.multiply(attn_weights, layer_head_mask_reshaped)
             attn_weights = fallback_ops.reshape(attn_weights, 1, bsz * self.num_heads, tgt_len, src_len)
 
         if output_attentions:
@@ -226,7 +221,7 @@ class TtWhisperAttention(nn.Module):
 
         attn_probs = attn_weights
 
-        attn_output = tt_lib.tensor.bmm(attn_probs, value_states)
+        attn_output = ttnn.matmul(attn_probs, value_states)
         value_states.deallocate()
 
         if attn_output.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, self.head_dim]:
@@ -234,8 +229,8 @@ class TtWhisperAttention(nn.Module):
                 f"`attn_output` should be of size {(bsz * self.num_heads, tgt_len, self.head_dim)}, but is"
                 f" {attn_output.get_legacy_shape()}"
             )
-        attn_output = tt_lib.tensor.reshape(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)
-        attn_output = tt_lib.tensor.transpose(attn_output, 1, -2)
+        attn_output = ttnn.reshape_on_device(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)
+        attn_output = ttnn.transpose(attn_output, 1, -2)
 
         attn_output = fallback_ops.reshape(attn_output, 1, bsz, tgt_len, self.embed_dim)
 

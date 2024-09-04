@@ -11,7 +11,14 @@ if [[ -z "$ARCH_NAME" ]]; then
     exit 1
 fi
 
-remove_default_log_locations
-make clean
-make build ENABLE_PROFILER=1 ENABLE_TRACY=1
-make programming_examples
+cmake -B build -G Ninja -DENABLE_TRACY=ON
+
+if [[ $1 == "NO_CLEAN" ]]; then
+    cmake --build build
+else
+    remove_default_log_locations
+    cmake --build build --target clean
+fi
+
+cmake --build build --target install
+cmake --build build --target programming_examples

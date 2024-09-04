@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 from loguru import logger
 
-import tt_lib
+import ttnn
 
 
 def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
@@ -20,11 +20,11 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
     while len(size) < 4:
         size.insert(0, 1)
 
-    tt_tensor = tt_lib.tensor.Tensor(
+    tt_tensor = ttnn.Tensor(
         py_tensor.reshape(-1).tolist(),
         size,
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
     if size[-1] % 2 == 0:
         tt_tensor = tt_tensor.to(tt_device)
@@ -34,6 +34,6 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
 
 def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
-    if tt_output.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-        tt_output = tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
+    if tt_output.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        tt_output = tt_output.to(ttnn.ROW_MAJOR_LAYOUT)
     return tt_output.to_torch()

@@ -10,12 +10,9 @@
 #include <immintrin.h>
 
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "blockfloat_common.hpp"
-
-using namespace std;
 
 // TODO: empty struct to facilitate Tensor template logic. Reconsider how/why templating is supported in Tensor
 struct bfloat4_b {};
@@ -47,10 +44,10 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
     int data_index;
     int subtile_r;
     int subtile_c;
-    const vector<uint32_t> mask_vec0 = {0xf, 0xf0, 0xf00, 0xf000};
-    const vector<uint32_t> mask_vec1 = {0xf0000, 0xf00000, 0xf000000, 0xf0000000};
-    const vector<uint32_t> shift_vec0 = {0, 4, 8, 12};
-    const vector<uint32_t> shift_vec1 = {16, 20, 24, 28};
+    const std::vector<uint32_t> mask_vec0 = {0xf, 0xf0, 0xf00, 0xf000};
+    const std::vector<uint32_t> mask_vec1 = {0xf0000, 0xf00000, 0xf000000, 0xf0000000};
+    const std::vector<uint32_t> shift_vec0 = {0, 4, 8, 12};
+    const std::vector<uint32_t> shift_vec1 = {16, 20, 24, 28};
     const __m128i mask0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(mask_vec0.data()));
     const __m128i mask1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(mask_vec1.data()));
     const __m128i shift0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(shift_vec0.data()));
@@ -183,8 +180,6 @@ inline std::vector<uint32_t> create_random_vector_of_bfp4(uint32_t num_bytes, bo
 
     TT_ASSERT(packed_result.size() == packed_data_size);
 
-    log_info(tt::LogVerif, "Created a random vector of size {}", packed_result.size());
-
     return packed_result;
 }
 
@@ -205,8 +200,6 @@ inline std::vector<uint32_t> create_constant_vector_of_bfp4(uint32_t num_bytes, 
     std::vector<uint32_t> packed_result = pack_fp32_vec_as_bfp4_tiles(fp32_vec, /*row_major_input=*/true, is_exp_a);
 
     TT_ASSERT(packed_result.size() == packed_data_size);
-
-    log_info(tt::LogVerif, "Created constant vector of size {}", packed_result.size());
 
     return packed_result;
 }

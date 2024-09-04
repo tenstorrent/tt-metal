@@ -10,7 +10,7 @@ import torch
 from transformers import BertForQuestionAnswering
 import numpy as np
 
-import tt_lib as ttl
+import ttnn
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from models.experimental.bert.fused_ops.linear import Linear as TtLinear
 from tt_lib.fused_ops.softmax import softmax
@@ -29,11 +29,11 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
     VProjection = TtLinear(hidden_dim, hidden_dim, vw, vb, device)
 
     # Used to scale down the input to the softmax
-    reciprocal_of_sqrt_hidden_dim_tensor = ttl.tensor.Tensor(
+    reciprocal_of_sqrt_hidden_dim_tensor = ttnn.Tensor(
         [1 / math.sqrt(hidden_dim // num_heads)] + [0 for _ in range(32 * 32 - 1)],
         [1, 1, 32, 32],
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
@@ -47,8 +47,8 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             #        x = x.view(new_x_shape)
             #        return x.permute(0, 2, 1, 3)
 
-            untilized_x = ttl.tensor.untilize(x)
-            reshaped_unt = ttl.tensor.reshape(
+            untilized_x = ttnn.untilize(x)
+            reshaped_unt = ttnn.reshape_on_device(
                 untilized_x,
                 x.get_legacy_shape()[0],
                 x.get_legacy_shape()[2],
@@ -57,9 +57,9 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             )
 
             # N, 128, 2, 64
-            transposed = ttl.tensor.transpose(reshaped_unt, 1, -2)
+            transposed = ttnn.transpose(reshaped_unt, 1, -2)
             # N, 2, 128, 64
-            retilized = ttl.tensor.tilize(transposed)
+            retilized = ttnn.tilize(transposed)
             return retilized
 
     def unmake_attention_heads(x):
@@ -74,19 +74,14 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
             outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
             """
-            ctx = ttl.tensor.transpose(x, 1, -2)
+            ctx = ttnn.transpose(x, 1, -2)
             ushape = ctx.get_legacy_shape()
-            reshaped = ttl.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
-            retval = ttl.tensor.tilize(reshaped)
+            reshaped = ttnn.reshape_on_device(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
+            retval = ttnn.tilize(reshaped)
             return retval
 
     def multiply_by_sqrt_hidden_dim(x):
-        return ttl.tensor.bcast(
-            x,
-            reciprocal_of_sqrt_hidden_dim_tensor,
-            ttl.tensor.BcastOpMath.MUL,
-            ttl.tensor.BcastOpDim.HW,
-        )
+        return ttnn.multiply(x, reciprocal_of_sqrt_hidden_dim_tensor)
 
     def mha_(activation, attention_mask):
         Q = QProjection(activation)
@@ -96,9 +91,9 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         Q_heads = make_attention_heads(Q)
         K_heads = make_attention_heads(K)
         V_heads = make_attention_heads(V)
-        K_T_heads = ttl.tensor.transpose(K_heads, -2, -1)
+        K_T_heads = ttnn.transpose(K_heads, -2, -1)
 
-        qkt = ttl.tensor.bmm(Q_heads, K_T_heads)
+        qkt = ttnn.matmul(Q_heads, K_T_heads)
 
         # Attention scores computation
         (
@@ -108,20 +103,15 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             W,
         ) = qkt.get_legacy_shape()  # Need to reshape right now since multi-C not supported for broadcast yet
         new_shape = [N, 1, C * H, W]
-        ttl.tensor.reshape(qkt, *new_shape)
+        ttnn.reshape_on_device(qkt, *new_shape)
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
         if attention_mask is not None:
-            attention_score_input = ttl.tensor.bcast(
-                attention_score_input,
-                attention_mask,
-                ttl.tensor.BcastOpMath.ADD,
-                ttl.tensor.BcastOpDim.H,
-            )
+            attention_score_input = ttnn.add(attention_score_input, attention_mask)
         attention_scores = softmax(attention_score_input)
-        ttl.tensor.reshape(attention_scores, N, C, H, W)  # Reshape back to original shape
+        ttnn.reshape_on_device(attention_scores, N, C, H, W)  # Reshape back to original shape
 
         # Apply attention to value matrix
-        weighted_activation = ttl.tensor.bmm(attention_scores, V_heads)
+        weighted_activation = ttnn.matmul(attention_scores, V_heads)
         return unmake_attention_heads(
             weighted_activation
         )  # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
@@ -144,53 +134,53 @@ class TtMultiHeadAttentionModel(torch.nn.Module):
 
         # Tilized
         parameters = [
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 qw.reshape(-1).tolist(),
                 qw.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 qb.reshape(-1).tolist(),
                 qb.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 kw.reshape(-1).tolist(),
                 kw.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 kb.reshape(-1).tolist(),
                 kb.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 vw.reshape(-1).tolist(),
                 vw.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 vb.reshape(-1).tolist(),
                 vb.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device),
         ]
 
@@ -233,16 +223,16 @@ def run_mha_inference(device, model_version, batch, seq_len, pcc, model_location
     pytorch_out = pytorch_mha_model(mha_input.squeeze(1)).unsqueeze(1)
 
     pad_mha_input = pad_activation(mha_input)
-    tt_mha_input = ttl.tensor.Tensor(
+    tt_mha_input = ttnn.Tensor(
         pad_mha_input.reshape(-1).tolist(),
         pad_mha_input.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ).to(ttnn.TILE_LAYOUT)
     tt_mha_input = tt_mha_input.to(device)
 
     tt_out = tt_mha_model(tt_mha_input).cpu()
-    tt_out1 = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_out1 = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out1, pcc)
     logger.info(f"Output {output}")

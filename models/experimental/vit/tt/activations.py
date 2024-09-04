@@ -18,19 +18,18 @@
 
 from collections import OrderedDict
 
-import tt_lib
+import ttnn
 from torch import nn
 
 
 class GELUActivation(nn.Module):
     def __init__(self):
         super().__init__()
-        self.act = tt_lib.tensor.gelu
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.act = ttnn.gelu
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
-
-    def forward(self, input: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-        return self.act(input, output_mem_config=self.out_mem_config_l1)
+    def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
+        return self.act(input, memory_config=self.out_mem_config_l1)
 
 
 class ClassInstantier(OrderedDict):
@@ -50,9 +49,7 @@ def get_activation(activation_string):
     if activation_string in ACT2FN:
         return ACT2FN[activation_string]
     else:
-        raise KeyError(
-            f"function {activation_string} not found in ACT2FN mapping {list(ACT2FN.keys())}"
-        )
+        raise KeyError(f"function {activation_string} not found in ACT2FN mapping {list(ACT2FN.keys())}")
 
 
 # For backwards compatibility with: from activations import gelu_python

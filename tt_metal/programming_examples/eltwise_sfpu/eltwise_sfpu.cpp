@@ -2,15 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
-
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -168,14 +162,14 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> result_vec;
         EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
 
-        std::function<bfloat16(const bfloat16 &)> transform_to_golden = [](const bfloat16 &a) {
+        auto transform_to_golden = [](const bfloat16 &a) {
             return bfloat16(std::exp(a.to_float()));
         };
         std::vector<uint32_t> golden_vec = pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
 
         constexpr float abs_tolerance = 0.02f;
         constexpr float rel_tolerance = 0.02f;
-        std::function<bool(const float, const float)> comparison_function = [](const float a, const float b) {
+        auto comparison_function = [](const float a, const float b) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
         };
 

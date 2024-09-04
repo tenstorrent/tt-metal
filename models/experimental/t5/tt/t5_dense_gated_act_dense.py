@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn
 from loguru import logger
 import math
 
@@ -27,9 +27,7 @@ class TtT5DenseGatedActDense(torch.nn.Module):
         super().__init__()
 
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
 
         enc_dec = "decoder" if config["is_decoder"] else "encoder"
 
@@ -37,17 +35,17 @@ class TtT5DenseGatedActDense(torch.nn.Module):
         self.wi_1_weights = torch2tt_tensor(state_dict[f"{base_address}.wi_1.weight"], device)
         self.wo_weights = torch2tt_tensor(state_dict[f"{base_address}.wo.weight"], device)
 
-        self.wi_0_weights = tt_lib.tensor.transpose(self.wi_0_weights, -2, -1)
-        self.wi_1_weights = tt_lib.tensor.transpose(self.wi_1_weights, -2, -1)
-        self.wo_weights = tt_lib.tensor.transpose(self.wo_weights, -2, -1)
+        self.wi_0_weights = ttnn.transpose(self.wi_0_weights, -2, -1)
+        self.wi_1_weights = ttnn.transpose(self.wi_1_weights, -2, -1)
+        self.wo_weights = ttnn.transpose(self.wo_weights, -2, -1)
 
         # self.dropout = nn.Dropout(config["dropout_rate"])
         self.act = gelu_new
 
     def forward(self, hidden_states):
-        hidden_gelu = self.act(tt_lib.tensor.matmul(hidden_states, self.wi_0_weights), self.device)
-        hidden_linear = tt_lib.tensor.matmul(hidden_states, self.wi_1_weights, output_mem_config=self.mem_config)
-        hidden_states = tt_lib.tensor.mul(hidden_gelu, hidden_linear, output_mem_config=self.mem_config)
+        hidden_gelu = self.act(ttnn.matmul(hidden_states, self.wi_0_weights), self.device)
+        hidden_linear = ttnn.matmul(hidden_states, self.wi_1_weights, memory_config=self.mem_config)
+        hidden_states = ttnn.mul(hidden_gelu, hidden_linear, memory_config=self.mem_config)
         # hidden_states = self.dropout(hidden_states)
 
         # To make 8bit quantization work for google/flan-t5-xxl, self.wo is kept in float32.
@@ -60,5 +58,5 @@ class TtT5DenseGatedActDense(torch.nn.Module):
         # ):
         #    hidden_states = hidden_states.to(self.wo.weight.dtype)
 
-        hidden_states = tt_lib.tensor.matmul(hidden_states, self.wo_weights, output_mem_config=self.mem_config)
+        hidden_states = ttnn.matmul(hidden_states, self.wo_weights, memory_config=self.mem_config)
         return hidden_states

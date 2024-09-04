@@ -22,7 +22,6 @@ template <bool APPROXIMATION_MODE>
 inline void calculate_elu(uint slope)
 {
     // SFPU microcode
-    constexpr bool zero_negative = true;
     Converter c_slope;
     c_slope.u = slope;
     vFloat s = c_slope.f;
@@ -32,7 +31,7 @@ inline void calculate_elu(uint slope)
         vFloat v = dst_reg[0];
 
         v_if (v < 0.0f) {
-	  vFloat v_exp = calculate_exponential_body_improved<APPROXIMATION_MODE, zero_negative>(v);
+	  vFloat v_exp = calculate_exponential_body_improved<APPROXIMATION_MODE>(v);
 	  v = s*(v_exp - 1.0f);
         }
         v_endif;

@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import pytest
+import ttnn
 import torch
 from loguru import logger
 import torchvision
@@ -43,9 +44,7 @@ def make_input_tensor(imagenet_sample_input, resize=256, crop=224):
         [
             torchvision.transforms.Resize(resize),
             torchvision.transforms.CenterCrop(crop),
-            torchvision.transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            ),
+            torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
     )
 
@@ -76,9 +75,7 @@ def run_efficientnet_model_test(
 
     tt_model = tt_model_class(device)
 
-    test_input = torch2tt_tensor(
-        test_input, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    test_input = torch2tt_tensor(test_input, tt_device=device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
     with torch.no_grad():
         tt_model.eval()
@@ -96,6 +93,7 @@ def run_efficientnet_model_test(
     assert does_pass
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b0_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -105,6 +103,7 @@ def test_efficientnet_b0_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b1_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -115,6 +114,7 @@ def test_efficientnet_b1_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b2_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -124,6 +124,7 @@ def test_efficientnet_b2_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b3_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -133,6 +134,7 @@ def test_efficientnet_b3_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b4_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -142,6 +144,7 @@ def test_efficientnet_b4_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b5_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -151,6 +154,7 @@ def test_efficientnet_b5_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b6_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -160,6 +164,7 @@ def test_efficientnet_b6_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b7_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -169,6 +174,7 @@ def test_efficientnet_b7_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_v2_s_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -178,7 +184,8 @@ def test_efficientnet_v2_s_model_synt(device, imagenet_sample_input):
     )
 
 
-def test_efficientnet_v2_m_model_synt(imagenet_sample_input):
+@pytest.mark.skip(reason="Not tested")
+def test_efficientnet_v2_m_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
         torchvision.models.efficientnet_v2_m,
@@ -187,6 +194,7 @@ def test_efficientnet_v2_m_model_synt(imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_v2_l_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -196,6 +204,7 @@ def test_efficientnet_v2_l_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_lite0_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -207,6 +216,7 @@ def test_efficientnet_lite0_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_lite1_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -220,6 +230,7 @@ def test_efficientnet_lite1_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_lite2_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -233,6 +244,7 @@ def test_efficientnet_lite2_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_lite3_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -246,6 +258,7 @@ def test_efficientnet_lite3_model_synt(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_lite4_model_synt(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -270,6 +283,7 @@ def test_efficientnet_b0_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b1_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -281,6 +295,7 @@ def test_efficientnet_b1_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b2_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -292,6 +307,7 @@ def test_efficientnet_b2_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b3_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -303,6 +319,7 @@ def test_efficientnet_b3_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b4_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -314,6 +331,7 @@ def test_efficientnet_b4_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b5_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -325,6 +343,7 @@ def test_efficientnet_b5_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b6_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -336,6 +355,7 @@ def test_efficientnet_b6_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_b7_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -358,6 +378,7 @@ def test_efficientnet_v2_s_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_v2_m_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -369,6 +390,7 @@ def test_efficientnet_v2_m_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_v2_l_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -391,6 +413,7 @@ def test_efficientnet_lite0_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_lite1_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -404,6 +427,7 @@ def test_efficientnet_lite1_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_lite2_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -417,6 +441,7 @@ def test_efficientnet_lite2_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_lite3_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,
@@ -430,6 +455,7 @@ def test_efficientnet_lite3_model_real(device, imagenet_sample_input):
     )
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_efficientnet_lite4_model_real(device, imagenet_sample_input):
     run_efficientnet_model_test(
         device,

@@ -7,7 +7,8 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
+
 #include "common/bfloat16.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
@@ -37,15 +38,15 @@ struct BinaryOpType {
 std::map<string, string> get_defines(BinaryOpType::Enum op_type){
     std::map<string, string> defines;
     // TODO(AP): remove duplication
-    string op_name, op_code;
+    string op_name, op_binary_type;
     switch (op_type) {
-        case BinaryOpType::ADD: op_name = "add_tiles"; op_code = "0"; break;
-        case BinaryOpType::SUB: op_name = "sub_tiles"; op_code = "1"; break;
-        case BinaryOpType::MUL: op_name = "mul_tiles"; op_code = "2"; break;
+        case BinaryOpType::ADD: op_name = "add_tiles"; op_binary_type = "EltwiseBinaryType::ELWADD"; break;
+        case BinaryOpType::SUB: op_name = "sub_tiles"; op_binary_type = "EltwiseBinaryType::ELWSUB"; break;
+        case BinaryOpType::MUL: op_name = "mul_tiles"; op_binary_type = "EltwiseBinaryType::ELWMUL"; break;
         default: TT_ASSERT(false && "Undefined op type");
     }
     defines["ELTWISE_OP"] = op_name.c_str();
-    defines["ELTWISE_OP_CODE"] = op_code.c_str();
+    defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
     return defines;
 }
 
@@ -322,14 +323,14 @@ int main(int argc, char **argv) {
          */
         EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
 
-        std::function<bfloat16(const bfloat16 &)> transform_to_golden = [](const bfloat16 &a) {
+        auto transform_to_golden = [](const bfloat16 &a) {
             return bfloat16((a.to_float() + val_to_add) * val_to_mul);
         };
         std::vector<uint32_t> golden_vec = pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
 
         constexpr float abs_tolerance = 0.01f;
         constexpr float rel_tolerance = 0.001f;
-        std::function<bool(const float, const float)> comparison_function = [](const float a, const float b) {
+        auto comparison_function = [](const float a, const float b) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
         };
 

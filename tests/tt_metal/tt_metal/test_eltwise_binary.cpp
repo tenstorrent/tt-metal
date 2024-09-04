@@ -10,7 +10,7 @@
 #include "test_gold_impls.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
     bool multibank = true;
 
     const char* op_id_to_op_define[] = {"add_tiles", "sub_tiles", "mul_tiles"};
-    const char* op_id_to_op_code_define[] = {"0", "1", "2"};
+    const char* op_id_to_op_type_define[] = {"EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWSUB", "EltwiseBinaryType::ELWMUL"};
     const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
             bool math_approx_mode = false;
             std::map<string, string> binary_defines = {
                 {"ELTWISE_OP", op_id_to_op_define[eltwise_op]},
-                {"ELTWISE_OP_CODE", op_id_to_op_code_define[eltwise_op]}
+                {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}
             };
             auto eltwise_binary_kernel = tt_metal::CreateKernel(
                 program,

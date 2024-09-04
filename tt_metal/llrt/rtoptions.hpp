@@ -10,14 +10,84 @@
 
 #pragma once
 
-#include <vector>
 #include <cstdint>
+#include <unordered_set>
+#include <vector>
+
 #include "tt_metal/common/core_coord.h"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"  // For CoreType
 
 namespace tt {
 
 namespace llrt {
+
+static inline const char *get_core_type_name(CoreType ct) {
+    switch (ct) {
+        case CoreType::ARC:
+            return "ARC";
+        case CoreType::DRAM:
+            return "DRAM";
+        case CoreType::ETH:
+            return "ethernet";
+        case CoreType::PCIE:
+            return "PCIE";
+        case CoreType::WORKER:
+            return "worker";
+        case CoreType::HARVESTED:
+            return "harvested";
+        case CoreType::ROUTER_ONLY:
+            return "router_only";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+// TODO: This should come from the HAL
+enum DebugHartFlags : unsigned int {
+    RISCV_NC  = 1,
+    RISCV_TR0 = 2,
+    RISCV_TR1 = 4,
+    RISCV_TR2 = 8,
+    RISCV_BR  = 16,
+    RISCV_ER  = 32
+};
+
+// Enumerates the debug features that can be enabled at runtime. These features allow for
+// fine-grained control over targeted cores, chips, harts, etc.
+enum RunTimeDebugFeatures {
+    RunTimeDebugFeatureDprint,
+    RunTimeDebugFeatureReadDebugDelay,
+    RunTimeDebugFeatureWriteDebugDelay,
+    RunTimeDebugFeatureAtomicDebugDelay,
+    RunTimeDebugFeatureDisableL1DataCache,
+    // NOTE: Update RunTimeDebugFeatureNames if adding new features
+    RunTimeDebugFeatureCount
+};
+
+// Enumerates a class of cores to enable features on at runtime.
+enum RunTimeDebugClass {
+    RunTimeDebugClassNoneSpecified,
+    RunTimeDebugClassWorker,
+    RunTimeDebugClassDispatch,
+    RunTimeDebugClassAll,
+    RunTimeDebugClassCount
+};
+
+extern const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount];
+extern const char *RunTimeDebugClassNames[RunTimeDebugClassCount];
+
+// TargetSelection stores the targets for a given debug feature. I.e. for which chips, cores, harts
+// to enable the feature.
+struct TargetSelection {
+    std::map<CoreType, std::vector<CoreCoord>> cores;
+    std::map<CoreType, int> all_cores;
+    bool enabled;
+    std::vector<int> chip_ids;
+    bool all_chips = false;
+    uint32_t riscv_mask = 0;
+    std::string file_name;  // File name to write output to.
+};
 
 class RunTimeOptions {
     std::string root_dir;
@@ -29,90 +99,139 @@ class RunTimeOptions {
     bool watcher_dump_all = false;
     bool watcher_append = false;
     bool watcher_auto_unpause = false;
+    bool watcher_noinline = false;
+    bool dprint_noc_transfer_data = false;
 
-    std::map<CoreType, std::vector<CoreCoord>> dprint_cores;
-    std::map<CoreType, bool> dprint_all_cores;
-    bool dprint_enabled;
-    std::vector<int> dprint_chip_ids;
-    bool dprint_all_chips = false;
-    uint32_t dprint_riscv_mask = 0;
-    std::string dprint_file_name;
+    TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
     bool test_mode_enabled = false;
 
     bool profiler_enabled = false;
+    bool profile_dispatch_cores = false;
+    bool profiler_sync_enabled = false;
 
     bool null_kernels = false;
 
     bool clear_l1 = false;
 
+    bool skip_loading_fw = false;
+
+    bool riscv_debug_info_enabled = false;
+    uint32_t watcher_debug_delay = 0;
+
+    bool validate_kernel_binaries = false;
+    unsigned num_hw_cqs = 1;
+
+    bool enable_dispatch_data_collection = false;
+
+    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+
    public:
     RunTimeOptions();
 
-    const std::string& get_root_dir();
+    const std::string &get_root_dir();
 
     inline bool get_build_map_enabled() { return build_map_enabled; }
 
     // Info from watcher environment variables, setters included so that user
     // can override with a SW call.
-    inline bool get_watcher_enabled()                 { return watcher_enabled; }
-    inline void set_watcher_enabled(bool enabled)     { watcher_enabled = enabled; }
-    inline int get_watcher_interval()                 { return watcher_interval_ms; }
+    inline bool get_watcher_enabled() { return watcher_enabled; }
+    inline void set_watcher_enabled(bool enabled) { watcher_enabled = enabled; }
+    inline int get_watcher_interval() { return watcher_interval_ms; }
     inline void set_watcher_interval(int interval_ms) { watcher_interval_ms = interval_ms; }
-    inline int get_watcher_dump_all()                 { return watcher_dump_all; }
-    inline void set_watcher_dump_all(bool dump_all)   { watcher_dump_all = dump_all; }
-    inline int get_watcher_append()                   { return watcher_append; }
-    inline void set_watcher_append(bool append)       { watcher_append = append; }
-    inline int get_watcher_auto_unpause()             { return watcher_auto_unpause; }
+    inline int get_watcher_dump_all() { return watcher_dump_all; }
+    inline void set_watcher_dump_all(bool dump_all) { watcher_dump_all = dump_all; }
+    inline int get_watcher_append() { return watcher_append; }
+    inline void set_watcher_append(bool append) { watcher_append = append; }
+    inline int get_watcher_auto_unpause() { return watcher_auto_unpause; }
     inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_auto_unpause = auto_unpause; }
-    inline std::set<std::string>& get_watcher_disabled_features() { return watcher_disabled_features; }
+    inline int get_watcher_noinline() { return watcher_noinline; }
+    inline void set_watcher_noinline(bool noinline) { watcher_noinline = noinline; }
+    inline std::set<std::string> &get_watcher_disabled_features() { return watcher_disabled_features; }
     inline bool watcher_status_disabled() { return watcher_feature_disabled(watcher_status_str); }
     inline bool watcher_noc_sanitize_disabled() { return watcher_feature_disabled(watcher_noc_sanitize_str); }
     inline bool watcher_assert_disabled() { return watcher_feature_disabled(watcher_assert_str); }
     inline bool watcher_pause_disabled() { return watcher_feature_disabled(watcher_pause_str); }
     inline bool watcher_ring_buffer_disabled() { return watcher_feature_disabled(watcher_ring_buffer_str); }
+    inline bool watcher_stack_usage_disabled() { return watcher_feature_disabled(watcher_stack_usage_str); }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
-    inline bool get_dprint_enabled() { return dprint_enabled; }
-    inline void set_dprint_enabled(bool enable) { dprint_enabled = enable; }
-    // Note: dprint cores are logical
-    inline std::map<CoreType, std::vector<CoreCoord>>& get_dprint_cores() {
-        return dprint_cores;
+    inline bool get_feature_enabled(RunTimeDebugFeatures feature) { return feature_targets[feature].enabled; }
+    inline void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) {
+        feature_targets[feature].enabled = enabled;
     }
-    inline void set_dprint_cores(std::map<CoreType, std::vector<CoreCoord>> cores) {
-        dprint_cores = cores;
+    // Note: dprint cores are logical
+    inline std::map<CoreType, std::vector<CoreCoord>> &get_feature_cores(RunTimeDebugFeatures feature) {
+        return feature_targets[feature].cores;
+    }
+    inline void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
+        feature_targets[feature].cores = cores;
     }
     // An alternative to setting cores by range, a flag to enable all.
-    inline void set_dprint_all_cores(CoreType core_type, bool all_cores) {
-        dprint_all_cores[core_type] = all_cores;
+    inline void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, int all_cores) {
+        feature_targets[feature].all_cores[core_type] = all_cores;
     }
-    inline bool get_dprint_all_cores(CoreType core_type) { return dprint_all_cores[core_type]; }
+    inline int get_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type) {
+        return feature_targets[feature].all_cores[core_type];
+    }
     // Note: core range is inclusive
-    inline void set_dprint_core_range(CoreCoord start, CoreCoord end, CoreType core_type) {
-        dprint_cores[core_type] = std::vector<CoreCoord>();
+    inline void set_feature_core_range(
+        RunTimeDebugFeatures feature, CoreCoord start, CoreCoord end, CoreType core_type) {
+        feature_targets[feature].cores[core_type] = std::vector<CoreCoord>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {
-                dprint_cores[core_type].push_back({x, y});
+                feature_targets[feature].cores[core_type].push_back({x, y});
             }
         }
     }
-    inline std::vector<int>& get_dprint_chip_ids() { return dprint_chip_ids; }
-    inline void set_dprint_chip_ids(std::vector<int> chip_ids) {
-        dprint_chip_ids = chip_ids;
+    inline std::vector<int> &get_feature_chip_ids(RunTimeDebugFeatures feature) {
+        return feature_targets[feature].chip_ids;
+    }
+    inline void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
+        feature_targets[feature].chip_ids = chip_ids;
     }
     // An alternative to setting cores by range, a flag to enable all.
-    inline void set_dprint_all_chips(bool all_chips) {
-        dprint_all_chips = all_chips;
+    inline void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
+        feature_targets[feature].all_chips = all_chips;
     }
-    inline bool get_dprint_all_chips() { return dprint_all_chips; }
-    inline uint32_t get_dprint_riscv_mask() { return dprint_riscv_mask; }
-    inline void set_dprint_riscv_mask(uint32_t riscv_mask) {
-        dprint_riscv_mask = riscv_mask;
+    inline bool get_feature_all_chips(RunTimeDebugFeatures feature) { return feature_targets[feature].all_chips; }
+    inline uint32_t get_feature_riscv_mask(RunTimeDebugFeatures feature) { return feature_targets[feature].riscv_mask; }
+    inline void set_feature_riscv_mask(RunTimeDebugFeatures feature, uint32_t riscv_mask) {
+        feature_targets[feature].riscv_mask = riscv_mask;
     }
-    inline std::string get_dprint_file_name() { return dprint_file_name; }
-    inline void set_dprint_file_name(std::string file_name) {
-        dprint_file_name = file_name;
+    inline std::string get_feature_file_name(RunTimeDebugFeatures feature) {
+        return feature_targets[feature].file_name;
+    }
+    inline void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
+        feature_targets[feature].file_name = file_name;
+    }
+    inline TargetSelection get_feature_targets(RunTimeDebugFeatures feature) { return feature_targets[feature]; }
+    inline void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
+        feature_targets[feature] = targets;
+    }
+
+    inline bool get_dprint_noc_transfers() { return dprint_noc_transfer_data; }
+    inline void set_dprint_noc_transfers(bool val) { dprint_noc_transfer_data = val; }
+
+    inline bool get_validate_kernel_binaries() { return validate_kernel_binaries; }
+    inline void set_validate_kernel_binaries(bool val) { validate_kernel_binaries = val; }
+
+    // Returns the string representation for hash computation.
+    inline std::string get_feature_hash_string(RunTimeDebugFeatures feature) {
+        switch (feature) {
+            case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureReadDebugDelay:
+            case RunTimeDebugFeatureWriteDebugDelay:
+            case RunTimeDebugFeatureAtomicDebugDelay:
+                if (get_feature_enabled(feature)) {
+                    return std::to_string(get_watcher_debug_delay());
+                } else {
+                    return "false";
+                }
+            case RunTimeDebugFeatureDisableL1DataCache: return std::to_string(get_feature_enabled(feature));
+            default: return "";
+        }
     }
 
     // Used for both watcher and dprint servers, this dev option (no corresponding env var) sets
@@ -124,19 +243,39 @@ class RunTimeOptions {
     inline void set_test_mode_enabled(bool enable) { test_mode_enabled = enable; }
 
     inline bool get_profiler_enabled() { return profiler_enabled; }
+    inline bool get_profiler_do_dispatch_cores() { return profile_dispatch_cores; }
+    inline bool get_profiler_sync_enabled() { return profiler_sync_enabled; }
 
     inline void set_kernels_nullified(bool v) { null_kernels = v; }
     inline bool get_kernels_nullified() { return null_kernels; }
 
     inline bool get_clear_l1() { return clear_l1; }
+    inline void set_clear_l1(bool clear) { clear_l1 = clear; }
 
-private:
-    // Helper functions to parse DPrint-specific environment vaiables.
-    void ParseDPrintEnv();
-    void ParseDPrintCoreRange(const char* env_var, CoreType core_type);
-    void ParseDPrintChipIds(const char* env_var);
-    void ParseDPrintRiscvMask(const char* env_var);
-    void ParseDPrintFileName(const char* env_var);
+    inline bool get_skip_loading_fw() { return skip_loading_fw; }
+
+    // Whether to compile with -g to include DWARF debug info in the binary.
+    inline bool get_riscv_debug_info_enabled() { return riscv_debug_info_enabled; }
+    inline void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
+
+    inline unsigned get_num_hw_cqs() { return num_hw_cqs; }
+    inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
+
+    inline uint32_t get_watcher_debug_delay() { return watcher_debug_delay; }
+    inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
+
+    inline bool get_dispatch_data_collection_enabled() { return enable_dispatch_data_collection; }
+    inline void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
+
+    inline tt_metal::DispatchCoreType get_dispatch_core_type() { return dispatch_core_type; }
+
+   private:
+    // Helper functions to parse feature-specific environment vaiables.
+    void ParseFeatureEnv(RunTimeDebugFeatures feature);
+    void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string &env_var, CoreType core_type);
+    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var);
 
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
@@ -148,15 +287,15 @@ private:
     const std::string watcher_assert_str = "ASSERT";
     const std::string watcher_pause_str = "PAUSE";
     const std::string watcher_ring_buffer_str = "RING_BUFFER";
+    const std::string watcher_stack_usage_str = "STACK_USAGE";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string &name) {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();
     }
 };
 
-
 extern RunTimeOptions OptionsG;
 
-} // namespace llrt
+}  // namespace llrt
 
-} // namespace tt
+}  // namespace tt

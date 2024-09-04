@@ -51,7 +51,7 @@ A chips is a collection of cores and I/O blocks, connected into a mesh via a NoC
 - **PCIe link** for host interface
 - **ARC core** for board management and control
 
-<img width="900" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/78d64b36-bb68-4d41-b2ca-5e3ed7ccda8f">
+<img width="900" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/78d64b36-bb68-4d41-b2ca-5e3ed7ccda8f">
 
 #### Near Memory Compute and Efficient use of SRAM
 The **high BW and large capacity SRAM** in each Tensix core is a form of **near memory compute**. A Tensix core operating on its local SRAM achieves **"silicon peak"** of what current technology node allows for.
@@ -88,7 +88,7 @@ AI workloads operate on tensors (N-dimensional data) and exhibit a high degree o
 These data movement patterns (local, row/column, nearest neighbour) are most efficiently implemented via a regular and scalable mesh architecture.
 
 Tenstorrent architecture is a mesh of cores within a chip and mesh of chips at the cluster level.
-<img width="900" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/0f40ace9-e2b3-4740-a89c-3e8a3580da8a">
+<img width="900" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/0f40ace9-e2b3-4740-a89c-3e8a3580da8a">
 TODO: Describe Galaxy, break up the slide into two slides
 
 #### Two levels of memory
@@ -111,8 +111,216 @@ TODO: Describe that TT wins at scale-out, best compute density at the server an
     - Compute Kernels
     - Ethernet Data Movement Kernels
   - Dispatch Kernels
-  <img width="1176" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/d3c89155-6e4d-49cb-a95c-85654ac29e7d">
-<img width="1171" alt="image" src="https://github.com/tenstorrent-metal/tt-metal/assets/3885633/73039d17-3bce-4ff5-b797-da1aa9b147c4">
+  <img width="1176" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/d3c89155-6e4d-49cb-a95c-85654ac29e7d">
+<img width="1171" alt="image" src="https://github.com/tenstorrent/tt-metal/assets/3885633/73039d17-3bce-4ff5-b797-da1aa9b147c4">
+
+#### Behind the scenes, a Compute Kernel becomes Unpack, Math, Pack Kernels
+
+As the above single Tensix core architecture shows, the Compute Kernel uses
+three Baby RISCVs. tt-metal uses them to conduct unpack, math, and pack. It
+actually generates Unpack, Math, Pack kernels from a single Compute kernel.
+
+For details, let's check what tt-metal generates for the following compute
+kernel:
+```
+namespace NAMESPACE {
+void MAIN {
+  mm_init();
+  acquire_dst(tt::DstMode::Tile);
+
+  cb_wait_front(tt::CB::c_in0, /* number of tiles */ 1);
+  cb_wait_front(tt::CB::c_in1, /* number of tiles */ 1);
+
+  matmul_tiles(tt::CB::c_in0, tt::CB::c_in1, 0, 0, 0, false);
+
+  cb_pop_front(tt::CB::c_in1, /* number of tiles */ 1);
+  cb_pop_front(tt::CB::c_in0, /* number of tiles */ 1);
+
+  cb_reserve_back(tt::CB::c_out0, /* number of tiles */ 1);
+  pack_tile(0, tt::CB::c_out0);
+  cb_push_back(tt::CB::c_out0, /* number of tiles */ 1);
+
+  release_dst(tt::DstMode::Tile);
+}
+}  // namespace NAMESPACE
+```
+
+It takes two matrix tiles from `tt::CB::c_in0` and `tt::CB::c_in0` L1 and
+conducts a single-tile matrix multiplication. Finally, it packs the result to
+`tt::CB::c_out0`.
+
+Note that tile registers are acquired by `acquire_dst(..)`, but actually we can
+use `tile_regs_..()` functions for the more fine-grained tile register lock
+mechanism. At the end of this section, we will explain more details.
+
+Even though it looks like a single Compute kernel,
+`tt::tt_metal::CreateKernel(..)` actually generates UNPACK, MATH, PACK kernels.
+To check the artifact of `tt::tt_metal::CreateKernel(..)`, we can intentionally
+add a syntax error like removing `p` from `pack_tile(..)`. Running the program
+with the syntax error will have a compile failure, which will dump the
+compilation command information like:
+```
+cd /path/to/tt-metal//built/2052/kernels/single_tile_matmul/1584599061800683236/trisc2/ \
+&& \
+/path/to/tt-metal//tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ \
+-mgrayskull -march=rv32iy -mtune=rvtt-b1 -mabi=ilp32 -std=c++17 -flto -ffast-math \
+-fno-use-cxa-atexit -fno-exceptions -Wall -Werror -Wno-unknown-pragmas \
+-Wno-error=multistatement-macros -Wno-error=parentheses \
+-Wno-error=unused-but-set-variable -Wno-unused-variable \
+-Wno-unused-function -O3 -DARCH_GRAYSKULL -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 \
+-DDEBUG_PRINT_ENABLED -DUCK_CHLKC_PACK -DNAMESPACE=chlkc_pack -DCOMPILE_FOR_TRISC=2 \
+-DKERNEL_BUILD -I.  -I..  -I/path/to/tt-metal// -I/path/to/tt-metal//tt_metal \
+... (a few more -I.. options) ...
+-I/path/to/tt-metal//tt_metal/hw/firmware/src \
+-I/path/to/tt-metal//tt_metal/third_party/tt_llk_grayskull/llk_lib \
+-c -o trisck.o \
+/path/to/tt-metal//tt_metal/hw/firmware/src/trisck.cc
+```
+(Note that the actual log shows a command in a single line, but we added line
+breaks to help understanding)
+
+Among many of the options, `-DUCK_CHLKC_PACK -DNAMESPACE=chlkc_pack` specifies
+it is a "Pack kernel". `-DCOMPILE_FOR_TRISC=2` means it will use `TRISC2` among
+the tree Baby RISCVs.
+
+Based on the information, we can try the following steps:
+* Checking the ELF file on the directory e.g.,
+`/path/to/tt-metal//built/2052/kernels/single_tile_matmul/1584599061800683236/trisc2/trisc2.elf`.
+  * `/path/to/tt-metal/tt_metal/third_party/sfpi/compiler/bin/` directory
+    contains build tools like `riscv32-unknown-elf-g++`, and it also contains
+    `riscv32-unknown-elf-objdump` and `riscv32-unknown-elf-readelf`
+    * For example, you can check all headers of ELF by running
+      `/path/to/riscv32-unknown-elf-readelf -a trisc2.elf`.
+* Running only preprocessing by replacing `-c` with `-E` of
+  `riscv32-unknown-elf-g++` command.
+  * As we do `-E` compiler option for C/C++ code, we can also use it for Unpack,
+    Math, and Pack kernels. The output file will show you the result of
+    "preprocessing".
+* Options to generate different kernels:
+  * Unpack kernel: `-DUCK_CHLKC_UNPACK -DNAMESPACE=chlkc_unpack`
+  * Math kernel: `-DUCK_CHLKC_MATH -DNAMESPACE=chlkc_math`
+  * Pack kernel: `-DUCK_CHLKC_PACK -DNAMESPACE=chlkc_pack`
+
+Note that the preprocessed kernel code is long like 23,000 lines, because
+tt-metal kernel APIs are implemented as header files.
+
+Also note that tt-metal uses `PACK(..), MATH(..), UNPACK(..)` macro to
+selectively attach code snippets to the preprocessed output. For example,
+if you wrap an expression with `PACK( /* an expression */ )`, it will
+disappear from Unpack and Math kernels, but will be only shown in the Pack
+kernel.
+
+If you generate a Pack kernel for the above Compute kernel example, the
+preprocessed `cb_wait_front(..)` is empty:
+```
+inline __attribute__((always_inline)) void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
+    ;
+}
+```
+
+On the other hand, the UNPACK kernel has the following
+`cb_wait_front(..)`:
+```
+inline __attribute__((always_inline)) void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
+    ( llk_wait_tiles(cbid, ntiles) );
+}
+```
+
+Another interesting function is `acquire_dst(tt::DstMode mode)`:
+* The UNPACK kernel has an empty one:
+```
+inline __attribute__((always_inline)) void acquire_dst(tt::DstMode mode) {
+    ;
+
+    ;
+}
+```
+* The MATH kernel waits for DEST available:
+```
+inline __attribute__((always_inline)) void acquire_dst(tt::DstMode mode) {
+    ( llk_math_wait_for_dest_available() );
+
+    ;
+}
+```
+* The UNPACK kernel waits for the end of MATH kernel:
+```
+inline __attribute__((always_inline)) void acquire_dst(tt::DstMode mode) {
+    ;
+
+    ( llk_packer_wait_for_math_done() );
+}
+```
+
+[Its implementation](https://github.com/tenstorrent/tt-metal/blob/6d4951a20ca4c392888f924f038ae0780a8cc656/tt_metal/include/compute_kernel_api/reg_api.h#L28-L32) matches the preprocessed code:
+```
+ALWI void acquire_dst(tt::DstMode mode) {
+    MATH(( llk_math_wait_for_dest_available()  ));
+
+    PACK(( llk_packer_wait_for_math_done()  ));
+}
+```
+
+Based on the implementation of `acquire_dst(..)`, if we use it, we can guess it
+executes UNPACK, MATH, PACK in order, which will help you to follow the
+execution order and instructions that actually run on each kernel.
+
+Actually, following `tile_regs_..()` functions provide the exact same mechanism
+but in a more fine-grained way:
+*  The MATH kernel can acquire the tile registers using:
+```
+ALWI void tile_regs_acquire() {
+    MATH(( llk_math_wait_for_dest_available()  ));
+}
+```
+* The PACK kernel can wait for the end of MATH kernel using:
+```
+ALWI void tile_regs_wait() {
+    PACK(( llk_packer_wait_for_math_done()  ));
+}
+```
+* `tile_regs_commit()` releases the lock from MATH kernel:
+```
+ALWI void tile_regs_commit() {
+    MATH(( llk_math_dest_section_done()  ));
+}
+```
+* `tile_regs_release()` releases the lock from PACK kernel:
+```
+ALWI void tile_regs_release() {
+    PACK(( llk_pack_dest_section_done()  ));
+}
+```
+
+We can replace `acquire_dst(..)` and `release_dst(..)` from the above example
+with `tile_regs_..()` functions like:
+```
+namespace NAMESPACE {
+void MAIN {
+  mm_init();
+
+  cb_wait_front(tt::CB::c_in0, /* number of tiles */ 1);
+  cb_wait_front(tt::CB::c_in1, /* number of tiles */ 1);
+
+  tile_regs_acquire();
+
+  matmul_tiles(tt::CB::c_in0, tt::CB::c_in1, 0, 0, 0, false);
+
+  tile_regs_commit();
+
+  cb_pop_front(tt::CB::c_in1, /* number of tiles */ 1);
+  cb_pop_front(tt::CB::c_in0, /* number of tiles */ 1);
+
+  tile_regs_wait();
+
+  cb_reserve_back(tt::CB::c_out0, /* number of tiles */ 1);
+  pack_tile(0, tt::CB::c_out0);
+  cb_push_back(tt::CB::c_out0, /* number of tiles */ 1);
+
+  tile_regs_release();
+}
+}  // namespace NAMESPACE
+```
 
 
 ### Efficiency of Tile-Based Compute and Data Movement

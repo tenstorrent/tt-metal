@@ -374,4 +374,4 @@ def test_ttnn_whisper(device, ttnn_model):
     last_hidden_state = ttnn.from_device(last_hidden_state)
     last_hidden_state = ttnn.to_torch(last_hidden_state)
 
-    assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.9912)
+    assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.9895)

@@ -4,8 +4,8 @@
 
 from loguru import logger
 import numpy as np
+import ttnn
 
-import tt_lib as ttl
 from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
@@ -23,25 +23,25 @@ import pytest
 
 @pytest.mark.parametrize(
     "out_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (ttnn.DRAM_MEMORY_CONFIG,),
     ids=["out_DRAM"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (ttnn.DRAM_MEMORY_CONFIG,),
     ids=["in0_DRAM"],
 )
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT8_B,),
+    (ttnn.bfloat8_b,),
     ids=["BFLOAT8_B"],
 )
 def test_split_query_key_value_and_split_heads_with_program_cache(device, dtype, in0_mem_config, out_mem_config):
     torch.manual_seed(1234)
 
-    sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
     )
 
     num_heads = 16
@@ -53,25 +53,28 @@ def test_split_query_key_value_and_split_heads_with_program_cache(device, dtype,
 
     in0 = torch.randn(input_shape)
     in0_t = torch2tt_tensor(in0, device, tt_memory_config=in0_mem_config, tt_dtype=dtype)
-    in0_t_shard = ttl.tensor.interleaved_to_sharded(
+    in0_t_shard = ttnn.interleaved_to_sharded(
         in0_t,
         grid_size,
         [M // grid_size[0], K // grid_size[1]],
-        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        ttl.tensor.ShardOrientation.COL_MAJOR,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.ShardOrientation.COL_MAJOR,
     )
 
-    q, k, v = ttl.operations.primary.transformers.split_query_key_value_and_split_heads(
-        in0_t_shard, ttl.tensor.CoreCoord(grid_size[0], grid_size[1]), sharded_mem_config, num_heads
+    q, k, v = ttnn.experimental.split_query_key_value_and_split_heads(
+        in0_t_shard,
+        ttnn.CoreCoord(grid_size[0], grid_size[1]),
+        memory_config=sharded_mem_config,
+        num_heads=num_heads,
     )
 
-    tt_q = ttl.tensor.sharded_to_interleaved(q, out_mem_config)
+    tt_q = ttnn.sharded_to_interleaved(q, out_mem_config)
     tt_q = tt_q.cpu().to_torch().float()
     tt_q = untilize(tt_q)
-    tt_k = ttl.tensor.sharded_to_interleaved(k, out_mem_config)
+    tt_k = ttnn.sharded_to_interleaved(k, out_mem_config)
     tt_k = tt_k.cpu().to_torch().float()
     tt_k = untilize(tt_k)
-    tt_v = ttl.tensor.sharded_to_interleaved(v, out_mem_config)
+    tt_v = ttnn.sharded_to_interleaved(v, out_mem_config)
     tt_v = tt_v.cpu().to_torch().float()
     tt_v = untilize(tt_v)
 

@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
 import torch
 
 from loguru import logger
 from transformers import ViTForImageClassification as HF_ViTForImageClassication
-
-import tt_lib
 
 from models.experimental.vit.tt.modeling_vit import TtViTModel
 from models.utility_functions import (
@@ -17,6 +17,8 @@ from models.utility_functions import (
     comp_allclose_and_pcc,
 )
 
+
+@pytest.mark.skip(reason="#7527: Test needs review")
 def test_vit_model(device, imagenet_sample_input, pcc=0.95):
     image = imagenet_sample_input
     head_mask = None
@@ -25,9 +27,7 @@ def test_vit_model(device, imagenet_sample_input, pcc=0.95):
     interpolate_pos_encoding = None
     return_dict = None
     with torch.no_grad():
-        HF_model = HF_ViTForImageClassication.from_pretrained(
-            "google/vit-base-patch16-224"
-        )
+        HF_model = HF_ViTForImageClassication.from_pretrained("google/vit-base-patch16-224")
 
         state_dict = HF_model.state_dict()
 

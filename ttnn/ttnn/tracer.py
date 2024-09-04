@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import dataclasses
 import io
 import math
 import shutil
@@ -12,48 +13,48 @@ from typing import Any
 
 from loguru import logger
 import networkx as nx
-from pyrsistent import PClass, field
-import ttnn._ttnn
 
-logger.disable("torchtrail")
+logger.disable("ttnn.torch_tracer")
 
-import torchtrail
+import ttnn.torch_tracer
 
 import ttnn
 
-TracedTensor = torchtrail.tracer.TracedTensor
-TracedTorchTensor = torchtrail.tracer.TracedTorchTensor
+TracedTensor = ttnn.torch_tracer.TracedTensor
+TracedTorchTensor = ttnn.torch_tracer.TracedTorchTensor
 
-TorchTensor = torchtrail.tracer.TorchTensor
-TorchParameter = torchtrail.tracer.TorchParameter
-TorchFunction = torchtrail.tracer.TorchFunction
-TorchModule = torchtrail.tracer.TorchModule
-TorchModuleInput = torchtrail.tracer.TorchModuleInput
+TorchTensor = ttnn.torch_tracer.TorchTensor
+TorchParameter = ttnn.torch_tracer.TorchParameter
+TorchFunction = ttnn.torch_tracer.TorchFunction
+TorchModule = ttnn.torch_tracer.TorchModule
+TorchModuleInput = ttnn.torch_tracer.TorchModuleInput
 
-PositionalArgumentName = torchtrail.tracer.PositionalArgumentName
-InputTensorIndex = torchtrail.tracer.InputTensorIndex
-
-
-duration_to_string = torchtrail.tracer.duration_to_string
-get_input_tensors = torchtrail.tracer.get_input_tensors
-get_arg_name_value_pairs = torchtrail.tracer.get_arg_name_value_pairs
-
-LEVEL_COLORS = torchtrail.tracer.LEVEL_COLORS
-
-_visualize = torchtrail.tracer._visualize
+PositionalArgumentName = ttnn.torch_tracer.PositionalArgumentName
+InputTensorIndex = ttnn.torch_tracer.InputTensorIndex
 
 
-class TTNNTensor(PClass):
+duration_to_string = ttnn.torch_tracer.duration_to_string
+get_input_tensors = ttnn.torch_tracer.get_input_tensors
+get_arg_name_value_pairs = ttnn.torch_tracer.get_arg_name_value_pairs
+
+LEVEL_COLORS = ttnn.torch_tracer.LEVEL_COLORS
+
+_visualize = ttnn.torch_tracer._visualize
+
+
+@dataclasses.dataclass
+class TTNNTensor:
     def to_string(self, verbose: bool = False) -> str:
         return "ttnn.Tensor"
 
     __repr__ = to_string
 
 
-class TTNNOperation(PClass):
-    pretty_name = field(mandatory=True)
-    operation = field(mandatory=True)
-    arg_name_value_pairs = field(mandatory=True)
+@dataclasses.dataclass
+class TTNNOperation:
+    pretty_name: str
+    operation: Any
+    arg_name_value_pairs: Any
 
     def to_string(self, verbose: bool = False) -> str:
         return self.pretty_name
@@ -61,11 +62,11 @@ class TTNNOperation(PClass):
     __repr__ = to_string
 
 
-class TracedTTNNTensor(ttnn.Tensor, torchtrail.tracer.TracedTensor):
-    def __init__(self, tensor: ttnn.Tensor, *, graph: nx.MultiDiGraph, node: torchtrail.tracer.Node, output_index: int):
+class TracedTTNNTensor(ttnn.Tensor, ttnn.torch_tracer.TracedTensor):
+    def __init__(self, tensor: ttnn.Tensor, *, graph: nx.MultiDiGraph, node: ttnn.torch_tracer.Node, output_index: int):
         super().__init__(tensor)
         self.graph: nx.MultiDiGraph = graph
-        self.node: torchtrail.tracer.Node = node
+        self.node: ttnn.torch_tracer.Node = node
         self.output_index: int = output_index
 
     @property
@@ -74,10 +75,10 @@ class TracedTTNNTensor(ttnn.Tensor, torchtrail.tracer.TracedTensor):
 
 
 def create_ttnn_input_tensor(tensor: ttnn.Tensor) -> TracedTTNNTensor:
-    unique_id = torchtrail.tracer.get_unique_id()
+    unique_id = ttnn.torch_tracer.get_unique_id()
     node_name = f"ttnn_input_{unique_id}"
-    node = torchtrail.tracer.Node(name=node_name, unique_id=unique_id)
-    graph = torchtrail.tracer.GRAPH_STACK[-1]
+    node = ttnn.torch_tracer.Node(name=node_name, unique_id=unique_id)
+    graph = ttnn.torch_tracer.GRAPH_STACK[-1]
     memory_config = ttnn.get_memory_config(tensor)
     graph.add_node(
         node,
@@ -94,12 +95,12 @@ def preprocess_args_and_kwargs(*function_args, **function_kwargs) -> Any:
     import torch
 
     def preprocess_arg(arg: Any) -> Any:
-        if isinstance(arg, torchtrail.tracer.TracedTensor):
+        if isinstance(arg, ttnn.torch_tracer.TracedTensor):
             return arg
         elif isinstance(arg, ttnn.Tensor):
             return create_ttnn_input_tensor(arg)
         elif isinstance(arg, torch.Tensor):
-            return torchtrail.tracer.create_input_tensor(arg)
+            return ttnn.torch_tracer.create_input_tensor(arg)
         elif isinstance(arg, (tuple, list)):
             return type(arg)([preprocess_arg(element) for element in arg])
         elif isinstance(arg, dict):
@@ -116,11 +117,11 @@ def preprocess_return_value(return_value):
     import torch
 
     output_tensors = []
-    if isinstance(return_value, torch.Tensor) and not isinstance(return_value, torchtrail.tracer.TracedTorchTensor):
+    if isinstance(return_value, torch.Tensor) and not isinstance(return_value, ttnn.torch_tracer.TracedTorchTensor):
         output_tensors.append(return_value)
     elif isinstance(return_value, ttnn.Tensor) and not isinstance(return_value, TracedTTNNTensor):
         output_tensors.append(create_ttnn_input_tensor(return_value))
-    elif isinstance(return_value, torchtrail.tracer.TracedTensor):
+    elif isinstance(return_value, ttnn.torch_tracer.TracedTensor):
         output_tensors.append(return_value)
     elif isinstance(return_value, (tuple, list)):
         for value in return_value:
@@ -138,7 +139,7 @@ def preprocess_return_value(return_value):
 def postprocess_return_value(return_value, output_tensors):
     import torch
 
-    if isinstance(return_value, (torch.Tensor, torchtrail.tracer.TracedTorchTensor, ttnn.Tensor, TracedTTNNTensor)):
+    if isinstance(return_value, (torch.Tensor, ttnn.torch_tracer.TracedTorchTensor, ttnn.Tensor, TracedTTNNTensor)):
         output_tensor, *_ = output_tensors
         output_tensors.pop(0)
         return output_tensor
@@ -154,7 +155,7 @@ def trace_ttnn_operation(pretty_operation_name, operation):
     import torch
 
     def call_wrapper(*function_args, **function_kwargs):
-        operation_id = ttnn._ttnn.get_operation_id()
+        operation_id = ttnn._ttnn.get_python_operation_id()
 
         original_function_args = function_args
         original_function_kwargs = function_kwargs
@@ -163,7 +164,7 @@ def trace_ttnn_operation(pretty_operation_name, operation):
 
         GRAPH_STACK.append(nx.MultiDiGraph())
 
-        node_name = f"{pretty_operation_name}_{torchtrail.tracer.get_unique_id()}"
+        node_name = f"{pretty_operation_name}_{ttnn.torch_tracer.get_unique_id()}"
 
         operation_return_type = operation(*function_args, **function_kwargs)
 
@@ -174,17 +175,19 @@ def trace_ttnn_operation(pretty_operation_name, operation):
         shapes = tuple(tensor.shape for tensor in output_tensors)
         dtypes = tuple(tensor.dtype for tensor in output_tensors)
         layouts = tuple(tensor.layout for tensor in output_tensors)
-        memory_configs = tuple(ttnn.get_memory_config(tensor) for tensor in output_tensors)
+        memory_configs = tuple(
+            ttnn.get_memory_config(tensor) if isinstance(tensor, ttnn.Tensor) else None for tensor in output_tensors
+        )
 
-        unique_id = torchtrail.tracer.get_unique_id()
+        unique_id = ttnn.torch_tracer.get_unique_id()
         node_name = f"{pretty_operation_name}_{unique_id}"
-        node = torchtrail.tracer.Node(name=node_name, unique_id=unique_id)
+        node = ttnn.torch_tracer.Node(name=node_name, unique_id=unique_id)
 
-        graph = torchtrail.tracer.GRAPH_STACK[-1]
+        graph = ttnn.torch_tracer.GRAPH_STACK[-1]
         for tensor in input_tensors:
             if tensor.graph is not graph:
                 graph = nx.compose(graph, tensor.graph)
-                torchtrail.tracer.GRAPH_STACK[-1] = graph
+                ttnn.torch_tracer.GRAPH_STACK[-1] = graph
 
         try:
             arg_name_value_pairs = get_arg_name_value_pairs(
@@ -214,7 +217,7 @@ def trace_ttnn_operation(pretty_operation_name, operation):
 
         output_tensors = [
             (
-                torchtrail.tracer.TracedTorchTensor(tensor, graph=graph, node=node, output_index=output_index)
+                ttnn.torch_tracer.TracedTorchTensor(tensor, graph=graph, node=node, output_index=output_index)
                 if isinstance(tensor, torch.Tensor)
                 else TracedTTNNTensor(tensor, graph=graph, node=node, output_index=output_index)
             )
@@ -438,10 +441,12 @@ def visualize(*function_args, file_name=None, visualize_node=visualize_node, **f
         logger.warning("Graphviz is not installed. Skipping visualization.")
         return
     logger.debug(f"Dumping graph of the model to {file_name}")
-    return torchtrail.visualize(*function_args, file_name=file_name, visualize_node=visualize_node, **function_kwargs)
+    return ttnn.torch_tracer.visualize(
+        *function_args, file_name=file_name, visualize_node=visualize_node, **function_kwargs
+    )
 
 
-get_graph = torchtrail.get_graph
+get_graph = ttnn.torch_tracer.get_graph
 
 GRAPH_STACK = None
 ENABLE_TRACER = False
@@ -450,23 +455,25 @@ ENABLE_TRACER = False
 def enable_tracing():
     global ENABLE_TRACER
     global GRAPH_STACK
+    if ttnn.CONFIG.enable_fast_runtime_mode:
+        raise ValueError("Tracing is only supported in fast runtime mode.")
     if ENABLE_TRACER:
         raise ValueError("Tracing is already enabled.")
     ENABLE_TRACER = True
-    torchtrail.tracer.enable_tracing()
-    GRAPH_STACK = torchtrail.tracer.GRAPH_STACK
+    ttnn.torch_tracer.enable_tracing()
+    GRAPH_STACK = ttnn.torch_tracer.GRAPH_STACK
 
 
 def disable_tracing():
     global ENABLE_TRACER
     global GRAPH_STACK
     ENABLE_TRACER = False
-    torchtrail.tracer.disable_tracing()
-    GRAPH_STACK = torchtrail.tracer.GRAPH_STACK
+    ttnn.torch_tracer.disable_tracing()
+    GRAPH_STACK = ttnn.torch_tracer.GRAPH_STACK
 
 
 def is_tracing_enabled():
-    return ENABLE_TRACER and torchtrail.tracer.is_tracing_enabled()
+    return ENABLE_TRACER and ttnn.torch_tracer.is_tracing_enabled()
 
 
 @contextmanager
@@ -531,9 +538,9 @@ def node_to_statement(string_io, graph, node, variable, input_variables, prefix)
     duration = graph.nodes[node].get("duration", None)
 
     if isinstance(operation, ttnn.tracer.TorchParameter):
-        torchtrail_name = getattr(operation.parameter, "torchtrail_name", "")
-        torchtrail_name = torchtrail_name.replace(f"{prefix}.", "", 1)
-        string_io.write(f"    {variable} = parameters.{torchtrail_name}")
+        ttnn_tracer_name = getattr(operation.parameter, "__ttnn_tracer_name__", "")
+        ttnn_tracer_name = ttnn_tracer_name.replace(f"{prefix}.", "", 1)
+        string_io.write(f"    {variable} = parameters.{ttnn_tracer_name}")
     elif isinstance(operation, ttnn.tracer.TorchTensor):
         string_io.write(
             f"    {variable} = torch.as_tensor({operation.tensor.flatten().tolist()[:8]}, ...).reshape({tuple(operation.tensor.shape)}).to({operation.tensor.dtype})"
@@ -558,8 +565,8 @@ def node_to_statement(string_io, graph, node, variable, input_variables, prefix)
 
     elif isinstance(operation, ttnn.tracer.TorchModule):
         module_name = f"{type(operation.module).__name__}"
-        torchtrail_name = operation.module.torchtrail_name
-        torchtrail_name = torchtrail_name.replace(f"{prefix}.", "", 1)
+        ttnn_tracer_name = operation.module.__ttnn_tracer_name__
+        ttnn_tracer_name = ttnn_tracer_name.replace(f"{prefix}.", "", 1)
 
         function_args = []
         function_kwargs = []
@@ -576,11 +583,11 @@ def node_to_statement(string_io, graph, node, variable, input_variables, prefix)
             arguments_string.append(", ".join(function_kwargs))
         arguments_string = ", ".join(arguments_string)
 
-        if torchtrail_name == "":
+        if ttnn_tracer_name == "":
             string_io.write(f"    {variable} = {module_name}(config, {arguments_string}, parameters=parameters)")
         else:
             string_io.write(
-                f"    {variable} = {module_name}(config, {arguments_string}, parameters=parameters.{torchtrail_name})"
+                f"    {variable} = {module_name}(config, {arguments_string}, parameters=parameters.{ttnn_tracer_name})"
             )
 
     elif isinstance(operation, TTNNOperation):
@@ -678,7 +685,7 @@ def codegen_submodules(graph):
         if isinstance(operation, ttnn.tracer.TorchModule):
             module = operation.module
             codegen_submodules(operation.graph)
-            yield module_to_source_code(operation, module.torchtrail_name)
+            yield module_to_source_code(operation, module.__ttnn_tracer_name__)
 
 
 def codegen_top_level_module(graph):

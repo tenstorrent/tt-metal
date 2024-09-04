@@ -27,8 +27,7 @@ depending on the most up-to-date installation methods.
 
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
-    make build
-    make programming_examples/matmul_multi_core
+    ./build_metal.sh
     ./build/programming_examples/matmul_multi_core
 
 Accessing all the cores
@@ -188,4 +187,5 @@ Conclusion
 ----------
 
 Those are all the major changes that we made in order to upgrade our single
-core matmul example into one that will use as many cores as possible.
+core matmul example into one that will use as many cores as possible.  To see a more complicated example using data reuse among these cores, please refer to the :ref:`Matmul
+multi-core data reuse example<MatMul_Multi_Core_Data_Reuse_example>`.

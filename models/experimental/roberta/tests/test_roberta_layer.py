@@ -7,16 +7,19 @@ import torch
 from loguru import logger
 from transformers import RobertaModel
 
-import tt_lib
+import pytest
 
 from models.experimental.roberta.tt.roberta_layer import TtRobertaLayer
 from models.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,
+    skip_for_wormhole_b0,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
+
+@skip_for_wormhole_b0()
 def test_roberta_layer_inference(device):
     torch.manual_seed(1234)
 

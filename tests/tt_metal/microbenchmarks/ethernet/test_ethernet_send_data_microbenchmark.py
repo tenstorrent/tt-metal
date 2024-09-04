@@ -126,6 +126,7 @@ def test_ethernet_send_data_microbenchmark_concurrent_with_dram_read_and_write(
 @pytest.mark.parametrize("num_transaction_buffers", [1, 2, 3])
 @pytest.mark.parametrize("input_buffer_page_size", [1024, 2048, 4096])
 # @pytest.mark.parametrize("precomputed_address_buffer_size", [0, 16, 32])
+@pytest.mark.skip("FD2_MULTI: FD2 doesn't support multichip yet")
 def test_decoupled_worker_and_erisc_data_mover_single_direction(
     input_buffer_size_bytes, eth_buffer_size_bytes, num_transaction_buffers, input_buffer_page_size
 ):

@@ -21,26 +21,27 @@
 
 namespace tt {
 
-#define LOGGER_TYPES   \
-    X(Always)          \
-    X(Test)            \
-    X(Timer)           \
-    X(Device)          \
-    X(Model)           \
-    X(LLRuntime)       \
-    X(Loader)          \
-    X(IO)              \
-    X(CompileTrisc)    \
-    X(BuildKernels)    \
-    X(Verif)           \
-    X(Golden)          \
-    X(Op)              \
-    X(HLK)             \
-    X(HLKC)            \
-    X(Reportify)       \
-    X(GraphCompiler)   \
-    X(Dispatch)        \
-    X(Metal)
+#define LOGGER_TYPES \
+    X(Always)        \
+    X(Test)          \
+    X(Timer)         \
+    X(Device)        \
+    X(Model)         \
+    X(LLRuntime)     \
+    X(Loader)        \
+    X(IO)            \
+    X(CompileTrisc)  \
+    X(BuildKernels)  \
+    X(Verif)         \
+    X(Golden)        \
+    X(Op)            \
+    X(HLK)           \
+    X(HLKC)          \
+    X(Reportify)     \
+    X(GraphCompiler) \
+    X(Dispatch)      \
+    X(Metal)         \
+    X(MetalTrace)
 
 enum LogType : uint32_t {
 // clang-format off
@@ -119,7 +120,11 @@ class Logger {
                 level_names[static_cast<std::underlying_type_t<Level>>(level)]);
             std::string type_str = fmt::format(fmt::fg(fmt::color::green), "{:>23}", type_names[type]);
             fmt::print(*fd, "{} | {} | ", type_str, level_str);
+#if FMT_VERSION < 100000
             fmt::print(*fd, fmt, std::forward<Args>(args)...);
+#else
+            fmt::print(*fd, fmt::runtime(fmt), std::forward<Args>(args)...);
+#endif
             *fd << std::endl;
         }
     }
@@ -151,8 +156,7 @@ class Logger {
                 level_str.begin(), level_str.end(), level_str.begin(), [](unsigned char c) { return std::toupper(c); });
             std::underlying_type_t<Level> level_index = 0;
             for (char const* level_name : level_names) {
-                if (level_str == level_name)
-                {
+                if (level_str == level_name) {
                     min_level = static_cast<Level>(level_index);
                 }
                 level_index++;
@@ -161,11 +165,9 @@ class Logger {
 
 #if !defined(UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT) || (UTILS_LOGGER_PYTHON_OSTREAM_REDIRECT == 0)
         static char const* file_env = std::getenv("TT_METAL_LOGGER_FILE");
-        if (file_env)
-        {
+        if (file_env) {
             log_file.open(file_env);
-            if (log_file.is_open())
-            {
+            if (log_file.is_open()) {
                 fd = &log_file;
             }
         }

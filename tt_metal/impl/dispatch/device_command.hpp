@@ -4,219 +4,728 @@
 
 #pragma once
 
-#include <array>
+#include <bit>
 #include <cstddef>
 #include <vector>
 
-#include "dev_mem_map.h"
+#include "common/env_lib.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
+#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include "tt_metal/tt_stl/aligned_allocator.hpp"
 
-static constexpr uint32_t EVENT_PADDED_SIZE = 16;
+template <typename T>
+using vector_memcpy_aligned = std::vector<T, tt::stl::aligned_allocator<T, MEMCPY_ALIGNMENT>>;
 
-struct CommandHeader {
-    uint32_t wrap = 0;
-    uint32_t finish = 0;
-    uint32_t num_workers = 0;
-    uint32_t num_buffer_transfers = 0;
-    uint32_t is_program_buffer = 0;
-    uint32_t stall = 0;
-    uint32_t page_size = 0;
-    uint32_t pull_and_push_cb_size = 0;
-    uint32_t event;
-    uint32_t producer_cb_size = 0;
-    uint32_t consumer_cb_size = 0;
-    uint32_t router_cb_size = 0;
-    uint32_t pull_and_push_cb_num_pages = 0;
-    uint32_t producer_cb_num_pages = 0;
-    uint32_t consumer_cb_num_pages = 0;
-    uint32_t router_cb_num_pages = 0;
-    uint32_t num_pages = 0;
-    uint32_t num_runtime_arg_pages = 0;
-    uint32_t num_cb_config_pages = 0;
-    uint32_t num_program_multicast_pages = 0;
-    uint32_t num_program_unicast_pages = 0;
-    uint32_t num_go_signal_multicast_pages = 0;
-    uint32_t num_go_signal_unicast_pages = 0;
-    uint32_t issue_data_size = 0;
-    uint32_t completion_data_size = 0;
-    uint32_t program_transfer_num_pages = 0;
-    uint32_t router_transfer_num_pages = 0;
-    uint32_t producer_consumer_transfer_num_pages = 0;
-    uint32_t buffer_type = 0;
-    uint32_t sharded_buffer_num_cores = 0;
-    uint32_t new_issue_queue_size = 0;
-    uint32_t new_completion_queue_size = 0;
-    uint16_t is_event_sync = 0;
-    uint8_t event_sync_core_x = 0;
-    uint8_t event_sync_core_y = 0;
-    uint32_t event_sync_event_id = 0;
-    uint32_t fwd_path = 1;
-};
-
-static_assert((offsetof(CommandHeader, event) % 32) == 0);
-
+template <bool hugepage_write = false>
 class DeviceCommand {
    public:
-    DeviceCommand();
+    DeviceCommand() = default;
+    DeviceCommand(void *cmd_region, uint32_t cmd_sequence_sizeB) :
+        cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_region(cmd_region), cmd_write_offsetB(0) {
+        TT_FATAL(
+            cmd_sequence_sizeB % sizeof(uint32_t) == 0,
+            "Command sequence size B={} is not {}-byte aligned",
+            cmd_sequence_sizeB,
+            sizeof(uint32_t));
+    }
+    template <bool hp_w = hugepage_write, typename std::enable_if_t<!hp_w, int> = 0>
+    DeviceCommand(uint32_t cmd_sequence_sizeB) : cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_write_offsetB(0) {
+        TT_FATAL(
+            cmd_sequence_sizeB % sizeof(uint32_t) == 0,
+            "Command sequence size B={} is not {}-byte aligned",
+            cmd_sequence_sizeB,
+            sizeof(uint32_t));
+        this->cmd_region_vector.resize(cmd_sequence_sizeB / sizeof(uint32_t), 0);
+        this->cmd_region = this->cmd_region_vector.data();
+    }
 
-    enum class TransferType : uint8_t {
-        RUNTIME_ARGS,
-        CB_CONFIGS,
-        PROGRAM_MULTICAST_PAGES,
-        PROGRAM_UNICAST_PAGES,
-        GO_SIGNALS_MULTICAST,
-        GO_SIGNALS_UNICAST,
-        NUM_TRANSFER_TYPES
-    };
+    DeviceCommand &operator=(const DeviceCommand &other) {
+        this->cmd_sequence_sizeB = other.cmd_sequence_sizeB;
+        this->cmd_write_offsetB = other.cmd_write_offsetB;
+        this->cmd_region_vector = other.cmd_region_vector;
+        this->deepcopy(other);
+        return *this;
+    }
+    DeviceCommand &operator=(DeviceCommand &&other) {
+        this->cmd_sequence_sizeB = other.cmd_sequence_sizeB;
+        this->cmd_write_offsetB = other.cmd_write_offsetB;
+        this->cmd_region_vector = other.cmd_region_vector;
+        this->deepcopy(other);
+        return *this;
+    }
+    DeviceCommand(const DeviceCommand &other) :
+        cmd_sequence_sizeB(other.cmd_sequence_sizeB),
+        cmd_write_offsetB(other.cmd_write_offsetB),
+        cmd_region_vector(other.cmd_region_vector) {
+        this->deepcopy(other);
+    }
+    DeviceCommand(DeviceCommand &&other) :
+        cmd_sequence_sizeB(other.cmd_sequence_sizeB),
+        cmd_write_offsetB(other.cmd_write_offsetB),
+        cmd_region_vector(other.cmd_region_vector) {
+        this->deepcopy(other);
+    }
 
     // Constants
-    //TODO: investigate other num_cores
-    static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30; // 1GB;
-    static constexpr uint32_t NUM_MAX_CORES = 108; //12 x 9
-    static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = sizeof(CommandHeader) / sizeof(uint32_t);
-    static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
-    static constexpr uint32_t NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t);
-    static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;
-    static constexpr uint32_t NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = COMMAND_PTR_SHARD_IDX + NUM_MAX_CORES*NUM_ENTRIES_PER_SHARD;
-    static constexpr uint32_t NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
-    // Perf measurements showed best results with divisions of 4 pages being transferred from producer -> consumer
-    static constexpr uint32_t SYNC_NUM_PAGES = 4;
+    static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;  // TODO: Move this somewhere else
+    static constexpr uint32_t LOG2_PROGRAM_PAGE_SIZE = std::bit_width(PROGRAM_PAGE_SIZE) - 1;
 
-    // Ensure any changes to this device command have asserts modified/extended
-    static_assert((NUM_BYTES_IN_DEVICE_COMMAND % 32) == 0);
+    uint32_t size_bytes() const { return this->cmd_sequence_sizeB; }
 
-    // Denotes which portion of the command queue needs to be wrapped
-    enum class WrapRegion : uint8_t {
-        NONE = 0,
-        ISSUE = 1,
-        COMPLETION = 2
-    };
+    void *data() const { return this->cmd_region; }
 
-    void set_event(uint32_t event);
+    uint32_t write_offset_bytes() const { return this->cmd_write_offsetB; }
 
-    void set_issue_queue_size(uint32_t new_issue_queue_size);
+    vector_memcpy_aligned<uint32_t> cmd_vector() const { return this->cmd_region_vector; }
 
-    void set_completion_queue_size(uint32_t new_completion_queue_size);
+    void add_dispatch_wait(
+        uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0, bool notify_prefetch = false, bool do_wait = true) {
+        auto initialize_wait_cmds = [&](CQPrefetchCmd *relay_wait, CQDispatchCmd *wait_cmd) {
+            relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
+            relay_wait->relay_inline.length = sizeof(CQDispatchCmd);
+            relay_wait->relay_inline.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
-    void set_wrap(WrapRegion wrap_region);
+            wait_cmd->base.cmd_id = CQ_DISPATCH_CMD_WAIT;
+            wait_cmd->wait.barrier = barrier;
+            wait_cmd->wait.notify_prefetch = notify_prefetch;
+            wait_cmd->wait.wait = do_wait;
+            wait_cmd->wait.addr = address;
+            wait_cmd->wait.count = count;
+            wait_cmd->wait.clear_count = clear_count;
+        };
+        CQPrefetchCmd *relay_wait_dst = this->reserve_space<CQPrefetchCmd *>(sizeof(CQPrefetchCmd));
+        CQDispatchCmd *wait_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
 
-    void set_finish();
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_wait;
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd wait_cmd;
+            initialize_wait_cmds(&relay_wait, &wait_cmd);
+            this->memcpy(relay_wait_dst, &relay_wait, sizeof(CQPrefetchCmd));
+            this->memcpy(wait_cmd_dst, &wait_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_wait_cmds(relay_wait_dst, wait_cmd_dst);
+        }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
 
-    void set_num_workers(const uint32_t num_workers);
+    void add_dispatch_wait_with_prefetch_stall(
+        uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0, bool do_wait = true) {
+        this->add_dispatch_wait(barrier, address, count, clear_count, true, do_wait);
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        auto initialize_stall_cmd = [&](CQPrefetchCmd *stall_cmd) {
+            *stall_cmd = {};
+            stall_cmd->base.cmd_id = CQ_PREFETCH_CMD_STALL;
+        };
+        CQPrefetchCmd *stall_cmd_dst = this->reserve_space<CQPrefetchCmd *>(increment_sizeB);
 
-    void set_is_program();
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd stall_cmd;
+            initialize_stall_cmd(&stall_cmd);
+            this->memcpy(stall_cmd_dst, &stall_cmd, sizeof(CQPrefetchCmd));
+        } else {
+            initialize_stall_cmd(stall_cmd_dst);
+        }
+    }
 
-    void set_stall();
+    void add_prefetch_wait_for_event(uint32_t event_id, uint32_t event_addr) {
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        auto initialize_wait_cmd = [&](CQPrefetchCmd *wait_cmd) {
+            *wait_cmd = {};
+            wait_cmd->base.cmd_id = CQ_PREFETCH_CMD_WAIT_FOR_EVENT;
+            wait_cmd->event_wait.sync_event = event_id;
+            wait_cmd->event_wait.sync_event_addr = event_addr;
+        };
+        CQPrefetchCmd *wait_cmd_dst = this->reserve_space<CQPrefetchCmd *>(increment_sizeB);
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd wait_cmd;
+            initialize_wait_cmd(&wait_cmd);
+            this->memcpy(wait_cmd_dst, &wait_cmd, sizeof(CQPrefetchCmd));
+        } else {
+            initialize_wait_cmd(wait_cmd_dst);
+        }
+    }
 
-    void set_page_size(const uint32_t page_size);
+    void add_dispatch_write_remote(uint32_t data, uint32_t noc_xy_addr, uint32_t addr) {
+        auto initialize_cross_prefetch_write = [&](CQPrefetchCmd *relay_write, CQDispatchCmd *write_cmd) {
+            relay_write->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
+            relay_write->relay_inline.length = sizeof(CQDispatchCmd);
+            relay_write->relay_inline.stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+            write_cmd->base.cmd_id = CQ_DISPATCH_CMD_REMOTE_WRITE;
+            write_cmd->write_from_remote.data = data;
+            write_cmd->write_from_remote.noc_xy_addr = noc_xy_addr;
+            write_cmd->write_from_remote.addr = addr;
+        };
+        CQPrefetchCmd *relay_write_dst = this->reserve_space<CQPrefetchCmd *>(sizeof(CQPrefetchCmd));
+        CQDispatchCmd *write_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
 
-    void set_pull_and_push_cb_size(const uint32_t cb_size);
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_write;
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_cmd;
+            initialize_cross_prefetch_write(&relay_write, &write_cmd);
+            this->memcpy(relay_write_dst, &relay_write, sizeof(CQPrefetchCmd));
+            this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_cross_prefetch_write(write_cmd_dst);
+        }
+    }
 
-   void set_producer_cb_size(const uint32_t cb_size);
+    void add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr) {
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        auto initialize_relay_linear_cmd = [&](CQPrefetchCmd *relay_linear_cmd) {
+            relay_linear_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
+            relay_linear_cmd->relay_linear.noc_xy_addr = noc_xy_addr;
+            relay_linear_cmd->relay_linear.length = lengthB;
+            relay_linear_cmd->relay_linear.addr = addr;
+        };
+        CQPrefetchCmd *relay_linear_cmd_dst = this->reserve_space<CQPrefetchCmd *>(increment_sizeB);
 
-    void set_consumer_cb_size(const uint32_t cb_size);
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_linear_cmd;
+            initialize_relay_linear_cmd(&relay_linear_cmd);
+            this->memcpy(relay_linear_cmd_dst, &relay_linear_cmd, sizeof(CQPrefetchCmd));
+        } else {
+            initialize_relay_linear_cmd(relay_linear_cmd_dst);
+        }
+    }
 
-    void set_router_cb_size(const uint32_t cb_size);
+    void add_prefetch_relay_paged(
+        uint8_t is_dram,
+        uint8_t start_page,
+        uint32_t base_addr,
+        uint32_t page_size,
+        uint32_t pages,
+        uint16_t length_adjust = 0) {
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        auto initialize_relay_paged_cmd = [&](CQPrefetchCmd *relay_paged_cmd) {
+            relay_paged_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
+            relay_paged_cmd->relay_paged.packed_page_flags = (is_dram << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) |
+                                                             (start_page << CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT);
+            relay_paged_cmd->relay_paged.length_adjust = length_adjust;
+            relay_paged_cmd->relay_paged.base_addr = base_addr;
+            relay_paged_cmd->relay_paged.page_size = page_size;
+            relay_paged_cmd->relay_paged.pages = pages;
+        };
+        CQPrefetchCmd *relay_paged_cmd_dst = this->reserve_space<CQPrefetchCmd *>(increment_sizeB);
 
-    void set_pull_and_push_cb_num_pages(const uint32_t cb_num_pages);
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_paged_cmd;
+            initialize_relay_paged_cmd(&relay_paged_cmd);
+            this->memcpy(relay_paged_cmd_dst, &relay_paged_cmd, sizeof(CQPrefetchCmd));
+        } else {
+            initialize_relay_paged_cmd(relay_paged_cmd_dst);
+        }
+    }
 
-    void set_producer_consumer_transfer_num_pages(const uint32_t producer_consumer_transfer_num_pages);
+    void add_prefetch_relay_paged_packed(
+        uint32_t length,
+        std::vector<CQPrefetchRelayPagedPackedSubCmd> & sub_cmds,
+        uint16_t num_sub_cmds,
+        uint32_t offset_idx = 0) {
 
-    void set_producer_cb_num_pages(const uint32_t cb_num_pages);
+        static_assert(sizeof(CQPrefetchRelayPagedPackedSubCmd) % sizeof(uint32_t) == 0);
 
-    void set_consumer_cb_num_pages(const uint32_t cb_num_pages);
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayPagedPackedSubCmd);
+        uint32_t increment_sizeB = align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        auto initialize_relay_paged_cmd = [&](CQPrefetchCmd *relay_paged_cmd) {
+            relay_paged_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED_PACKED;
+            relay_paged_cmd->relay_paged_packed.total_length = length;
+            relay_paged_cmd->relay_paged_packed.stride = increment_sizeB;
+            relay_paged_cmd->relay_paged_packed.count = num_sub_cmds;
+        };
+        CQPrefetchCmd *relay_paged_cmd_dst = this->reserve_space<CQPrefetchCmd *>(increment_sizeB);
 
-    void set_router_cb_num_pages(const uint32_t cb_num_pages);
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_paged_cmd;
+            initialize_relay_paged_cmd(&relay_paged_cmd);
+            this->memcpy(relay_paged_cmd_dst, &relay_paged_cmd, sizeof(CQPrefetchCmd));
+        } else {
+            initialize_relay_paged_cmd(relay_paged_cmd_dst);
+        }
 
-    void set_num_pages(const uint32_t num_pages);
+        this->memcpy((char *)relay_paged_cmd_dst + sizeof(CQPrefetchCmd), &sub_cmds[offset_idx], sub_cmds_sizeB);
+    }
 
-    // Denotes the type of buffer
-    enum class BufferType : uint8_t {
-        INTERLEAVED = 0,
-        SHARDED = 1
-    };
+    template <bool inline_data = false>
+    void add_dispatch_write_linear(
+        bool flush_prefetch,
+        uint8_t num_mcast_dests,
+        uint32_t noc_xy_addr,
+        uint32_t addr,
+        uint32_t data_sizeB,
+        const void *data = nullptr,
+        uint32_t write_offset_index = 0) {
+        uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? data_sizeB : 0);
+        this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
-    void set_buffer_type(BufferType buff_type);
+        auto initialize_write_cmd = [&](CQDispatchCmd *write_cmd) {
+            write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
+            write_cmd->write_linear.num_mcast_dests = num_mcast_dests;
+            write_cmd->write_linear.write_offset_index = write_offset_index;
+            write_cmd->write_linear.noc_xy_addr = noc_xy_addr;
+            write_cmd->write_linear.addr = addr;
+            write_cmd->write_linear.length = data_sizeB;
+        };
+        CQDispatchCmd *write_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
 
-    void set_sharded_buffer_num_cores(uint32_t num_cores);
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_cmd;
+            initialize_write_cmd(&write_cmd);
+            this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_write_cmd(write_cmd_dst);
+        }
 
-    void set_num_pages(const DeviceCommand::TransferType transfer_type, const uint32_t num_pages);
+        if constexpr (inline_data) {
+            TT_ASSERT(data != nullptr);  // compiled out?
+            uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
+            this->add_data(data, data_sizeB, increment_sizeB);
+        }
+    }
 
-    void set_issue_data_size(const uint32_t data_size);
+    template <bool inline_data = false>
+    void add_dispatch_write_paged(
+        bool flush_prefetch,
+        uint8_t is_dram,
+        uint16_t start_page,
+        uint32_t base_addr,
+        uint32_t page_size,
+        uint32_t pages,
+        const void *data = nullptr) {
+        uint32_t data_sizeB = page_size * pages;
+        uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? data_sizeB : 0);
+        this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
-    void set_completion_data_size(const uint32_t data_size);
+        auto initialize_write_cmd = [&](CQDispatchCmd *write_cmd) {
+            write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PAGED;
+            write_cmd->write_paged.is_dram = is_dram;
+            write_cmd->write_paged.start_page = start_page;
+            write_cmd->write_paged.base_addr = base_addr;
+            write_cmd->write_paged.page_size = page_size;
+            write_cmd->write_paged.pages = pages;
+        };
+        CQDispatchCmd *write_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
 
-    void set_program_transfer_num_pages(const uint32_t program_transfer_num_pages);
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_cmd;
+            initialize_write_cmd(&write_cmd);
+            this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_write_cmd(write_cmd_dst);
+        }
 
-    void set_router_transfer_num_pages(const uint32_t router_transfer_num_pages);
+        if (inline_data) {
+            TT_ASSERT(data != nullptr);  // compiled out?
+            uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
+            this->add_data(data, data_sizeB, increment_sizeB);
+        }
+    }
 
-    void set_is_event_sync(const uint16_t is_event_sync);
-    void set_event_sync_core_x(const uint8_t event_sync_core_x);
-    void set_event_sync_core_y(const uint8_t event_sync_core_y);
-    void set_event_sync_event_id(const uint32_t event_sync_event_id);
+    template <bool inline_data = false>
+    void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, bool is_event, const void *data = nullptr) {
+        uint32_t payload_sizeB = sizeof(CQDispatchCmd) + (flush_prefetch ? data_sizeB : 0);
+        this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
 
-    uint32_t get_issue_data_size() const;
+        auto initialize_write_cmd = [&](CQDispatchCmd *write_cmd) {
+            write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
+            write_cmd->write_linear_host.is_event = is_event;
+            write_cmd->write_linear_host.length =
+                sizeof(CQDispatchCmd) + data_sizeB;  // CQ_DISPATCH_CMD_WRITE_LINEAR_HOST writes dispatch cmd back to completion queue
+        };
+        CQDispatchCmd *write_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
 
-    uint32_t get_completion_data_size() const;
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_cmd;
+            initialize_write_cmd(&write_cmd);
+            this->memcpy(write_cmd_dst, &write_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_write_cmd(write_cmd_dst);
+        }
 
-    void update_buffer_transfer_src(const uint8_t buffer_transfer_idx, const uint32_t new_src);
+        if (inline_data) {
+            TT_ASSERT(data != nullptr);  // compiled out?
+            this->add_data(data, data_sizeB, data_sizeB);
+        }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
 
-    void add_buffer_transfer_interleaved_instruction(
-        const uint32_t src,
-        const uint32_t dst,
-        const uint32_t num_pages,
-        const uint32_t padded_page_size,
-        const uint32_t src_buf_type,
-        const uint32_t dst_buf_type,
-        const uint32_t src_page_index,
-        const uint32_t dst_page_index
-    );
+    void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages) {
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        auto initialize_exec_buf_cmd = [&](CQPrefetchCmd *exec_buf_cmd) {
+            exec_buf_cmd->base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF;
+            exec_buf_cmd->exec_buf.base_addr = base_addr;
+            exec_buf_cmd->exec_buf.log_page_size = log_page_size;
+            exec_buf_cmd->exec_buf.pages = pages;
+        };
+        CQPrefetchCmd *exec_buf_cmd_dst = this->reserve_space<CQPrefetchCmd *>(increment_sizeB);
 
-    void add_buffer_transfer_sharded_instruction(
-        const uint32_t src,
-        const uint32_t dst,
-        const uint32_t num_pages,
-        const uint32_t padded_page_size,
-        const uint32_t src_buf_type,
-        const uint32_t dst_buf_type,
-        const uint32_t src_page_index,
-        const uint32_t dst_page_index,
-        const std::vector<uint32_t> num_pages_in_shard,
-        const std::vector<uint32_t> core_id_x,
-        const std::vector<uint32_t> core_id_y
-    );
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd exec_buf_cmd;
+            initialize_exec_buf_cmd(&exec_buf_cmd);
+            this->memcpy(exec_buf_cmd_dst, &exec_buf_cmd, sizeof(CQPrefetchCmd));
+        } else {
+            initialize_exec_buf_cmd(exec_buf_cmd_dst);
+        }
+    }
 
-    void write_program_entry(const uint32_t val);
+    void add_dispatch_set_write_offsets(uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2) {
+        this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd));
+        auto initialize_write_offset_cmd = [&](CQDispatchCmd *write_offset_cmd) {
+            *write_offset_cmd = {};
+            write_offset_cmd->base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
+            write_offset_cmd->set_write_offset.offset0 = write_offset0;
+            write_offset_cmd->set_write_offset.offset1 = write_offset1;
+            write_offset_cmd->set_write_offset.offset2 = write_offset2;
+        };
+        CQDispatchCmd *write_offset_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
 
-    void add_write_page_partial_instruction(
-        const uint32_t num_bytes,
-        const uint32_t dst,
-        const uint32_t dst_noc,
-        const uint32_t num_receivers,
-        const bool advance,
-        const bool linked);
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_offset_cmd;
+            initialize_write_offset_cmd(&write_offset_cmd);
+            this->memcpy(write_offset_cmd_dst, &write_offset_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_write_offset_cmd(write_offset_cmd_dst);
+        }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
 
-    void* data() const;
+    void add_dispatch_terminate() {
+        this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd));
+        auto initialize_terminate_cmd = [&](CQDispatchCmd *terminate_cmd) {
+            *terminate_cmd = {};
+            terminate_cmd->base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
+        };
+        CQDispatchCmd *terminate_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd terminate_cmd;
+            initialize_terminate_cmd(&terminate_cmd);
+            this->memcpy(terminate_cmd_dst, &terminate_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_terminate_cmd(terminate_cmd_dst);
+        }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
+
+    void add_prefetch_terminate() {
+        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        auto initialize_terminate_cmd = [&](CQPrefetchCmd *terminate_cmd) {
+            *terminate_cmd = {};
+            terminate_cmd->base.cmd_id = CQ_PREFETCH_CMD_TERMINATE;
+        };
+        CQPrefetchCmd *terminate_cmd_dst = this->reserve_space<CQPrefetchCmd *>(increment_sizeB);
+
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd terminate_cmd;
+            initialize_terminate_cmd(&terminate_cmd);
+            this->memcpy(terminate_cmd_dst, &terminate_cmd, sizeof(CQPrefetchCmd));
+        } else {
+            initialize_terminate_cmd(terminate_cmd_dst);
+        }
+    }
+
+    void add_prefetch_exec_buf_end() {
+        auto initialize_prefetch_exec_buf_end_cmd = [&](CQPrefetchCmd *exec_buf_end_cmd) {
+            // prefetch exec_buf_end behaves as a relay_inline
+            exec_buf_end_cmd->base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF_END;
+            exec_buf_end_cmd->relay_inline.length = sizeof(CQDispatchCmd);
+            exec_buf_end_cmd->relay_inline.stride = align(sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd), PCIE_ALIGNMENT);
+        };
+        auto initialize_dispatch_exec_buf_end_cmd = [&](CQDispatchCmd *exec_buf_end_cmd) {
+            exec_buf_end_cmd->base.cmd_id = CQ_DISPATCH_CMD_EXEC_BUF_END;
+        };
+
+        CQPrefetchCmd *prefetch_exec_buf_end_cmd_dst = this->reserve_space<CQPrefetchCmd *>(sizeof(CQPrefetchCmd));
+        CQDispatchCmd *dispatch_exec_buf_end_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd prefetch_exec_buf_end_cmd;
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd dispatch_exec_buf_end_cmd;
+            initialize_prefetch_exec_buf_end_cmd(&prefetch_exec_buf_end_cmd);
+            initialize_dispatch_exec_buf_end_cmd(&dispatch_exec_buf_end_cmd);
+            this->memcpy(prefetch_exec_buf_end_cmd_dst, &prefetch_exec_buf_end_cmd, sizeof(CQPrefetchCmd));
+            this->memcpy(dispatch_exec_buf_end_cmd_dst, &dispatch_exec_buf_end_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_prefetch_exec_buf_end_cmd(prefetch_exec_buf_end_cmd_dst);
+            initialize_dispatch_exec_buf_end_cmd(dispatch_exec_buf_end_cmd_dst);
+        }
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
+
+    void update_cmd_sequence(uint32_t cmd_offsetB, const void *new_data, uint32_t data_sizeB) {
+        this->memcpy((char *)this->cmd_region + cmd_offsetB, new_data, data_sizeB);
+    }
+
+    void add_data(const void *data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB) {
+        this->validate_cmd_write(cmd_write_offset_incrementB);
+        this->memcpy((uint8_t *)this->cmd_region + this->cmd_write_offsetB, data, data_size_to_copyB);
+        this->cmd_write_offsetB += cmd_write_offset_incrementB;
+    }
+
+    template <typename PackedSubCmd>
+    void add_dispatch_write_packed(
+        uint16_t num_sub_cmds,
+        uint32_t common_addr,
+        uint16_t packed_data_sizeB,
+        uint32_t payload_sizeB,
+        const std::vector<PackedSubCmd> &sub_cmds,
+        const std::vector<std::pair<const void *, uint32_t>> &data_collection,
+        uint32_t packed_write_max_unicast_sub_cmds,
+        const uint32_t offset_idx = 0,
+        const bool no_stride = false,
+        uint32_t write_offset_index = 0) {
+        static_assert(
+            std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
+            std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
+        bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
+
+        uint32_t packed_write_max_multicast_sub_cmds = get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
+        uint32_t max_num_packed_sub_cmds = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value ? packed_write_max_unicast_sub_cmds : packed_write_max_multicast_sub_cmds;
+        TT_FATAL(
+            num_sub_cmds <= max_num_packed_sub_cmds,
+            "Max number of packed sub commands are {} but requesting {}",
+            max_num_packed_sub_cmds,
+            num_sub_cmds);
+
+        constexpr bool flush_prefetch = true;
+        this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
+
+        auto initialize_write_packed_cmd = [&](CQDispatchCmd *write_packed_cmd) {
+            write_packed_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
+            write_packed_cmd->write_packed.flags =
+                (multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE) |
+                (no_stride ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE);
+            write_packed_cmd->write_packed.count = num_sub_cmds;
+            write_packed_cmd->write_packed.write_offset_index = write_offset_index;
+            write_packed_cmd->write_packed.addr = common_addr;
+            write_packed_cmd->write_packed.size = packed_data_sizeB;
+        };
+        CQDispatchCmd *write_packed_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_packed_cmd;
+            initialize_write_packed_cmd(&write_packed_cmd);
+            this->memcpy(write_packed_cmd_dst, &write_packed_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_write_packed_cmd(write_packed_cmd_dst);
+        }
+
+        static_assert(sizeof(PackedSubCmd) % sizeof(uint32_t) == 0);
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(PackedSubCmd);
+        this->memcpy((char *)this->cmd_region + this->cmd_write_offsetB, &sub_cmds[offset_idx], sub_cmds_sizeB);
+
+        uint32_t increment_sizeB =
+            align(sub_cmds_sizeB, L1_ALIGNMENT);  // this assumes CQDispatchCmd is L1_ALIGNEMENT aligned
+        this->cmd_write_offsetB += increment_sizeB;
+
+        // copy the actual data
+        increment_sizeB = align(packed_data_sizeB, L1_ALIGNMENT);
+        uint32_t num_data_copies = no_stride ? 1 : num_sub_cmds;
+        for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
+            this->memcpy(
+                (char *)this->cmd_region + this->cmd_write_offsetB,
+                data_collection[i].first,
+                data_collection[i].second);
+            this->cmd_write_offsetB += increment_sizeB;
+        }
+
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
+
+    // Tuple in data_collection is:
+    //  0:address, 1:size, 2:stride
+    template <typename PackedSubCmd>
+    void add_dispatch_write_packed(
+        uint16_t num_sub_cmds,
+        uint32_t common_addr,
+        uint16_t packed_data_sizeB,
+        uint32_t payload_sizeB,
+        const std::vector<PackedSubCmd> &sub_cmds,
+        const std::vector<std::vector<std::tuple<const void *, uint32_t, uint32_t>>> &data_collection,
+        uint32_t packed_write_max_unicast_sub_cmds,
+        const uint32_t offset_idx = 0,
+        const bool no_stride = false,
+        uint32_t write_offset_index = 0) {
+        static_assert(
+            std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
+            std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
+        bool multicast = std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value;
+
+        uint32_t packed_write_max_multicast_sub_cmds = get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
+        uint32_t max_num_packed_sub_cmds = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value ? packed_write_max_unicast_sub_cmds : packed_write_max_multicast_sub_cmds;
+        TT_ASSERT(
+            num_sub_cmds <= max_num_packed_sub_cmds,
+            "Max number of packed sub commands are {} but requesting {}",
+            max_num_packed_sub_cmds,
+            num_sub_cmds);
+
+        constexpr bool flush_prefetch = true;
+        this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
+
+        auto initialize_write_packed_cmd = [&](CQDispatchCmd *write_packed_cmd) {
+            write_packed_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
+            write_packed_cmd->write_packed.flags =
+                (multicast ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE) |
+                (no_stride ? CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NO_STRIDE : CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_NONE);
+            write_packed_cmd->write_packed.count = num_sub_cmds;
+            write_packed_cmd->write_packed.write_offset_index = write_offset_index;
+            write_packed_cmd->write_packed.addr = common_addr;
+            write_packed_cmd->write_packed.size = packed_data_sizeB;
+        };
+        CQDispatchCmd *write_packed_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_packed_cmd;
+            initialize_write_packed_cmd(&write_packed_cmd);
+            this->memcpy(write_packed_cmd_dst, &write_packed_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_write_packed_cmd(write_packed_cmd_dst);
+        }
+
+        static_assert(sizeof(PackedSubCmd) % sizeof(uint32_t) == 0);
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(PackedSubCmd);
+        this->memcpy((char *)this->cmd_region + this->cmd_write_offsetB, &sub_cmds[offset_idx], sub_cmds_sizeB);
+
+        uint32_t increment_sizeB =
+            align(sub_cmds_sizeB, L1_ALIGNMENT);  // this assumes CQDispatchCmd is L1_ALIGNEMENT aligned
+        this->cmd_write_offsetB += increment_sizeB;
+
+        // copy the actual data
+        increment_sizeB = align(packed_data_sizeB, L1_ALIGNMENT);
+        uint32_t num_data_copies = no_stride ? 1 : num_sub_cmds;
+        for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
+            uint32_t offset = 0;
+            for (auto& data : data_collection[i]) {
+                this->memcpy(
+                    (char *)this->cmd_region + this->cmd_write_offsetB + offset,
+                    std::get<0>(data),
+                    std::get<1>(data));
+                offset += std::get<2>(data);
+            }
+            this->cmd_write_offsetB += increment_sizeB;
+        }
+
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
+
+    void add_dispatch_write_packed_large(
+        uint16_t alignment,
+        uint16_t num_sub_cmds,
+        const std::vector<CQDispatchWritePackedLargeSubCmd> &sub_cmds,
+        const uint32_t offset_idx = 0,
+        uint32_t write_offset_index = 0) {
+
+        TT_ASSERT(num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS, "Cannot fit {} sub cmds in one CQDispatchWritePackedLargeCmd", num_sub_cmds);
+        static_assert(sizeof(CQDispatchWritePackedLargeSubCmd) % sizeof(uint32_t) == 0);
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQDispatchWritePackedLargeSubCmd);
+        constexpr bool flush_prefetch = false;
+        uint32_t payload_size = align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, L1_ALIGNMENT);
+        this->add_prefetch_relay_inline(flush_prefetch, payload_size);
+
+        auto initialize_write_packed_large_cmd = [&](CQDispatchCmd *write_packed_large_cmd) {
+            write_packed_large_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED_LARGE;
+            write_packed_large_cmd->write_packed_large.count = num_sub_cmds;
+            write_packed_large_cmd->write_packed_large.alignment = alignment;
+            write_packed_large_cmd->write_packed_large.write_offset_index = write_offset_index;
+        };
+        uint32_t payload_dst_size = align(sizeof(CQPrefetchCmd) + payload_size, PCIE_ALIGNMENT) - sizeof(CQPrefetchCmd);
+        CQDispatchCmd * write_packed_large_cmd_dst = this->reserve_space<CQDispatchCmd *>(payload_dst_size);
+        char * write_packed_large_sub_cmds_dst = (char *)write_packed_large_cmd_dst + sizeof(CQDispatchCmd);
+
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_packed_large_cmd;
+            initialize_write_packed_large_cmd(&write_packed_large_cmd);
+            this->memcpy(write_packed_large_cmd_dst, &write_packed_large_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_write_packed_large_cmd(write_packed_large_cmd_dst);
+        }
+
+        this->memcpy(write_packed_large_sub_cmds_dst, &sub_cmds[offset_idx], sub_cmds_sizeB);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+    }
+
+    template <typename CommandPtr, bool data = false>
+    CommandPtr reserve_space(uint32_t size_to_writeB) {
+        this->validate_cmd_write(size_to_writeB);
+        CommandPtr cmd = (CommandPtr)((char *)this->cmd_region + this->cmd_write_offsetB);
+        // Only zero out cmds
+        if constexpr (!data) {
+            if (zero_init_enable)
+                DeviceCommand::zero(cmd);
+        }
+        this->cmd_write_offsetB += size_to_writeB;
+        return cmd;
+    }
 
    private:
-    uint32_t buffer_transfer_idx;
-    uint32_t program_transfer_idx;
-    void add_buffer_transfer_instruction_preamble(
-        const uint32_t src,
-        const uint32_t dst,
-        const uint32_t num_pages,
-        const uint32_t padded_page_size,
-        const uint32_t src_buf_type,
-        const uint32_t dst_buf_type,
-        const uint32_t src_page_index,
-        const uint32_t dst_page_index
-        );
-    void add_buffer_transfer_instruction_postamble();
+    static bool zero_init_enable;
 
-    struct packet_ {
-        CommandHeader header;
-        std::array<uint32_t, DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND - DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER> data;
-    };
+    void add_prefetch_relay_inline(bool flush, uint32_t lengthB) {
+        if (!flush) {
+            TT_ASSERT(lengthB <= (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE), "Data to relay for inline no flush must fit within one page");
+        }
+        auto initialize_relay_write = [&](CQPrefetchCmd *relay_write) {
+            relay_write->base.cmd_id = flush ? CQ_PREFETCH_CMD_RELAY_INLINE : CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH;
+            relay_write->relay_inline.length = lengthB;
+            relay_write->relay_inline.stride = align(sizeof(CQPrefetchCmd) + lengthB, PCIE_ALIGNMENT);
+        };
+        CQPrefetchCmd *relay_write_dst = this->reserve_space<CQPrefetchCmd *>(sizeof(CQPrefetchCmd));
 
-    packet_ packet;
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQPrefetchCmd relay_write;
+            initialize_relay_write(&relay_write);
+            this->memcpy(relay_write_dst, &relay_write, sizeof(CQPrefetchCmd));
+        } else {
+            initialize_relay_write(relay_write_dst);
+        }
+    }
+
+    void validate_cmd_write(uint32_t data_sizeB) const {
+        uint32_t data_endB = this->cmd_write_offsetB + data_sizeB;
+        TT_ASSERT(
+            data_endB <= this->cmd_sequence_sizeB,
+            "Out of bounds command sequence write: attemping to write {} B but only {} B available",
+            data_sizeB,
+            this->cmd_sequence_sizeB - this->cmd_write_offsetB);
+    }
+
+    template <typename Command>
+    void zero(Command *cmd) {
+        if constexpr (hugepage_write) {
+            vector_memcpy_aligned<char> zero_cmd(sizeof(Command), 0);
+            this->memcpy(cmd, zero_cmd.data(), sizeof(Command));
+        } else {
+            std::fill((uint8_t *)cmd, (uint8_t *)cmd + sizeof(Command), 0);
+        }
+    }
+
+    void deepcopy(const DeviceCommand &other) {
+        if (other.cmd_region_vector.empty() and other.cmd_region != nullptr) {
+            this->cmd_region = other.cmd_region;
+        } else if (not other.cmd_region_vector.empty()) {
+            TT_ASSERT(other.cmd_region != nullptr);
+            this->cmd_region = this->cmd_region_vector.data();
+            this->memcpy(this->cmd_region, other.cmd_region_vector.data(), this->cmd_sequence_sizeB);
+        }
+    }
+
+    void memcpy(void *__restrict dst, const void *__restrict src, size_t n) {
+        if constexpr (hugepage_write) {
+            memcpy_to_device(dst, src, n);
+        } else {
+            std::memcpy(dst, src, n);
+        }
+    }
+
+    uint32_t cmd_sequence_sizeB = 0;
+    void *cmd_region = nullptr;
+    uint32_t cmd_write_offsetB = 0;
+
+    vector_memcpy_aligned<uint32_t> cmd_region_vector;
 };
+
+template <bool hugepage_write>
+bool DeviceCommand<hugepage_write>::zero_init_enable = tt::parse_env<bool>("TT_METAL_ZERO_INIT_ENABLE", false);
+
+using HugepageDeviceCommand = DeviceCommand<true>;
+using HostMemDeviceCommand = DeviceCommand<false>;

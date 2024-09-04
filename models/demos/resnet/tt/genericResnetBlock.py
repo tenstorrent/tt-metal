@@ -4,7 +4,7 @@
 
 from typing import Type, Union, Optional, List, Callable
 
-import tt_lib
+import ttnn
 import torch
 import torch.nn as nn
 import math
@@ -31,8 +31,8 @@ def unpad_from_zero(x, desired_shape):
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
-        if x.get_layout() != tt_lib.tensor.Layout.ROW_MAJOR:
-            x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
+        if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            x = x.to(ttnn.ROW_MAJOR_LAYOUT)
         x = x.unpad(
             (0, 0, 0, 0),
             (
@@ -126,7 +126,7 @@ class Bottleneck(nn.Module):
         )
         self.bn3.eval()
 
-        self.relu = tt_lib.tensor.relu
+        self.relu = ttnn.relu
         self.downsample = downsample
         self.stride = stride
 
@@ -229,7 +229,7 @@ class Bottleneck(nn.Module):
         elif self.downsample is not None:
             identity = self.downsample(x)
 
-        out = tt_lib.tensor.add(out, identity)
+        out = ttnn.add(out, identity)
 
         out = self.relu(out)
 
@@ -284,7 +284,7 @@ class BasicBlock(nn.Module):
         )
         self.bn1.eval()
 
-        self.relu = tt_lib.tensor.relu
+        self.relu = ttnn.relu
 
         conv2_weight = state_dict[f"{base_address}.conv2.weight"]
         conv2_bias = None
@@ -379,7 +379,7 @@ class BasicBlock(nn.Module):
         elif self.downsample is not None:
             identity = self.downsample(x)
 
-        out = tt_lib.tensor.add(out, identity)
+        out = ttnn.add(out, identity)
 
         out = self.relu(out)
 
@@ -462,7 +462,7 @@ class ResNet(nn.Module):
                 padding=3,
             )
 
-        self.relu = tt_lib.tensor.relu
+        self.relu = ttnn.relu
         self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True)
         self.layer1 = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict)
         self.layer2 = self._make_layer(
@@ -495,19 +495,19 @@ class ResNet(nn.Module):
         self.avgpool = TtAvgPool(self.device)
 
         fc_weight = pad_weight(state_dict[f"{self.base_address_with_dot}fc.weight"])
-        fc_weight = tt_lib.tensor.Tensor(
+        fc_weight = ttnn.Tensor(
             fc_weight.reshape(-1).tolist(),
             fc_weight.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        ).to(tt_lib.tensor.Layout.TILE)
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+        ).to(ttnn.TILE_LAYOUT)
         fc_bias = pad_weight(state_dict[f"{self.base_address_with_dot}fc.bias"])
-        fc_bias = tt_lib.tensor.Tensor(
+        fc_bias = ttnn.Tensor(
             fc_bias.reshape(-1).tolist(),
             fc_bias.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        ).to(tt_lib.tensor.Layout.TILE)
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+        ).to(ttnn.TILE_LAYOUT)
 
         self.fc = TtLinear(512 * block.expansion, 1024, fc_weight, fc_bias, self.device)  # num_classes = 1000
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
@@ -628,7 +628,7 @@ class ResNet(nn.Module):
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         x = torch.permute(x, (0, 2, 3, 1))
-        x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
+        x = ttnn.Tensor(x, ttnn.bfloat16)
         x = x.pad(
             (
                 x.get_legacy_shape()[0],

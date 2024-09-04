@@ -6,14 +6,14 @@ import pytest
 import torch
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import untilize, comp_pcc
 from models.utility_functions import is_grayskull
 
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.FLOAT32),
+    (ttnn.bfloat16, ttnn.float32),
     ids=["bfloat16", "float"],
 )
 @pytest.mark.parametrize(
@@ -38,7 +38,7 @@ from models.utility_functions import is_grayskull
     ),
 )
 def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
-    if is_grayskull() and dtype == ttl.tensor.DataType.FLOAT32:
+    if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
     shape = [nb, nc, 32 * nh, 32 * nw]
@@ -47,55 +47,30 @@ def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
 
     torch.manual_seed(10)
 
-    if dtype == ttl.tensor.DataType.FLOAT32:
+    if dtype == ttnn.float32:
         inp = torch.rand(*shape).float() * 1000.0
     else:
         inp = torch.rand(*shape).bfloat16()
-    # for b in range(0, nb):
-    #     for c in range(0, nc):
-    #         for h in range(0, 32 * nh):
-    #             for w in range(0, 32 * nw):
-    #                 inp[b][c][h][w] = 1 + w // 32
-    # print(f"{inp}")
 
-    a = ttl.tensor.Tensor(
+    a = ttnn.Tensor(
         inp.flatten().tolist(),
         shape,
         dtype,
-        ttl.tensor.Layout.TILE,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
-    # a_sharded = ttl.tensor.interleaved_to_sharded(
-    #     a,
-    #     [12, 9],
-    #     [a.get_legacy_shape()[-2] // 100, a.get_legacy_shape()[-1]],
-    #     ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-    #     ttl.tensor.ShardOrientation.ROW_MAJOR,
-    # )
-    # out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
-    out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
-    # print(f"{a}")
-    b1 = ttl.tensor.untilize(a, out_mem_config, use_multicore=True, use_pack_untilize=True)
-    # b2 = ttl.tensor.untilize(a_sharded, out_mem_config, use_multicore=True, use_pack_untilize=False)
+    b1 = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True, use_pack_untilize=True)
     c1 = b1.cpu().to_torch()
-    # c2 = b2.cpu().to_torch()
-
-    # print(f"{c.shape}")
-    # torch.save(c, "output.pt")
 
     untilized_inp = untilize(inp)
-    # print(f"{untilized_inp.shape}")
-    # torch.save(untilized_inp, "golden.pt")
 
-    if dtype == ttl.tensor.DataType.FLOAT32:
+    if dtype == ttnn.float32:
         passing1, output = comp_pcc(untilized_inp, c1, 0.999999)
         logger.info(output)
     else:
         passing1 = torch.equal(untilized_inp, c1)
-    # print(f'OUTPUT: {untilized_inp}')
-    # print(f'GOLDEN: {c1}')
-    # passing2 = torch.equal(untilized_inp, c2)
+
     assert passing1
-    # assert passing1 and passing2

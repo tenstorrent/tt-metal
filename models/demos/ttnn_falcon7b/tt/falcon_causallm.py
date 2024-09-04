@@ -4,7 +4,6 @@
 
 from typing import Optional, Tuple
 
-import tt_lib
 import ttnn
 
 from models.demos.ttnn_falcon7b.tt.falcon_model import TtFalconModelShared
@@ -43,14 +42,14 @@ class TtFalconCausalLM(TtFalconModelShared):
 
     def __call__(
         self,
-        input_embeddings: tt_lib.tensor.Tensor,
+        input_embeddings: ttnn.Tensor,
         llm_mode: str,
-        attention_mask: tt_lib.tensor.Tensor = None,
+        attention_mask: ttnn.Tensor = None,
         user_id: int = 0,
-        layer_past: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        layer_past: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         layer_past_len: int = 0,
         use_cache: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         hidden_states, presents = super().__call__(
             input_embeddings=input_embeddings,
             attention_mask=attention_mask,
@@ -66,7 +65,6 @@ class TtFalconCausalLM(TtFalconModelShared):
             self.lm_head_weights,
             memory_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
-            use_1d_systolic_array=True,
             core_grid=self.core_grid,
         )
 

@@ -5,7 +5,7 @@
 import torch
 import pytest
 from torch import nn
-import tt_lib
+import ttnn
 from loguru import logger
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from models.llama.llama_utils import (
@@ -33,8 +33,8 @@ def tt_llama_second_half_decoders(
 ):
     position_ids_padded = gen_position_ids(inputs)
 
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.SetDefaultDevice(device)
+    device = ttnn.open_device(0)
+    ttnn.SetDefaultDevice(device)
     tt_inputs = torch_to_tt_tensor_rm(inputs, device)
 
     logger.debug(f"The call of the second half started")
@@ -54,7 +54,7 @@ def tt_llama_second_half_decoders(
     second_out = tt_to_torch_tensor(second_out)
     logger.debug(f"The call of the second half ended")
 
-    tt_lib.device.CloseDevice(device)
+    ttnn.close_device(device)
 
     return second_out
 
@@ -94,9 +94,7 @@ def test_llama_second_half(pcc, model_location_generator, reset_seeds):
     base_url = _base_url
     max_position_embeddings = _max_position_embeddings
 
-    input_loc = model_location_generator(
-        "llama/LlamaForCausalLM/inputs/first_half_output.pt"
-    )
+    input_loc = model_location_generator("llama/LlamaForCausalLM/inputs/first_half_output.pt")
 
     # how many decoders to use
     second_decoder_start = _second_decoder_start
@@ -106,9 +104,7 @@ def test_llama_second_half(pcc, model_location_generator, reset_seeds):
 
     # load llama pytorch model ================================================
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        llama_model_name
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(llama_model_name)
 
     hugging_face_reference_model.eval()
     # get configurations
@@ -120,18 +116,14 @@ def test_llama_second_half(pcc, model_location_generator, reset_seeds):
     input_ids = real_inputs.input_ids
 
     is_input_padded = True
-    input_ids_padded, _, position_ids_padded = prepare_llama_input(
-        prompt, tokenizer, configuration, is_input_padded
-    )
+    input_ids_padded, _, position_ids_padded = prepare_llama_input(prompt, tokenizer, configuration, is_input_padded)
 
     second_half_input = torch.load(input_loc)
     second_half_input = second_half_input.squeeze(1)
     # TT output: call forward() function several times ========================
     with torch.no_grad():
         # call huggingface model
-        pt_llama_second_half = PytorchLlamaDecoderModelStacked(
-            hugging_face_reference_model, decoder_stack_list
-        )
+        pt_llama_second_half = PytorchLlamaDecoderModelStacked(hugging_face_reference_model, decoder_stack_list)
         pt_llama_second_half.eval()
         pytorch_out = pt_llama_second_half(x=second_half_input, y=position_ids_padded)
 

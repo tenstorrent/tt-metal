@@ -10,7 +10,7 @@ from diffusers import StableDiffusionPipeline
 from loguru import logger
 
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,
@@ -71,7 +71,7 @@ def test_run_resnet_inference(device):
     tt_temb = torch_to_tt_tensor_rm(temb, device, put_on_device=False)
 
     tt_out = tt_resnet(tt_input, tt_temb)
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     tt_output = tt_to_torch_tensor(tt_out)
 
     passing = comp_pcc(torch_output, tt_output)

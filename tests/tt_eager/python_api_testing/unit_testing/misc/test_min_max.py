@@ -5,7 +5,7 @@
 import torch
 import pytest
 from functools import partial
-import tt_lib as ttl
+import ttnn
 
 
 @pytest.mark.parametrize(
@@ -34,8 +34,8 @@ import tt_lib as ttl
 @pytest.mark.parametrize(
     "layout",
     (
-        ttl.tensor.Layout.ROW_MAJOR,
-        ttl.tensor.Layout.TILE,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT,
     ),
 )
 def test_min_max_for_dim_hw(device, use_program_cache, shape_dim, kind, layout):
@@ -63,16 +63,16 @@ def test_min_max_for_dim_hw(device, use_program_cache, shape_dim, kind, layout):
 
     # print(f"x.max/min = {value}")
 
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(layout).to(device)
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).to(layout).to(device)
     if kind == "max":
-        tt_npu = ttl.tensor.global_max(dev_x)
+        tt_npu = ttnn.max(dev_x)
     elif kind == "min":
-        tt_npu = ttl.tensor.global_min(dev_x)
+        tt_npu = ttnn.min(dev_x)
     else:
         assert kind == "mean"
-        tt_npu = ttl.tensor.global_mean(dev_x)
+        tt_npu = ttnn.mean(dev_x)
 
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     comparison_fn = torch.equal
     if kind == "mean":

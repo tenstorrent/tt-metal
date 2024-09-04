@@ -7,10 +7,10 @@ import math
 from torch.nn import functional as F
 from functools import partial
 
+import ttnn
+
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_block as bloom_block
-import tt_lib as ttl
-from tt_lib.fallback_ops import fallback_ops
 from typing import Optional, Tuple, Union
 from models.utility_functions import pad_by_zero
 
@@ -325,10 +325,10 @@ class TtBloomModel(torch.nn.Module):
         )[0]
 
         self.word_embeddings_layernorm = partial(
-            ttl.tensor.layernorm,
-            gamma=self.word_embeddings_layernorm_weight,
-            beta=self.word_embeddings_layernorm_bias,
-            eps=config.layer_norm_epsilon,
+            ttnn.layer_norm,
+            weight=self.word_embeddings_layernorm_weight,
+            bias=self.word_embeddings_layernorm_bias,
+            epsilon=config.layer_norm_epsilon,
         )
 
         # Transformer blocks
@@ -345,10 +345,10 @@ class TtBloomModel(torch.nn.Module):
 
         # Final Layer Norm
         self.ln_f = partial(
-            ttl.tensor.layernorm,
-            gamma=self.ln_f_weight,
-            beta=self.ln_f_bias,
-            eps=config.layer_norm_epsilon,
+            ttnn.layer_norm,
+            weight=self.ln_f_weight,
+            bias=self.ln_f_bias,
+            epsilon=config.layer_norm_epsilon,
         )
 
     def build_alibi_tensor(self, attention_mask: torch.Tensor, num_heads: int, dtype: torch.dtype) -> torch.Tensor:

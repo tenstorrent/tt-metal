@@ -20,7 +20,7 @@
 #include "dataflow_api.h"
 #include "noc_addr_ranges_gen.h"
 
-#include <kernel.cpp>
+#include <kernel_includes.hpp>
 
 uint8_t noc_index = NOC_INDEX;
 

@@ -22,7 +22,7 @@ The headers for the CSV are explained under `Perf Report Headers`_.
 
 **IMPORTANT NOTES**:
 
-- If this is the first time you are running ``profile_this.py``, it requires `developer dependencies <https://github.com/tenstorrent-metal/tt-metal/blob/main/INSTALLING.md#step-4-installing-developer-dependencies>`_ to be installed.
+- If this is the first time you are running ``profile_this.py``, it requires `developer dependencies <https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md#step-4-installing-developer-dependencies>`_ to be installed.
 - If you have done a reset on your GS device with ``tt_smi`` or ``tensix_reset.sh``, profiling results are not valid due to tensix cores' skewed timer starts. You need to perform a full reboot with ``sudo reboot`` on your host machine to align the timer starts. WH does not have this issue and profiling can be performed after ``tt_smi`` resets.
 
 - In order to populate program cache, tests should run their inference layer at least twice and should run it in the same process. If pytest is being used, that would be running in

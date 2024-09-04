@@ -9,7 +9,7 @@ from functools import partial
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
-import tt_lib as ttl
+import ttnn
 
 params = [
     pytest.param([[5, 5, 50, 50]], tilize_with_val_padding_args)
@@ -23,16 +23,11 @@ params += [
     pytest.param(
         [[1, 1, 120, 7300]],
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
-            "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-            ],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             "output_tensor_shape": [1, 1, 128, 7328],
-            "input_tensor_start": [0, 0, 0, 0],
             "pad_value": 10,
         },
     )

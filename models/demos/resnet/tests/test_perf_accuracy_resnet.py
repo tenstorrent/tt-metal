@@ -4,28 +4,28 @@
 
 import torch
 from loguru import logger
-from torchvision import models
 from transformers import AutoImageProcessor
 import pytest
 import numpy as np
 from loguru import logger
-import tt_lib
+import ttnn
 
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     profiler,
     is_e75,
+    skip_for_wormhole_b0,
 )
 from models.perf.perf_utils import prep_perf_report
-from models.demos.resnet.tests.demo_utils import get_data
+from models.demos.resnet.tests.demo_utils import get_data, load_resnet50_model
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 from datasets import load_dataset
 
 model_config = {
-    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.HiFi2,
-    "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
-    "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
+    "MATH_FIDELITY": ttnn.MathFidelity.HiFi2,
+    "WEIGHTS_DTYPE": ttnn.bfloat8_b,
+    "ACTIVATIONS_DTYPE": ttnn.bfloat8_b,
 }
 
 
@@ -52,7 +52,7 @@ def run_perf_resnet(
     inputs = inputs["pixel_values"].repeat([batch_size, 1, 1, 1])
     comments = f"{list(inputs.shape)[-2]}x{list(inputs.shape)[-1]}_batchsize{batch_size}"
 
-    torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+    torch_resnet50 = load_resnet50_model(model_location_generator)
     torch_resnet50.eval()
 
     state_dict = torch_resnet50.state_dict()
@@ -160,42 +160,14 @@ def run_perf_resnet(
     logger.info(f"resnet50 inference for {batch_size}x{iterations} Samples: {third_iter_time}")
 
 
+@skip_for_wormhole_b0(reason_str="Not tested on single WH")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time, iterations",
-    ((16, 0.015, 33, 160), (20, 0.0185, 33, 160)),
+    ((16, 0.015, 14.5, 160), (20, 0.014, 14.5, 160)),
 )
 def test_perf_bare_metal(
-    device,
-    use_program_cache,
-    model_location_generator,
-    batch_size,
-    expected_inference_time,
-    expected_compile_time,
-    hf_cat_image_sample_input,
-    iterations,
-    function_level_defaults,
-):
-    if is_e75(device):
-        pytest.skip("Resnet is not supported on E75")
-
-    run_perf_resnet(
-        model_location_generator,
-        batch_size,
-        expected_inference_time,
-        expected_compile_time,
-        hf_cat_image_sample_input,
-        iterations,
-        device,
-    )
-
-
-@pytest.mark.models_performance_virtual_machine
-@pytest.mark.parametrize(
-    "batch_size, expected_inference_time, expected_compile_time, iterations",
-    ((16, 0.015, 36, 50), (20, 0.016, 36, 50)),
-)
-def test_perf_virtual_machine(
     device,
     use_program_cache,
     model_location_generator,

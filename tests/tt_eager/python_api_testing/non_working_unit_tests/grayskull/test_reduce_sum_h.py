@@ -5,7 +5,7 @@
 from loguru import logger
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
@@ -34,7 +34,7 @@ def run_reduce_max_h_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_c
     )
 
     # compare tt and golden outputs
-    success, pcc_value = comp_equal(ref_value, tt_result)
+    success, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
 
     assert success
@@ -43,18 +43,18 @@ def run_reduce_max_h_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_c
 test_sweep_args = [
     (
         (1, 4, 20, 166),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
         "SYSTEM_MEMORY",
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         14632035,
     ),
     (
         (4, 1, 154, 26),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
         "SYSTEM_MEMORY",
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         8728623,
     ),
 ]

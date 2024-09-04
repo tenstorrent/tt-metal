@@ -8,63 +8,13 @@ from typing import Union
 import ttnn
 
 
-def _zeros_like_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
-
-
 def _golden_function(input_tensor: ttnn.Tensor, **_):
     import torch
 
     return torch.zeros_like(input_tensor)
 
 
-@ttnn.register_operation(
-    name="ttnn.zeros_like",
-    validate_input_tensors=_zeros_like_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def zeros_like(
-    input_tensor: ttnn.Tensor,
-    *,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
-    zeros_like(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Returns a new tensor filled with zero by taking input tensor shape as reference.
-
-    Args:
-        * :attr:`input_tensor`: the input tensor for reference shape
-
-    Keyword Args:
-        * :attr:`memory_config`: the memory configuration for the output tensor
-    """
-
-    original_shape = input_tensor.shape
-    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    output_tensor = ttnn.experimental.tensor.zeros_like(input_tensor, output_mem_config=memory_config)
-    output_tensor = ttnn.reshape(output_tensor, original_shape)
-    return output_tensor
-
-
-def _ones_like_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
+ttnn.attach_golden_function(ttnn.zeros_like, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, **_):
@@ -73,45 +23,7 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
     return torch.ones_like(input_tensor)
 
 
-@ttnn.register_operation(
-    name="ttnn.ones_like",
-    validate_input_tensors=_ones_like_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def ones_like(
-    input_tensor: ttnn.Tensor,
-    *,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
-    ones_like(input_tensor: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Returns a new tensor filled with one by taking input tensor shape as reference.
-
-    Args:
-        * :attr:`input_tensor`: the input tensor for reference shape
-
-    Keyword Args:
-        * :attr:`memory_config`: the memory configuration for the output tensor
-    """
-
-    original_shape = input_tensor.shape
-    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    output_tensor = ttnn.experimental.tensor.ones_like(input_tensor, output_mem_config=memory_config)
-    output_tensor = ttnn.reshape(output_tensor, original_shape)
-    return output_tensor
-
-
-def _full_like_validate_input_tensors(operation_name, input_tensor, *args, **kwargs):
-    ttnn.validate_input_tensor(
-        operation_name,
-        input_tensor,
-        ranks=(2, 3, 4),
-        dtypes=(ttnn.bfloat16, ttnn.bfloat8_b),
-        layouts=(ttnn.ROW_MAJOR_LAYOUT,),
-        can_be_on_device=True,
-        can_be_on_cpu=False,
-    )
+ttnn.attach_golden_function(ttnn.ones_like, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
@@ -120,36 +32,16 @@ def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
     return torch.full_like(input_tensor, fill_value)
 
 
-@ttnn.register_operation(
-    name="ttnn.full_like",
-    validate_input_tensors=_full_like_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def full_like(
-    input_tensor: ttnn.Tensor,
-    *,
-    fill_value: float,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
+ttnn.attach_golden_function(ttnn.full_like, golden_function=_golden_function)
 
-    full_like(input_tensor: ttnn.Tensor, *, fill_value: float, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
 
-    Returns a new tensor filled with scalar value by taking input tensor shape as reference.
+def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
+    import torch
 
-    Args:
-        * :attr:`input_tensor`: the input tensor for reference shape
+    return torch.empty_like(input_tensor, fill_value)
 
-    Keyword Args:
-        * :attr:`fill_value`: the value to be filled
-        * :attr:`memory_config`: the memory configuration for the output tensor
-    """
 
-    original_shape = input_tensor.shape
-    input_tensor = ttnn.unsqueeze_to_4D(input_tensor)
-    output_tensor = ttnn.experimental.tensor.full_like(input_tensor, fill_value, output_mem_config=memory_config)
-    output_tensor = ttnn.reshape(output_tensor, original_shape)
-    return output_tensor
+ttnn.attach_golden_function(ttnn.empty_like, golden_function=_golden_function)
 
 
 def _golden_function(input_shape: ttnn.Shape, **_):
@@ -158,42 +50,7 @@ def _golden_function(input_shape: ttnn.Shape, **_):
     return torch.zeros(input_shape)
 
 
-def _zeros_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
-    ...
-
-
-@ttnn.register_operation(
-    name="ttnn.zeros",
-    validate_input_tensors=_zeros_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def zeros(
-    input_shape: ttnn.Shape,
-    *,
-    device: ttnn.Device,
-    dtype: Union[ttnn.DataType, str] = ttnn.bfloat16,
-    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
-
-    zeros(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.TILE_LAYOUT, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Returns a new tensor filled with zeros by taking input tensor shape as reference.
-
-    Args:
-        * :attr:`input_shape`: the input shape for reference
-
-    Keyword Args:
-        * :attr:`device`: the device for the output tensor
-        * :attr:`dtype`: the data type for the output tensor
-        * :attr:`layout`: the layout for the output tensor
-        * :attr:`memory_config`: the memory configuration for the output tensor
-    """
-    output_tensor = ttnn.experimental.tensor.zeros(
-        input_shape, data_type=dtype, layout=layout, device=device, output_mem_config=memory_config
-    )
-    return output_tensor
+ttnn.attach_golden_function(ttnn.zeros, golden_function=_golden_function)
 
 
 def _golden_function(input_shape: ttnn.Shape, **_):
@@ -202,43 +59,7 @@ def _golden_function(input_shape: ttnn.Shape, **_):
     return torch.ones(input_shape)
 
 
-def _ones_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
-    ...
-
-
-@ttnn.register_operation(
-    name="ttnn.ones",
-    validate_input_tensors=_ones_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def ones(
-    input_shape: ttnn.Shape,
-    *,
-    device: ttnn.Device,
-    dtype: Union[ttnn.DataType, str] = ttnn.bfloat16,
-    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
-
-    ones(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.TILE_LAYOUT, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Returns a new tensor filled with ones by taking input tensor shape as reference.
-
-    Args:
-        * :attr:`input_shape`: the input shape for reference
-
-    Keyword Args:
-        * :attr:`device`: the device for the output tensor
-        * :attr:`dtype`: the data type for the output tensor
-        * :attr:`layout`: the layout for the output tensor
-        * :attr:`memory_config`: the memory configuration for the output tensor
-    """
-
-    output_tensor = ttnn.experimental.tensor.ones(
-        input_shape, data_type=dtype, layout=layout, device=device, output_mem_config=memory_config
-    )
-    return output_tensor
+ttnn.attach_golden_function(ttnn.ones, golden_function=_golden_function)
 
 
 def _golden_function_full(input_shape: ttnn.Shape, fill_value: float, **_):
@@ -247,96 +68,7 @@ def _golden_function_full(input_shape: ttnn.Shape, fill_value: float, **_):
     return torch.full(input_shape, fill_value=fill_value)
 
 
-def _full_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
-    ...
-
-
-@ttnn.register_operation(
-    name="ttnn.full",
-    validate_input_tensors=_full_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def full(
-    input_shape: ttnn.Shape,
-    *,
-    device: ttnn.Device,
-    dtype: Union[ttnn.DataType, str] = ttnn.bfloat16,
-    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
-    fill_value: float,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
-
-    full(input_shape: ttnn.Shape, *, device: ttnn.Device, dtype: Union[ttnn.DataType, str] = ttnn.bfloat16, layout: ttnn.Layout = ttnn.TILE_LAYOUT, fill_value: float, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Returns a new tensor filled with fill_value by taking input tensor shape as reference.
-
-    Args:
-        * :attr:`input_shape`: the input shape for reference
-
-    Keyword Args:
-        * :attr:`device`: the device for the output tensor
-        * :attr:`dtype`: the data type for the output tensor
-        * :attr:`layout`: the layout for the output tensor
-        * :attr:`fill_value`: the value to be filled
-        * :attr:`memory_config`: the memory configuration for the output tensor
-
-    """
-
-    output_tensor = ttnn.experimental.tensor.full(
-        input_shape,
-        fill_value=fill_value,
-        device=device,
-        data_type=dtype,
-        layout=layout,
-        output_mem_config=memory_config,
-    )
-    return output_tensor
-
-
-def _is_int(value):
-    return isinstance(value, (int))
-
-
-def _golden_function(start: int, end: int, step: int, **_):
-    import torch
-
-    return torch.arange(start, end, step)
-
-
-def _arange_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
-    ...
-
-
-@ttnn.register_operation(
-    name="ttnn.arange",
-    validate_input_tensors=_arange_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def arange(
-    start: int,
-    end: int,
-    step: int,
-    device,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
-
-    arange(start: int, end: int, step: int, device, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
-    Returns a new 1D tensor with the incremented values in size specified by inputs start, end and step.
-
-    Args:
-        * :attr:`start`
-        * :attr:`end`
-        * :attr:`step`
-    """
-    if not _is_int(start) or not _is_int(end) or not _is_int(step):
-        raise TypeError("Expected three arguments to be a int")
-
-    output_tensor = ttnn.experimental.tensor.arange(start, end, step, device, output_mem_config=memory_config)
-
-    return output_tensor
+ttnn.attach_golden_function(ttnn.full, golden_function=_golden_function_full)
 
 
 def _golden_function(input_shape: ttnn.Shape, **_):
@@ -345,33 +77,15 @@ def _golden_function(input_shape: ttnn.Shape, **_):
     return torch.empty(input_shape)
 
 
-def _empty_validate_input_tensors(operation_name, input_shape, *args, **kwargs):
-    ...
+ttnn.attach_golden_function(ttnn.empty, golden_function=_golden_function)
 
 
-@ttnn.register_operation(
-    name="ttnn.empty",
-    validate_input_tensors=_empty_validate_input_tensors,
-    golden_function=_golden_function,
-)
-def empty(
-    input_shape: ttnn.Shape,
-    device: ttnn.Device,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    r"""
+def _golden_function(start: int, end: int, step: int, **_):
+    import torch
 
-    empty(input_shape: ttnn.Shape, device: ttnn.Device, memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor
+    return torch.arange(start, end, step)
 
-    Returns a new empty tensor by taking input shape as reference.
 
-    Args:
-        * :attr:`input_shape`: the input shape for reference
-    """
-
-    output_tensor = ttnn.experimental.tensor.empty(input_shape, device=device, output_mem_config=memory_config)
-
-    return output_tensor
-
+ttnn.attach_golden_function(ttnn.arange, golden_function=_golden_function)
 
 __all__ = []

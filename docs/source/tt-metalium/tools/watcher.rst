@@ -1,6 +1,9 @@
 Watcher
 =======
 
+.. note::
+   Tools are only fully supported on source builds.
+
 Overview
 --------
 
@@ -42,6 +45,10 @@ Watcher features can be disabled individually using the following environment va
    export TT_METAL_WATCHER_DISABLE_RING_BUFFER=1
    export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
    export TT_METAL_WATCHER_DISABLE_STATUS=1
+   export TT_METAL_WATCHER_DISABLE_STACK_USAGE=1
+
+   # In certain cases enabling watcher can cause the binary to be too large. In this case, disable inlining.
+   export TT_METAL_WATCHER_NOINLINE=1
 
 Details
 -------
@@ -57,10 +64,10 @@ below:
     #include "debug/status.h"
 
     void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
-        DEBUG_STATUS('N', 'S', 'W');
+        DEBUG_STATUS("NSW");
         while ((*sem_addr) != val)
             ;
-        DEBUG_STATUS('N', 'S', 'D');
+        DEBUG_STATUS("NSD");
     }
 
 Waypoints have no overhead when the watcher is disabled and can be used inside user written kernels.  They indicate
@@ -124,7 +131,7 @@ assert was tripped. An example of an assert and the resulting message is shown b
         uint32_t a = get_arg_val<uint32_t>(0);
         uint32_t b = get_arg_val<uint32_t>(1);
 
-        DEBUG_STATUS('A', 'S', 'T', '1');
+        DEBUG_STATUS("AST1");
         ASSERT(a != b);
     }
 
@@ -190,11 +197,45 @@ watcher log:
 
 .. code-block::
 
-    # The ring buffer has a size of 31 elements, therefore writing 40 entries into the buffer will
-    # result in the oldest 9 entries being dropped. Entries are printed starting with the most recent.
+    # The ring buffer has a size of 32 elements, therefore writing 40 entries into the buffer will
+    # result in the oldest 8 entries being dropped. Entries are printed starting with the most recent.
     Core (x=1,y=1):    R,R,R,R,R rmsg:D0G|BNT smsg:GGGG k_ids:1|0|0
         debug_ring_buffer(latest_written_idx=8)=
         [0x00000028,0x00000027,0x00000026,0x00000025,0x00000024,0x00000023,0x00000022,0x00000021,
          0x00000020,0x0000001f,0x0000001e,0x0000001d,0x0000001c,0x0000001b,0x0000001a,0x00000019,
          0x00000018,0x00000017,0x00000016,0x00000015,0x00000014,0x00000013,0x00000012,0x00000011,
-         0x00000010,0x0000000f,0x0000000e,0x0000000d,0x0000000c,0x0000000b,0x0000000a]
+         0x00000010,0x0000000f,0x0000000e,0x0000000d,0x0000000c,0x0000000b,0x0000000a,0x00000009]
+
+Stack Usage Measurement
+-----------------------
+The watcher will automatically measure the stack usage after each kernel is run, and report the overall stack usage
+per RISC in the log. If a stack overflow is detected, the core will hang and an error will be thrown on host.
+
+.. code-block::
+
+    Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1):   GW,   W,   W,   W,   W  rmsg:D1D|BNt smsg:DDDD k_ids:11|10|0
+        brisc stack usage: 228/768, kernel using most stack: ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp
+        ncrisc stack usage: 192/768, kernel using most stack:  ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp
+        trisc0 stack usage: 252/320, kernel using most stack: ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp
+        trisc1 stack usage: 208/256, kernel using most stack: ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp
+        trisc2 stack usage: 192/768, kernel using most stack: ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp
+
+Debug Delays
+------------
+Watcher can insert NOC transaction delays for debugging purposes. These delays can be specified by
+transaction type and location. Environment variable ``TT_METAL_WATCHER_DELAY`` specifies the number
+of clock cycles to wait for. Similarly to DPRINT, the delay can be set for all cores, or a
+or a subset by setting environment variable ``TT_METAL_*_DEBUG_DELAY_CORES``: x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all.
+The * can be one of: READ, WRITE or ATOMIC indicating whether the delays will be inserted before read, write or atomic NOC
+transactions. Finally, the delay can be set for a specific RISCs (BRISC, NCRISC, TRISC0, TRISC1, TRISC2) through the
+environment variable ``TT_METAL_*_DEBUG_DELAY_RISCVS``: (one of: BR,NC,TR0,TR1,TR2); if not set, the delay
+is applied to all RISCs.
+Note that `TT_METAL_WATCHER` must be set and ``TT_METAL_WATCHER_DISABLE_NOC_SANITIZE`` must not be
+set for the delays to be applied.
+
+For example, the following command will run test_eltwise_binary with a delay of 10 iterations added to both READ and WRITE
+transactions on BRISC core at location 0,0:
+
+.. code-block::
+
+    TT_METAL_WATCHER=1 TT_METAL_WATCHER_DEBUG_DELAY=10 TT_METAL_READ_DEBUG_DELAY_CORES=0,0 TT_METAL_WRITE_DEBUG_DELAY_CORES=0,0 TT_METAL_READ_DEBUG_DELAY_RISCVS=BR TT_METAL_WRITE_DEBUG_DELAY_RISCVS=BR ./build/test/tt_metal/test_eltwise_binary

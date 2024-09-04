@@ -11,6 +11,7 @@
 #include <filesystem>
 
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/program/program.hpp"
 #include "llrt/llrt.hpp"
 #include "tools/profiler/profiler_state.hpp"
 #include "tools/profiler/common.hpp"
@@ -50,8 +51,8 @@ class DeviceProfiler {
         // Device-Core tracy context
         std::map<std::pair<uint16_t,CoreCoord>, TracyTTCtx> device_tracy_contexts;
 
-        // Device-Core tracy context
-        std::vector<tracy::TTDeviceEvent> device_events;
+        // Device events
+        std::set<tracy::TTDeviceEvent> device_events;
 
         // Hash to zone source locations
         std::unordered_map<uint16_t, std::string> hash_to_zone_src_locations;
@@ -71,6 +72,7 @@ class DeviceProfiler {
         // Dumping profile result to file
         void dumpResultToFile(
                 uint32_t runID,
+                uint32_t runHostID,
                 int device_id,
                 CoreCoord core,
                 int core_flat,
@@ -101,7 +103,10 @@ class DeviceProfiler {
 
         //DRAM buffer for device side results
         std::shared_ptr<tt::tt_metal::Buffer> output_dram_buffer = nullptr;
+        std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
 
+        // Device-core Syncdata
+        std::map<CoreCoord, std::tuple<double,double,double>> device_core_sync_info;
 
         //Set the device side file flag
         void setNewLogFlag(bool new_log_flag);
@@ -113,7 +118,7 @@ class DeviceProfiler {
         void setOutputDir(const std::string& new_output_dir);
 
         //Traverse all cores on the device and dump the device profile results
-        void dumpResults(Device *device, const vector<CoreCoord> &worker_cores);
+        void dumpResults(Device *device, const vector<CoreCoord> &worker_cores, bool lastDump);
 };
 
 }  // namespace tt_metal

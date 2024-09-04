@@ -5,6 +5,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -51,7 +52,7 @@ void RunTest(Device *device) {
         return (uint32_t) core.y * 100 * multiplier;
     };
     for (auto &core_range : core_ranges) {
-        CoreCoord core = core_range.start;
+        CoreCoord core = core_range.start_coord;
         std::vector<uint32_t> brisc_rt_args = {
             get_first_arg(device, core, 1),
             get_second_arg(device, core, 1)
@@ -77,14 +78,14 @@ void RunTest(Device *device) {
 
     // Check results
     for (auto &core_range : core_ranges) {
-        CoreCoord core = core_range.start;
+        CoreCoord core = core_range.start_coord;
         std::vector<uint32_t> brisc_result;
         tt_metal::detail::ReadFromDeviceL1(
-            device, core, BRISC_L1_RESULT_BASE, sizeof(uint32_t), brisc_result
+            device, core, L1_UNRESERVED_BASE, sizeof(uint32_t), brisc_result
         );
         std::vector<uint32_t> ncrisc_result;
         tt_metal::detail::ReadFromDeviceL1(
-            device, core, NCRISC_L1_RESULT_BASE, sizeof(uint32_t), ncrisc_result
+            device, core, L1_UNRESERVED_BASE, sizeof(uint32_t), ncrisc_result
         );
         uint32_t expected_result = get_first_arg(device, core, 1) + get_second_arg(device, core, 1);
         if (expected_result != brisc_result[0])
@@ -121,9 +122,13 @@ TEST(Common, AllCoresRunManyTimes) {
         log_info(LogTest, "Running iteration #{}", idx);
         // Need to open/close the device each time in order to reproduce original issue.
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        vector<Device*> devices_;
+        std::vector<chip_id_t> chip_ids;
         for (unsigned int id = 0; id < num_devices; id++) {
-            auto* device = tt::tt_metal::CreateDevice(id);
+            chip_ids.push_back(id);
+        }
+        vector<Device*> devices_;
+        auto reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
+        for (const auto &[id, device] : reserved_devices_) {
             devices_.push_back(device);
         }
 
@@ -133,9 +138,7 @@ TEST(Common, AllCoresRunManyTimes) {
         }
 
         // Close all devices
-        for (unsigned int id = 0; id < devices_.size(); id++) {
-            tt::tt_metal::CloseDevice(devices_.at(id));
-        }
+        tt::tt_metal::detail::CloseDevices(reserved_devices_);
     }
 
 }

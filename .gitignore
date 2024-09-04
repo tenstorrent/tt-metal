@@ -1,6 +1,7 @@
 .cache
 .vscode
 .idea
+runtime
 *.log
 *.csv
 *.xlsx
@@ -9,6 +10,8 @@ test_hlk_args_init_gen
 tt_build
 tt_debug
 build
+build_*
+/python_env/
 
 /llk_out/
 /out/
@@ -19,6 +22,7 @@ coremodel/model/release/
 
 pipegen.yaml
 device_desc.yaml
+.umd/
 /clean
 *coverage.txt
 blobgen_cmd_log
@@ -70,6 +74,7 @@ infra/machine_setup/inventory/
 
 # exclude MNIST etc model downloads
 data/
+hf_data/
 
 # exclude venv
 venv/
@@ -111,3 +116,12 @@ ttnn/tutorials/DiT/
 *.pyi
 
 compile_commands.json
+
+# rpath_check
+ttnn/ttnn/.rpath_checked*
+
+# exclude packages brough in from CPM
+.cpmcache
+
+ClangBuildAnalyzer.ini
+ttnn/ttnn/.rpath_checked__ttnn

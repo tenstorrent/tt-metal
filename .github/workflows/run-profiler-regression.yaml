@@ -1,8 +1,6 @@
-name: "[post-commit] metal - Run profiler regression"
+name: "[internal] metal - Run profiler regression impl"
 
 on:
-
-  workflow_dispatch:
   workflow_call:
 
 jobs:
@@ -13,17 +11,18 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          # No GS as tests now require synced starts. GS profiler tests will run on dedicated BMs
+          # E150
+          {arch: grayskull, runs-on: ["cloud-virtual-machine", "E150", "in-service"], name: E150},
           # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
+          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N150", "in-service"], name: N150},
           # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
+          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N300", "in-service"], name: N300},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
-      CONFIG: ci
       LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
@@ -31,10 +30,18 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: |
-          ./scripts/build_scripts/build_with_profiler_opt.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.runner-info.arch }}_profiler
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
       - name: Run profiler regression tests
         timeout-minutes: 30
         run: |
           ./tests/scripts/run_profiler_regressions.sh
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U0593J2RQRZ # Bill Teng

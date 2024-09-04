@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tensor/tensor.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tensor/owned_buffer_functions.hpp"
-#include "tt_dnn/op_library/tilize/tilize_op.hpp"
-#include "common/constants.hpp"
-#include "tt_numpy/functions.hpp"
-
 #include <algorithm>
 #include <functional>
 #include <random>
+
+#include "common/constants.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "tt_metal/host_api.hpp"
+#include "tt_numpy/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
         Shape shape = {1, 32, 45, 64};
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a =  tt::numpy::random::random(shape).to(device);
-        Tensor b = tilize_with_zero_padding(a);
+        Tensor b = ttnn::tilize_with_zero_padding(a);
         Tensor c =  b.cpu();
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

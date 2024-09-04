@@ -52,7 +52,15 @@ extensions = [
     "sphinxcontrib.email",
     "sphinx.ext.mathjax",
     "breathe",
+    "myst_parser",
 ]
+
+# For markdown and RST files
+source_suffix = {
+    ".rst": "restructuredtext",
+    ".txt": "markdown",
+    ".md": "markdown",
+}
 
 # Napoleon settings
 napoleon_google_docstring = False

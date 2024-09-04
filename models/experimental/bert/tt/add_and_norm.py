@@ -9,7 +9,7 @@ import torch
 from transformers import BertForQuestionAnswering
 import numpy as np
 
-import tt_lib as ttl
+import ttnn
 from models.experimental.bert.fused_ops.add_and_norm import AddAndNorm
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from models.utility_functions import (
@@ -26,47 +26,47 @@ class TtAddAndNormModel(torch.nn.Module):
         if lnorm_type == "attention":
             gamma = pad_weight(state_dict["bert.encoder.layer.0.attention.output.LayerNorm.weight"])
             gamma = (
-                ttl.tensor.Tensor(
+                ttnn.Tensor(
                     gamma.reshape(-1).tolist(),
                     gamma.shape,
-                    ttl.tensor.DataType.BFLOAT16,
-                    ttl.tensor.Layout.ROW_MAJOR,
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
                 )
-                .to(ttl.tensor.Layout.TILE)
+                .to(ttnn.TILE_LAYOUT)
                 .to(device)
             )
             beta = pad_weight(state_dict["bert.encoder.layer.0.attention.output.LayerNorm.bias"])
             beta = (
-                ttl.tensor.Tensor(
+                ttnn.Tensor(
                     beta.reshape(-1).tolist(),
                     beta.shape,
-                    ttl.tensor.DataType.BFLOAT16,
-                    ttl.tensor.Layout.ROW_MAJOR,
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
                 )
-                .to(ttl.tensor.Layout.TILE)
+                .to(ttnn.TILE_LAYOUT)
                 .to(device)
             )
         elif lnorm_type == "ffn":
             gamma = pad_weight(state_dict["bert.encoder.layer.0.output.LayerNorm.weight"])
             gamma = (
-                ttl.tensor.Tensor(
+                ttnn.Tensor(
                     gamma.reshape(-1).tolist(),
                     gamma.shape,
-                    ttl.tensor.DataType.BFLOAT16,
-                    ttl.tensor.Layout.ROW_MAJOR,
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
                 )
-                .to(ttl.tensor.Layout.TILE)
+                .to(ttnn.TILE_LAYOUT)
                 .to(device)
             )
             beta = pad_weight(state_dict["bert.encoder.layer.0.output.LayerNorm.bias"])
             beta = (
-                ttl.tensor.Tensor(
+                ttnn.Tensor(
                     beta.reshape(-1).tolist(),
                     beta.shape,
-                    ttl.tensor.DataType.BFLOAT16,
-                    ttl.tensor.Layout.ROW_MAJOR,
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
                 )
-                .to(ttl.tensor.Layout.TILE)
+                .to(ttnn.TILE_LAYOUT)
                 .to(device)
             )
         else:
@@ -122,23 +122,23 @@ def run_add_and_norm_inference(device, model_version, batch, seq_len, pcc, model
 
     pad_add_and_norm_inputa = pad_activation(add_and_norm_inputa)
     pad_add_and_norm_inputb = pad_activation(add_and_norm_inputb)
-    tt_add_and_norm_input_a = ttl.tensor.Tensor(
+    tt_add_and_norm_input_a = ttnn.Tensor(
         pad_add_and_norm_inputa.reshape(-1).tolist(),
         pad_add_and_norm_inputa.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ).to(ttnn.TILE_LAYOUT)
     tt_add_and_norm_input_a = tt_add_and_norm_input_a.to(device)
-    tt_add_and_norm_input_b = ttl.tensor.Tensor(
+    tt_add_and_norm_input_b = ttnn.Tensor(
         pad_add_and_norm_inputb.reshape(-1).tolist(),
         pad_add_and_norm_inputb.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ).to(ttnn.TILE_LAYOUT)
     tt_add_and_norm_input_b = tt_add_and_norm_input_b.to(device)
 
     tt_out = tt_add_and_norm_model(tt_add_and_norm_input_a, tt_add_and_norm_input_b).cpu()
-    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_out = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")

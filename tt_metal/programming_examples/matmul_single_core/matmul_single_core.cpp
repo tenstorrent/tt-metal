@@ -8,9 +8,9 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/common/test_tiles.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/programming_examples/matmul_common/bmm_op.hpp"
 #include "tt_metal/common/tilize_untilize.hpp"
+#include "impl/device/device.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -18,7 +18,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 
-void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& output,
+void golden_matmul(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std::vector<bfloat16>& output,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B) {
     std::uint32_t idx_c = 0;
     std::uint32_t idx_a = 0;
@@ -45,7 +45,7 @@ void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& o
     }
 }
 
-void matmul_single_core(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& output, bool bcast_batch,
+void matmul_single_core(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std::vector<bfloat16>& output, bool bcast_batch,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B, Device* device) {
 
     /*

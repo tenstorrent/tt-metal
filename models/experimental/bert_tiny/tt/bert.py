@@ -5,7 +5,6 @@
 import torch.nn as nn
 import torch
 import ttnn
-import tt_lib
 from typing import List, Optional
 from models.experimental.bert_tiny.tt.bert_encoder import TtBertencoder
 from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor, torch_to_tt_tensor_rm
@@ -54,7 +53,7 @@ class TtBert(nn.Module):
         self.register_buffer(
             "token_type_ids", torch.zeros(self.position_ids.size(), dtype=torch.long), persistent=False
         )
-        self.ln = tt_lib.tensor.layernorm
+        self.ln = ttnn.layer_norm
         self.encoder = TtBertencoder(
             config=self.config, state_dict=self.state_dict, device=self.device, mem_config=self.output_mem_config
         )
@@ -84,7 +83,7 @@ class TtBert(nn.Module):
 
         embedding = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(embedding, layout=ttnn.ROW_MAJOR_LAYOUT)))
         embedding = torch_to_tt_tensor_rm(embedding, self.device, put_on_device=False)
-        ln_out = self.ln(embedding, eps=1e-12, gamma=self.gamma, beta=self.beta)
+        ln_out = self.ln(embedding, epsilon=1e-12, weight=self.gamma, bias=self.beta)
         ln_out = tt_to_torch_tensor(ln_out)
         encoder_input = ttnn.to_device(ttnn.from_torch(ln_out, dtype=ttnn.bfloat16), device=self.device)
         return self.encoder(encoder_input, attention_mask)

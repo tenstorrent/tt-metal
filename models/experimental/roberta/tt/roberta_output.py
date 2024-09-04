@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from functools import partial
 
-import tt_lib
+import ttnn
 
 from models.helper_funcs import Linear as TTLinear
 from models.utility_functions import (
@@ -26,9 +26,7 @@ class TtRobertaOutput(nn.Module):
         device,
     ):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
         self.device = device
 
         self.dense_weight = pad_by_zero(state_dict[f"{base_address}.dense.weight"], self.device)[0]
@@ -38,7 +36,7 @@ class TtRobertaOutput(nn.Module):
         beta = pad_by_zero(state_dict[f"{base_address}.LayerNorm.bias"], self.device)[0]
 
         self.LayerNorm = self.LayerNorm = partial(
-            tt_lib.tensor.layernorm, eps=config.layer_norm_eps, gamma=gamma, beta=beta
+            ttnn.layer_norm, epsilon=config.layer_norm_eps, weight=gamma, bias=beta
         )
 
         # TODO: Add dropout when supported
@@ -51,14 +49,12 @@ class TtRobertaOutput(nn.Module):
         )
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight, -2, -1)
-        x = tt_lib.tensor.matmul(x, weight, output_mem_config=self.mem_config)
-        x = tt_lib.tensor.bcast(
+        weight = ttnn.transpose(weight, -2, -1)
+        x = ttnn.matmul(x, weight, memory_config=self.mem_config)
+        x = ttnn.add(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            output_mem_config=self.mem_config,
+            memory_config=self.mem_config,
         )
         return x
 
@@ -66,6 +62,6 @@ class TtRobertaOutput(nn.Module):
         hidden_states = self.dense_linear(hidden_states)
         # TODO: Add dropout when supported
         # hidden_states = self.dropout(hidden_states)
-        hidden_states = tt_lib.tensor.add(hidden_states, input_tensor, output_mem_config=self.mem_config)
+        hidden_states = ttnn.add(hidden_states, input_tensor, memory_config=self.mem_config)
         hidden_states = self.LayerNorm(hidden_states)
         return hidden_states

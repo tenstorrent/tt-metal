@@ -10,12 +10,16 @@
 
 void assert_and_hang(uint32_t line_num) {
     // Write the line number into the memory mailbox for host to read.
-    debug_assert_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(assert_status);
+    debug_assert_msg_t tt_l1_ptr *v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
     if (v->tripped == DebugAssertOK) {
         v->line_num = line_num;
         v->tripped = DebugAssertTripped;
         v->which = debug_get_which_riscv();
     }
+
+    // Update launch msg to show that we've exited.
+    tt_l1_ptr launch_msg_t *launch_msg = GET_MAILBOX_ADDRESS_DEV(launch);
+    launch_msg->go.run = RUN_MSG_DONE;
 
     // Hang, or in the case of erisc, early exit.
 #if defined(COMPILE_FOR_ERISC)

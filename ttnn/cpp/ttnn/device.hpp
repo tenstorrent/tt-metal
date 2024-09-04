@@ -4,27 +4,22 @@
 
 #pragma once
 
-#include "tt_metal/detail/tt_metal.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/device_pool.hpp"
-
 namespace ttnn {
 
 namespace device {
 
-Device &open_device(int device_id);
+using Device = ttnn::Device;
+
+Device &open_device(int device_id, size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE, tt::tt_metal::DispatchCoreType dispatch_core_type = tt::tt_metal::DispatchCoreType::WORKER);
 void close_device(Device &device);
 void enable_program_cache(Device &device);
 void disable_and_clear_program_cache(Device &device);
+bool is_wormhole_or_blackhole(tt::ARCH arch);
+void deallocate_buffers(Device *device);
 
 }  // namespace device
 
 using namespace device;
 
 }  // namespace ttnn
-
-namespace tt {
-namespace tt_metal {
-    using DeviceMesh = ttnn::multi_device::DeviceMesh;
-} // namespace tt_metal
-} // namespace tt

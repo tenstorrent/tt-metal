@@ -5,7 +5,7 @@
 from torch import nn
 from typing import Optional, Tuple, Union
 
-import tt_lib
+import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.deit.tt.deit_config import DeiTConfig
@@ -17,20 +17,12 @@ from models.experimental.deit.tt.deit_output import TtDeiTOutput
 class TtDeiTLayer(nn.Module):
     """This corresponds to the Block class in the timm implementation."""
 
-    def __init__(
-        self, config: DeiTConfig(), device, state_dict=None, base_address=""
-    ) -> None:
+    def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
 
-        self.attention = TtDeiTAttention(
-            config, device, state_dict, base_address=f"{base_address}.attention"
-        )
-        self.intermediate = TtDeiTIntermediate(
-            config, device, state_dict, base_address=f"{base_address}.intermediate"
-        )
-        self.output = TtDeiTOutput(
-            config, device, state_dict, base_address=f"{base_address}.output"
-        )
+        self.attention = TtDeiTAttention(config, device, state_dict, base_address=f"{base_address}.attention")
+        self.intermediate = TtDeiTIntermediate(config, device, state_dict, base_address=f"{base_address}.intermediate")
+        self.output = TtDeiTOutput(config, device, state_dict, base_address=f"{base_address}.output")
 
         ln_bw = state_dict[f"{base_address}.layernorm_before.weight"]
         ln_bb = state_dict[f"{base_address}.layernorm_before.bias"]
@@ -52,26 +44,20 @@ class TtDeiTLayer(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        hidden_states: ttnn.Tensor,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Union[
-        Tuple[tt_lib.tensor.Tensor, tt_lib.tensor.Tensor], Tuple[tt_lib.tensor.Tensor]
-    ]:
+    ) -> Union[Tuple[ttnn.Tensor, ttnn.Tensor], Tuple[ttnn.Tensor]]:
         self_attention_outputs = self.attention(
-            self.layernorm_before(
-                hidden_states
-            ),  # in DeiT, layernorm is applied before self-attention
+            self.layernorm_before(hidden_states),  # in DeiT, layernorm is applied before self-attention
             head_mask,
             output_attentions=output_attentions,
         )
         attention_output = self_attention_outputs[0]
-        outputs = self_attention_outputs[
-            1:
-        ]  # add self attentions if we output attention weights
+        outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 
         # first residual connection
-        hidden_states = tt_lib.tensor.add(attention_output, hidden_states)
+        hidden_states = ttnn.add(attention_output, hidden_states)
 
         # in DeiT, layernorm is also applied after self-attention
         layer_output = self.layernorm_after(hidden_states)

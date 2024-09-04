@@ -4,7 +4,7 @@
 
 import torch.nn as nn
 
-import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm
 from models.experimental.hrnet.hrnet_utils import create_batchnorm
@@ -65,9 +65,7 @@ class TtBottleneck(nn.Module):
             bias=False,
         )
 
-        self.bn3 = create_batchnorm(
-            out_ch * self.expansion, state_dict, f"{base_address}.bn3", device
-        )
+        self.bn3 = create_batchnorm(out_ch * self.expansion, state_dict, f"{base_address}.bn3", device)
 
         self.conv_ds_weights = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.downsample.0.weight"],
@@ -84,33 +82,28 @@ class TtBottleneck(nn.Module):
             bias=False,
         )
 
-        self.bn_ds = create_batchnorm(
-            out_ch * self.expansion, state_dict, f"{base_address}.downsample.1", device
-        )
+        self.bn_ds = create_batchnorm(out_ch * self.expansion, state_dict, f"{base_address}.downsample.1", device)
 
     def forward(self, x):
         residual = x
 
         out = self.conv1(x)
         out = self.bn1(out)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.relu(out)
 
         out = self.conv2(out)
         out = self.bn2(out)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.relu(out)
 
         out = self.conv3(out)
         out = self.bn3(out)
 
         # Downsample
-        if (
-            self.stride != 1
-            or self.num_inchannels != self.num_channels * self.expansion
-        ):
+        if self.stride != 1 or self.num_inchannels != self.num_channels * self.expansion:
             residual = self.conv_ds(x)
             residual = self.bn_ds(residual)
 
-        out = tt_lib.tensor.add(out, residual)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.add(out, residual)
+        out = ttnn.relu(out)
 
         return out

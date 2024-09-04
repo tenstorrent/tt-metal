@@ -6,9 +6,9 @@ import pytest
 import torch
 from transformers import BloomConfig, BloomForQuestionAnswering, BloomTokenizerFast
 
-from models.experimental.functional_bloom.tt import ttnn_functional_bloom
-from models.experimental.functional_bloom.tt import ttnn_optimized_functional_bloom
-from models.utility_functions import skip_for_wormhole_b0
+from models.demos.grayskull.functional_bloom.tt import ttnn_functional_bloom
+from models.demos.grayskull.functional_bloom.tt import ttnn_optimized_functional_bloom
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -17,6 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_wormhole_b0()
+@skip_for_grayskull(reason_str="#10797: OOM")
 @pytest.mark.parametrize("ttnn_model", [ttnn_functional_bloom, ttnn_optimized_functional_bloom])
 def test_bloom_for_question_answering(device, use_program_cache, ttnn_model, batch_size=8, max_length=384):
     torch.manual_seed(0)

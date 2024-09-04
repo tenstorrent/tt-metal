@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -15,12 +14,11 @@ from loguru import logger
 
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_model as bloom_model
+from models.utility_functions import skip_for_wormhole_b0
 
 
 def run_bloom_model_test(device):
-    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained(
-        "bigscience/bloom-560m", torchscript=False
-    )
+    hugging_bloom_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hugging_bloom_reference_model.eval()
 
     config = hugging_bloom_reference_model.config
@@ -56,5 +54,6 @@ def run_bloom_model_test(device):
     assert does_pass
 
 
+@skip_for_wormhole_b0()
 def test_bloom_model(device):
     run_bloom_model_test(device)

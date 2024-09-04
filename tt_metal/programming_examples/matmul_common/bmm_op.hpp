@@ -71,22 +71,7 @@ uint32_t _get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
     return 0;
 }
 
-inline const std::vector<float> unpack_uint32_vec_into_float_vec(
-    const std::vector<std::uint32_t>& data,
-    std::function<bfloat16(const bfloat16 &)> transform = bfloat16_identity_transform
-) {
-    std::vector<float> result;
-    for(auto i = 0 ; i < data.size(); i++) {
-        auto unpacked = unpack_two_bfloat16_from_uint32(data[i]);
-        auto d1 = static_cast<double>(transform(unpacked.first).to_float());
-        auto d2 = static_cast<double>(transform(unpacked.second).to_float());
-        result.push_back(d1);
-        result.push_back(d2);
-    }
-    return result;
-}
-
-inline float check_bfloat16_vector_pcc(const vector<bfloat16> &vec_a, const vector<bfloat16> &vec_b)
+inline float check_bfloat16_vector_pcc(const std::vector<bfloat16> &vec_a, const std::vector<bfloat16> &vec_b)
 {
     // Calculate the mean of x and y values
     float x_mean = 0.0f;
@@ -121,13 +106,13 @@ inline float check_bfloat16_vector_pcc(const vector<bfloat16> &vec_a, const vect
     y_stddev /= vec_b.size();
 
     // Calculate the correlation coefficient
-    float correlation_coefficient_ = covariance / (sqrt(x_stddev) * sqrt(y_stddev));
+    float correlation_coefficient_ = covariance / (std::sqrt(x_stddev) * std::sqrt(y_stddev));
     return correlation_coefficient_;
 }
 
 namespace bmm_op_utils {
 
-constexpr std::array<tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
+constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
     {4, 2}, {2, 4}, {8, 1}, {1, 8},
     {7, 1}, {1, 7},
     {3, 2}, {2, 3}, {6, 1}, {1, 6},
@@ -138,7 +123,7 @@ constexpr std::array<tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
     {1, 1},
 }};
 
-tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w) {
     auto Nt_fac = _get_prime_factors(Nt);
     auto Mt_fac = _get_prime_factors(Mt);
     uint32_t Npc_min = 1;

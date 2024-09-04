@@ -4,7 +4,7 @@
 
 import torch
 import json
-import tt_lib
+import pytest
 from loguru import logger
 
 from transformers import AutoTokenizer, T5Tokenizer, T5Model
@@ -12,8 +12,11 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
+    is_wormhole_b0,
 )
 from models.experimental.t5.tt.t5_model import TtT5Model
+
+pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Skip for Wormhole B0")
 
 
 def run_test_T5Model_inference(device, use_attention_mask, model_name):
@@ -25,9 +28,7 @@ def run_test_T5Model_inference(device, use_attention_mask, model_name):
 
     # Prepare input
     input_sentance = "Studies have been shown that owning a dog is good for you"
-    tokenized = tokenizer(
-        input_sentance, padding="max_length", max_length=32, return_tensors="pt"
-    )  # Batch size 1
+    tokenized = tokenizer(input_sentance, padding="max_length", max_length=32, return_tensors="pt")  # Batch size 1
 
     input_ids = tokenized.input_ids
     attention_mask = tokenized.attention_mask if use_attention_mask else None
@@ -87,9 +88,7 @@ def test_T5Model_inference_t5_small(device):
 
 
 def test_T5Model_inference_flan_t5_small(device):
-    run_test_T5Model_inference(
-        device, use_attention_mask=True, model_name="google/flan-t5-small"
-    )
+    run_test_T5Model_inference(device, use_attention_mask=True, model_name="google/flan-t5-small")
 
 
 def test_T5Model_inference_t5_base(device):

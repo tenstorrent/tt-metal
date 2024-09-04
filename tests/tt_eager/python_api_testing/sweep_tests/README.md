@@ -12,16 +12,45 @@ Follow the `Getting Started` page to setup the `python_env`. Then, run:
 source build/python_env/bin/activate
 ```
 
-## Running tests
-The tests are run through a python script:
-```
-python python_api_testing/sweep_tests/run_pytorch_test.py -i python_api_testing/sweep_tests/test_configs/<test_config.yaml> -o <output_folder>
-```
 
-The inputs are:
-- `-i, --input-test-config`: Input test config containing list of tests to run (see below for description on what this config should look like).
-- `-o, --output-folder-path`: Optional folder name to dump result CSV's in. If not specified, it will default to `pytorch_test_folder`. If this folder (or any folder specified) already exists, the tests will not run.
+## single YAML file
 
+The script used for single sweep run is
+`tests/tt_eager/python_api_testing/sweep_tests/run_sweep_test.py`
+
+Command for running a single sweep test has the following pattern
+`pytest test_script --input-path yaml_path --input-method cli --cli-input output_dir`
+
+This script has two crucial parameters:
+1) `--input-path yaml_path` - The YAML file defining op sweep test itself is given as yaml_path
+Path pattern for ttlib ops:
+`tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_state/device_name/my_sweep.yaml` 
+Various test variants:
+  1.1) state: a) working - Passes in all cases b) broken - Fails at least in one test case for any reason - Low PCC, specified or unspecified error
+  1.2) device_name - Variant of the sweeps for specific device: a) grayskull b) wormhole
+
+2) `--input-method cli --cli-input output_dir` - Here, we use output_dir as optional folder name to dump result CSV's in. If not specified, it will default to `pytorch_test_folder`. If this folder (or any folder specified) already exists, the tests will not run. In case if provided - after sweep run, here we can find the test results within the generated CSV file as outcome.
+
+
+example:
+
+`pytest tests/tt_eager/python_api_testing/sweep_tests/run_sweep_test.py --input-path tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/grayskull/pytorch_eltwise_add_test.yaml --input-method cli --cli-input results_add`
+
+## multi YAML files
+
+The script used for multiple YAML sweeps at once:
+`tests/tt_eager/python_api_testing/sweep_tests/run_sweep_tests.py`
+
+The command pattern:
+`python tests/tt_eager/python_api_testing/sweep_tests/run_sweep_tests.py -d path_to_yaml_dir -r output_dir`
+
+This script has two crucial parameters as well:
+1) path_to_yaml_dir - Folder containing the YAML files of the sweeps which we want to run at once
+2) output_folder - After sweep run, here we can find the test results within the generated CSV file as outcome
+
+example:
+
+`python tests/tt_eager/python_api_testing/sweep_tests/run_sweep_tests.py -d tests/tt_eager/python_api_testing/sweep_tests/test_configs/ci_sweep_tests_working/grayskull/ -r result_sweeps`
 
 ## Adding test configs
 Here is an example of a test config:
@@ -46,6 +75,8 @@ test-list:
       function: comp_pcc
       args:
         pcc: 0.99
+    args-gen: gen_dtype_layout_device
+    sanitize-args: True
     args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
@@ -66,9 +97,11 @@ test-list:
     - `args-sampling-strategy`: Strategy how arguments to operation will be configured. If set to `all` (which is default) sweep will go through all combinations for all inputs of data-layout, data-type, and memory configs defined in _args_ dictionary. If set to `random` sweep will randomly choose data-layout, data-type, and memory configs for each input to generate `num-samples` test runs.
     - `method`: Defaults to `default`; determines how the shapes are swept across
 - _comparison_: Maps to `python_api_testing/sweep_tests/comparison_funcs.py`.
+- _args-gen_: Maps to `python_api_testing/sweep_tests/generation_funcs.py`. You can choose what function is used to generate arguments for the test (dtype, layout etc). For example, for `glu` you might want to generate a `dim` parameter, so default `args-gen` won't be useful.
+- _sanitize-args_: `True` if `args-gen` is doing arg sanitization, `False` otherwise. If not stated, the default is `True`. When ON, args sanitization won't allow some problematic combinations of args (Eg. `ROW_MAJOR` layout for `BFLOAT8_B` and `BFLOAT4_B`). But args sanitization might be an obstacle when we want to create some more flexible tests.
 - _args_: Defines how arguments to operation can be configured in terms of data-layout, data_type and memory config.
   - `data-layout`: Data layout each input argument can take. Can be TILE or ROW_MAJOR.
-  - `data-type`: Data type each input argument can take. Can be BFLOAT16 or BFLOAT8_B.
+  - `data-type`: Data type each input argument can take. Can be one of the follwoing: BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, UINT16 or INT32.
   - `buffer-type`: Buffer type each input argument can take. Can be DRAM, L1, or SYSTEM_MEMORY.
   - `out-buffer-type`: Buffer type output can take. Can be DRAM, L1, or SYSTEM_MEMORY.
 - _output-file_: Name of the output csv dumped inside the output folder. You can write results for additional tests to the same file if you provide the same output file path.

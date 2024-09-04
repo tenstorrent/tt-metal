@@ -4,21 +4,35 @@
 
 #pragma once
 
+#include <dev_msgs.h>
+
+// TODO: remove the HartFlags in dprint_server.hpp and drive from this
+enum DebugPrintHartIndex : unsigned int {
+    DPRINT_RISCV_INDEX_NC  = 0,
+    DPRINT_RISCV_INDEX_TR0 = 1,
+    DPRINT_RISCV_INDEX_TR1 = 2,
+    DPRINT_RISCV_INDEX_TR2 = 3,
+    DPRINT_RISCV_INDEX_BR  = 4,
+    DPRINT_RISCV_INDEX_ER  = 0,
+};
+
 // Returns the buffer address for current thread+core. Differs for NC/BR/ER/TR0-2.
 inline uint8_t* get_debug_print_buffer() {
     #if defined(COMPILE_FOR_NCRISC)
-        return reinterpret_cast<uint8_t*>(PRINT_BUFFER_NC);
+        return reinterpret_cast<uint8_t*>(GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_NC]));
     #elif defined(COMPILE_FOR_BRISC)
-        return reinterpret_cast<uint8_t*>(PRINT_BUFFER_BR);
+        return reinterpret_cast<uint8_t*>(GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_BR]));
     #elif defined(COMPILE_FOR_ERISC)
-        return reinterpret_cast<uint8_t*>(eth_l1_mem::address_map::PRINT_BUFFER_ER);
+        return reinterpret_cast<uint8_t*>(GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_ER]));
     #elif defined(COMPILE_FOR_IDLE_ERISC)
-        return reinterpret_cast<uint8_t*>(eth_l1_mem::address_map::PRINT_BUFFER_ER);
+        return reinterpret_cast<uint8_t*>(GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_ER]));
     #elif defined(UCK_CHLKC_UNPACK)
-        return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T0);
+        return reinterpret_cast<uint8_t*>(GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_TR0]));
     #elif defined(UCK_CHLKC_MATH)
-        return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T1);
+        return reinterpret_cast<uint8_t*>(GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_TR1]));
     #elif defined(UCK_CHLKC_PACK)
-        return reinterpret_cast<uint8_t*>(PRINT_BUFFER_T2);
+        return reinterpret_cast<uint8_t*>(GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[DPRINT_RISCV_INDEX_TR2]));
+    #else
+        return 0;
     #endif
 }

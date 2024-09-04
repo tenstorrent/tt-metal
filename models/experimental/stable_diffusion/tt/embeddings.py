@@ -6,11 +6,13 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
+import ttnn
 
 
-import tt_lib as ttl
+import ttnn
 from models.experimental.stable_diffusion.sd_utils import make_linear
 from tt_lib.fallback_ops import fallback_ops
+
 
 class TtTimestepEmbedding(nn.Module):
     def __init__(
@@ -26,11 +28,11 @@ class TtTimestepEmbedding(nn.Module):
         use_fallback_ops=False,
     ):
         super().__init__()
-        self.use_fallback_ops=use_fallback_ops
+        self.use_fallback_ops = use_fallback_ops
 
         weights = state_dict[f"{base_address}.linear_1.weight"]
         bias = state_dict[f"{base_address}.linear_1.bias"]
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         self.linear_1 = make_linear(
             in_features=in_channels,
@@ -44,7 +46,7 @@ class TtTimestepEmbedding(nn.Module):
             if self.use_fallback_ops:
                 self.act = fallback_ops.silu
             else:
-                self.act = ttl.tensor.silu
+                self.act = ttnn.silu
         elif act_fn == "mish":
             assert False, "tt does not support nn.Mish() yet"
             self.act = nn.Mish()
@@ -64,7 +66,7 @@ class TtTimestepEmbedding(nn.Module):
             device=device,
         )
 
-    def forward(self, sample: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def forward(self, sample: ttnn.Tensor) -> ttnn.Tensor:
         sample = self.linear_1(sample)
 
         if self.act is not None:

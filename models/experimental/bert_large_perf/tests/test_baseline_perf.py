@@ -8,7 +8,7 @@ import torch
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import time
-import tt_lib as ttl
+import ttnn
 from models.experimental.bert.tt.embeddings import PytorchEmbeddings
 from models.experimental.bert.tt.bert_encoder import TtBertEncoder
 from models.experimental.bert.fused_ops.linear import Linear
@@ -22,7 +22,6 @@ from models.utility_functions import (
 )
 
 
-
 class TtBertForQuestionAnswering(torch.nn.Module):
     def __init__(self, config, hugging_face_reference_model, device):
         super().__init__()
@@ -33,15 +32,10 @@ class TtBertForQuestionAnswering(torch.nn.Module):
 
         # So far on CPU until we add embeddings support on device
         self.embeddings = PytorchEmbeddings(hugging_face_reference_model)
-        self.get_extended_attention_mask = (
-            hugging_face_reference_model.get_extended_attention_mask
-        )
+        self.get_extended_attention_mask = hugging_face_reference_model.get_extended_attention_mask
 
         self.encoders = torch.nn.ModuleList(
-            [
-                TtBertEncoder(config, encoder_idx, state_dict, device)
-                for encoder_idx in range(config.num_hidden_layers)
-            ]
+            [TtBertEncoder(config, encoder_idx, state_dict, device) for encoder_idx in range(config.num_hidden_layers)]
         )
         self.device = device
 
@@ -49,24 +43,24 @@ class TtBertForQuestionAnswering(torch.nn.Module):
 
         weight = pad_weight(state_dict["qa_outputs.weight"])
         weight = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 weight.reshape(-1).tolist(),
                 weight.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
         bias = pad_weight(state_dict["qa_outputs.bias"])
         bias = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 bias.reshape(-1).tolist(),
                 bias.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
 
@@ -78,26 +72,24 @@ class TtBertForQuestionAnswering(torch.nn.Module):
         embeddings = self.embeddings(input_ids, token_type_ids)
 
         if attention_mask is not None:
-            extended_attention_mask = self.get_extended_attention_mask(
-                attention_mask, input_ids.shape
-            )
+            extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
             extended_attention_mask = torch.clamp(
                 extended_attention_mask, -100000
             )  # Limit neg value that goes into exp
             extended_attention_mask = pad_activation(extended_attention_mask)
-            tt_attention_mask = ttl.tensor.Tensor(
+            tt_attention_mask = ttnn.Tensor(
                 extended_attention_mask.reshape(-1).tolist(),
                 extended_attention_mask.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
-            ).to(ttl.tensor.Layout.TILE)
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+            ).to(ttnn.TILE_LAYOUT)
             tt_attention_mask = tt_attention_mask.to(self.device)
         else:
             tt_attention_mask = attention_mask
 
         # Convert to ll buda tensor
         pad_embeddings = pad_activation(embeddings)
-        tt_embeddings = ttl.tensor.Tensor(
+        tt_embeddings = ttnn.Tensor(
             pad_embeddings.reshape(-1).tolist(),
             (
                 pad_embeddings.shape[0],
@@ -105,9 +97,9 @@ class TtBertForQuestionAnswering(torch.nn.Module):
                 pad_embeddings.shape[-2],
                 pad_embeddings.shape[-1],
             ),
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        ).to(ttl.tensor.Layout.TILE)
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
+        ).to(ttnn.TILE_LAYOUT)
         tt_embeddings = tt_embeddings.to(self.device)
         hidden_states = tt_embeddings
         profiler.end("_calc_embeddings")
@@ -145,9 +137,7 @@ def run_bert_question_and_answering_inference(
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
     tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
-        model_name, torchscript=False
-    )
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     hugging_face_reference_model.eval()
     tt_bert_model = TtBertForQuestionAnswering(
         hugging_face_reference_model.config, hugging_face_reference_model, device
@@ -203,7 +193,7 @@ def run_bert_question_and_answering_inference(
 
     profiler.end("processing_of_input")
 
-    # tt_bert_input = ttl.tensor.Tensor(pad_activation(bert_input).reshape(-1).tolist(), bert_input.shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR).to(ttl.tensor.Layout.TILE)
+    # tt_bert_input = ttnn.Tensor(pad_activation(bert_input).reshape(-1).tolist(), bert_input.shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT)
     profiler.start("hugging_face_reference_model")
     pytorch_out = hugging_face_reference_model(**bert_input)
     profiler.end("hugging_face_reference_model")
@@ -220,9 +210,7 @@ def run_bert_question_and_answering_inference(
     profiler.start("processing_output_to_string")
 
     tt_out = tt_out.cpu()
-    tt_untilized_output = (
-        tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1)
-    )
+    tt_untilized_output = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch().reshape(batch, 1, seq_len, -1)
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -277,9 +265,7 @@ def run_bert_question_and_answering_inference(
     assert profiler.get("processing_of_input") < 2.1
     assert profiler.get("whole_model") < 310
     assert profiler.get("processing_output_to_string") < 0.1
-    assert (
-        passing_start and passing_end
-    ), f"At least one start or end logits don't meet PCC requirement {pcc}"
+    assert passing_start and passing_end, f"At least one start or end logits don't meet PCC requirement {pcc}"
 
 
 def test_bert_large_baseline_perf(device, model_location_generator):

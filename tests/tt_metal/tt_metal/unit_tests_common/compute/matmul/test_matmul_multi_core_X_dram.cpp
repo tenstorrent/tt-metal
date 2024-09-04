@@ -201,9 +201,9 @@ bool matmul_multi_core_single_dram(tt_metal::Device *device){
             TT_FATAL(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
             TT_FATAL(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
 
-            auto dram_src0_noc_xy = device->core_from_dram_channel(dram_src0_channel_id);
-            auto dram_src1_noc_xy = device->core_from_dram_channel(dram_src1_channel_id);
-            auto dram_dst_noc_xy = device->core_from_dram_channel(dram_dst_channel_id);
+            auto dram_src0_noc_xy = device->dram_core_from_dram_channel(dram_src0_channel_id);
+            auto dram_src1_noc_xy = device->dram_core_from_dram_channel(dram_src1_channel_id);
+            auto dram_dst_noc_xy = device->dram_core_from_dram_channel(dram_dst_channel_id);
 
             auto activations_tilized = test_utils::tilize(activation_slice, per_core_M * 32, K * 32);
             auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
@@ -356,8 +356,8 @@ bool assign_runtime_args_to_program(
 
 bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *device){
     bool pass = true;
-    int num_cores_r = device->logical_grid_size().y - 1;
-    int num_cores_c = device->logical_grid_size().x;
+    int num_cores_r = device->compute_with_storage_grid_size().y;
+    int num_cores_c = device->compute_with_storage_grid_size().x;
     uint32_t M = 16 * num_cores_r;
     uint32_t K = 16 * 12;
     uint32_t N = 16 * num_cores_c;
@@ -367,6 +367,7 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
     int per_core_M = M / num_cores_r;
     int per_core_N = N / num_cores_c;
     uint32_t single_tile_size = 2 * 1024;
+    log_info(LogTest, "num_cores_r={}, num_cores_c={}", num_cores_r, num_cores_c);
     log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
     log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
     log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
@@ -503,6 +504,9 @@ TEST_F(CommonFixture, MatmulMultiCoreMultiDRAM){
         GTEST_SKIP();
     }
     for (unsigned int id = 0; id < devices_.size(); id++) {
+        if (this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP();
+        }
         ASSERT_TRUE(unit_tests_common::matmul::test_matmul_multi_core_X_dram::matmul_multi_core_multi_dram(this, devices_.at(id)));
     }
 }

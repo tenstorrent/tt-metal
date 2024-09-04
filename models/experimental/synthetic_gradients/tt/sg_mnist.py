@@ -6,11 +6,12 @@
 from pathlib import Path
 
 import torch
+import ttnn
 from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import transforms, datasets
 
-import tt_lib
+import ttnn
 from models.utility_functions import (
     pad_activation,
     pad_weight,
@@ -131,7 +132,7 @@ class TtMnistModel(nn.Module):
             gamma3, beta3, running_mean3, running_var3, eps, gamma3_shape, device
         )
 
-        self.TtRelu = tt_lib.tensor.relu
+        self.TtRelu = ttnn.relu
 
     # tt forwrd
     def forward(self, X):
@@ -145,8 +146,8 @@ class TtMnistModel(nn.Module):
         x_ = tilize_to_list(x)
 
         # x is a pytorch tensor,... need to convert to a buda tensor
-        inp = tt_lib.tensor.Tensor(x_, x.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.TILE, device)
-        breakpoint()
+        inp = ttnn.Tensor(x_, x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        # breakpoint()
         lin1_out = self.lin1(inp)
         bn1_out = self.batchnorm1d_1(lin1_out)
         relu1_out = self.TtRelu(lin1_out)
@@ -240,7 +241,7 @@ def run_mnist_inference():
 
     close_or_far = is_close(pytorch_out, tt_out)
     print("close or far?", close_or_far)
-    breakpoint()
+    # breakpoint()
     # assert tt_out_oom == pytorch_out_oom, "The order of magnitudes of the outputs must be the same"
 
 

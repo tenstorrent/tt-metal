@@ -6,7 +6,8 @@ import sys
 import math
 import torch
 from torch import nn
-import tt_lib
+
+import ttnn
 from typing import Optional, Tuple
 from loguru import logger
 
@@ -19,14 +20,14 @@ from models.utility_functions import (
 
 
 def shape_tt(
-    states: tt_lib.tensor.Tensor,
+    states: ttnn.Tensor,
     batch_size: int,
     seq_len: int,
     n_heads: int,
     head_dim: int,
 ):
-    tt_out = tt_lib.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
-    tt_out = tt_lib.tensor.transpose(tt_out, 1, -2)
+    tt_out = ttnn.reshape_on_device(states, batch_size, seq_len, n_heads, head_dim)
+    tt_out = ttnn.transpose(tt_out, 1, -2)
 
     return tt_out
 
@@ -37,7 +38,7 @@ def shape_pt(tensor: torch.Tensor, seq_len: int, bsz: int):
     return tensor.view(bsz, seq_len, num_heads, head_dim).transpose(1, 2).contiguous()
 
 
-def test_lamma_shape(device: tt_lib.device.Device):
+def test_lamma_shape(device: ttnn.Device):
     batch_size = 1
     n_heads = 32
     seq_len = 128
@@ -186,7 +187,7 @@ class TtLlamaAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
@@ -234,19 +235,19 @@ class TtLlamaAttention(nn.Module):
 
         if past_key_value is not None:
             # reuse k, v, self_attention
-            key_states = tt_lib.tensor.concat([past_key_value[0], key_states], dim=2)
-            value_states = tt_lib.tensor.concat([past_key_value[1], value_states], dim=2)
+            key_states = ttnn.concat([past_key_value[0], key_states], dim=2)
+            value_states = ttnn.concat([past_key_value[1], value_states], dim=2)
 
         past_key_value = (key_states, value_states) if use_cache else None
 
         key_states_tt = torch_to_tt_tensor_rm(key_states, self.device)
         query_states_tt = torch_to_tt_tensor_rm(query_states, self.device)
 
-        key_states_tt_transposed = tt_lib.tensor.transpose(key_states_tt, -2, -1)
-        mul = tt_lib.tensor.bmm(query_states_tt, key_states_tt_transposed)
+        key_states_tt_transposed = ttnn.transpose(key_states_tt, -2, -1)
+        mul = ttnn.matmul(query_states_tt, key_states_tt_transposed)
 
         # TODO: Fuse into softmax
-        attn_weights = tt_lib.tensor.bcast(mul, self.scalar, tt_lib.tensor.BcastOpMath.MUL, tt_lib.tensor.BcastOpDim.HW)
+        attn_weights = ttnn.multiply(mul, self.scalar)
 
         if attn_weights.get_legacy_shape() != [bsz, self.num_heads, q_len, kv_seq_len]:
             raise ValueError(
@@ -263,17 +264,17 @@ class TtLlamaAttention(nn.Module):
             # TT eltwise add operation, expand attention_mask shape
             attention_mask = attention_mask.repeat(1, self.num_heads, 1, 1)
             attention_mask = torch_to_tt_tensor_rm(attention_mask, self.device)
-            attn_weights = tt_lib.tensor.add(attn_weights, attention_mask)
+            attn_weights = ttnn.add(attn_weights, attention_mask)
             # convert to PyTorch tensor
             attn_weights = tt_to_torch_tensor(attn_weights)
             attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
 
-        if not isinstance(attn_weights, tt_lib.tensor.Tensor):
+        if not isinstance(attn_weights, ttnn.Tensor):
             attn_weights = pad_by_zero(attn_weights, self.device)[0]
         value_states = torch_to_tt_tensor_rm(value_states, self.device)
 
-        attn_weights = tt_lib.operations.primary.softmax_in_place(attn_weights)
-        attn_output = tt_lib.tensor.bmm(attn_weights, value_states)
+        attn_weights = ttnn.softmax_in_place(attn_weights)
+        attn_output = ttnn.matmul(attn_weights, value_states)
 
         if attn_output.get_legacy_shape() != [bsz, self.num_heads, q_len, self.head_dim]:
             raise ValueError(
@@ -281,8 +282,8 @@ class TtLlamaAttention(nn.Module):
                 f" {attn_output.get_legacy_shape()}"
             )
 
-        attn_output = tt_lib.tensor.transpose(attn_output, 1, -2)
-        attn_output = tt_lib.tensor.reshape(attn_output, bsz, 1, q_len, self.hidden_size)
+        attn_output = ttnn.transpose(attn_output, 1, -2)
+        attn_output = ttnn.reshape_on_device(attn_output, bsz, 1, q_len, self.hidden_size)
         attn_output = self.attn_linear(attn_output)
 
         if not output_attentions:

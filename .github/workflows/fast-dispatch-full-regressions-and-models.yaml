@@ -4,48 +4,148 @@ on:
   workflow_dispatch:
   workflow_call:
   schedule:
-    - cron: "0 1,6 * * *"
+    - cron: "0 */2 * * *"
 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  frequent-fast-dispatch:
+  fd-nightly:
     needs: build-artifact
-    name: ${{ matrix.frequent-type }} ${{ matrix.arch }} tests
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        arch: [grayskull, wormhole_b0]
-        frequent-type: [models, api]
+        test-group:
+          [
+            {
+              name: "Common models GS",
+              arch: grayskull,
+              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
+              timeout: 40
+            },
+            {
+              name: "Common models N300 WH B0",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
+              timeout: 40,
+            },
+            {
+              name: "Common models N150 WH BO",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_common_models.sh,
+              timeout: 40,
+            },
+            {
+              name: "GS ttnn nightly",
+              arch: grayskull,
+              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
+              timeout: 40
+            },
+            {
+              name: "WH N150 ttnn nightly",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
+              timeout: 70
+            },
+            {
+              name: "WH N300 ttnn nightly",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
+              timeout: 70
+            },
+            {
+              name: "GS-only models",
+              arch: grayskull,
+              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_gs_only.sh,
+              timeout: 40
+            },
+            {
+              name: "N300 WH-only models",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
+              timeout: 80
+            },
+            {
+              name: "N150 WH-only models",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_wh_b0_only.sh,
+              timeout: 80
+            },
+            {
+              name: "API tests GS",
+              arch: grayskull,
+              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast,
+              timeout: 40
+            },
+            {
+              name: "API tests N300 WH B0",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+              cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
+              timeout: 40
+            },
+            {
+              name: "API tests N150 WH B0",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
+              timeout: 40
+            },
+            {
+              name: "[Unstable] N150 models",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_wh_b0_unstable.sh,
+              timeout: 55
+            },
+            {
+              name: "[Unstable] N300 models",
+              arch: wormhole_b0,
+              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+              cmd: tests/scripts/single_card/nightly/run_wh_b0_unstable.sh,
+              timeout: 55
+            },
+          ]
+    name: FD ${{ matrix.test-group.name }} ${{ matrix.test-group.arch }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ci
+      ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
-    runs-on: model-runner-${{ matrix.arch }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Ensure weka mount is active
-        run: |
-          sudo systemctl restart mnt-MLPerf.mount
-          sudo /etc/rc.local
-          ls -al /mnt/MLPerf/bit_error_tests
+      - uses: ./.github/actions/retry-command
+        with:
+          timeout-seconds: 100
+          max-retries: 10
+          backoff-seconds: 60
+          command: ./.github/scripts/cloud_utils/mount_weka.sh
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.arch }}
+          name: TTMetal_build_${{ matrix.test-group.arch }}
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.arch }}.tar
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent reg tests scripts
-        timeout-minutes: 165
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent_${{ matrix.frequent-type }} --dispatch-mode fast
+          ${{ matrix.test-group.cmd }}

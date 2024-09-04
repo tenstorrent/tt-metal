@@ -5,14 +5,12 @@
 #include <cmath>
 
 #include "common/constants.hpp"
-#include "tensor/tensor.hpp"
-#include "tensor/owned_buffer.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "tt_metal/host_api.hpp"
-
 #include "tt_numpy/functions.hpp"
-
-#include "tt_dnn/op_library/pad/pad_op.hpp"
-#include "tt_dnn/op_library/operation.hpp"
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::Device;
@@ -27,15 +25,15 @@ void test_operation_infrastructure() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
     using namespace tt::tt_metal;
 
-    auto input_shape = Shape{1, 1, 18, 13};
-    auto padded_shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
+    tt::tt_metal::Array4D input_shape = {1, 1, 18, 13};
+    tt::tt_metal::Array4D padded_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
-    auto output_tensor = operation::run(PadOnHost{padded_shape, {0, 0, 0, 0}, 0}, {input_tensor}).at(0);
+    auto output_tensor = ttnn::pad(input_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
     auto output_shape = output_tensor.get_legacy_shape();
-    TT_FATAL(output_shape == padded_shape);
-    TT_FATAL(output_shape.without_padding() == input_shape);
+    TT_FATAL(output_shape == tt::tt_metal::Shape(padded_shape));
+    TT_FATAL(output_shape.without_padding() == tt::tt_metal::Shape(input_shape));
 }
 
 int main(int argc, char** argv) {

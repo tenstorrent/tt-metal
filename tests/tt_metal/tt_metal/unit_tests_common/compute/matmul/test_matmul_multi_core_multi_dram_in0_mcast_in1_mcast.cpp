@@ -19,18 +19,32 @@
 using namespace tt;
 namespace unit_tests_common::matmul::test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast {
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
+std::tuple<
+    tt_metal::Program,
+    tt_metal::KernelHandle,
+    tt_metal::KernelHandle,
+    tt_metal::KernelHandle,
+    tt_metal::KernelHandle,
+    tt_metal::KernelHandle,
+    tt_metal::KernelHandle,
+    uint32_t,
+    uint32_t,
+    uint32_t,
+    uint32_t>
+create_program(
     tt_metal::Device *device,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
     int num_cores_c,
-    int M, int N, int K,
+    int M,
+    int N,
+    int K,
     int in0_block_w,
     int out_subblock_h,
     int out_subblock_w,
-    int per_core_M, int per_core_N) {
-
+    int per_core_M,
+    int per_core_N) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t single_tile_size = 2 * 1024;
@@ -173,13 +187,23 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
+    uint32_t in0_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    uint32_t in0_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    uint32_t in1_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    uint32_t in1_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
-    uint32_t in0_mcast_sender_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    uint32_t in0_mcast_receiver_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    uint32_t in1_mcast_sender_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    uint32_t in1_mcast_receiver_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-
-    return {std::move(program), mm_reader_kernel_in0_sender_in1_sender, mm_reader_kernel_in0_sender_in1_receiver, mm_reader_kernel_in0_receiver_in1_sender, mm_reader_kernel_in0_receiver_in1_receiver, unary_writer_kernel_noc0, unary_writer_kernel_noc1};
+    return {
+        std::move(program),
+        mm_reader_kernel_in0_sender_in1_sender,
+        mm_reader_kernel_in0_sender_in1_receiver,
+        mm_reader_kernel_in0_receiver_in1_sender,
+        mm_reader_kernel_in0_receiver_in1_receiver,
+        unary_writer_kernel_noc0,
+        unary_writer_kernel_noc1,
+        in0_mcast_sender_semaphore_id,
+        in0_mcast_receiver_semaphore_id,
+        in1_mcast_sender_semaphore_id,
+        in1_mcast_receiver_semaphore_id};
 }
 
 bool write_runtime_args_to_device(
@@ -206,11 +230,10 @@ bool write_runtime_args_to_device(
     uint32_t in0_dram_addr,
     uint32_t in1_dram_addr,
     uint32_t out_dram_addr,
-    uint32_t in0_mcast_sender_semaphore_addr,
-    uint32_t in1_mcast_sender_semaphore_addr,
-    uint32_t in0_mcast_receiver_semaphore_addr,
-    uint32_t in1_mcast_receiver_semaphore_addr) {
-
+    uint32_t in0_mcast_sender_semaphore_id,
+    uint32_t in1_mcast_sender_semaphore_id,
+    uint32_t in0_mcast_receiver_semaphore_id,
+    uint32_t in1_mcast_receiver_semaphore_id) {
     bool pass = true;
     uint32_t single_tile_size = 2 * 1024;
 
@@ -241,48 +264,47 @@ bool write_runtime_args_to_device(
             auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
             auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
             std::vector<uint32_t> mm_reader_args = {
-                (std::uint32_t) in0_dram_addr, // in0_tensor_addr
-                (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
-                (std::uint32_t)  1, // in0_tensor_stride_w
-                (std::uint32_t)  K, // in0_tensor_stride_h
-                (std::uint32_t)  in0_block_w, // in0_tensor_next_block_stride
+                (std::uint32_t)in0_dram_addr,                // in0_tensor_addr
+                (std::uint32_t)K * per_core_M * core_idx_y,  // in0_tensor_start_tile_id
+                (std::uint32_t)1,                            // in0_tensor_stride_w
+                (std::uint32_t)K,                            // in0_tensor_stride_h
+                (std::uint32_t)in0_block_w,                  // in0_tensor_next_block_stride
 
-                (std::uint32_t)  in0_block_w, // in0_block_w
-                (std::uint32_t)  per_core_M, // in0_block_h
-                (std::uint32_t)  in0_block_w * per_core_M, // in0_block_num_tiles
+                (std::uint32_t)in0_block_w,               // in0_block_w
+                (std::uint32_t)per_core_M,                // in0_block_h
+                (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
 
-                (std::uint32_t)  in1_dram_addr, // in1_tensor_addr
-                (std::uint32_t)  per_core_N * core_idx_x, //in1_tensor_start_tile_id
-                (std::uint32_t)  1, // in1_tensor_stride_w
-                (std::uint32_t)  N, // in1_tensor_stride_h
-                (std::uint32_t)  in0_block_w * N, //in1_tensor_next_block_stride
+                (std::uint32_t)in1_dram_addr,            // in1_tensor_addr
+                (std::uint32_t)per_core_N * core_idx_x,  // in1_tensor_start_tile_id
+                (std::uint32_t)1,                        // in1_tensor_stride_w
+                (std::uint32_t)N,                        // in1_tensor_stride_h
+                (std::uint32_t)in0_block_w * N,          // in1_tensor_next_block_stride
 
-                (std::uint32_t)  per_core_N, // in1_block_w
-                (std::uint32_t)  in0_block_w, //in1_block_h
-                (std::uint32_t)  per_core_N * in0_block_w, // in1_block_num_tiles
+                (std::uint32_t)per_core_N,                // in1_block_w
+                (std::uint32_t)in0_block_w,               // in1_block_h
+                (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
 
-                (std::uint32_t)  K / in0_block_w, // num_blocks
+                (std::uint32_t)K / in0_block_w,  // num_blocks
 
-                (std::uint32_t)  right_core_physical.x, // in0_mcast_dest_noc_start_x
-                (std::uint32_t)  right_core_physical.y, // in0_mcast_dest_noc_start_y
-                (std::uint32_t)  left_core_plus_one_physical.x, // in0_mcast_dest_noc_end_x
-                (std::uint32_t)  left_core_plus_one_physical.y, // in0_mcast_dest_noc_end_y
-                (std::uint32_t)  (num_cores_c - 1), // in0_mcast_num_dests
-                (std::uint32_t)  left_core_physical.x, // in0_mcast_sender_noc_x
-                (std::uint32_t)  left_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in0_mcast_sender_semaphore_addr,
-                (std::uint32_t)  in0_mcast_receiver_semaphore_addr,
+                (std::uint32_t)right_core_physical.x,          // in0_mcast_dest_noc_start_x
+                (std::uint32_t)right_core_physical.y,          // in0_mcast_dest_noc_start_y
+                (std::uint32_t)left_core_plus_one_physical.x,  // in0_mcast_dest_noc_end_x
+                (std::uint32_t)left_core_plus_one_physical.y,  // in0_mcast_dest_noc_end_y
+                (std::uint32_t)(num_cores_c - 1),              // in0_mcast_num_dests
+                (std::uint32_t)left_core_physical.x,           // in0_mcast_sender_noc_x
+                (std::uint32_t)left_core_physical.y,           // in0_mcast_sender_noc_y
+                (std::uint32_t)in0_mcast_sender_semaphore_id,
+                (std::uint32_t)in0_mcast_receiver_semaphore_id,
 
-                (std::uint32_t)  bottom_core_physical.x, // in0_mcast_dest_noc_start_x
-                (std::uint32_t)  bottom_core_physical.y, // in0_mcast_dest_noc_start_y
-                (std::uint32_t)  top_core_plus_one_physical.x, // in0_mcast_dest_noc_end_x
-                (std::uint32_t)  top_core_plus_one_physical.y, // in0_mcast_dest_noc_end_y
-                (std::uint32_t)  (num_cores_r - 1), // in0_mcast_num_dests
-                (std::uint32_t)  top_core_physical.x, // in0_mcast_sender_noc_x
-                (std::uint32_t)  top_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in1_mcast_sender_semaphore_addr,
-                (std::uint32_t)  in1_mcast_receiver_semaphore_addr
-            };
+                (std::uint32_t)bottom_core_physical.x,        // in0_mcast_dest_noc_start_x
+                (std::uint32_t)bottom_core_physical.y,        // in0_mcast_dest_noc_start_y
+                (std::uint32_t)top_core_plus_one_physical.x,  // in0_mcast_dest_noc_end_x
+                (std::uint32_t)top_core_plus_one_physical.y,  // in0_mcast_dest_noc_end_y
+                (std::uint32_t)(num_cores_r - 1),             // in0_mcast_num_dests
+                (std::uint32_t)top_core_physical.x,           // in0_mcast_sender_noc_x
+                (std::uint32_t)top_core_physical.y,           // in0_mcast_sender_noc_y
+                (std::uint32_t)in1_mcast_sender_semaphore_id,
+                (std::uint32_t)in1_mcast_receiver_semaphore_id};
             std::vector<uint32_t> writer_args = {
                 (std::uint32_t) out_dram_addr, // out_tensor_addr
                 (std::uint32_t) core_idx_x * per_core_N + core_idx_y * per_core_M * N, // out_tensor_start_tile_id
@@ -327,9 +349,18 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::Device *device){
     uint32_t M = 16 * num_cores_r;
     uint32_t K = 16 * 12;
     uint32_t N = 16 * num_cores_c;
-    int out_subblock_h = 4;
-    int out_subblock_w = 2;
-    int in0_block_w = 2;
+    int out_subblock_h;
+    int out_subblock_w;
+    int in0_block_w;
+    if (device->arch() == tt::ARCH::BLACKHOLE and not getenv("TT_METAL_DISABLE_BH_ND_WORKAROUND")) {
+        out_subblock_h = 1;
+        out_subblock_w = 1;
+        in0_block_w = 1;
+    } else {
+        out_subblock_h = 4;
+        out_subblock_w = 2;
+        in0_block_w = 2;
+    }
     int per_core_M = M / num_cores_r;
     int per_core_N = N / num_cores_c;
     uint32_t single_tile_size = 2 * 1024;
@@ -338,6 +369,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::Device *device){
     uint32_t out_dram_addr = 800 * 1024 * 1024;
 
 
+    log_info(LogTest, "Grid size = {}x{}", num_cores_r, num_cores_c);
     log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
     log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
     log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
@@ -348,20 +380,32 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::Device *device){
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 identity
     auto golden = select_columns(tensor.get_values(), M, K, N);
 
-    auto [program,
-        mm_reader_kernel_in0_sender_in1_sender,
-        mm_reader_kernel_in0_sender_in1_receiver,
-        mm_reader_kernel_in0_receiver_in1_sender,
-        mm_reader_kernel_in0_receiver_in1_receiver,
-        unary_writer_kernel_noc0,
-        unary_writer_kernel_noc1]  = create_program(device,
-                                                    start_core_x, start_core_y,
-                                                    num_cores_r, num_cores_c,
-                                                    M, N, K,
-                                                    in0_block_w, out_subblock_h, out_subblock_w,
-                                                    per_core_M, per_core_N);
-
-
+    auto
+        [program,
+         mm_reader_kernel_in0_sender_in1_sender,
+         mm_reader_kernel_in0_sender_in1_receiver,
+         mm_reader_kernel_in0_receiver_in1_sender,
+         mm_reader_kernel_in0_receiver_in1_receiver,
+         unary_writer_kernel_noc0,
+         unary_writer_kernel_noc1,
+         in0_mcast_sender_semaphore_id,
+         in0_mcast_receiver_semaphore_id,
+         in1_mcast_sender_semaphore_id,
+         in1_mcast_receiver_semaphore_id] =
+            create_program(
+                device,
+                start_core_x,
+                start_core_y,
+                num_cores_r,
+                num_cores_c,
+                M,
+                N,
+                K,
+                in0_block_w,
+                out_subblock_h,
+                out_subblock_w,
+                per_core_M,
+                per_core_N);
 
     log_debug(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
     auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
@@ -376,26 +420,35 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::Device *device){
     log_debug(LogTest, "Copying inputs to dram complete");
 
     log_debug(LogTest, "Writing kernel runtime args to device");
-    const vector<Semaphore>& semaphores = program.semaphores();
-    uint32_t in0_mcast_sender_semaphore_noc_addr = semaphores[0].address();
-    uint32_t in1_mcast_sender_semaphore_noc_addr = semaphores[1].address();
-    uint32_t in0_mcast_receiver_semaphore_noc_addr = semaphores[2].address();
-    uint32_t in1_mcast_receiver_semaphore_noc_addr = semaphores[3].address();
 
     pass &= write_runtime_args_to_device(
         device,
         program,
-        start_core_x, start_core_y,
-        num_cores_r, num_cores_c,
-        mm_reader_kernel_in0_sender_in1_sender, mm_reader_kernel_in0_sender_in1_receiver, mm_reader_kernel_in0_receiver_in1_sender, mm_reader_kernel_in0_receiver_in1_receiver,
-        unary_writer_kernel_noc0, unary_writer_kernel_noc1,
-        M, N, K,
+        start_core_x,
+        start_core_y,
+        num_cores_r,
+        num_cores_c,
+        mm_reader_kernel_in0_sender_in1_sender,
+        mm_reader_kernel_in0_sender_in1_receiver,
+        mm_reader_kernel_in0_receiver_in1_sender,
+        mm_reader_kernel_in0_receiver_in1_receiver,
+        unary_writer_kernel_noc0,
+        unary_writer_kernel_noc1,
+        M,
+        N,
+        K,
         in0_block_w,
-        out_subblock_h, out_subblock_w,
-        per_core_M, per_core_N,
-        in0_dram_addr, in1_dram_addr, out_dram_addr,
-        in0_mcast_sender_semaphore_noc_addr, in1_mcast_sender_semaphore_noc_addr, in0_mcast_receiver_semaphore_noc_addr, in1_mcast_receiver_semaphore_noc_addr
-    );
+        out_subblock_h,
+        out_subblock_w,
+        per_core_M,
+        per_core_N,
+        in0_dram_addr,
+        in1_dram_addr,
+        out_dram_addr,
+        in0_mcast_sender_semaphore_id,
+        in1_mcast_sender_semaphore_id,
+        in0_mcast_receiver_semaphore_id,
+        in1_mcast_receiver_semaphore_id);
     log_debug(LogTest, "Writing kernel runtime args to device complete");
 
     log_debug(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);

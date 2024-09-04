@@ -83,10 +83,10 @@ void read_contiguous_hex_file_impl(std::istream& input, Function&& callback) {
     memory::address_t hex_address;
 
     if (!parse_hex_line(line, &seen_at, &hex_address))
-      throw runtime_error("Memory image has unreadable data line.");
+      throw std::runtime_error("Memory image has unreadable data line.");
 
     if (seen_at)
-      throw runtime_error("Memory file has multiple base addresses.");
+      throw std::runtime_error("Memory file has multiple base addresses.");
 
     callback(hex_address);
   }
@@ -124,7 +124,7 @@ memory::address_t read_discontiguous_hex_file(
 
   getline(input, line);
   if (input.bad() || input.fail()) {
-    throw runtime_error(
+    throw std::runtime_error(
         "Problem getting initial line from hexfile stream. It may be reading a file that doesn't exist or ulimit -n too low.");
   }
   if (line.empty() && input.eof()) {
@@ -133,19 +133,19 @@ memory::address_t read_discontiguous_hex_file(
   }
 
   if (!parse_hex_line(line, &seen_at, &addr) || !seen_at)
-    throw runtime_error("Memory image does not start with address line.");
+    throw std::runtime_error("Memory image does not start with address line.");
 
   while (getline(input, line)) {
     memory::address_t value;
     if (!parse_hex_line(line, &seen_at, &value))
-      throw runtime_error("Memory image has unreadable line.");
+      throw std::runtime_error("Memory image has unreadable line.");
 
     if (seen_at) {
       memory::address_t new_addr = value;
 
       if (new_addr < addr) {
         cout << "new_addr = " << std::hex << new_addr << ", addr = " << addr << std::dec << endl;
-        throw runtime_error("Memory image address goes backwards.");
+        throw std::runtime_error("Memory image address goes backwards.");
       }
 
 

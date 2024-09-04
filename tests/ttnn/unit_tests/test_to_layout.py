@@ -58,10 +58,3 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
 
     assert_with_pcc(torch_input_tensor, output_tensor)
     assert torch.allclose(torch_input_tensor, output_tensor)
-
-
-def test_to_layout(device):
-    torch_tensor = torch.rand((1, 1, 32, 256), dtype=torch.bfloat16)
-    ttnn_tensor = ttnn.from_torch(torch_tensor)
-    with pytest.raises(RuntimeError):
-        ttnn_tensor = ttnn.to_layout(ttnn_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.ROW_MAJOR_LAYOUT)

@@ -18,18 +18,21 @@
 extern "C" {
 #endif
 
-void ApplicationHandler(void) __attribute__((__section__(".init")));
+  void ApplicationHandler(void);
 
 #ifdef __cplusplus
 }
 #endif
 
+#if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+    uint16_t core_flat_id __attribute__((used));
 }
+#endif
 
 uint8_t noc_index = 0;  // TODO: remove hardcoding
 uint8_t my_x[NUM_NOCS] __attribute__((used));
@@ -38,17 +41,16 @@ uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t atomic_ret_val __attribute__ ((section ("l1_data"))) __attribute__((used));
 
-void __attribute__((section("code_l1"))) risc_init() {
-    for (uint32_t n = 0; n < NUM_NOCS; n++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);
-        my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;
-        my_y[n] = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-    }
-}
+uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
-void __attribute__((section("erisc_l1_code"))) Application(void) {
-    DEBUG_STATUS('I');
+void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
+    DEBUG_STATUS("I");
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     // Not using firmware_kernel_common_init since it is copying to registers
@@ -63,7 +65,7 @@ void __attribute__((section("erisc_l1_code"))) Application(void) {
         noc_local_state_init(n);
     }
     ncrisc_noc_full_sync();
-    DEBUG_STATUS('R', 'E', 'W');
+    DEBUG_STATUS("REW");
     uint32_t count = 0;
     while (routing_info->routing_enabled != 1) {
         volatile uint32_t *ptr = (volatile uint32_t *)0xffb2010c;
@@ -71,14 +73,18 @@ void __attribute__((section("erisc_l1_code"))) Application(void) {
         *ptr = 0xAABB0000 | (count & 0xFFFF);
         internal_::risc_context_switch();
     }
-    DEBUG_STATUS('R', 'E', 'D');
+    DEBUG_STATUS("RED");
 
 
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
-        if (mailboxes->launch.run == RUN_MSG_GO) {
+        if (mailboxes->launch.go.run == RUN_MSG_GO) {
             DeviceZoneScopedMainN("ERISC-FW");
-            DEBUG_STATUS('R');
+            DeviceZoneSetCounter(mailboxes->launch.kernel_config.host_assigned_id);
+
+            firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+
+            DEBUG_STATUS("R");
             kernel_init();
         } else {
             internal_::risc_context_switch();
@@ -86,7 +92,7 @@ void __attribute__((section("erisc_l1_code"))) Application(void) {
     }
     internal_::disable_erisc_app();
 }
-void __attribute__((section("erisc_l1_code"), naked)) ApplicationHandler(void) {
+void __attribute__((section("erisc_l1_code.0"), naked)) ApplicationHandler(void) {
     // Save the registers, stack pointer, return address so that we can early exit in the case of
     // an error.
     __asm__(

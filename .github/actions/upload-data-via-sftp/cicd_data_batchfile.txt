@@ -1,0 +1,2 @@
+put -r pipeline_*.json
+ls -hal

@@ -46,6 +46,7 @@ inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
 }
 
 inline void llk_unpack_untilize_uninit(uint32_t operand) {
+    DEBUG_STATUS("UPUW");
     std::uint32_t operand_id = get_operand_id(operand);
     // Check that unpacker is done (all contexts freed up) before starting hw configuration
     wait_for_idle();
@@ -91,6 +92,7 @@ inline void llk_unpack_untilize_uninit(uint32_t operand) {
 
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, UNP0_ADDR_BASE_REG_0_Base_ADDR32); // Clear base address register
     TTI_NOP; TTI_NOP;
+    DEBUG_STATUS("UPUD");
 }
 
 template <bool first_pass = true>
@@ -105,6 +107,8 @@ inline void llk_unpack_untilize_pass(std::uint32_t operand, std::uint32_t block_
 }
 
 inline void llk_unpack_untilize(std::uint32_t operand, std::uint32_t block_c_tiles) {
+    DEBUG_STATUS("UPUW");
     llk_unpack_untilize_pass<true>(operand, block_c_tiles);
     llk_unpack_untilize_pass<false>(operand, block_c_tiles);
+    DEBUG_STATUS("UPUD");
 }

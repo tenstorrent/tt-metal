@@ -4,46 +4,51 @@
 
 import torch
 
-import tt_lib as ttl
+import ttnn
 import pytest
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 import torch.nn.functional as F
+from models.utility_functions import is_wormhole_b0
+
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+    get_compute_kernel_options,
+    compute_kernel_options,
+    compute_kernel_ids,
+)
 
 
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 1, 32, 32), 3),  # single tile
-        ((1, 1, 32, 32 * 5), 3),  # mutiple tile with dim W
+        ((32, 32), 1),  # single tile
+        ((3, 32, 32 * 5), 2),  # mutiple tile with dim W
         ((5, 6, 32, 32), 3),  # multiple cores
         ((10, 20, 32 * 3, 32 * 5), 3),  # multiple tiles per core
-        ((1, 1, 32, 32), 2),  # single tile
-        ((1, 1, 32 * 5, 32), 2),  # mutiple tile with dim H
+        ((32, 32), 0),  # single tile
+        ((3, 32 * 5, 32), 1),  # mutiple tile with dim H
         ((5, 6, 32, 32), 2),  # multiple cores
         ((10, 20, 32 * 3, 32 * 5), 2),  # multiple tiles per core
     ),
 )
-def test_softmin_for_dim_hw(shape_dim, device):
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_softmin_for_dim_hw(shape_dim, compute_kernel_options, device):
     device.enable_program_cache()
 
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = F.softmin(x, dim)
-    tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim)
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmin(dev_x, dim, compute_kernel_config=compute_kernel_config)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
@@ -58,31 +63,31 @@ def test_softmin_for_dim_hw(shape_dim, device):
         ((2, 3, 32 * 4, 32 * 5), 2),
     ),
 )
-def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_softmin_large_algorithm_for_dim_hw(shape_dim, compute_kernel_options, device):
     device.enable_program_cache()
 
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = F.softmin(x, dim)
     strategy = (
-        ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_W
+        ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_W
         if dim == 3
-        else ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_H
+        else ttnn.experimental.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_H
     )
-    tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim, None, strategy)
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmin(
+        dev_x, dim, None, strategy, compute_kernel_config=compute_kernel_config
+    )
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
@@ -99,28 +104,21 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
         ((1, 1, 32 * 2 + 10, 32), 2),  # mutiple tile with dim
     ),
 )
-def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, compute_kernel_options, device):
     device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
-    dev_x = (
-        ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16)
-        .pad_to_tile(float("nan"))
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = F.softmin(x, dim)
-    tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmin(dev_x, dim, compute_kernel_config=compute_kernel_config)
+    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
@@ -142,25 +140,21 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
         ((15, 109, 32 * 2, 32 * 2), 0),  # mutiple tiles per cores
     ),
 )
-def test_softmin_for_dim_nc(shape_dim, device):
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_softmin_for_dim_nc(shape_dim, compute_kernel_options, device):
     device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
-    dev_x = (
-        ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).pad_to_tile(float("7")).to(ttl.tensor.Layout.TILE).to(device)
-    )
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).pad_to_tile(float("7")).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_cpu = F.softmin(x, dim)
-    tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmin(dev_x, dim, compute_kernel_config=compute_kernel_config)
+    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
@@ -174,44 +168,39 @@ def test_softmin_for_dim_nc(shape_dim, device):
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 1, 32, 32), 3),  # single tile
-        ((1, 1, 32, 32 * 5), 3),  # mutiple tile with dim W
+        ((32, 32), 1),  # single tile
+        ((3, 32, 32 * 5), 2),  # mutiple tile with dim W
         ((5, 6, 32, 32), 3),  # multiple cores
         ((10, 20, 32 * 3, 32 * 5), 3),  # multiple tiles per core
-        ((1, 1, 32, 32), 2),  # single tile
-        ((1, 1, 32 * 5, 32), 2),  # mutiple tile with dim H
+        ((32, 32), 0),  # single tile
+        ((3, 32 * 5, 32), 1),  # mutiple tile with dim H
         ((5, 6, 32, 32), 2),  # multiple cores
         ((10, 20, 32 * 3, 32 * 5), 2),  # multiple tiles per core
     ),
 )
-def test_softmin_backward_for_dim_hw(shape_dim, device):
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_softmin_backward_for_dim_hw(shape_dim, compute_kernel_options, device):
     device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x = (
-        torch.randint(low=0, high=4, size=(N * C * H * W,))
-        .reshape((N, C, H, W))
-        .to(torch.bfloat16)
-        .requires_grad_(True)
-    )
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
-    dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_y = ttnn.Tensor(y, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
-    dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+    dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
-    tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmin_backward(
+        dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config
+    )
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
@@ -226,39 +215,34 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
         ((2, 3, 32 * 4, 32 * 5), 2),
     ),
 )
-def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, compute_kernel_options, device):
     device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x = (
-        torch.randint(low=0, high=4, size=(N * C * H * W,))
-        .reshape((N, C, H, W))
-        .to(torch.bfloat16)
-        .requires_grad_(True)
-    )
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
-    dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_y = ttnn.Tensor(y, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
-    dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+    dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
     strategy = (
-        ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W
+        ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W
         if dim == 3
-        else ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H
+        else ttnn.experimental.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H
     )
-    tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim, None, strategy)
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmin_backward(
+        dev_y, dev_dy, dim, None, strategy, compute_kernel_config=compute_kernel_config
+    )
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
@@ -275,42 +259,27 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
         ((1, 1, 32 * 2 + 10, 32), 2),  # mutiple tile with dim
     ),
 )
-def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, compute_kernel_options, device):
     device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x = (
-        torch.randint(low=0, high=4, size=(N * C * H * W,))
-        .reshape((N, C, H, W))
-        .to(torch.bfloat16)
-        .requires_grad_(True)
-    )
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
-    dev_y = (
-        ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16)
-        .pad_to_tile(float("10"))
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_y = ttnn.Tensor(y, ttnn.bfloat16).pad_to_tile(float("10")).to(ttnn.TILE_LAYOUT).to(device)
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
-    dev_dy = (
-        ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16)
-        .pad_to_tile(float("20"))
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+    dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).pad_to_tile(float("20")).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
-    tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmin_backward(
+        dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config
+    )
+    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
@@ -332,42 +301,27 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
         ((15, 109, 32 * 2, 32 * 2), 0),  # mutiple tiles per cores
     ),
 )
-def test_softmin_backward_for_dim_nc(shape_dim, device):
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_softmin_backward_for_dim_nc(shape_dim, compute_kernel_options, device):
     device.enable_program_cache()
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x = (
-        torch.randint(low=0, high=4, size=(N * C * H * W,))
-        .reshape((N, C, H, W))
-        .to(torch.bfloat16)
-        .requires_grad_(True)
-    )
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
-    dev_y = (
-        ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16)
-        .pad_to_tile(float("10"))
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_y = ttnn.Tensor(y, ttnn.bfloat16).pad_to_tile(float("10")).to(ttnn.TILE_LAYOUT).to(device)
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
-    dev_dy = (
-        ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16)
-        .pad_to_tile(float("10"))
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+    dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).pad_to_tile(float("10")).to(ttnn.TILE_LAYOUT).to(device)
 
     y.backward(dy)
-    tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
-    tt_npu = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile((N, C, H, W))
+    tt_npu = ttnn.experimental.operations.primary.moreh_softmin_backward(
+        dev_y, dev_dy, dim, compute_kernel_config=compute_kernel_config
+    )
+    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to_torch().to(torch.bfloat16)
 
@@ -379,7 +333,7 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
 
 @pytest.mark.parametrize(
     "shape_dim",
-    (((1, 1, 32, 32), 3),),  # single tile
+    (((32, 32), 1),),  # single tile
 )
 @pytest.mark.parametrize(
     "optional_output_tensor",
@@ -391,27 +345,22 @@ def test_softmin_optional_output_tensor(shape_dim, optional_output_tensor, devic
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
 
     # cpu calculation
     tt_cpu = F.softmin(x, dim)
 
     # npu calculation
-    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_x = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
     if optional_output_tensor:
-        dev_y = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+        dev_y = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-        tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim, dev_y)
+        tt_npu = ttnn.experimental.operations.primary.moreh_softmin(dev_x, dim, dev_y)
     else:
-        tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim)
+        tt_npu = ttnn.experimental.operations.primary.moreh_softmin(dev_x, dim)
 
     assert list(tt_npu.get_legacy_shape()) == list(tt_cpu.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
@@ -421,7 +370,7 @@ def test_softmin_optional_output_tensor(shape_dim, optional_output_tensor, devic
 
 @pytest.mark.parametrize(
     "shape_dim",
-    (((1, 1, 32, 32), 3),),  # single tile
+    (((32, 32), 1),),  # single tile
 )
 @pytest.mark.parametrize(
     "optional_output_tensor",
@@ -432,35 +381,25 @@ def test_softmin_backward_optional_output_tensor(shape_dim, optional_output_tens
     shape, dim = shape_dim
     torch.manual_seed(0)
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
-
     # cpu calculation
-    x = (
-        torch.randint(low=0, high=4, size=(N * C * H * W,))
-        .reshape((N, C, H, W))
-        .to(torch.bfloat16)
-        .requires_grad_(True)
-    )
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
     y.backward(dy)
 
     # npu calculation
-    dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-    dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
+    dev_y = ttnn.Tensor(y, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    dev_dy = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     if optional_output_tensor:
-        dev_dx = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
-        tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim, dev_dx)
+        dev_dx = ttnn.Tensor(dy, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+        tt_npu = ttnn.experimental.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim, dev_dx)
     else:
-        tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
+        tt_npu = ttnn.experimental.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
 
     assert list(tt_npu.get_legacy_shape()) == list(x.grad.shape)
-    tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
 
     rtol = atol = 0.05
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)

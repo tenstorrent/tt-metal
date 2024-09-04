@@ -2,34 +2,70 @@ name: "Build tt-metal artifacts"
 
 on:
   workflow_call:
+    inputs:
+      arch:
+        required: false
+        type: string
+        default: '["grayskull", "wormhole_b0"]'
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+      tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Build with tracy enabled"
   workflow_dispatch:
-
+    inputs:
+      arch:
+        required: false
+        type: string
+        default: '["grayskull", "wormhole_b0"]'
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - CI
+      tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Build with tracy enabled"
 jobs:
   build-artifact:
     strategy:
       matrix:
-        arch: ["grayskull", "wormhole_b0"]
+        arch: ${{ fromJson(inputs.arch || '["grayskull", "wormhole_b0", "blackhole"]') }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ci
       SILENT: 0
+      VERBOSE: 1
     environment: dev
-    runs-on: build
+    runs-on:
+      - build
+      - in-service
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: ./.github/actions/install-python-deps
+      - name: Update submodules
+        run: |
+          git submodule update --init --recursive
       - name: Build tt-metal and libs
         run: |
-          make build PYTHON_ENV=${{ github.workspace }}/python_env
-          make tests
+          nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
+          nice -n 19 cmake --build build --target tests
+          nice -n 19 cmake --build build --target install
       - name: 'Tar files'
-        run: tar -cvf ttm_${{ matrix.arch }}.tar build/hw build/lib tt_eager/tt_lib/*.so ttnn/ttnn/*.so build/programming_examples build/test
+        run: tar -cvf ttm_${{ matrix.arch }}.tar build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
       - name: 'Upload Artifact'
         uses: actions/upload-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.arch }}
+          name: TTMetal_build_${{ matrix.arch }}${{ (inputs.tracy && '_profiler') || '' }}
           path: ttm_${{ matrix.arch }}.tar

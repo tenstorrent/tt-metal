@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 from diffusers import StableDiffusionPipeline
 
@@ -12,10 +13,11 @@ from models.utility_functions import (
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_embeddings import TtTimestepEmbedding
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_embeddings import TtTimestepEmbedding
+import pytest
 
 
-@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_embeddings(
     device,
 ):
@@ -38,8 +40,6 @@ def test_embeddings(
     input = ttnn.to_device(input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     ttnn_output = model(input)
-    ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.squeeze(0).squeeze(0)
 

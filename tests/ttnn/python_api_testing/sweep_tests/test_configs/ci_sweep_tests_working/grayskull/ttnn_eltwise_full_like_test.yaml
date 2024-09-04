@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-full-like:
+  - eltwise-full_like:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -17,6 +17,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_scalar_args
+      sanitize-args: False
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]

@@ -5,7 +5,7 @@
 from loguru import logger
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.pytorch_ops import relu_min as pt_relu_min
@@ -47,19 +47,19 @@ def run_eltwise_relu_min_tests(
 test_sweep_args = [
     (
         (4, 2, 96, 160),
-        ttl.tensor.DataType.BFLOAT8_B,
-        ttl.tensor.Layout.TILE,
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
         "SYSTEM_MEMORY",
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         99.5,
         12915139,
     ),
     (
         (3, 10, 64, 96),
-        ttl.tensor.DataType.BFLOAT8_B,
-        ttl.tensor.Layout.TILE,
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         97.5,
         8726038,
     ),

@@ -14,8 +14,6 @@
 #include <vector>
 #include <map>
 
-#include <boost/functional/hash.hpp>
-
 #include "tt_metal/common/tt_backend_api_types.hpp" // These are the types exported to frontend team...
 #include "tt_metal/common/assert.hpp"
 #include "hostdevcommon/kernel_structs.h"
@@ -33,7 +31,7 @@ using std::string;
 using std::size_t;
 using std::map;
 
-inline uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
+inline constexpr uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
 
 namespace tt
@@ -44,10 +42,8 @@ namespace tt
 */
 enum class TargetDevice : uint8_t
 {
-    Model = 0,
-    Versim = 1,
-    Silicon = 2,
-    Golden = 3,
+    Silicon = 0,
+    Simulator = 1,
     Invalid = 0xFF,
 };
 

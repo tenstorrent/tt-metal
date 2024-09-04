@@ -5,8 +5,10 @@
 /** @file @brief Main firmware code */
 
 #include <unistd.h>
+
 #include <cstdint>
 
+// clang-format off
 #include "risc_common.h"
 #include "tensix.h"
 #include "tensix_types.h"
@@ -24,13 +26,18 @@
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "dataflow_api.h"
+#include "dev_mem_map.h"
+#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 
 #include "debug/status.h"
 #include "debug/dprint.h"
+#include "debug/stack_usage.h"
+// clang-format on
 
 uint8_t noc_index;
 
 constexpr uint32_t RISCV_IC_BRISC_MASK = 0x1;
+constexpr uint32_t RISCV_IC_NCRISC_MASK = 0x10;
 constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x2;
 constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
 constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
@@ -38,7 +45,7 @@ constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRI
 
 constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
 
-tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
+tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 uint32_t ncrisc_kernel_start_offset16;
 
 c_tensix_core core;
@@ -53,26 +60,41 @@ uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t atomic_ret_val __attribute__((section("l1_data"))) __attribute__((used));
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
+uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
+#if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+    uint16_t core_flat_id __attribute__((used));
 }
+#endif
 
 void enable_power_management() {
     // Mask and Hyst taken from tb_tensix math_tests
     uint32_t pm_mask = 0xFFFF;
     uint32_t pm_hyst = 32;
-    {
-        // Important: program hyteresis first then enable, otherwise the en_pulse will fail to latch the value
-        uint32_t hyst_val = pm_hyst & 0x7f;
 
+    #ifdef ARCH_BLACKHOLE
+    uint32_t hyst_val = pm_hyst;
+    #else
+    // Important: program hyteresis first then enable, otherwise the en_pulse will fail to latch the value
+    uint32_t hyst_val = pm_hyst & 0x7f;
+    #endif
+
+    {
         // Program slightly off values for each CG
         uint32_t hyst0_reg_data = ((hyst_val) << 24) | ((hyst_val) << 16) | ((hyst_val) << 8) | hyst_val;
         uint32_t hyst1_reg_data = ((hyst_val) << 24) | ((hyst_val) << 16) | ((hyst_val) << 8) | hyst_val;
@@ -87,8 +109,14 @@ void enable_power_management() {
         WRITE_REG(RISCV_DEBUG_REG_CG_CTRL_HYST2, hyst2_reg_data);
     }
 
+    #ifdef ARCH_BLACKHOLE
+    /*FIXME: need to deal with srcb ctrl bit not fitting in 16 bits. For  */
+    /*now just always turn it on */
+    *((uint32_t volatile*)RISCV_DEBUG_REG_CG_CTRL_EN) = 0x10000 | (pm_mask);
+    #else
     // core.ex_setc16(CG_CTRL_EN_Hyst_ADDR32, command_data[1] >> 16, instrn_buf[0]);
     core.ex_setc16(CG_CTRL_EN_Regblocks_ADDR32, pm_mask, instrn_buf[0]);
+    #endif
 
     if (((pm_mask & 0x0100) >> 8) == 1) {  // enable noc clk gatting
 
@@ -127,30 +155,43 @@ void enable_power_management() {
 }
 
 void set_deassert_addresses() {
-
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
 
-    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = MEM_NCRISC_IRAM_BASE;
-    cfg_regs[TRISC_RESET_PC_SEC0_PC_ADDR32] = MEM_TRISC0_BASE;
-    cfg_regs[TRISC_RESET_PC_SEC1_PC_ADDR32] = MEM_TRISC1_BASE;
-    cfg_regs[TRISC_RESET_PC_SEC2_PC_ADDR32] = MEM_TRISC2_BASE;
+#ifdef ARCH_BLACKHOLE
+    WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC, MEM_NCRISC_FIRMWARE_BASE);
+    WRITE_REG(RISCV_DEBUG_REG_TRISC0_RESET_PC, MEM_TRISC0_FIRMWARE_BASE);
+    WRITE_REG(RISCV_DEBUG_REG_TRISC1_RESET_PC, MEM_TRISC1_FIRMWARE_BASE);
+    WRITE_REG(RISCV_DEBUG_REG_TRISC2_RESET_PC, MEM_TRISC2_FIRMWARE_BASE);
+    WRITE_REG(RISCV_DEBUG_REG_TRISC_RESET_PC_OVERRIDE, 0b111);
+    WRITE_REG(RISCV_DEBUG_REG_NCRISC_RESET_PC_OVERRIDE, 0x1);
+#else
+    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = MEM_NCRISC_FIRMWARE_BASE;
+    cfg_regs[TRISC_RESET_PC_SEC0_PC_ADDR32] = MEM_TRISC0_FIRMWARE_BASE;
+    cfg_regs[TRISC_RESET_PC_SEC1_PC_ADDR32] = MEM_TRISC1_FIRMWARE_BASE;
+    cfg_regs[TRISC_RESET_PC_SEC2_PC_ADDR32] = MEM_TRISC2_FIRMWARE_BASE;
     cfg_regs[TRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en_ADDR32] = 0b111;
     cfg_regs[NCRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en_ADDR32] = 0x1;
+#endif
 }
 
-void l1_to_ncrisc_iram_copy(uint32_t src, uint32_t dst, uint16_t size) {
+void l1_to_ncrisc_iram_copy(uint16_t size, uint32_t address_offset = 0) {
+#ifdef NCRISC_HAS_IRAM
+    // Always copy ncrisc even if its size is 0 (save branch)...
     // Copy NCRISC firmware from L1 to local IRAM using tensix DMA
     tdma_xmov(
         TDMA_MOVER0,
-        src,
-        dst,
+        (MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + address_offset,
+        MEM_MOVER_VIEW_IRAM_BASE_ADDR + address_offset,
         size,
         XMOV_L1_TO_L0);
+#endif
 }
 
 void l1_to_ncrisc_iram_copy_wait() {
+#ifdef NCRISC_HAS_IRAM
     // Wait for DMA to finish
     wait_tdma_movers_done(RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK);
+#endif
 }
 
 void device_setup() {
@@ -166,6 +207,11 @@ void device_setup() {
 
     // FIXME MT: enable later
     // enable_power_management();
+
+#ifdef ARCH_BLACKHOLE
+    // Disable DEST CG
+    *((uint32_t volatile*)RISCV_DEBUG_REG_DEST_CG_CTRL) = 0;
+#endif
 
     WRITE_REG(RISCV_TDMA_REG_CLK_GATE_EN, 0x3f);  // Enable clock gating
 
@@ -187,7 +233,7 @@ void device_setup() {
     wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
 
     // Invalidate tensix icache for all 4 risc cores
-    cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
+    cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
     // Clear destination registers
     core.ex_zeroacc(instrn_buf[0]);
@@ -219,69 +265,82 @@ void init_sync_registers() {
     volatile tt_reg_ptr uint* tiles_received_ptr;
     volatile tt_reg_ptr uint* tiles_acked_ptr;
     for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
-      tiles_received_ptr = get_cb_tiles_received_ptr(operand);
-      tiles_received_ptr[0] = 0;
-      tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-      tiles_acked_ptr[0] = 0;
+        tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+        tiles_received_ptr[0] = 0;
+        tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
+        tiles_acked_ptr[0] = 0;
     }
 }
 
-inline void deassert_ncrisc_trisc()
-{
+inline void deassert_ncrisc_trisc() {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
     mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
 
-    uint16_t fw_size16 = mailboxes->launch.ncrisc_kernel_size16;
+    uint16_t fw_size16 = mailboxes->launch.kernel_config.ncrisc_kernel_size16;
     ncrisc_kernel_start_offset16 = fw_size16;
 
-    l1_to_ncrisc_iram_copy(MEM_NCRISC_INIT_IRAM_L1_BASE >> 4, MEM_MOVER_VIEW_IRAM_BASE_ADDR, fw_size16);
+    // Copies from L1 to IRAM on chips where NCRISC has IRAM
+    l1_to_ncrisc_iram_copy(fw_size16);
     l1_to_ncrisc_iram_copy_wait();
 
     // Bring ncrisc/triscs out of reset
     deassert_all_reset();
 }
 
-inline void set_ncrisc_kernel_resume_deassert_address()
-{
-    volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-    DEBUG_STATUS('I', 'N', 'W');
-    while (mailboxes->ncrisc_halt.resume_addr == 0);
-    DEBUG_STATUS('I', 'N', 'D');
-    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
+inline __attribute__((always_inline)) void wait_for_ncrisc_to_halt() {
+#ifdef NCRISC_HAS_IRAM
+    DEBUG_STATUS("INW");
+    while (mailboxes->slave_sync.ncrisc != RUN_SYNC_MSG_DONE);
+    DEBUG_STATUS("IND");
+#endif
 }
 
-inline void run_triscs()
-{
-    if (mailboxes->launch.enable_triscs) {
+inline __attribute__((always_inline)) void reset_ncrisc_with_iram() {
+#ifdef NCRISC_HAS_IRAM
+    assert_just_ncrisc_reset();
+#endif
+}
+
+inline void set_ncrisc_kernel_resume_deassert_address() {
+#ifdef NCRISC_HAS_IRAM
+    volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
+    DEBUG_STATUS("INW");
+    while (mailboxes->ncrisc_halt.resume_addr == 0);
+    DEBUG_STATUS("IND");
+    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
+#endif
+}
+
+inline void run_triscs(dispatch_core_processor_masks enables) {
+    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
         mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_TRISCS_GO;
     }
 }
 
-inline void finish_ncrisc_copy_and_run()
-{
-   if (mailboxes->launch.enable_ncrisc) {
-       mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
+inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
+    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+        mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
 
-       l1_to_ncrisc_iram_copy_wait();
+        l1_to_ncrisc_iram_copy_wait();
 
-       // Note: only ncrisc is in reset, so just deasserts ncrisc
-       deassert_all_reset();
-   }
+        // Note: only ncrisc is in reset, so just deasserts ncrisc
+        deassert_all_reset();
+    }
 }
 
-inline void wait_ncrisc_trisc()
-{
-    DEBUG_STATUS('N', 'T', 'W');
+inline void wait_ncrisc_trisc() {
+    DEBUG_STATUS("NTW");
     while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE);
-    DEBUG_STATUS('N', 'T', 'D');
+    DEBUG_STATUS("NTD");
 }
 
 int main() {
-
-    DEBUG_STATUS('I');
+    conditionally_disable_l1_cache();
+    DIRTY_STACK_MEMORY();
+    DEBUG_STATUS("I");
 
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
-    l1_to_local_mem_copy((uint*)__ldm_data_start, (uint tt_l1_ptr *)MEM_BRISC_INIT_LOCAL_L1_BASE, num_words);
+    l1_to_local_mem_copy((uint*)__ldm_data_start, (uint tt_l1_ptr*)MEM_BRISC_INIT_LOCAL_L1_BASE, num_words);
 
     risc_init();
     device_setup();
@@ -291,61 +350,76 @@ int main() {
     mailboxes->ncrisc_halt.resume_addr = 0;
     mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
     deassert_ncrisc_trisc();
+    // When NCRISC has IRAM, it needs to be halted before data can be copied from L1 to IRAM
+    // This routine allows us to resume NCRISC after the copy is done
     set_ncrisc_kernel_resume_deassert_address();
 
     // Wait for ncrisc to halt
-    DEBUG_STATUS('I', 'N', 'W');
-    while (mailboxes->slave_sync.ncrisc != RUN_SYNC_MSG_DONE);
-    DEBUG_STATUS('I', 'N', 'D');
+    wait_for_ncrisc_to_halt();
 
-    mailboxes->launch.run = RUN_MSG_DONE;
+    mailboxes->launch.go.run = RUN_MSG_DONE;
 
     while (1) {
         init_sync_registers();
-        assert_just_ncrisc_reset();
+        reset_ncrisc_with_iram();
 
-        DEBUG_STATUS('G', 'W');
-        while (mailboxes->launch.run != RUN_MSG_GO);
-        DEBUG_STATUS('G', 'D');
+        DEBUG_STATUS("GW");
+        while (mailboxes->launch.go.run != RUN_MSG_GO);
+        DEBUG_STATUS("GD");
 
         {
             DeviceZoneScopedMainN("BRISC-FW");
+            DeviceZoneSetCounter(mailboxes->launch.kernel_config.host_assigned_id);
 
-            // Always copy ncrisc even if its size is 0 (save branch)...
-            l1_to_ncrisc_iram_copy((MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
-                                   MEM_MOVER_VIEW_IRAM_BASE_ADDR + ncrisc_kernel_start_offset16,
-                                   mailboxes->launch.ncrisc_kernel_size16);
+            // Copies from L1 to IRAM on chips where NCRISC has IRAM
+            l1_to_ncrisc_iram_copy(mailboxes->launch.kernel_config.ncrisc_kernel_size16, ncrisc_kernel_start_offset16);
 
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-            cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
+            cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
-            run_triscs();
+            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)mailboxes->launch.kernel_config.enables;
+            run_triscs(enables);
 
-            noc_index = mailboxes->launch.brisc_noc_id;
+            noc_index = mailboxes->launch.kernel_config.brisc_noc_id;
 
-            setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
-            finish_ncrisc_copy_and_run();
+            uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
+            uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
+                mailboxes->launch.kernel_config.cb_offset);
+            setup_cb_read_write_interfaces(cb_l1_base, 0, num_cbs_to_early_init, true, true, false);
+
+            finish_ncrisc_copy_and_run(enables);
 
             // Run the BRISC kernel
-            DEBUG_STATUS('R');
-            if (mailboxes->launch.enable_brisc) {
-                setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
+            DEBUG_STATUS("R");
+            if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
+                setup_cb_read_write_interfaces(cb_l1_base, num_cbs_to_early_init, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
                 kernel_init();
+                RECORD_STACK_USAGE();
             } else {
                 // This was not initialized in kernel_init
                 noc_local_state_init(noc_index);
             }
-            DEBUG_STATUS('D');
+            DEBUG_STATUS("D");
 
             wait_ncrisc_trisc();
 
-            mailboxes->launch.run = RUN_MSG_DONE;
+            mailboxes->launch.go.run = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
-            if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
-                uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
-                noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
+            if (mailboxes->launch.kernel_config.mode == DISPATCH_MODE_DEV) {
+                uint64_t dispatch_addr =
+                    NOC_XY_ADDR(NOC_X(mailboxes->launch.kernel_config.dispatch_core_x),
+                        NOC_Y(mailboxes->launch.kernel_config.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
+                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                noc_fast_atomic_increment(
+                    noc_index,
+                    NCRISC_AT_CMD_BUF,
+                    dispatch_addr,
+                    NOC_UNICAST_WRITE_VC,
+                    1,
+                    31 /*wrap*/,
+                    false /*linked*/);
             }
         }
     }

@@ -8,6 +8,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/common/test_tiles.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/programming_examples/matmul_common/bmm_op.hpp"
 #include <algorithm>
@@ -19,7 +20,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 
-void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& output,
+void golden_matmul(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std::vector<bfloat16>& output,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B) {
     std::uint32_t idx_c = 0;
     std::uint32_t idx_a = 0;
@@ -27,7 +28,7 @@ void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& o
 
     float c_f;
     float float_tmp;
-    vector<bfloat16> c_bf(M * N, 0);
+    std::vector<bfloat16> c_bf(M * N, 0);
 
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
@@ -46,7 +47,7 @@ void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& o
     }
 }
 
-void matmul_multicore_reuse_mcast(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& output, bool bcast_batch,
+void matmul_multicore_reuse_mcast(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std::vector<bfloat16>& output, bool bcast_batch,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B, Device* device) {
 
     /*
@@ -306,10 +307,10 @@ void matmul_multicore_reuse_mcast(vector<bfloat16>& a, vector<bfloat16>& b, vect
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args}
     );
 
-    auto in0_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
 
     /*
@@ -365,8 +366,8 @@ void matmul_multicore_reuse_mcast(vector<bfloat16>& a, vector<bfloat16>& b, vect
                 (std::uint32_t)  (num_cores_c - 1), // in0_mcast_num_dests
                 (std::uint32_t)  left_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  left_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in0_mcast_sender_semaphore,
-                (std::uint32_t)  in0_mcast_receiver_semaphore,
+                (std::uint32_t)  in0_mcast_sender_semaphore_id,
+                (std::uint32_t)  in0_mcast_receiver_semaphore_id,
 
                 (std::uint32_t)  bottom_core_physical.x, // in0_mcast_dest_noc_start_x
                 (std::uint32_t)  bottom_core_physical.y, // in0_mcast_dest_noc_start_y
@@ -375,8 +376,8 @@ void matmul_multicore_reuse_mcast(vector<bfloat16>& a, vector<bfloat16>& b, vect
                 (std::uint32_t)  (num_cores_r - 1), // in0_mcast_num_dests
                 (std::uint32_t)  top_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  top_core_physical.y, // in0_mcast_sender_noc_y
-                (std::uint32_t)  in1_mcast_sender_semaphore,
-                (std::uint32_t)  in1_mcast_receiver_semaphore,
+                (std::uint32_t)  in1_mcast_sender_semaphore_id,
+                (std::uint32_t)  in1_mcast_receiver_semaphore_id,
 
                 (std::uint32_t)  Mt * Kt, // MtKt
                 (std::uint32_t)  Kt * Nt, // KtNt

@@ -30,4 +30,10 @@ What you see below highlights the expectations for all our models that successfu
     - Discuss any external dependencies or services required for the full operation of your model and how they impact the end-to-end performance.
     - Please add your tests to either ``run_perf_models_other()``, ``run_perf_models_llm_javelin()``, or ``run_perf_models_cnn_javelin()`` within ``run_performance.sh``. Only tests marked with ``@pytest.mark.models_performance_bare_metal`` will be included.
 
+5. Does your model have an end-to-end demo test demonstrating working output generation on real inputs and has this been integrated on our CI pipeline?
+    - Include a test that demonstrates the model's functionality and performance on real inputs, such as images or text, to ensure the model is producing the expected output.
+    - This test should be integrated into the CI pipeline to ensure the model's functionality is automatically validated.
+    - Provide instructions on how to run this test locally in the ``README.md``.
+    - Please add your test within ``run_demos_single_card_n150_tests.sh``, ``run_demos_single_card_n300_tests.sh``, and/or ``run_t3000_demo_tests.sh`` depending on the hardware you are targeting.
+
 For the purpose of organizing your tests to be managed for collecting both device and end-to-end performance, please take a look at ``test_ttnn_functional_resnet50.py`` and how the ``ResNet50TestInfra`` class was setup.

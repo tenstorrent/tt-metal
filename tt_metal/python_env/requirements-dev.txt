@@ -7,7 +7,8 @@
 # requires <4.0.0 platformdirs, so we're pinning platformdirs here
 platformdirs<4.0.0
 pre-commit==3.0.4
-black==23.10.1
+black==24.3.0
+clang-format==18.1.5
 build==0.10.0
 yamllint==1.32.0
 mypy==1.9.0
@@ -15,10 +16,14 @@ mypy==1.9.0
 # For docs
 -r ../../docs/requirements-docs.txt
 
+# For sweep testing
+-r ../../tests/sweep_framework/requirements-sweeps.txt
+
 # testing
 pytest==7.2.2
 pytest-timeout==2.2.0
 pytest-split==0.8.2
+pytest-xdist==3.6.1
 jsbeautifier==1.14.7
 datasets==2.9.0
 torch==2.2.1.0+cpu
@@ -27,8 +32,16 @@ torchvision==0.17.1+cpu
 transformers==4.37.2
 tqdm==4.65.0
 sentencepiece==0.1.97
+torchmetrics==1.3.1
+torch-fidelity==0.3.0
+xlsxwriter==3.0.8
+tiktoken==0.3.3
+enlighten==1.12.4
+numba>=0.58.1
+librosa==0.10.0
 timm==0.6.13
 diffusers==0.12.1
+
 # Pin to this because evaluate 0.4.0 will download the latest multiprocess as a
 # transitive dep, which uses dill >=0.3.7, however many packages require
 # dill < 0.3.7

@@ -6,13 +6,14 @@ import torch
 from torch import nn
 from torchvision import transforms, datasets
 
-import tt_lib
+import ttnn
 from models.utility_functions import (
     tilize_to_list,
     untilize,
     comp_allclose_and_pcc,
     comp_pcc,
 )
+
 from tt_lib.utils import pad_activation, pad_weight
 
 
@@ -36,11 +37,11 @@ def tt_batch_norm(
     epsilon_torch = torch.tensor([[[W * [eps]]]])
     epsilon_padded = pad_activation(epsilon_torch)
     epsilon_tilized = tilize_to_list(epsilon_padded)
-    eps_tt = tt_lib.tensor.Tensor(
+    eps_tt = ttnn.Tensor(
         epsilon_tilized,
         [1, 1, H, W],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
@@ -49,13 +50,13 @@ def tt_batch_norm(
         print("inference mode")
         assert batch_size == 1, "in inference mode batch size must be 1!"
         # In prediction mode, use mean and variance obtained by moving average
-        var_plus_eps = tt_lib.tensor.add(eps_tt, running_var)
-        sqrt_var = tt_lib.tensor.sqrt(var_plus_eps)
-        sqrt_inv = tt_lib.tensor.recip(sqrt_var)
-        x_minus_mean = tt_lib.tensor.sub(x, running_mean)
-        x_div_sqrt = tt_lib.tensor.mul(x_minus_mean, sqrt_inv)
-        x_gamma = tt_lib.tensor.mul(x_div_sqrt, gamma)
-        Y = tt_lib.tensor.add(x_gamma, beta)
+        var_plus_eps = ttnn.add(eps_tt, running_var)
+        sqrt_var = ttnn.sqrt(var_plus_eps)
+        sqrt_inv = ttnn.reciprocal(sqrt_var)
+        x_minus_mean = ttnn.sub(x, running_mean)
+        x_div_sqrt = ttnn.mul(x_minus_mean, sqrt_inv)
+        x_gamma = ttnn.mul(x_div_sqrt, gamma)
+        Y = ttnn.add(x_gamma, beta)
     else:
         print("train mode")
         x_tor = x.cpu().to_torch()
@@ -65,18 +66,18 @@ def tt_batch_norm(
         var = ((x_tor - mean) ** 2).mean(dim=0)
         var_reshaped = var.view(1, 1, 32, 32)
         var_tilized = tilize_to_list(var_reshaped)
-        var_tt = tt_lib.tensor.Tensor(
+        var_tt = ttnn.Tensor(
             var_tilized,
             [1, 1, H, W],
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.TILE,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
             device,
         )
 
         # In training mode, the current mean and variance are used
-        var_plus_eps = tt_lib.tensor.add(eps_tt, var_tt)
-        sqrt_var = tt_lib.tensor.sqrt(var_plus_eps)
-        sqrt_inv = tt_lib.tensor.recip(sqrt_var)
+        var_plus_eps = ttnn.add(eps_tt, var_tt)
+        sqrt_var = ttnn.sqrt(var_plus_eps)
+        sqrt_inv = ttnn.reciprocal(sqrt_var)
         sqrt_inv_data = sqrt_inv.cpu().to_torch()
         sqrt_inv_data = torch.Tensor(sqrt_inv_data).reshape((1, 1, H, W))
         sqrt_inv_data = untilize(sqrt_inv_data)
@@ -87,40 +88,40 @@ def tt_batch_norm(
         momentum_torch = torch.tensor([[[W * [momentum]]]])
         momentum_padded = pad_activation(momentum_torch)
         momentum_tilized = tilize_to_list(momentum_padded)
-        momentum_tt = tt_lib.tensor.Tensor(
+        momentum_tt = ttnn.Tensor(
             momentum_tilized,
             [1, 1, H, W],
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.TILE,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
             device,
         )
         ones_torch = torch.tensor([[[bn_size * [1.0]]]])
         ones_padded = pad_activation(ones_torch)
         ones_tilized = tilize_to_list(ones_padded)
-        ones_tt = tt_lib.tensor.Tensor(
+        ones_tt = ttnn.Tensor(
             ones_tilized,
             [1, 1, 32, bn_size],
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.TILE,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
             device,
         )
 
-        running_mean_left = tt_lib.tensor.mul(tt_lib.tensor.sub(ones_tt, momentum_tt), running_mean)
+        running_mean_left = ttnn.mul(ttnn.sub(ones_tt, momentum_tt), running_mean)
         mean_reshaped = mean.view(1, 1, 32, 32)
         mean_tilized = tilize_to_list(mean_reshaped)
-        mean_tt = tt_lib.tensor.Tensor(
+        mean_tt = ttnn.Tensor(
             mean_tilized,
             [1, 1, H, W],
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.TILE,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
             device,
         )
-        running_mean_right = tt_lib.tensor.mul(momentum_tt, mean_tt)
-        running_mean = tt_lib.tensor.add(running_mean_left, running_mean_right)
+        running_mean_right = ttnn.mul(momentum_tt, mean_tt)
+        running_mean = ttnn.add(running_mean_left, running_mean_right)
 
-        running_var_left = tt_lib.tensor.mul(tt_lib.tensor.sub(ones_tt, momentum_tt), running_var)
-        running_var_right = tt_lib.tensor.mul(momentum_tt, var_tt)
-        running_var = tt_lib.tensor.add(running_var_left, running_var_right)
+        running_var_left = ttnn.mul(ttnn.sub(ones_tt, momentum_tt), running_var)
+        running_var_right = ttnn.mul(momentum_tt, var_tt)
+        running_var = ttnn.add(running_var_left, running_var_right)
 
         gamma_tor = gamma.cpu().to_torch()
         gamma_tor = torch.Tensor(gamma_tor).reshape((1, 1, H, W))
@@ -135,11 +136,11 @@ def tt_batch_norm(
         Y_tor = torch.add(x_gamma_tor, beta_tor)
 
         Y_tilized = tilize_to_list(Y_tor)
-        Y = tt_lib.tensor.Tensor(
+        Y = ttnn.Tensor(
             Y_tilized,
             [batch_size, 1, H, W],
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.TILE,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
             device,
         )
 
@@ -163,21 +164,21 @@ class ttBatchNorm:
             zeros_torch = torch.tensor([[[bn_size * [0.0]]]])
             zeros_padded = pad_activation(zeros_torch)
             zeros_tilized = tilize_to_list(zeros_padded)
-            zeros_tt = tt_lib.tensor.Tensor(
+            zeros_tt = ttnn.Tensor(
                 zeros_tilized,
                 [1, 1, 32, bn_size],
-                tt_lib.tensor.DataType.BFLOAT16,
-                tt_lib.tensor.Layout.TILE,
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
                 device,
             )
             ones_torch = torch.tensor([[[bn_size * [1.0]]]])
             ones_padded = pad_activation(ones_torch)
             ones_tilized = tilize_to_list(ones_padded)
-            ones_tt = tt_lib.tensor.Tensor(
+            ones_tt = ttnn.Tensor(
                 ones_tilized,
                 [1, 1, 32, bn_size],
-                tt_lib.tensor.DataType.BFLOAT16,
-                tt_lib.tensor.Layout.TILE,
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
                 device,
             )
 
@@ -268,66 +269,66 @@ def run_batchnorm_forward(device, bn_size):
     weight_bn_src = weight_bn.view(1, 1, 1, bn_size)
     gamma_padded = pad_weight(weight_bn_src)
     gamma_untilized = tilize_to_list(gamma_padded)
-    gamma_tt = tt_lib.tensor.Tensor(
+    gamma_tt = ttnn.Tensor(
         gamma_untilized,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
     bias_bn_src = bias_bn.view(1, 1, 1, bn_size)
     beta_padded = pad_weight(bias_bn_src)
     beta_tilized = tilize_to_list(beta_padded)
-    beta_tt = tt_lib.tensor.Tensor(
+    beta_tt = ttnn.Tensor(
         beta_tilized,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
     running_mean_bn_src = running_mean.view(1, 1, 1, bn_size)
     running_mean_padded = pad_activation(running_mean_bn_src)
     running_mean_tilized = tilize_to_list(running_mean_padded)
-    running_mean_tt = tt_lib.tensor.Tensor(
+    running_mean_tt = ttnn.Tensor(
         running_mean_tilized,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
     running_var_bn_src = running_var.view(1, 1, 1, bn_size)
     running_var_padded = pad_activation(running_var_bn_src)
     running_var_tilized = tilize_to_list(running_var_padded)
-    running_var_tt = tt_lib.tensor.Tensor(
+    running_var_tt = ttnn.Tensor(
         running_var_tilized,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
     epsilon_torch = torch.tensor([[[bn_size * [epsilon]]]])
     epsilon_padded = pad_activation(epsilon_torch)
     epsilon_tilized = tilize_to_list(epsilon_padded)
-    eps_tt = tt_lib.tensor.Tensor(
+    eps_tt = ttnn.Tensor(
         epsilon_tilized,
         [1, 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
     inputs_torch = inputs.view(inputs.shape[0], 1, 1, bn_size)
     inputs_padded = pad_activation(inputs_torch)
     inputs_tilized = tilize_to_list(inputs_padded)
-    inputs_tt = tt_lib.tensor.Tensor(
+    inputs_tt = ttnn.Tensor(
         inputs_tilized,
         [inputs_padded.shape[0], 1, 32, bn_size],
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.TILE,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
         device,
     )
 
@@ -347,7 +348,7 @@ def run_batchnorm_forward(device, bn_size):
     print("\n\n", "atol/rtol:", test_results, "| pcc:", output, "\n\n")
 
     pcc = comp_pcc(output_bn_torch[0], output_bn_tt_untilized)
-    assert float(pcc[1][5:]) > 0.99, f"pcc is lower than 0.99: {float(pcc[1][5:])}"
+    assert float(pcc[1]) > 0.99, f"pcc is lower than 0.99: {float(pcc[1])}"
 
 
 def test_batchnorm_inference(device):

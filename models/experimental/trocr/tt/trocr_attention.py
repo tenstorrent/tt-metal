@@ -7,7 +7,7 @@ import torch.nn as nn
 import math
 from typing import Optional, Tuple
 
-import tt_lib
+import ttnn
 from tt_lib import fallback_ops
 
 from models.helper_funcs import Linear
@@ -90,20 +90,20 @@ class TtTrOCRAttention(nn.Module):
         )
         self.out_proj = Linear(embed_dim, embed_dim, self.out_proj_weight, self.out_proj_bias)
 
-    def _shape(self, tensor: tt_lib.tensor.Tensor, seq_len: int, bsz: int):
+    def _shape(self, tensor: ttnn.Tensor, seq_len: int, bsz: int):
         tensor = fallback_ops.reshape(tensor, bsz, seq_len, self.num_heads, self.head_dim)
-        tensor = tt_lib.tensor.transpose(tensor, 1, -2)
+        tensor = ttnn.transpose(tensor, 1, -2)
         return tensor
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        key_value_states: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_value: Optional[Tuple[tt_lib.tensor.Tensor]] = None,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        layer_head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        hidden_states: ttnn.Tensor,
+        key_value_states: Optional[ttnn.Tensor] = None,
+        past_key_value: Optional[Tuple[ttnn.Tensor]] = None,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        layer_head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, Optional[tt_lib.tensor.Tensor], Optional[Tuple[tt_lib.tensor.Tensor]],]:
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor], Optional[Tuple[ttnn.Tensor]],]:
         """Input shape: Batch x Time x Channel"""
 
         # if key_value_states are provided this layer is used as a cross-attention layer
@@ -115,7 +115,7 @@ class TtTrOCRAttention(nn.Module):
         bsz, tgt_len, embed_dim = hidden_states.get_legacy_shape()[1:]
 
         # get query proj
-        query_states = tt_lib.tensor.mul_unary(self.q_proj(hidden_states), self.scaling)
+        query_states = ttnn.multiply(self.q_proj(hidden_states), self.scaling)
 
         # get key, value proj
         if is_cross_attention and past_key_value is not None:
@@ -155,8 +155,8 @@ class TtTrOCRAttention(nn.Module):
         value_states = fallback_ops.reshape(value_states, *proj_shape)
 
         src_len = key_states.get_legacy_shape()[2]
-        key_states = tt_lib.tensor.transpose(key_states, -2, -1)
-        attn_weights = tt_lib.tensor.bmm(query_states, key_states)
+        key_states = ttnn.transpose(key_states, -2, -1)
+        attn_weights = ttnn.matmul(query_states, key_states)
 
         if attn_weights.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, src_len]:
             raise ValueError(
@@ -173,7 +173,7 @@ class TtTrOCRAttention(nn.Module):
             attn_weights = fallback_ops.reshape(attn_weights, bsz, self.num_heads, tgt_len, src_len)
 
             if attention_mask == None:
-                attn_weights = tt_lib.tensor.add(attn_weights, attention_mask)
+                attn_weights = ttnn.add(attn_weights, attention_mask)
 
             attn_weights = fallback_ops.reshape(attn_weights, 1, bsz * self.num_heads, tgt_len, src_len)
 
@@ -200,7 +200,7 @@ class TtTrOCRAttention(nn.Module):
         else:
             attn_weights_reshaped = None
 
-        attn_output = tt_lib.tensor.bmm(attn_weights, value_states)
+        attn_output = ttnn.matmul(attn_weights, value_states)
 
         if attn_output.get_legacy_shape() != [1, bsz * self.num_heads, tgt_len, self.head_dim]:
             raise ValueError(
@@ -209,7 +209,7 @@ class TtTrOCRAttention(nn.Module):
             )
 
         attn_output = fallback_ops.reshape(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)
-        attn_output = tt_lib.tensor.transpose(attn_output, 1, -2)
+        attn_output = ttnn.transpose(attn_output, 1, -2)
         attn_output = fallback_ops.reshape(attn_output, 1, bsz, tgt_len, embed_dim)
 
         attn_output = self.out_proj(attn_output)

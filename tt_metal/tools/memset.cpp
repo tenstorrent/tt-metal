@@ -5,6 +5,8 @@
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 
+#include <unistd.h>
+
 void memset_l1(vector<uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) {
     // Utility function that writes a memory vector to L1 for all cores at a specific start address.
     const metal_SocDescriptor &sdesc = tt::Cluster::instance().get_soc_desc(chip_id);

@@ -6,9 +6,10 @@ import pytest
 from loguru import logger
 
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_pcc, skip_for_wormhole_b0
 import torch
+import ttnn
 
 shapes = [
     [1, 1, 25088, 64],
@@ -33,35 +34,35 @@ def run_move_op(shape, device):
     else:
         core_count = 98
 
-    dtype = ttl.tensor.DataType.BFLOAT16
-    layout = ttl.tensor.Layout.ROW_MAJOR
-    shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
+    dtype = ttnn.bfloat16
+    layout = ttnn.ROW_MAJOR_LAYOUT
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
     if (compute_grid_size.x * compute_grid_size.y) < 98:
-        shard_grid = ttl.tensor.CoreRangeSet(
+        shard_grid = ttnn.CoreRangeSet(
             {
-                ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, 0),
-                    ttl.tensor.CoreCoord(4, 4),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(4, 4),
                 ),
             }
         )
     else:
-        shard_grid = ttl.tensor.CoreRangeSet(
+        shard_grid = ttnn.CoreRangeSet(
             {
-                ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, 0),
-                    ttl.tensor.CoreCoord(11, 7),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(11, 7),
                 ),
-                ttl.tensor.CoreRange(
-                    ttl.tensor.CoreCoord(0, 8),
-                    ttl.tensor.CoreCoord(1, 8),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 8),
+                    ttnn.CoreCoord(1, 8),
                 ),
             }
         )
     assert shape[0] == 1 and shape[1] == 1
     assert shape[2] % core_count == 0 and shape[3] % 32 == 0
     shard_shape = [(int)(shape[2] / core_count), shape[3]]
-    shard_spec = ttl.tensor.ShardSpec(
+    shard_spec = ttnn.ShardSpec(
         shard_grid,
         shard_shape,
         shard_orientation,
@@ -70,17 +71,17 @@ def run_move_op(shape, device):
     # make dummy shape half of shape, so we will test move sharded with overlap
     dummy_shape = [shape[0], shape[1], (int)(shape[2] / 2), shape[3]]
     dummy_shard_shape = [(int)(dummy_shape[2] / core_count), dummy_shape[3]]
-    dummy_shard_spec = ttl.tensor.ShardSpec(
+    dummy_shard_spec = ttnn.ShardSpec(
         shard_grid,
         dummy_shard_shape,
         shard_orientation,
         False,
     )
     dummy_tensor = torch.zeros(dummy_shape)
-    tt_dummy_tensor = ttl.tensor.Tensor(dummy_tensor, dtype)
-    dummy_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    tt_dummy_tensor = ttnn.Tensor(dummy_tensor, dtype)
+    dummy_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
         shard_spec=dummy_shard_spec,
     )
     tt_dummy_tensor = tt_dummy_tensor.to(device, dummy_mem_config)
@@ -90,10 +91,10 @@ def run_move_op(shape, device):
     for val in range(1, input_volume + 1):
         tensor.append(val)
     torch_tensor = torch.tensor(tensor).reshape(shape)
-    tt_tensor = ttl.tensor.Tensor(torch_tensor, dtype)
-    height_sharded_mem_config = ttl.tensor.MemoryConfig(
-        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+    tt_tensor = ttnn.Tensor(torch_tensor, dtype)
+    height_sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
         shard_spec=shard_spec,
     )
     tt_tensor = tt_tensor.to(device, height_sharded_mem_config)
@@ -101,9 +102,9 @@ def run_move_op(shape, device):
     # Free up dummy tensor from memory to make available to move
     tt_dummy_tensor.deallocate()
 
-    output = ttl.tensor.move_sharded(tt_tensor, height_sharded_mem_config)
+    output = ttnn.move(tt_tensor, memory_config=height_sharded_mem_config)
 
-    tt_host_rm = output.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    tt_host_rm = output.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     pyt_got_back_rm = tt_host_rm.to_torch()
 
     passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm, torch_tensor, 0.99)

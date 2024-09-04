@@ -5,15 +5,12 @@
 #pragma once
 
 #include <string>
+#include <sstream>
 #include <thread>
 #include <mutex>
-#include "tt_metal/common/assert.hpp"
+#include <vector>
 
 using std::string;
-using std::cout;
-
-#include <filesystem>
-namespace fs = std::filesystem;
 
 namespace tt
 {
@@ -24,9 +21,10 @@ namespace utils
     const std::string &get_reports_dir();
 
     // Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
-    template <typename SizeT>
-    inline void hash_combine(SizeT& seed, const SizeT value) {
-        seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    template <typename T>
+    void hash_combine(std::size_t& seed, const T& value) {
+        std::hash<T> hasher;
+        seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
 
     inline std::vector<std::string> strsplit(std::string input, char delimiter) {

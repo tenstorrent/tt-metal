@@ -24,11 +24,11 @@ bool test_cb_config_written_to_core(Program &program, Device *device, const Core
 
     for (const auto cb: program.circular_buffers()) {
         for (const CoreRange &core_range : cb->core_ranges().ranges()) {
-            for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+                for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
                     tt::tt_metal::detail::ReadFromDeviceL1(
-                        device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
+                        device, core_coord, program.get_sem_base_addr(device, core_coord, CoreType::WORKER), cb_config_buffer_size, cb_config_vector);
 
                     for (const auto &[buffer_index, golden_cb_config] : cb_config_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * buffer_index;

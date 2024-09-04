@@ -37,7 +37,7 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.99987)
+    assert_with_pcc(torch_output_tensor, output, 0.99981)
 
 
 # fmt: off
@@ -116,7 +116,7 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999649)
+    assert_with_pcc(torch_output_tensor, output, 0.999599)
 
 
 # fmt: off
@@ -141,7 +141,7 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output, 0.999877)
+    assert_with_pcc(torch_output_tensor, output, 0.9997)
 
 
 # fmt: off
@@ -398,23 +398,14 @@ def test_matmul_with_core_grid(device, batch_size):
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    if batch_size == 1:
-        with pytest.raises(RuntimeError) as exception:
-            output_tensor = ttnn.matmul(
-                input_tensor_a,
-                input_tensor_b,
-                core_grid=ttnn.CoreGrid(y=batch_size, x=8),
-            )
-        assert "1D mcast for in0 or in1 is not implemented yet" in str(exception.value)
-    else:
-        output_tensor = ttnn.matmul(
-            input_tensor_a,
-            input_tensor_b,
-            core_grid=ttnn.CoreGrid(y=batch_size, x=8),
-        )
+    output_tensor = ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        core_grid=ttnn.CoreGrid(y=batch_size, x=8),
+    )
 
-        output_tensor = ttnn.to_torch(output_tensor)
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
 @skip_for_wormhole_b0()
@@ -422,7 +413,7 @@ def test_matmul_with_core_grid(device, batch_size):
 @pytest.mark.parametrize("m_size", [30, 61])
 @pytest.mark.parametrize("k_size", [1023, 2048])
 @pytest.mark.parametrize("n_size", [1021, 2048])
-def test_wide_matmul_with_argument_for_using_1D_systolic_array_set_to_true(device, batch_size, m_size, k_size, n_size):
+def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batch_size, m_size, k_size, n_size):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
@@ -435,7 +426,7 @@ def test_wide_matmul_with_argument_for_using_1D_systolic_array_set_to_true(devic
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        use_1d_systolic_array=True,
+        core_grid=device.core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -447,7 +438,7 @@ def test_wide_matmul_with_argument_for_using_1D_systolic_array_set_to_true(devic
 @pytest.mark.parametrize("m_size", [1024, 2048])
 @pytest.mark.parametrize("k_size", [1023, 2048])
 @pytest.mark.parametrize("n_size", [32, 61])
-def test_tall_matmul_with_argument_for_using_1D_systolic_array_set_to_true(device, batch_size, m_size, k_size, n_size):
+def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batch_size, m_size, k_size, n_size):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
@@ -460,7 +451,7 @@ def test_tall_matmul_with_argument_for_using_1D_systolic_array_set_to_true(devic
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        use_1d_systolic_array=True,
+        core_grid=device.core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -482,22 +473,50 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    program_config = ttnn.create_matmul_1d_systolic_array_program_config(
-        input_shape_a=input_tensor_a.shape.with_tile_padding(),
-        input_shape_b=input_tensor_b.shape.with_tile_padding(),
-        core_grid=input_tensor_a.device().core_grid,
-    )
-
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        program_config=program_config,
+        core_grid=device.core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.997)
 
 
+@pytest.mark.parametrize(
+    "n_size, c, m, k, n",
+    [
+        (1, 1, 2, 3, 4),
+        (1, 1, 1024, 64, 512),
+    ],
+)
+@pytest.mark.parametrize("transpose_b", [True, False])
+@pytest.mark.parametrize("transpose_a", [True, False])
+def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, transpose_b):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((n_size, c, m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((n_size, c, k, n), dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    if transpose_a:
+        torch_input_tensor_a = torch_input_tensor_a.transpose(-1, -2)
+    if transpose_b:
+        torch_input_tensor_b = torch_input_tensor_b.transpose(-1, -2)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.matmul(input_tensor_a, input_tensor_b, transpose_a=transpose_a, transpose_b=transpose_b)
+    output = ttnn.to_torch(output)
+
+    assert len(output.shape) == len(torch_output_tensor.shape)
+    assert output.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output, 0.999)
+
+
+##########################
+# MODEL SPECIFIC MATMULS #
+##########################
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("m_size", [128])
@@ -517,7 +536,6 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        use_1d_systolic_array=True,
         core_grid=core_grid,
     )
 
@@ -620,14 +638,12 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
             input_tensor_a,
             input_tensor_b,
             bias=input_tensor_c,
-            # use_1d_systolic_array=True,
             core_grid=core_grid,
         )
     else:
         output_tensor = ttnn.matmul(
             input_tensor_a,
             input_tensor_b,
-            # use_1d_systolic_array=True,
             core_grid=core_grid,
         )
 

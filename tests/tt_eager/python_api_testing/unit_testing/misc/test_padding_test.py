@@ -7,7 +7,7 @@ import pytest
 
 import torch
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import nearest_32
 
 
@@ -25,7 +25,7 @@ def test_run_padding_test(input_tensor_shape, output_tensor_shape, input_tensor_
     inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
     # Create tensor on host
-    a = ttl.tensor.Tensor(inp, ttl.tensor.DataType.BFLOAT16)
+    a = ttnn.Tensor(inp, ttnn.bfloat16)
 
     # Pad inputs on host
     a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
@@ -64,11 +64,11 @@ def test_run_unpadding_test(input_tensor_shape, output_tensor_start, output_tens
     inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
     # Create tensor on host
-    a = ttl.tensor.Tensor(
+    a = ttnn.Tensor(
         inp.reshape(-1).tolist(),
         input_tensor_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
 
     # Unpad inputs on host
@@ -109,17 +109,17 @@ def test_run_padding_and_add_test(input_tensor_shape, output_tensor_shape, input
     ones = torch.ones(*input_tensor_shape)
 
     # Create tensor on host
-    a = ttl.tensor.Tensor(
+    a = ttnn.Tensor(
         inp.reshape(-1).tolist(),
         input_tensor_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
-    b = ttl.tensor.Tensor(
+    b = ttnn.Tensor(
         ones.reshape(-1).tolist(),
         input_tensor_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
 
     # Pad inputs on host
@@ -128,10 +128,10 @@ def test_run_padding_and_add_test(input_tensor_shape, output_tensor_shape, input
 
     # Run add op on device with padded tensors
 
-    a_dev = a_pad.to(ttl.tensor.Layout.TILE).to(device)
-    b_dev = b_pad.to(ttl.tensor.Layout.TILE).to(device)
-    out_dev = ttl.tensor.add(a_dev, b_dev)
-    out_pad = out_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    a_dev = a_pad.to(ttnn.TILE_LAYOUT).to(device)
+    b_dev = b_pad.to(ttnn.TILE_LAYOUT).to(device)
+    out_dev = ttnn.add(a_dev, b_dev)
+    out_pad = out_dev.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
 
     # Unpad out to get result
     out = out_pad.unpad(output_tensor_start, output_tensor_end)
@@ -165,11 +165,11 @@ def test_run_tile_padding_test(input_tensor_shape, pad_value):
     inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
     # Create tensor on host
-    a = ttl.tensor.Tensor(
+    a = ttnn.Tensor(
         inp.reshape(-1).tolist(),
         input_tensor_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
 
     # Pad inputs on host
@@ -209,11 +209,11 @@ def test_run_tile_unpadding_test(input_tensor_shape, output_tensor_shape):
     inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
     # Create tensor on host
-    a = ttl.tensor.Tensor(
+    a = ttnn.Tensor(
         inp.reshape(-1).tolist(),
         input_tensor_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
 
     # Unpad inputs on host
@@ -247,27 +247,27 @@ def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value, device):
     ones = torch.ones(*input_tensor_shape)
 
     # Create tensor on host
-    a = ttl.tensor.Tensor(
+    a = ttnn.Tensor(
         inp.reshape(-1).tolist(),
         input_tensor_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
-    b = ttl.tensor.Tensor(
+    b = ttnn.Tensor(
         ones.reshape(-1).tolist(),
         input_tensor_shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
 
     # Pad inputs on host
     a_pad = a.pad_to_tile(pad_value)
     b_pad = b.pad_to_tile(pad_value)
 
-    a_dev = a_pad.to(ttl.tensor.Layout.TILE).to(device)
-    b_dev = b_pad.to(ttl.tensor.Layout.TILE).to(device)
-    out_dev = ttl.tensor.add(a_dev, b_dev)
-    out_pad = out_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+    a_dev = a_pad.to(ttnn.TILE_LAYOUT).to(device)
+    b_dev = b_pad.to(ttnn.TILE_LAYOUT).to(device)
+    out_dev = ttnn.add(a_dev, b_dev)
+    out_pad = out_dev.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
 
     # Unpad out to get result
     out = out_pad.unpad_from_tile(input_tensor_shape)

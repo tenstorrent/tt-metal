@@ -18,13 +18,15 @@
 #include "tensix_functions.h"
 #include "c_tensix_core.h"
 
-#include "kernel.cpp"
+#include "kernel_includes.hpp"
 
 uint8_t noc_index = NOC_INDEX;
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_acked[NUM_NOCS];
+uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
+uint32_t noc_posted_writes_num_issued[NUM_NOCS];
 
 void kernel_launch() {
 

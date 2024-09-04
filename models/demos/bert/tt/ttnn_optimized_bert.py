@@ -190,7 +190,7 @@ def bert(
         input_ids,
         parameters.embeddings.word_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
-        pad_token=config.pad_token_id,
+        padding_idx=config.pad_token_id,
     )
     ttnn.deallocate(input_ids)
 
@@ -286,7 +286,7 @@ def preprocess_inputs(
     position_ids = ttnn.from_torch(position_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     if attention_mask is not None:
-        attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape)
+        attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape, torch.float32)
         attention_mask = attention_mask.expand((batch_size, -1, -1, -1))
         attention_mask = torch.clamp(attention_mask, min=-100000)
         attention_mask = ttnn.from_torch(

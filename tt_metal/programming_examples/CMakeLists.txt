@@ -1,29 +1,24 @@
 
 set(PROGRAMMING_EXAMPLES_SRCS
-    eltwise_binary/eltwise_binary
-    eltwise_sfpu/eltwise_sfpu
-    loopback/loopback
-    matmul_multi_core/matmul_multi_core
-    matmul_multicore_reuse/matmul_multicore_reuse
-    matmul_multicore_reuse_mcast/matmul_multicore_reuse_mcast
-    matmul_single_core/matmul_single_core
-    # none of the profiler tests are run?
+    ${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_compute/add_2_integers_in_compute.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/add_2_integers_in_riscv/add_2_integers_in_riscv.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_binary/eltwise_binary.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/eltwise_sfpu/eltwise_sfpu.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/hello_world_compute_kernel/hello_world_compute_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datamovement_kernel/hello_world_datamovement_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/hello_world_datatypes_kernel/hello_world_datatypes_kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/loopback/loopback.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/matmul_multi_core/matmul_multi_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/matmul_multicore_reuse/matmul_multicore_reuse.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/matmul_multicore_reuse_mcast/matmul_multicore_reuse_mcast.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/matmul_single_core/matmul_single_core.cpp
 )
 
-foreach (TEST ${PROGRAMMING_EXAMPLES_SRCS})
-    get_filename_component(TEST_TARGET ${TEST} NAME)
+include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 
-    add_executable(${TEST_TARGET} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST})
-    target_link_libraries(${TEST_TARGET} PUBLIC tt_metal stdc++fs yaml-cpp m)
-    target_include_directories(${TEST_TARGET} PRIVATE
-        ${UMD_HOME}
-        ${CMAKE_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/tt_metal
-        ${CMAKE_SOURCE_DIR}/tt_metal/common
-        ${CMAKE_CURRENT_SOURCE_DIR}
-    )
-    set_target_properties(${TEST_TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/programming_examples)
-    list(APPEND PROGRAMMING_EXAMPLES_TEST_TARGETS ${TEST_TARGET})
-endforeach()
+CREATE_PGM_EXAMPLES_EXE("${PROGRAMMING_EXAMPLES_SRCS}" "")  # no subdir, output binaries straight to build/programming_examples
 
-add_custom_target(programming_examples DEPENDS ${PROGRAMMING_EXAMPLES_TEST_TARGETS})
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/profiler)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/contributed)
+
+add_custom_target(programming_examples DEPENDS profiler_examples contributed ${PROGRAMMING_EXAMPLES_TEST_TARGETS})

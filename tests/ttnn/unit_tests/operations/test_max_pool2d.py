@@ -18,6 +18,7 @@ import ttnn
 ## stride_h, stride_w
 ## pad_h, pad_w
 ## dilation_h, dilation_w
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
@@ -179,7 +180,6 @@ def test_run_max_pool(
 
     out_pytorch_padded = ttnn.to_torch(out_padded)
     out_pytorch = out_pytorch_padded[:, :, :, :in_c]
-    out_pytorch = torch.permute(out_pytorch, (0, 3, 1, 2))  ## N, C, 1, HW
 
     ## reference
     golden_pytorch = torch.nn.MaxPool2d(
@@ -192,7 +192,9 @@ def test_run_max_pool(
     )(act)
 
     ## test for equivalance
-    out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
+    golden_shape = golden_pytorch.shape
+    out_pytorch = out_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
+    out_pytorch = torch.permute(out_pytorch, (0, 3, 1, 2))  ## N, C, H, W
     assert_with_pcc(out_pytorch, golden_pytorch)
 
     ## do more rigorous comparision for each element
@@ -208,3 +210,82 @@ def test_run_max_pool(
     assert isclose
     if dtype == ttnn.bfloat16:
         assert isequal
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, config_override, xfail",
+    (
+        (1, 32, 9, 9, 3, 3, 1, 1, 1, 1, {"num_cores_nhw": 2, "snap_to_tile": True}, False),
+        (1, 32, 17, 17, 3, 3, 1, 1, 1, 1, {"num_cores_nhw": 4, "snap_to_tile": True}, False),
+        (1, 32, 17, 17, 3, 3, 2, 2, 1, 1, {"num_cores_nhw": 2, "snap_to_tile": True}, False),
+        (2, 32, 16, 16, 3, 3, 1, 1, 1, 1, {"num_cores_nhw": 3, "snap_to_tile": True}, False),
+        (2, 32, 23, 23, 3, 3, 2, 2, 1, 1, {"num_cores_nhw": 3, "snap_to_tile": True}, False),
+        (1, 32, 23, 23, 3, 3, 1, 1, 1, 1, {"num_cores_nhw": 10, "snap_to_tile": True}, True),
+    ),
+)
+def test_pool_core_nondivis(
+    device,
+    use_program_cache,
+    batch_size,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    config_override,
+    xfail,
+):
+    if xfail:
+        pytest.xfail()
+
+    torch.manual_seed(0)
+
+    if True:
+        v = batch_size * input_height * input_width
+        act = (
+            torch.arange(v, dtype=torch.bfloat16)
+            .repeat(input_channels)
+            .reshape(input_channels, batch_size, input_height, input_width)
+            .permute(1, 0, 2, 3)
+        )
+    else:
+        act = torch.randn((batch_size, input_channels, input_height, input_width), dtype=torch.bfloat16)
+    golden = torch.nn.functional.max_pool2d(
+        act, (filter_height, filter_width), stride=(stride_h, stride_w), padding=(pad_h, pad_w)
+    )
+
+    act_permuted = torch.permute(act, (0, 2, 3, 1))
+    act_reshaped = act_permuted.reshape(batch_size, 1, input_height * input_width, input_channels)
+
+    reader_patterns_cache = {}
+    max_pool = ttnn.MaxPool2d(
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        dtype=ttnn.bfloat16,
+        device=device,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        reader_patterns_cache=reader_patterns_cache,
+        parallel_config_override=config_override,
+    )
+
+    ttact = ttnn.from_torch(act_reshaped, ttnn.bfloat16)
+    ttact_d = max_pool.copy_input_to_device(ttact)
+    out_d = max_pool(ttact_d)
+    out_padded = max_pool.copy_output_from_device(out_d)
+    out_pytorch_padded = ttnn.to_torch(out_padded)
+    out_pytorch = out_pytorch_padded[:, :, :, :input_channels]
+    out_pytorch = out_pytorch.reshape(golden.shape[0], golden.shape[2], golden.shape[3], golden.shape[1])
+    out_pytorch = torch.permute(out_pytorch, (0, 3, 1, 2))  ## N, C, H, W
+
+    ## test for equivalance
+    out_pytorch = out_pytorch.reshape(golden.shape)
+    assert_with_pcc(out_pytorch, golden)
+    assert torch.allclose(out_pytorch, golden)

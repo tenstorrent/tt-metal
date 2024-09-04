@@ -24,7 +24,7 @@ inline void calculate_exp2()
         // log(2) = 0.6931471805;
         v = v * 0.6931471805f;
 	    // exp = e^(v)
-	    vFloat exp = calculate_exponential_body_improved<APPROXIMATION_MODE, true>(v);
+	    vFloat exp = calculate_exponential_body_improved<APPROXIMATION_MODE>(v);
 	    dst_reg[0] = exp;
         dst_reg++;
     }

@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 from torch import nn
-import tt_lib
+import ttnn
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -140,28 +140,22 @@ def test_llama_decoder_split_inference(pcc, has_layer_norm, is_causal, reset_see
     tokenizer_name = tokenizer_version
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.float32
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
 
     # PyTorch output ==================================================================
-    pytorch_LlamaDecoder_model = PytorchLlamaDecoderModelStacked(
-        hugging_face_reference_model, decoder_stack_list
-    )
+    pytorch_LlamaDecoder_model = PytorchLlamaDecoderModelStacked(hugging_face_reference_model, decoder_stack_list)
     pytorch_LlamaDecoder_model.eval()
 
     # get output
-    pytorch_out = pytorch_LlamaDecoder_model(
-        x=llama_input, y=position_ids, is_causal=is_causal
-    )
+    pytorch_out = pytorch_LlamaDecoder_model(x=llama_input, y=position_ids, is_causal=is_causal)
 
     # TT hardware execution ============================================================
     # The first call --------------------------
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.SetDefaultDevice(device)
+    device = ttnn.open_device(0)
+    ttnn.SetDefaultDevice(device)
 
     # prepare input for TT hardware
     tt_llama_input = llama_input.unsqueeze(1)
@@ -180,11 +174,11 @@ def test_llama_decoder_split_inference(pcc, has_layer_norm, is_causal, reset_see
         half=1,
     )
 
-    tt_lib.device.CloseDevice(device)
+    ttnn.close_device(device)
 
     # The second call -------------------------------------------------------
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.SetDefaultDevice(device)
+    device = ttnn.open_device(0)
+    ttnn.SetDefaultDevice(device)
 
     # send input tensor from host to tt device
     tt_input = torch_to_tt_tensor_rm(first_out, device)
@@ -204,7 +198,7 @@ def test_llama_decoder_split_inference(pcc, has_layer_norm, is_causal, reset_see
         is_causal=is_causal,
     )
 
-    tt_lib.device.CloseDevice(device)
+    ttnn.close_device(device)
 
     # squeeze output
     tt_out = tt_out.squeeze(1)

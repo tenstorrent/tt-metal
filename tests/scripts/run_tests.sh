@@ -67,30 +67,7 @@ run_post_commit_pipeline_tests() {
         ./tests/scripts/run_pre_post_commit_regressions_slow_dispatch.sh
     elif [[ $dispatch_mode == "fast" ]]; then
         ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
-    elif [[ $dispatch_mode == "fast-multi-queue-single-device" ]]; then
-        TT_METAL_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_fast_dispatch_single_chip_multi_queue --gtest_filter=MultiCommandQueueSingleDeviceFixture.*
     fi
-}
-
-run_eager_package_end_to_end_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-
-    # This is important for validating our wheel. Ideally end to end testing should
-    # be a diff repo
-    unset PYTHONPATH
-
-    cd tests/end_to_end_tests
-    env pytest -c conftest.py . -m $pipeline_type
-}
-
-run_frequent_models_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    # Please put model runs in here from now on - thank you
-    ./tests/scripts/run_models.sh
 }
 
 run_frequent_api_pipeline_tests() {
@@ -104,25 +81,21 @@ run_frequent_api_pipeline_tests() {
         ./tests/scripts/run_python_api_unit_tests.sh
     else
         if [[ $tt_arch == "wormhole_b0" ]]; then
-            pytest  tests/tt_eager/python_api_testing/unit_testing/misc/test_all_gather.py -k nightly
+            pytest -n auto tests/ttnn/unit_tests/operations/test_all_gather.py -k nightly
         else
             echo "API tests are not available for fast dispatch because they're already covered in post-commit"
         fi
     fi
 }
 
-# Run frequent multi device pipeline tests - these are the t3000 + 4xn300 tests
-run_frequent_multi_device_pipeline_tests() {
+run_models_performance() {
     local tt_arch=$1
     local pipeline_type=$2
-    local dispatch_mode=$3
 
-    # Switch to modules only soon
-    # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
-    ./tests/scripts/run_frequent_regressions_multi_device.sh
+    ./tests/scripts/run_performance.sh --pipeline-type $pipeline_type --tt-arch $tt_arch
 }
 
-run_models_performance() {
+run_models_performance_multi_device() {
     local tt_arch=$1
     local pipeline_type=$2
 
@@ -133,15 +106,6 @@ run_models_performance_bare_metal_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
-
-    # BERT large via new enqueue APIs. I know this is not a unit test, but I would like to avoid BERT large breaking, so this
-    # is a safe place to put it for the time being. Need to run these as separate tests to avoid segfault (TODO(agrebenisan): Investigate why)
-    if [[ $dispatch_mode == "slow" ]]; then
-        env pytest -svv models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py::test_bert_batch_dram[BERT_LARGE-batch_9-BFLOAT16-DRAM]
-        env pytest -svv models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache[BERT_LARGE-batch_9-BFLOAT16-DRAM]
-    else
-        echo "Not running bert-large in fast-dispatch mode on bare-metal"
-    fi
 
     run_models_performance "$tt_arch" "$pipeline_type"
 }
@@ -181,14 +145,12 @@ run_stress_post_commit_pipeline_tests() {
     done
 }
 
-run_post_commit_multi_device_pipeline_tests() {
+run_post_commit_multi_device_unstable_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
 
-    # Switch to modules only soon
-    # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
-    ./tests/scripts/run_pre_post_commit_regressions_multi_device.sh
+    ./tests/scripts/multi_chip/run_unstable_multi_device.sh
 }
 
 run_microbenchmarks_pipeline_tests() {
@@ -198,7 +160,7 @@ run_microbenchmarks_pipeline_tests() {
 
     export TT_METAL_DEVICE_PROFILER=1
 
-    source build/python_env/bin/activate
+    source python_env/bin/activate
     ./tests/scripts/run_moreh_microbenchmark.sh
     pytest -svv tests/tt_metal/microbenchmarks
 }
@@ -211,6 +173,120 @@ run_ttnn_sweeps_pipeline_tests() {
     ./tests/scripts/run_ttnn_sweeps.sh
 }
 
+##########################T3000##########################
+# Run t3000 unit tests
+unit_t3000_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/t3000/run_t3000_unit_tests.sh
+}
+
+# Run t3000 frequent tests
+frequent_t3000_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/t3000/run_t3000_frequent_tests.sh
+}
+
+# Run t3000 demo tests
+demos_t3000_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/t3000/run_t3000_demo_tests.sh
+}
+
+# Run t3000 model perf tests
+model_perf_t3000_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/t3000/run_t3000_model_perf_tests.sh --pipeline-type "$pipeline_type"
+}
+##########################T3000##########################
+
+##########################TG##########################
+# Run tg unit tests
+unit_tg_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tg/run_tg_unit_tests.sh
+}
+
+# Run tg frequent tests
+frequent_tg_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tg/run_tg_frequent_tests.sh
+}
+
+# Run tg demo tests
+demos_tg_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tg/run_tg_demo_tests.sh
+}
+
+# Run tg model perf tests
+model_perf_tg_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tg/run_tg_model_perf_tests.sh --pipeline-type "$pipeline_type"
+}
+##########################TG##########################
+
+##########################TGG##########################
+# Run tgg unit tests
+unit_tgg_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tgg/run_tgg_unit_tests.sh
+}
+
+# Run tgg frequent tests
+frequent_tgg_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tgg/run_tgg_frequent_tests.sh
+}
+
+# Run tgg demo tests
+demos_tgg_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tgg/run_tgg_demo_tests.sh
+}
+
+# Run tgg model perf tests
+model_perf_tgg_device() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    ./tests/scripts/tgg/run_tgg_model_perf_tests.sh --pipeline-type "$pipeline_type"
+}
+##########################TGG##########################
+
 run_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -221,28 +297,45 @@ run_pipeline_tests() {
     # Call the appropriate module tests based on pipeline
     if [[ $pipeline_type == "post_commit" ]]; then
         run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "frequent_models" ]]; then
-        run_frequent_models_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "frequent_api" ]]; then
         run_frequent_api_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "eager_host_side" ]]; then
-        run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
-    elif [[ $pipeline_type == "eager_package_silicon" ]]; then
-        run_eager_package_end_to_end_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == *"models_performance_bare_metal" || $pipeline_type == "models_device_performance_bare_metal" ]]; then
         run_models_performance_bare_metal_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "models_performance_virtual_machine" ]]; then
         run_models_performance_virtual_machine_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "stress_post_commit" ]]; then
         run_stress_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "post_commit_multi_device" ]]; then
-        run_post_commit_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "frequent_multi_device" ]]; then
-        run_frequent_multi_device_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "microbenchmarks" ]]; then
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then
         run_ttnn_sweeps_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    # T3000 pipelines
+    elif [[ $pipeline_type == "unit_t3000_device" ]]; then
+        unit_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "frequent_t3000_device" ]]; then
+        frequent_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "demos_t3000_device" ]]; then
+        demos_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == *"model_perf_t3000_device" ]]; then
+        model_perf_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    # TG pipelines
+    elif [[ $pipeline_type == "unit_tg_device" ]]; then
+        unit_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "frequent_tg_device" ]]; then
+        frequent_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "demos_tg_device" ]]; then
+        demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == *"model_perf_tg_device" ]]; then
+        model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    # TGG pipelines
+    elif [[ $pipeline_type == "unit_tgg_device" ]]; then
+        unit_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "frequent_tgg_device" ]]; then
+        frequent_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "demos_tgg_device" ]]; then
+        demos_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == *"model_perf_tgg_device" ]]; then
+        model_perf_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1
@@ -328,8 +421,8 @@ main() {
     dispatch_mode=${dispatch_mode:-$default_dispatch_mode}
     pipeline_type=${pipeline_type:-$default_pipeline_type}
 
-    available_dispatch_modes=("fast" "slow" "fast-multi-queue-single-device")
-    available_tt_archs=("grayskull" "wormhole_b0")
+    available_dispatch_modes=("fast" "slow")
+    available_tt_archs=("grayskull" "wormhole_b0" "blackhole")
 
     # Validate arguments
     if [[ ! " ${available_tt_archs[*]} " =~ " $tt_arch " ]]; then

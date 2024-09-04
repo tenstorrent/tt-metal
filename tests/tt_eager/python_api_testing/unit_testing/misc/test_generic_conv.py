@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 import numpy as np
 
-import tt_lib as ttl
 from tt_lib.utils import (
     tilize_to_list,
     tilize,
@@ -23,6 +22,7 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_weight_tensor_special_padding,
 )
 import torch
+import ttnn
 
 
 # generic conv doesnt support tiled out, bias and relu fusions
@@ -125,14 +125,14 @@ def test_run_generic_conv(
         # Prepare activations
         A_cl_host = create_conv_act_tensor(A_pyt, 1, C, H, W)
         if run_conv_with_address_map:
-            A = A_cl_host.to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK))
+            A = A_cl_host.to(device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.SINGLE_BANK))
         else:
             A = A_cl_host.to(device)
 
         # Prepare weights
         B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
         if run_conv_with_address_map:
-            B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK))
+            B_tiled = B_tiled_host.to(device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.SINGLE_BANK))
         else:
             B_tiled = B_tiled_host.to(device)
 
@@ -155,7 +155,7 @@ def test_run_generic_conv(
         # Run TT metal OP
         if run_conv_with_address_map:
             untilize_out = True
-            out = ttl.tensor.conv_with_address_map(
+            out = ttnn.experimental.tensor.conv_with_address_map(
                 A,
                 B_tiled,
                 [R, S, stride_h, stride_w, pad_h, pad_w],
@@ -169,7 +169,7 @@ def test_run_generic_conv(
         else:
             if not has_bias:
                 bias_device = None
-            out = ttl.tensor.conv(
+            out = ttnn.operations.conv2d.conv_legacy(
                 A,
                 B_tiled,
                 bias_device,  # bias not fused with generic conv
@@ -185,11 +185,11 @@ def test_run_generic_conv(
         if not untilize_out:
             out_unpadded_shape = [1, 1, OH * OW, K]
             assert out_unpadded_shape == out.shape_without_padding()
-            out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
+            out = ttnn.format_output_tensor(out, out.shape_without_padding(), device, ttnn.ROW_MAJOR_LAYOUT)
             out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
         out = out.cpu()
         assert list(out.get_legacy_shape()) == conv_output_shape
-        assert out.get_layout() == ttl.tensor.Layout.ROW_MAJOR
+        assert out.get_layout() == ttnn.ROW_MAJOR_LAYOUT
 
         # Copy output to host and convert tt tensor to pytorch tensor
         out_result = out.to_torch().float()

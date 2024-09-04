@@ -2,6 +2,38 @@ name: "[internal] models tests impl"
 
 on:
   workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 45
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - grayskull
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - E150
+          - N150
+          - N300
+          - BH
+      timeout:
+        required: false
+        type: number
+        default: 45
 
 jobs:
   models:
@@ -10,40 +42,42 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-info: [
-          # E150
-          {arch: grayskull, runs-on: ["grayskull"], name: E150},
-          # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"], name: N150},
-          # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"], name: N300},
-        ]
         test-group: [
           {name: model, cmd: ./tests/scripts/run_python_model_tests.sh},
         ]
-    name: ${{ matrix.test-group.name }} ${{ matrix.runner-info.arch }} ${{ matrix.runner-info.name }}
+    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
-      CONFIG: ci
+      ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ${{ matrix.runner-info.runs-on }}
+    runs-on:
+      - ${{ inputs.runner-label }}
+      - in-service
+      - cloud-virtual-machine
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
-      - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: 45
+          arch: ${{ inputs.arch }}
+      - name: ${{ inputs.runner-label }} tests
+        timeout-minutes: ${{ inputs.timeout }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U0593J2RQRZ # Bill Teng
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"

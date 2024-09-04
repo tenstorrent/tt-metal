@@ -60,5 +60,9 @@ enum SfpuType {
   silu,
   mask,
   negative,
+  unary_ne,
+  unary_gt,
+  unary_lt,
+  tiled_prod,
   unused,
 };

@@ -12,10 +12,14 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/device/device.hpp"
+
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -31,8 +35,8 @@ struct BankedConfig {
     size_t num_pages = 1;
     size_t size_bytes = 1 * 2 * 32 * 32;
     size_t page_size_bytes = 2 * 32 * 32;
-    BufferType input_buffer_type = BufferType::L1;
-    BufferType output_buffer_type = BufferType::L1;
+    tt_metal::BufferType input_buffer_type = tt_metal::BufferType::L1;
+    tt_metal::BufferType output_buffer_type = tt_metal::BufferType::L1;
     tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
 };
 
@@ -49,18 +53,18 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord
     bool pass = true;
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
+    constexpr uint32_t num_runtime_args0 = 9;
+    constexpr uint32_t rta_base0 = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    std::map<string, string> dummy_defines0 = {{"DATA_MOVEMENT", "1"},
+                                               {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args0)},
+                                               {"RESULTS_ADDR", std::to_string(rta_base0)}};
     auto dummy_kernel0 = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/runtime_args_kernel0.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
         eth_core_coord,
-        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .defines = dummy_defines0});
 
     vector<uint32_t> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
-
-    // zero out expected L1 values
-    std::vector<uint32_t> all_zeros(dummy_kernel0_args.size(), 0);
-    llrt::write_hex_vec_to_core(device->id(), eth_noc_xy, all_zeros, eth_l1_mem::address_map::ERISC_L1_ARG_BASE);
-
     tt::tt_metal::SetRuntimeArgs(program, dummy_kernel0, eth_core_coord, dummy_kernel0_args);
 
     tt::tt_metal::detail::CompileProgram(device, program);
@@ -71,7 +75,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord
     vector<uint32_t> dummy_kernel0_args_readback = llrt::read_hex_vec_from_core(
         device->id(),
         eth_noc_xy,
-        eth_l1_mem::address_map::ERISC_L1_ARG_BASE,
+        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
         dummy_kernel0_args.size() * sizeof(uint32_t));
 
     pass &= (dummy_kernel0_args == dummy_kernel0_args_readback);
@@ -586,7 +590,6 @@ TEST_F(CommandQueueSingleCardFixture, EthKernelsNocWriteNoReceive) {
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectSendAllConnectedChips) {
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) GTEST_SKIP_("see issue #6616");
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     for (const auto& sender_device : devices_) {
@@ -638,7 +641,6 @@ TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectSendAllConnectedChips) {
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendDramBufferAllConnectedChips) {
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) GTEST_SKIP_("see issue #6616");
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {
@@ -672,7 +674,6 @@ TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendDramBufferAllConnectedChips
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendInterleavedBufferAllConnectedChips) {
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) GTEST_SKIP_("see issue #6616");
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {

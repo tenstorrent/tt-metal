@@ -4,14 +4,11 @@
 
 #pragma once
 
-#include <optional>
 #include <variant>
 #include <vector>
-#include <future>
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/event/event.hpp"
+#include "tt_metal/impl/kernels/runtime_args_data.hpp"
 
 /** @file */
 
@@ -25,16 +22,20 @@
  * https://www.tablesgenerator.com/markdown_tables
  * */
 
+class CoreRange;
+class CoreRangeSet;
+
 namespace tt {
 
 namespace tt_metal {
 
 class Program;
-class Host;
 class Device;
 class CommandQueue;
 class Trace;
 class CircularBuffer;
+class Event;
+class Buffer;
 
 // ==================================================
 //                  HOST API: Device management
@@ -54,6 +55,8 @@ size_t GetNumAvailableDevices();
  */
 size_t GetNumPCIeDevices();
 
+chip_id_t GetPCIeDeviceID(chip_id_t device_id);
+
 /**
  * Instantiates a device object.
  *
@@ -63,7 +66,28 @@ size_t GetNumPCIeDevices();
  * |------------|----------------------------|-----------------|-----------------------------------|----------|
  * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
-Device *CreateDevice(chip_id_t device_id, const uint8_t num_hw_cqs = 1, const std::vector<uint32_t>& l1_bank_remap = {});
+Device *CreateDevice(
+    chip_id_t device_id,
+    const uint8_t num_hw_cqs = 1,
+    const size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+    const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+    DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER,
+    const std::vector<uint32_t> &l1_bank_remap = {});
+
+/**
+ * Instantiates a device with minimal setup, used to attach to a device in a bad state.
+ *
+ * Return value: Device *
+ *
+ * | Argument   | Description                | Type            | Valid Range                       | Required |
+ * |------------|----------------------------|-----------------|-----------------------------------|----------|
+ * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
+ * */
+Device *CreateDeviceMinimal(
+    chip_id_t device_id,
+    const uint8_t num_hw_cqs = 1,
+    DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER
+    );
 
 /**
  * Resets device and closes device
@@ -95,7 +119,7 @@ Program CreateProgram();
  * | Argument     | Description                                                                                                                          | Type                                                     | Valid Range | Required |
  * |--------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
  * | program      | The program to which this kernel will be added to                                                                                    | Program &                                                |             | Yes      |
- * | file_name    | Path to kernel src. Assumed to be absolute path, but will fall back to relative path from TT_METAL_HOME if file doesn't exist.       | const std::string &                                      |             | Yes      |
+ * | file_name    | Path to kernel src. Assumed to be absolute/relative to CWD, but will fall back to relative path from TT_METAL_HOME.                  | const std::string &                                      |             | Yes      |
  * | core_spec    | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
  * | config       | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
  */
@@ -243,6 +267,7 @@ void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, std::variant<st
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
+ * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -257,6 +282,7 @@ void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vari
 
 /**
  * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
+ * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -271,6 +297,7 @@ void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vect
 
 /**
  * Set runtime args for a kernel that are sent to the specified cores using the command queue. This API must be used when Asynchronous Command Queue Mode is enabled.
+ * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -285,6 +312,7 @@ void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const 
 
 /**
  * Set multiple runtime arguments of a kernel using the command queue. Each core can have distinct arguments. This API must be used when Asynchronous Command Queue Mode is enabled.
+ * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
@@ -296,10 +324,26 @@ void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const 
  */
 void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const std::vector< CoreCoord > & core_spec, const std::vector<std::shared_ptr<RuntimeArgs>> runtime_args);
 
+
+/**
+ * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
+ * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> &                          |                                                                     | Yes      |
+ */
+void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args);
+
+
 /**
  * Get the runtime args for a kernel.
  *
- * Return value: std::vector<uint32_t> &
+ * Return value: uint32_t *
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
@@ -307,22 +351,31 @@ void SetRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const 
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
  * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
  */
-std::vector<uint32_t>& GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core);
+RuntimeArgsData & GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core);
 
 /**
- * Update specific entries of the runtime args vector for a kernel using the command queue. This API must be used when Asynchronous Command Queue Mode is enabled.
+ * Get the runtime args for a kernel.
  *
- * Return Value: void
+ * Return value: std::vector< std::vector< RuntimeArgsData > > &
  *
- * | Argument     | Description                                                            | Type                          | Valid Range                                                  | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|--------------------------------------------------------------|----------|
- * | cq           | The command queue used to send the runtime args update                 | CommandQueue &                |                                                              | Yes      |
- * | kernel       | The kernel for which the runtime args must be updated                  | std::shared_ptr<Kernel>       |                                                              | Yes      |
- * | core_coord   | The core receiving the runtime args update                             | const CoreCoord &             | A single core running the kernel                             | Yes      |
- * | update_idx   | The runtime arg vector indices that must be updated                    | std::vector<uint32_t> &       | Each index in this vector must be less than num runtime args | Yes      |
- * | runtime_args | Updated runtime args                                                   | std::shared_ptr<RuntimeArgs>  | 1:1 Mapping between each entry and the indices in update_idx | Yes      |
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
  */
-void UpdateRuntimeArgs(Device* device, const std::shared_ptr<Kernel> kernel, const CoreCoord &core_coord, std::vector<uint32_t> &update_idx, std::shared_ptr<RuntimeArgs> runtime_args);
+std::vector< std::vector< RuntimeArgsData > > & GetRuntimeArgs(const Program &program, KernelHandle kernel_id);
+
+/**
+ * Get the common runtime args for a kernel.
+ *
+ * Return value: RuntimeArgsData &
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
+ */
+RuntimeArgsData & GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id);
 
 /**
  * Reads a buffer from the device
@@ -406,40 +459,61 @@ void Finish(CommandQueue& cq);
 
 /**
  * Begins capture on a trace, when the trace is in capture mode all programs pushed into the trace queue will have their execution delayed until the trace is instantiated and enqueued.
- * The capture must be later ended via EndTrace, and can be instantiated via InstantiateTrace on a device command queue, and finally scheduled to be executed via EnqueueTrace.
+ * The capture must be later ended via EndTraceCapture, and finally scheduled to be executed via ReplayTrace.
+ * Beginning a trace capture enabled buffer allocations until capture has ended.
  *
- * Return value: CommandQueue&
+ * Return value: Trace ID
  *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | trace        | Trace in which to initiate the capture                                 | Trace &                       |                                    | Yes      |
+ * | Argument        | Description                                                            | Type                          | Valid Range                        | Required |
+ * |-----------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | device          | The device holding being traced.                                       | Device *                      |                                    | Yes      |
+ * | cq_id           | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
 */
-CommandQueue& BeginTrace(Trace &trace);
+uint32_t BeginTraceCapture(Device *device, const uint8_t cq_id);
 
 /**
  * Completes capture on a trace, if captured commands do not conform to the rules of the trace, the trace will be invalidated.
- * This trace can later be instantiated via InstantiateTrace on a device command queue, and enqueued for execution via EnqueueTrace on the same device command queue.
+ * This trace can be enqueued for execution via ReplayTrace on the same device command queue.
+ * After ending a trace capture, buffer allocations on device are disabled until either a new trace begins capture,
+ * or all traces on the device are released
  *
  * Return value: void
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | trace        | Trace in which to end the capture                                      | Trace &                       |                                    | Yes      |
+ * | device       | The device holding being traced.                                       | Device *                      |                                    | Yes      |
+ * | cq_id        | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
+ * | tid          | A unique id from BeginTraceCapture for the trace being captured        | uint32_t                      |                                    | Yes      |
  */
-void EndTrace(Trace &trace);
+void EndTraceCapture(Device *device, const uint8_t cq_id, const uint32_t tid);
 
 /**
- * Instantiates a trace on a device command queue, triggering the staging of traced commands and data to the device.
- * Staging is a blocking operation and must be completed before the trace can be enqueued for exeuction. A unique trace instance id is returned
+ * Replay a trace of previously generated commands and data.
  *
- * Return value: uint32_t
+ * Return value: void
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | trace        | The trace object to instantiate                                        | Trace &                       |                                    | Yes      |
- * | cq           | The device command queue on which to instantiate the trace             | CommandQueue &                |                                    | Yes      |
-*/
-uint32_t InstantiateTrace(Trace &trace, CommandQueue &cq);
+ * | device       | The device holding the trace.                                          | Device *                      |                                    | Yes      |
+ * | cq_id        | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
+ * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
+ * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
+ */
+void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const bool blocking);
+
+/**
+ * Release a previously instantiated trace, deallocating the associated trace buffers on device
+ * This operation is not thread-safe, user must ensure that the trace being released is no longer needed by device threads
+ * If this releases the last trace on a device, then buffer allocations are re-enabled
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | device       | The device holding the trace.                                          | Device *                      |                                    | Yes      |
+ * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
+ */
+void ReleaseTrace(Device *device, const uint32_t tid);
 
 /**
  * Enqueues a trace of previously generated commands and data.
@@ -498,6 +572,29 @@ void EnqueueWaitForEvent(CommandQueue& cq, std::shared_ptr<Event> event);
  * | event        | The event object that host will wait on for completion.                | std::shared_ptr<Event>        |                                    | Yes      |
  */
 void EventSynchronize(std::shared_ptr<Event> event);
+
+/**
+ * Host will query an event for completion status on device.
+ * Return value: bool.  True if event is completed, false otherwise.
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | event        | The event object that host will query for completion.                  | std::shared_ptr<Event>        |                                    | Yes      |
+ */
+bool EventQuery(std::shared_ptr<Event> event);
+
+/**
+ * Synchronize the device with host by waiting for all operations to complete.
+ * If cq_id is provided then only the operations associated with that cq_id are waited for,
+ * otherwise operations for all command queues are waited on.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | device       | The device to synchronize.                                             | Device *                      |                                    | Yes      |
+ * | cq_id        | The specific command queue id to synchronize  .                        | uint8_t                       |                                    | No       |
+ */
+void Synchronize(Device *device, const std::optional<uint8_t> cq_id = std::nullopt);
 
 }  // namespace tt_metal
 

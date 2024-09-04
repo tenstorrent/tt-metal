@@ -8,14 +8,9 @@
 #include <memory>
 #include <optional>
 
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/buffers/semaphore.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
+#include "tt_metal/impl/buffers/circular_buffer_types.hpp"
+#include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
 #include "dev_msgs.h"
 
@@ -24,32 +19,54 @@ namespace tt {
 namespace tt_metal {
 
 // Fwd declares
+class Buffer;
+class Kernel;
+class CircularBuffer;
+class Device;
+class Program;
+class JitBuildOptions;
+class CircularBufferConfig;
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
-    KernelHandle AddKernel ( Program & program, std::shared_ptr<Kernel> kernel, const CoreType &core_type);
+    KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
+    void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
 }
 
+typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
+
 struct KernelGroup {
+    uint32_t programmable_core_type_index;
     CoreRangeSet core_ranges;
-    std::optional<KernelHandle> compute_id = std::nullopt;
-    std::optional<KernelHandle> riscv0_id = std::nullopt;
-    std::optional<KernelHandle> riscv1_id = std::nullopt;
-    std::optional<KernelHandle> erisc_id = std::nullopt;
+    kernel_id_array_t kernel_ids;
+    uint32_t rta_sizes[DISPATCH_CLASS_MAX];
+    uint32_t total_rta_size;
     launch_msg_t launch_msg;
 
     KernelGroup();
     KernelGroup(
         const Program &program,
-        std::optional<KernelHandle> brisc_id,
-        std::optional<KernelHandle> ncrisc_id,
-        std::optional<KernelHandle> trisc_id,
-        std::optional<KernelHandle> erisc_id,
+        uint32_t programmable_core_type_index,
+        kernel_id_array_t kernel_ids,
+        bool erisc_is_idle,
         int last_cb_index,
         const CoreRangeSet &new_ranges);
 
+    uint32_t get_programmable_core_type_index() const;
+
     CoreType get_core_type() const;
+};
+
+// Contains the program's worker memory map
+struct ProgramConfig {
+    uint32_t rta_offset;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
+    uint32_t sem_offset;
+    uint32_t sem_size;
+    uint32_t cb_offset;
+    uint32_t cb_size;
 };
 
 class Program {
@@ -64,15 +81,17 @@ class Program {
     Program(Program &&other) = default;
     Program& operator=(Program &&other) = default;
 
+    void set_runtime_id(uint64_t id);
     ~Program();
 
     void construct_core_range_set_for_worker_cores();
 
     const uint64_t get_id() const { return this->id; }
+    const uint64_t get_runtime_id() const { return this->runtime_id; }
 
     size_t num_kernels() const {
       size_t count = 0;
-      for (const auto& [core_type, kernels] : kernels_) {
+      for (const auto& kernels : kernels_) {
         count += kernels.size();
       }
       return count;
@@ -82,13 +101,15 @@ class Program {
 
     const std::vector< Semaphore > & semaphores() const { return semaphores_; }
 
-    KernelGroup * kernels_on_core(const CoreCoord &core, const CoreType &core_type);
-    std::vector<KernelGroup>& get_kernel_groups(const CoreType &core_type);
+    KernelGroup * kernels_on_core(const CoreCoord &core, uint32_t programmable_core_type_index);
+    std::vector<KernelGroup>& get_kernel_groups(uint32_t programmable_core_type_index);
     inline void add_buffer(std::shared_ptr<Buffer> buf) { owned_buffer_pool.push_back(buf); }
     inline void release_buffers() { owned_buffer_pool = {}; }
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
 
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_corerange(const CoreRange &cr) const;
+
+    const std::vector<CoreRange> circular_buffers_unique_coreranges() const;
 
     auto semaphores_on_core(const CoreCoord &core) const {
         std::vector<std::reference_wrapper<const Semaphore>> semaphores;
@@ -102,13 +123,14 @@ class Program {
 
     size_t num_semaphores ( const CoreCoord & core ) const;
     size_t num_semaphores () const;
-    void init_semaphores ( const Device & device, const CoreCoord &logical_core, const CoreType core_type) const;
-    std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores() const;
+    void init_semaphores ( const Device & device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const;
+    // XXXXX TODO: this should return a const reference
+    std::vector<std::vector<CoreCoord>> logical_cores() const;
 
     // Is worker_crs_ used anywhere?
     const CoreRangeSet& get_worker_core_range_set() const { return worker_crs_; };
 
-    void compile(Device * device);
+    void compile(Device * device, bool fd_bootloader_mode = false);
 
     void invalidate_compile();
 
@@ -116,16 +138,33 @@ class Program {
 
     void allocate_circular_buffers();
 
+    bool is_finalized() const { return this->finalized_; }
+    void finalize();
+    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
+
+    void capture_multi_device_dependencies() { capture_multi_device_dependencies_ = true; }
+    bool has_multi_device_dependencies() { return capture_multi_device_dependencies_; }
+
+    ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
+
+    // debug/test
+    uint32_t get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
+
    private:
+    void populate_dispatch_data(Device *device);
+
     // Buffers temporarily owned by the program
     std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
 
-    ProgramDeviceMap program_device_map;
-
     // The buffer that holds the kernel/binaries/etc for this program
-    std::unique_ptr<Buffer> buffer;
+    std::shared_ptr<Buffer> kernels_buffer = nullptr;
+    ProgramTransferInfo program_transfer_info;
 
-    bool loaded_onto_device;
+    bool finalized_;
+
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
 
@@ -153,9 +192,10 @@ class Program {
     };
 
     uint64_t id; // Need to make non-const due to move constructor
+    uint64_t runtime_id;
     static std::atomic<uint64_t> program_counter;
-    std::unordered_map<CoreType, std::unordered_map<KernelHandle, std::shared_ptr<Kernel> >> kernels_;
-    std::unordered_map<CoreType, CoreCoord> grid_extent_;
+    std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel> >> kernels_;
+    std::vector<CoreCoord> grid_extent_;
 
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_;
     std::unordered_map<CBHandle,  std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
@@ -171,31 +211,46 @@ class Program {
     bool local_circular_buffer_allocation_needed_;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
-    std::unordered_map<CoreType, std::vector<KernelGroup>> kernel_groups_;
-    std::unordered_map<CoreType, std::vector<uint8_t>> core_to_kernel_group_index_table_;
+    std::vector<std::vector<KernelGroup>> kernel_groups_;
+    std::vector<std::vector<uint8_t>> core_to_kernel_group_index_table_;
+    uint32_t tensix_go_signal_count_;
 
+    std::vector<std::shared_ptr<Buffer>> config_buffers_;
+
+    std::vector<ProgramConfig> program_configs_;
+    std::vector<uint32_t> program_config_sizes_;
+    bool capture_multi_device_dependencies_ = false;
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
-    friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel, const CoreType &core_type);
+    friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
-    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const CoreType &core_type);
-    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
+    KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType &core_type);
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
-    void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value, CoreType core_type=CoreType::WORKER);
+    void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
+
+    friend void detail::AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
+    void add_config_buffer(std::shared_ptr<Buffer> config_buffer);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const Device *device) const;
 
     void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
-    void update_kernel_groups(const CoreType &core_type);
+    void update_kernel_groups(uint32_t programmable_core_type_index);
+
+    uint32_t& get_program_config_size(uint32_t programmable_core_type_index);
+
+    uint32_t finalize_rt_args(uint32_t programmable_core_type_index, uint32_t base_offset);
+    uint32_t finalize_sems(uint32_t programmable_core_type_index, uint32_t base_offset);
+    uint32_t finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset);
+    void set_launch_msg_sem_offsets();
 
     friend class HWCommandQueue;
     friend class EnqueueProgramCommand;

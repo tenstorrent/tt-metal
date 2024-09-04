@@ -15,7 +15,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 import ast
 import cv2
 import torch
-import tt_lib
+import ttnn
 import torchvision
 from loguru import logger
 from datasets import load_dataset
@@ -37,9 +37,7 @@ def preprocess():
             torchvision.transforms.Resize(256),
             torchvision.transforms.CenterCrop(224),
             torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            ),
+            torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
     )
 
@@ -59,17 +57,15 @@ def load_imagenet_labels():
     with open(ROOT / "imagenet_class_labels.txt", "r") as file:
         class_labels = ast.literal_eval(file.read())
 
-        categories = [
-            class_labels[key] for key in sorted(class_labels.keys(), reverse=False)
-        ]
+        categories = [class_labels[key] for key in sorted(class_labels.keys(), reverse=False)]
 
     return categories
 
 
 def run_gs_demo(efficientnet_model_constructor):
-    device = tt_lib.device.CreateDevice(0)
+    device = ttnn.open_device(0)
 
-    tt_lib.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
 
     img_path = ROOT / "input_image.jpg"
     download_images(img_path)
@@ -84,14 +80,12 @@ def run_gs_demo(efficientnet_model_constructor):
     input_batch = input_tensor.unsqueeze(0)
 
     with torch.no_grad():
-        input_batch = torch2tt_tensor(
-            input_batch, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        input_batch = torch2tt_tensor(input_batch, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
         output = model(input_batch)
         output = tt2torch_tensor(output)
         output = output.squeeze(0).squeeze(0)
 
-    tt_lib.device.CloseDevice(device)
+    ttnn.close_device(device)
     probabilities = torch.nn.functional.softmax(output[0], dim=0)
 
     # Check the top 5 categories that are predicted.

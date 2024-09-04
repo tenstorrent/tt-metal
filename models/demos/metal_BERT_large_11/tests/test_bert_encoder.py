@@ -9,7 +9,7 @@ from transformers import BertForQuestionAnswering
 from loguru import logger
 
 
-import tt_lib
+import ttnn
 
 from tt_lib.utils import pad_activation
 from models.utility_functions import comp_pcc, comp_allclose, profiler
@@ -52,13 +52,13 @@ def run_bert_encoder_inference(
     pytorch_out = pytorch_bert_model(bert_encoder_input.squeeze(1), bert_attention_mask).unsqueeze(1)
 
     pad_bert_encoder_input = pad_activation(bert_encoder_input)
-    tt_bert_encoder_input = tt_lib.tensor.Tensor(
+    tt_bert_encoder_input = ttnn.Tensor(
         pad_bert_encoder_input,
         model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"],
-    ).to(tt_lib.tensor.Layout.TILE)
+    ).to(ttnn.TILE_LAYOUT)
     if "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG" in model_config:
         tt_bert_encoder_input = tt_bert_encoder_input.to(device)
-        tt_bert_encoder_input = tt_lib.tensor.interleaved_to_sharded(
+        tt_bert_encoder_input = ttnn.interleaved_to_sharded(
             tt_bert_encoder_input,
             model_config["GRID_SIZE"],
             model_config["SHARD_SIZE"],
@@ -70,25 +70,25 @@ def run_bert_encoder_inference(
 
     if model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"].is_sharded():
         extended_bert_attention_mask = bert_attention_mask.reshape(bert_attention_mask.shape[0], 1, -1, 32)
-        tt_bert_attention_mask = tt_lib.tensor.Tensor(
+        tt_bert_attention_mask = ttnn.Tensor(
             extended_bert_attention_mask,
             model_config["OP4_SOFTMAX_ATTENTION_MASK_DTYPE"],
         ).to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
     else:
         extended_bert_attention_mask = pad_activation(bert_attention_mask)
         tt_bert_attention_mask = (
-            tt_lib.tensor.Tensor(
+            ttnn.Tensor(
                 extended_bert_attention_mask,
                 model_config["OP4_SOFTMAX_ATTENTION_MASK_DTYPE"],
             )
-            .to(tt_lib.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
         )
 
     tt_out = tt_bert_encoder_model(tt_bert_encoder_input, tt_bert_attention_mask)
     if tt_out.is_sharded():
-        tt_out = tt_lib.tensor.sharded_to_interleaved(tt_out)
-    tt_out = tt_out.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_out = ttnn.sharded_to_interleaved(tt_out)
+    tt_out = tt_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
@@ -101,7 +101,7 @@ def run_bert_encoder_inference(
     if not passing:
         logger.error(f"Output PCC < {pcc}")
 
-    if model_config["DEFAULT_DTYPE"] == tt_lib.tensor.DataType.BFLOAT8_B and not passing:
+    if model_config["DEFAULT_DTYPE"] == ttnn.bfloat8_b and not passing:
         pytest.xfail("PCC is garbage for BFLOAT8_B. Numbers are for perf only!")
 
     assert passing

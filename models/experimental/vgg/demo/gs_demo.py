@@ -5,7 +5,7 @@
 import os
 import torch
 import pytest
-import tt_lib
+import ttnn
 
 from loguru import logger
 from pathlib import Path
@@ -17,7 +17,7 @@ from models.experimental.vgg.vgg_utils import store_weights, get_tt_cache_path
 
 @pytest.mark.parametrize(
     "dtype",
-    (tt_lib.tensor.DataType.BFLOAT16,),
+    (ttnn.bfloat16,),
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -46,7 +46,7 @@ def test_gs_demo(device, imagenet_sample_input, imagenet_label_dict, batch_size,
         tt_vgg = vgg16(device, disable_conv_on_tt_device=True, tt_cache_path=tt_cache_path)
 
         tt_images = [torch_to_tt_tensor(image, device=device) for image in images]
-        tt_images = tt_lib.tensor.concat(tt_images)
+        tt_images = ttnn.concat(tt_images)
 
         tt_output = tt_vgg(tt_images)
         tt_output = unpad_from_zero(tt_output, tt_output.get_legacy_shape())

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn
 
 from loguru import logger
 from tt_lib.fallback_ops import fallback_ops
@@ -60,16 +60,10 @@ class TtEfficientnetConv2d(torch.nn.Module):
             if isinstance(kernel_size, int) and isinstance(dilation, int):
                 padding = (kernel_size - 1) // 2 * dilation
             else:
-                _conv_dim = (
-                    len(kernel_size)
-                    if isinstance(kernel_size, Sequence)
-                    else len(dilation)
-                )
+                _conv_dim = len(kernel_size) if isinstance(kernel_size, Sequence) else len(dilation)
                 kernel_size = _make_ntuple(kernel_size, _conv_dim)
                 dilation = _make_ntuple(dilation, _conv_dim)
-                padding = tuple(
-                    (kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim)
-                )
+                padding = tuple((kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim))
 
         # self.conv =
         #     torch.nn.Conv2d(
@@ -190,18 +184,10 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
         running_mean = state_dict[f"{bn_base_address}.running_mean"]
         running_var = state_dict[f"{bn_base_address}.running_var"]
 
-        bnorm_weights = torch2tt_tensor(
-            bnorm_weights, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        bnrom_bias = torch2tt_tensor(
-            bnrom_bias, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        running_mean = torch2tt_tensor(
-            running_mean, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        running_var = torch2tt_tensor(
-            running_var, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        bnorm_weights = torch2tt_tensor(bnorm_weights, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        bnrom_bias = torch2tt_tensor(bnrom_bias, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        running_mean = torch2tt_tensor(running_mean, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
+        running_var = torch2tt_tensor(running_var, device, tt_layout=ttnn.ROW_MAJOR_LAYOUT)
 
         self.bnorm = fallback_ops.BatchNorm2d(
             weights=bnorm_weights,
@@ -225,8 +211,8 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
         if self.activation_layer is True:
             if self.is_lite:
                 # Lite variant has ReLU6 instead of silu
-                x = tt_lib.tensor.relu6(x)
+                x = ttnn.relu6(x)
             else:
-                x = tt_lib.tensor.silu(x)
+                x = ttnn.silu(x)
 
         return x

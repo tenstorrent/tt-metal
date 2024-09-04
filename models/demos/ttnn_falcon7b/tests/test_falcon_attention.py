@@ -100,6 +100,7 @@ def test_falcon_attention(
         configuration.max_position_embeddings,
         model_config,
         parameters=parameters,
+        core_grid=device.core_grid,
     )
 
     tt_out, tt_layer_present = tt_FalconAttention_model(
@@ -112,11 +113,11 @@ def test_falcon_attention(
         layer_past_len=kv_cache_len,
         use_cache=True,
     )
-    tt_out = ttnn.to_torch(tt_out).squeeze(1)
+    tt_out = ttnn.to_torch(tt_out, device=device).squeeze(1)
 
     tt_layer_present = (
-        ttnn.to_torch(tt_layer_present[0]).squeeze(1),
-        ttnn.to_torch(tt_layer_present[1]).squeeze(1),
+        ttnn.to_torch(tt_layer_present[0], device=device).squeeze(1),
+        ttnn.to_torch(tt_layer_present[1], device=device).squeeze(1),
     )
 
     if llm_mode == "decode":

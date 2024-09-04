@@ -7,9 +7,12 @@ CommandQueue
   EnqueueProgram
   EnqueueRecordEvent
   EnqueueWaitForEvent
+  EventQuery
   EventSynchronize
-  BeginTrace
-  EndTrace
-  InstantiateTrace
+  BeginTraceCapture
+  EndTraceCapture
+  ReplayTrace
+  ReleaseTrace
   EnqueueTrace
   Finish
+  Synchronize

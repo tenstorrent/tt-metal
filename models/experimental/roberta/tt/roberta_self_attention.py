@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from typing import Optional, Tuple
 
-import tt_lib
+import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
 from models.helper_funcs import Linear as TTLinear
@@ -28,9 +28,7 @@ class TtRobertaSelfAttention(nn.Module):
                 f"heads ({config.num_attention_heads})"
             )
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
 
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
@@ -74,7 +72,7 @@ class TtRobertaSelfAttention(nn.Module):
             self.value_bias,
         )
 
-    def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def transpose_for_scores(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # x must be 4d originaly
         # 1 is appended to the beggining
         # so create tensor shape by ommiting the first dimension
@@ -83,31 +81,29 @@ class TtRobertaSelfAttention(nn.Module):
             self.attention_head_size,
         ]
         x = fallback_ops.reshape(x, *new_x_shape)
-        x = tt_lib.tensor.permute(x, (0, 2, 1, 3))
+        x = ttnn.permute(x, (0, 2, 1, 3))
         return x
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight, -2, -1)
-        x = tt_lib.tensor.matmul(x, weight, output_mem_config=self.mem_config)
-        x = tt_lib.tensor.bcast(
+        weight = ttnn.transpose(weight, -2, -1)
+        x = ttnn.matmul(x, weight, memory_config=self.mem_config)
+        x = ttnn.add(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            output_mem_config=self.mem_config,
+            memory_config=self.mem_config,
         )
         return x
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_hidden_states: Optional[tt_lib.tensor.Tensor] = None,
-        encoder_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
-        past_key_value: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        hidden_states: ttnn.Tensor,
+        attention_mask: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
+        encoder_hidden_states: Optional[ttnn.Tensor] = None,
+        encoder_attention_mask: Optional[ttnn.Tensor] = None,
+        past_key_value: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         output_attentions: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.Tensor]:
         mixed_query_layer = self.query_linear(hidden_states)
 
         # If this is instantiated as a cross-attention module, the keys
@@ -128,8 +124,8 @@ class TtRobertaSelfAttention(nn.Module):
             key_layer = self.transpose_for_scores(self.key_linear(hidden_states))
             value_layer = self.transpose_for_scores(self.value_linear(hidden_states))
             dim = 2
-            key_layer = tt_lib.tensor.concat([past_key_value[0], key_layer], dim)
-            value_layer = tt_lib.tensor.concat([past_key_value[1], value_layer], dim)
+            key_layer = ttnn.concat([past_key_value[0], key_layer], dim)
+            value_layer = ttnn.concat([past_key_value[1], value_layer], dim)
         else:
             key_layer = self.transpose_for_scores(self.key_linear(hidden_states))
             value_layer = self.transpose_for_scores(self.value_linear(hidden_states))
@@ -148,9 +144,9 @@ class TtRobertaSelfAttention(nn.Module):
             past_key_value = (key_layer, value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_transposed = tt_lib.tensor.transpose(key_layer, -2, -1)
+        key_layer_transposed = ttnn.transpose(key_layer, -2, -1)
 
-        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed, output_mem_config=self.mem_config)
+        attention_scores = ttnn.matmul(query_layer, key_layer_transposed, memory_config=self.mem_config)
 
         if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
             """
@@ -183,27 +179,25 @@ class TtRobertaSelfAttention(nn.Module):
             # back to tt
             attention_scores = torch2tt_tensor(attention_scores, self.device)
 
-        div_const = tt_lib.tensor.full(
+        div_const = ttnn.full(
             attention_scores.get_legacy_shape(),
             1.0 / math.sqrt(self.attention_head_size),
         )
-        attention_scores = tt_lib.tensor.mul(attention_scores, div_const, output_mem_config=self.mem_config)
+        attention_scores = ttnn.mul(attention_scores, div_const, memory_config=self.mem_config)
 
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
-            # attention_scores = tt_lib.tensor.add(attention_scores, attention_mask)
+            # attention_scores = ttnn.add(attention_scores, attention_mask)
             if attention_mask.get_legacy_shape()[0] > 1:
                 torch_attention_mask = tt2torch_tensor(attention_mask)
                 torch_attention_scores = tt2torch_tensor(attention_scores)
                 torch_attention_scores = torch_attention_scores + torch_attention_mask
                 attention_scores = torch2tt_tensor(torch_attention_scores, self.device)
             else:
-                tt_lib.tensor.bcast(
+                ttnn.add(
                     attention_scores,
                     attention_mask,
-                    tt_lib.tensor.BcastOpMath.ADD,
-                    tt_lib.tensor.BcastOpDim.H,
-                    self.mem_config,
+                    memory_config=self.mem_config,
                 )
         # Normalize the attention scores to probabilities.
 
@@ -219,10 +213,10 @@ class TtRobertaSelfAttention(nn.Module):
 
         # Mask heads if we want to
         if head_mask is not None:
-            attention_probs = tt_lib.tensor.mul(attention_probs, head_mask, output_mem_config=self.mem_config)
+            attention_probs = ttnn.mul(attention_probs, head_mask, memory_config=self.mem_config)
 
-        context_layer = tt_lib.tensor.bmm(attention_probs, value_layer, self.mem_config)
-        context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
+        context_layer = ttnn.matmul(attention_probs, value_layer, memory_config=self.mem_config)
+        context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
 
         # TODO left here. Finish porting and re-test everything. See other TODO s
         # context_layer = context_layer.permute(0, 2, 1, 3). contiguous() TODO: CHECK contiguous

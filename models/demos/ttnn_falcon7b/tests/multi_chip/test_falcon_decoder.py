@@ -59,14 +59,18 @@ def torch_model():
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 @pytest.mark.parametrize(
-    "device_mesh",
+    "mesh_device",
     [
         2,
     ],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "enable_async",
+    [True, False],
+)
 def test_falcon_decoder(
-    device_mesh,
+    mesh_device,
     model_name,
     llm_mode,
     device_batch_size,
@@ -75,9 +79,13 @@ def test_falcon_decoder(
     expected_pcc,
     model_config_str,
     torch_model,
+    enable_async,
 ):
+    for device in mesh_device.get_device_ids():
+        mesh_device.get_device(device).enable_async(enable_async)
+
     torch.manual_seed(0)
-    batch = device_batch_size * device_mesh.get_num_devices()
+    batch = device_batch_size * mesh_device.get_num_devices()
     if llm_mode == "decode":
         shard_dim = 2
     else:
@@ -94,8 +102,8 @@ def test_falcon_decoder(
         batch,
         seq_len,
         configuration.hidden_size,
-        device_mesh,
-        mesh_mapper=ShardTensorToMesh(device_mesh, dim=shard_dim),
+        mesh_device,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=shard_dim),
     )
     position_ids = create_position_ids(llm_mode, kv_cache_len)
     attention_mask, tt_attention_mask = create_attention_mask(
@@ -106,8 +114,8 @@ def test_falcon_decoder(
         seq_len,
         configuration.num_attention_heads,
         kv_cache_len,
-        device_mesh,
-        mesh_mapper=ShardTensorToMesh(device_mesh, dim=shard_dim),
+        mesh_device,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=shard_dim),
     )
     layer_past, tt_layer_past = create_kv_cache(
         llm_mode,
@@ -115,8 +123,8 @@ def test_falcon_decoder(
         batch,
         kv_cache_len,
         configuration,
-        device_mesh,
-        mesh_mapper=ShardTensorToMesh(device_mesh, dim=0),
+        mesh_device,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
     )
 
     pytorch_out, pytorch_layer_present = torch_model(
@@ -129,17 +137,17 @@ def test_falcon_decoder(
     )
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        device=device_mesh,
+        device=mesh_device,
         custom_preprocessor=create_custom_preprocessor(
             model_config,
             tt_cache_path=get_tt_cache_path(f"{model_name}"),
-            device=device_mesh,
+            device=mesh_device,
             base_file_name=get_model_prefix(),
-            weights_mesh_mapper=ReplicateTensorToMesh(device_mesh),
+            weights_mesh_mapper=ReplicateTensorToMesh(mesh_device),
         ),
     )
     tt_FalconDecoder_model = TtFalconDecoderLayer(
-        device_mesh,
+        mesh_device,
         configuration,
         model_config,
         parameters,
@@ -155,11 +163,11 @@ def test_falcon_decoder(
         layer_past_len=kv_cache_len,
         use_cache=True,
     )
-    tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(device_mesh, dim=shard_dim)).squeeze(1)
+    tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=shard_dim)).squeeze(1)
 
     tt_layer_present = (
-        ttnn.to_torch(tt_layer_present[0], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)).squeeze(1),
-        ttnn.to_torch(tt_layer_present[1], mesh_composer=ConcatMeshToTensor(device_mesh, dim=0)).squeeze(1),
+        ttnn.to_torch(tt_layer_present[0], mesh_composer=ConcatMeshToTensor(mesh_device, dim=0)).squeeze(1),
+        ttnn.to_torch(tt_layer_present[1], mesh_composer=ConcatMeshToTensor(mesh_device, dim=0)).squeeze(1),
     )
     if llm_mode == "decode":
         tt_out = tt_out.transpose(0, 1)
@@ -176,3 +184,6 @@ def test_falcon_decoder(
     assert_with_pcc(
         pytorch_layer_present[1].squeeze(1), tt_layer_present[1].to(pytorch_layer_present[1].dtype), expected_pcc
     )
+
+    for device in mesh_device.get_device_ids():
+        mesh_device.get_device(device).enable_async(False)

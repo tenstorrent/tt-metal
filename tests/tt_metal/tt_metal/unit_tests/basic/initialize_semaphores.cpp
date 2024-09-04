@@ -66,20 +66,20 @@ void create_and_read_max_num_semaphores(
     std::vector<uint32_t> golden;
     for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
-        auto semaphore_addr = tt_metal::CreateSemaphore(program, core_range, initial_value);
+        auto semaphore_id = tt_metal::CreateSemaphore(program, core_range, initial_value);
         golden.push_back(initial_value);
-        ASSERT_TRUE(semaphore_addr == SEMAPHORE_BASE + (L1_ALIGNMENT * i));
+        ASSERT_TRUE(semaphore_id == i);
     }
 
     ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, program));
 
-    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+    for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+        for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             auto logical_core = CoreCoord{x, y};
             std::vector<uint32_t> res;
             for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
                 std::vector<uint32_t> single_val;
-                uint32_t semaphore_addr = SEMAPHORE_BASE + (L1_ALIGNMENT * i);
+                uint32_t semaphore_addr = program.get_sem_base_addr(device, logical_core, CoreType::WORKER) + (L1_ALIGNMENT * i);
                 uint32_t semaphore_size = sizeof(uint32_t);
                 tt_metal::detail::ReadFromDeviceL1(device, logical_core, semaphore_addr, semaphore_size, single_val);
                 ASSERT_TRUE(single_val.size() == 1);
@@ -123,10 +123,10 @@ TEST_F(DeviceFixture, CreateMultipleSemaphoresOnSameCore) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core0(0,0);
-    uint32_t sem0_addr = tt_metal::CreateSemaphore(program, core0, 0);
+    uint32_t sem0_id = tt_metal::CreateSemaphore(program, core0, 0);
 
     CoreCoord core1(4,0);
-    uint32_t sem1_addr = tt_metal::CreateSemaphore(program, core1, 1);
+    uint32_t sem1_id = tt_metal::CreateSemaphore(program, core1, 1);
 
     CoreRange core_range({1, 0}, {3, 0});
     CoreRangeSet core_range_set({core_range});
@@ -135,17 +135,17 @@ TEST_F(DeviceFixture, CreateMultipleSemaphoresOnSameCore) {
     CoreRangeSet core_range_set3(set_of_cores);
     CoreRangeSet core_range_set4({CoreRange({5,0}, {6,0})});
 
-    uint32_t sem2_addr = tt_metal::CreateSemaphore(program, core_range_set, 2);
-    uint32_t sem3_addr = tt_metal::CreateSemaphore(program, core_range_set2, 3);
-    uint32_t sem4_addr = tt_metal::CreateSemaphore(program, core_range_set2, 4);
-    uint32_t sem5_addr = tt_metal::CreateSemaphore(program, core_range_set3, 5);
-    uint32_t sem6_addr = tt_metal::CreateSemaphore(program, core_range_set4, 6);
+    uint32_t sem2_id = tt_metal::CreateSemaphore(program, core_range_set, 2);
+    uint32_t sem3_id = tt_metal::CreateSemaphore(program, core_range_set2, 3);
+    uint32_t sem4_id = tt_metal::CreateSemaphore(program, core_range_set2, 4);
+    uint32_t sem5_id = tt_metal::CreateSemaphore(program, core_range_set3, 5);
+    uint32_t sem6_id = tt_metal::CreateSemaphore(program, core_range_set4, 6);
 
-    EXPECT_EQ(sem0_addr, SEMAPHORE_BASE);
-    EXPECT_EQ(sem1_addr, SEMAPHORE_BASE);
-    EXPECT_EQ(sem2_addr, SEMAPHORE_BASE);
-    EXPECT_EQ(sem3_addr, SEMAPHORE_BASE + L1_ALIGNMENT);
-    EXPECT_EQ(sem4_addr, SEMAPHORE_BASE + L1_ALIGNMENT * 2);
-    EXPECT_EQ(sem5_addr, SEMAPHORE_BASE + L1_ALIGNMENT * 3);
-    EXPECT_EQ(sem6_addr, SEMAPHORE_BASE);
+    EXPECT_EQ(sem0_id, 0);
+    EXPECT_EQ(sem1_id, 0);
+    EXPECT_EQ(sem2_id, 0);
+    EXPECT_EQ(sem3_id, 1);
+    EXPECT_EQ(sem4_id, 2);
+    EXPECT_EQ(sem5_id, 3);
+    EXPECT_EQ(sem6_id, 0);
 }

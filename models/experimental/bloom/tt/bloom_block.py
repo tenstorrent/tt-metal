@@ -7,9 +7,9 @@ import math
 from torch.nn import functional as F
 from torch.nn import LayerNorm
 
+import ttnn
+
 from functools import partial
-import tt_lib as ttl
-from tt_lib.fallback_ops import fallback_ops
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_attention as bloom_attention
 import models.experimental.bloom.tt.bloom_mlp as bloom_mlp
@@ -29,10 +29,10 @@ class TtBloomBlock(torch.nn.Module):
         self.beta = pad_by_zero(state_dict[f"{base_address}.input_layernorm.bias"], device)[0]
         self.gamma = pad_by_zero(state_dict[f"{base_address}.input_layernorm.weight"], device)[0]
         self.input_layernorm = partial(
-            ttl.tensor.layernorm,
-            gamma=self.gamma,
-            beta=self.beta,
-            eps=self.layer_norm_epsilon,
+            ttnn.layer_norm,
+            weight=self.gamma,
+            bias=self.beta,
+            epsilon=self.layer_norm_epsilon,
         )
 
         self.self_attention = bloom_attention.TtBloomAttention(
@@ -42,10 +42,10 @@ class TtBloomBlock(torch.nn.Module):
         self.beta_2 = pad_by_zero(state_dict[f"{base_address}.post_attention_layernorm.bias"], device)[0]
         self.gamma_2 = pad_by_zero(state_dict[f"{base_address}.post_attention_layernorm.weight"], device)[0]
         self.post_attention_layernorm = partial(
-            ttl.tensor.layernorm,
-            gamma=self.gamma_2,
-            beta=self.beta_2,
-            eps=self.layer_norm_epsilon,
+            ttnn.layer_norm,
+            weight=self.gamma_2,
+            bias=self.beta_2,
+            epsilon=self.layer_norm_epsilon,
         )
 
         self.mlp = bloom_mlp.TtBloomMLP(config, state_dict, f"{base_address}.mlp", device)

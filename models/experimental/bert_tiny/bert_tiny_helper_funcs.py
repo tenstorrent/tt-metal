@@ -1,17 +1,12 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
-import tt_lib
+
 import ttnn
 from typing import Optional
 
 
 def Linear(
-    weight: tt_lib.tensor.Tensor,
-    bias: Optional[tt_lib.tensor.Tensor] = None,
-    device=None,
-    output_mem_config=tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-    ),
+    weight: ttnn.Tensor, bias: Optional[ttnn.Tensor] = None, device=None, output_mem_config=ttnn.DRAM_MEMORY_CONFIG
 ):
     weight_T = ttnn.permute(weight, (1, 0))
 

@@ -27,10 +27,9 @@ from torch import nn
 from typing import Union, Optional, Tuple, Dict
 from transformers import ViTForImageClassification
 
-import tt_lib
+import ttnn
 import tt_lib.fallback_ops as fallback_ops
 
-from tt_lib import tensor
 from models.experimental.vit.tt.configuration_vit import ViTConfig
 from models.experimental.vit.tt.activations import ACT2FN
 from models.experimental.vit.vit_utils import make_address, make_linear
@@ -41,15 +40,13 @@ from models.utility_functions import (
 )
 
 
-tt_tensor = tt_lib.tensor.Tensor
+tt_tensor = ttnn.Tensor
 
 
 class TtViTOutput(nn.Module):
     def __init__(self, config: ViTConfig, base_address, state_dict, device) -> None:
         super().__init__()
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         self.dense = make_linear(
             config.intermediate_size,
@@ -61,9 +58,9 @@ class TtViTOutput(nn.Module):
             self.out_mem_config_l1,
         )
 
-    def forward(self, hidden_states: tt_lib.tensor.Tensor, input_tensor: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         hidden_states = self.dense(hidden_states)
-        hidden_states = tt_lib.tensor.add(hidden_states, input_tensor, output_mem_config=self.out_mem_config_l1)
+        hidden_states = ttnn.add(hidden_states, input_tensor, memory_config=self.out_mem_config_l1)
         return hidden_states
 
 
@@ -71,9 +68,7 @@ class TtViTSelfAttention(nn.Module):
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
         self.device = device
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
@@ -123,7 +118,7 @@ class TtViTSelfAttention(nn.Module):
             self.attention_head_size,
         )
         x = tt_lib.fallback_ops.reshape(x, *new_x_shape)
-        return tt_lib.tensor.permute(x, (0, 2, 1, 3))
+        return ttnn.permute(x, (0, 2, 1, 3))
 
     def forward(
         self,
@@ -138,15 +133,11 @@ class TtViTSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_T = tt_lib.tensor.transpose(key_layer, -2, -1, self.out_mem_config_l1)
-        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_T, self.out_mem_config_l1)
+        key_layer_T = ttnn.transpose(key_layer, -2, -1, self.out_mem_config_l1)
+        attention_scores = ttnn.matmul(query_layer, key_layer_T, memory_config=self.out_mem_config_l1)
 
-        attention_scores = tt_lib.tensor.bcast(
-            attention_scores,
-            self.recip_sqrt_attention_head_size_tensor,
-            tt_lib.tensor.BcastOpMath.MUL,
-            tt_lib.tensor.BcastOpDim.HW,
-            self.out_mem_config_l1,
+        attention_scores = ttnn.multiply(
+            attention_scores, self.recip_sqrt_attention_head_size_tensor, memory_config=self.out_mem_config_l1
         )
 
         # Normalize the attention scores to probabilities.
@@ -154,11 +145,11 @@ class TtViTSelfAttention(nn.Module):
 
         # Mask heads if we want to
         if head_mask is not None:
-            attention_probs = tt_lib.tensor.mul(attention_probs, head_mask, output_mem_config=self.out_mem_config_l1)
+            attention_probs = ttnn.mul(attention_probs, head_mask, memory_config=self.out_mem_config_l1)
 
-        context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
+        context_layer = ttnn.matmul(attention_probs, value_layer)
 
-        context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
+        context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
         new_context_layer_shape = (1,) + tuple(context_layer.get_legacy_shape())[:-2] + (self.all_head_size,)
         context_layer = fallback_ops.reshape(context_layer, *new_context_layer_shape)
 
@@ -175,9 +166,7 @@ class TtViTSelfOutput(nn.Module):
 
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         self.dense = make_linear(
             config.hidden_size,
@@ -218,9 +207,7 @@ class TtViTAttention(nn.Module):
 class TtViTIntermediate(nn.Module):
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         self.dense = make_linear(
             config.hidden_size,
@@ -248,9 +235,7 @@ class TtViTLayer(nn.Module):
 
     def __init__(self, config: ViTConfig, base_address: str, state_dict: Dict, device) -> None:
         super().__init__()
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
         self.attention = TtViTAttention(config, f"{base_address}.attention", state_dict, device)
@@ -290,7 +275,7 @@ class TtViTLayer(nn.Module):
         outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 
         # first residual connection
-        hidden_states = tt_lib.tensor.add(attention_output, hidden_states, output_mem_config=self.out_mem_config_l1)
+        hidden_states = ttnn.add(attention_output, hidden_states, memory_config=self.out_mem_config_l1)
 
         # in ViT, layernorm is also applied after self-attention
         layer_output = self.layernorm_after(hidden_states)
@@ -596,9 +581,7 @@ class TtViTForImageClassification(nn.Module):
         super().__init__()
         self.config = config
         self.num_labels = config.num_labels
-        self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         self.vit = TtViTModel(
             config,

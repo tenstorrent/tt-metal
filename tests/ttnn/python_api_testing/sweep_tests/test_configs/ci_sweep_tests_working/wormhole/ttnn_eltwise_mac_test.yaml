@@ -1,14 +1,14 @@
 ---
 test-list:
-  - ttnn-eltwise-mac:
+  - eltwise-mac:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
         num-dims: [2, 3, 4]
         num-shapes: 3
-        num-samples: 64
-        args-sampling-strategy: "all"
+        num-samples: 128
+        args-sampling-strategy: "random"
       datagen:
         function: gen_rand
         dtype: bfloat16
@@ -18,6 +18,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]

@@ -9,8 +9,9 @@
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
 #include "command_queue_test_utils.hpp"
+#include "tt_metal/impl/event/event.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt::tt_metal;
 
@@ -47,7 +48,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEventSynchronizeSanity) {
             EventSynchronize(event);
             // Can check events fields after prev sync w/ async CQ.
             EXPECT_EQ(event->cq_id, cqs[i].get().id());
-            EXPECT_EQ(event->event_id, cmds_issued_per_cq[i]);
+            EXPECT_EQ(event->event_id, cmds_issued_per_cq[i] + 1);
             cmds_issued_per_cq[i] += num_cmds_per_cq;
         }
     }
@@ -68,11 +69,11 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEventSynchronizeSanity) {
 // Simplest test to record and wait-for-events on same CQ.
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventSanity) {
     vector<std::reference_wrapper<CommandQueue>> cqs = {this->device_->command_queue(0), this->device_->command_queue(1)};
-    vector<uint32_t> cmds_issued_per_cq = {0, 0};
+    vector<uint32_t> events_issued_per_cq = {0, 0};
     size_t num_events = 10;
 
     TT_ASSERT(cqs.size() == 2);
-    const int num_cmds_per_cq = 2;
+    const int num_events_per_cq = 1;
 
     auto start = std::chrono::system_clock::now();
 
@@ -82,9 +83,9 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventSanity
             auto event = std::make_shared<Event>();
             EnqueueRecordEvent(cqs[i], event);
             EXPECT_EQ(event->cq_id, cqs[i].get().id());
-            EXPECT_EQ(event->event_id, cmds_issued_per_cq[i]);
+            EXPECT_EQ(event->event_id, events_issued_per_cq[i] + 1);
             EnqueueWaitForEvent(cqs[i], event);
-            cmds_issued_per_cq[i] += num_cmds_per_cq;
+            events_issued_per_cq[i] += num_events_per_cq;
         }
     }
     local_test_functions::FinishAllCqs(cqs);
@@ -123,7 +124,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventCrossC
             log_debug(tt::LogTest, "j : {} Recording event on CQ ID: {} and Device Syncing on CQ ID: {}", j, cqs[cq_idx_record].get().id(), cqs[cq_idx_wait].get().id());
             EnqueueRecordEvent(cqs[cq_idx_record], event);
             EXPECT_EQ(event->cq_id, cqs[cq_idx_record].get().id());
-            EXPECT_EQ(event->event_id, cmds_issued_per_cq[i]);
+            EXPECT_EQ(event->event_id, cmds_issued_per_cq[i] + 1);
             EnqueueWaitForEvent(cqs[cq_idx_wait], event);
 
             // Occasionally do host wait for extra coverage from both CQs.
@@ -131,7 +132,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventCrossC
                 EventSynchronize(event);
             }
             cmds_issued_per_cq[cq_idx_record] += num_cmds_per_cq;
-            cmds_issued_per_cq[cq_idx_wait] += num_cmds_per_cq;
+            // cmds_issued_per_cq[cq_idx_wait] += num_cmds_per_cq; // wait_for_event no longer records an event on host
         }
     }
 
@@ -142,13 +143,13 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventCrossC
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
     constexpr uint32_t completion_queue_event_alignment = 32;
     uint32_t event;
-
+    // Iterate through all CQs, and verify that the events returned by EnqueueRecordEvent are in order.
     for (uint cq_id = 0; cq_id < cqs.size(); cq_id++) {
-        for (size_t i = 0; i < num_cmds_per_cq * cqs.size() * num_events_per_cq; i++) {
-            uint32_t host_addr = completion_queue_base[cq_id] + i * completion_queue_event_alignment;
+        for (size_t i = 0; i < num_cmds_per_cq * num_events_per_cq; i++) {
+            uint32_t host_addr = completion_queue_base[cq_id] + i * dispatch_constants::TRANSFER_PAGE_SIZE + sizeof(CQDispatchCmd);
             tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
             log_debug(tt::LogTest, "Checking completion queue. cq_id: {} i: {} host_addr: {}. Got event_id: {}", cq_id, i, host_addr, event);
-            EXPECT_EQ(event, expected_event_id[cq_id]++);
+            EXPECT_EQ(event, ++expected_event_id[cq_id]);
         }
     }
 

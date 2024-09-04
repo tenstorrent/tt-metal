@@ -95,6 +95,14 @@ def profile_results_kernel_duration():
     return total_cycle
 
 
+def get_device_freq():
+    setup = device_post_proc_config.default_setup()
+    setup.deviceInputLog = profiler_log_path
+    deviceData = import_log_run_stats(setup)
+    freq = deviceData["deviceInfo"]["freq"]
+    return freq
+
+
 def profile_noc_results():
     setup = device_post_proc_config.test_noc()
     setup.deviceInputLog = profiler_log_path
@@ -140,7 +148,7 @@ def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
 
 def test_write_buffer(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -205,7 +213,7 @@ def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
 
 def test_read_buffer(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -233,6 +241,28 @@ def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
     line = capture_terminal_line(result, "EnqueueReadBuffer")
     bw = capture_line_result(line, -1)
     return bw
+
+
+def run_dram_read_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
+    command = (
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/8_dram_adjacent_core_read/test_dram_read "
+        + " --k "
+        + str(k)
+        + " --n "
+        + str(n)
+        + " --num-blocks "
+        + str(num_blocks)
+        + " --num-tests "
+        + str(1)
+        + " --data-type "
+        + str(df)
+        + " --num-banks "
+        + str(num_banks)
+        + " --bank-start-id "
+        + str(bank_start_id)
+        + " --bypass-check "
+    )
+    run_moreh_single_test("DRAM BW test multi-core", command)
 
 
 # noc
@@ -527,155 +557,18 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
 
 
 @pytest.mark.parametrize(
-    "arch, freq, test_vector, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index",
+    "arch, freq, test_vector, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index, baseline",
     [
         # ########################### 512 512 512 x 8 subblock 4 2 ################################
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 0, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 0, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0),
-        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
         # ########################### 512 512 256x8 subblock 4 2 ################################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0),
-        # ########################### 512 512 256x8 subblock 4 2 num_block 2 #####################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 2, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 2, 1, 0, 0, 0),
-        # ########################### 512 512 256x8 subblock 4 2 num_block 16 #####################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 16, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 16, 1, 0, 0, 0),
-        # # ########################### 512 512 256x8 subblock 1 8 ################################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 3),
-        # ########################### 512 512 256x8 subblock 8 1 ################################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 0, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 0, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 2),
-        # ########################## 512 512 256x8  FP16 subblock 4 2 ##########################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 1, 0, 0, 0),
-        # ########################## 512 512 256x8  FP16 subblock 4 2 num_block 2 ################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 0, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 0, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 2, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 2, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 2, 1, 0, 0, 0),
-        # ########################## 512 512 256x8  FP16 subblock 4 2 num_block 16 ################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 0, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 0, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 16, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 16, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 16, 1, 0, 0, 0),
-        # ########################## 512 512 256x8  FP16 subblock 1 8  ##########################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 0, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 0, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 0, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 1, 0, 0, 3),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 1, 0, 0, 3),
-        # ########################## 512 512 256x8  FP16 subblock 8 1  ##########################
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 0, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 0, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 0, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 0, 1, 8, 1, 0, 0, 2),
-        # ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 1, 1, 1, 8, 1, 0, 0, 2),
-        # ########################### 1024 256 256x8 ####################################
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 0, 1, 1, 8, 1, 0, 0, 0),
-        # ########################### 1024 256 256x8 FP16 ############################
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[1024, 256, 256]]), 1, 1, 1, 8, 1, 0, 0, 0),
-        # ########################### 256 1024 256x8  ####################################
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 0, 1, 1, 8, 1, 0, 0, 0),
-        # ########################### 256 1024 256x8 FP16 ################################
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 0, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 1, 0, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 0, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 1, 1, 8, 0, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 0, 1, 8, 1, 0, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 1024, 256]]), 1, 1, 1, 8, 1, 0, 0, 0),
-        # ########################### 256 512 256x8 FP32 subblock 2 2 #####################
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 0, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 0, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 1, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 1, 1, 1, 0),
-        # # ########################### 256 512 256x8 input:FP16 FP32 subblock 2 2 #########
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 0, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 0, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 0, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 1, 1, 1, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 1, 1, 1, 0),
-        # ########################### 256 512 256x8 FP32 subblock 1 4 #####################
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 0, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 0, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 1, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 1, 1, 1, 3),
-        # # ########################### 256 512 256x8 input:FP16 FP32 subblock 1 4 #########
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 0, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 0, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 0, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 1, 1, 1, 3),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 1, 1, 1, 3),
-        # ########################### 256 512 256x8 FP32 interm_cb FP16 #####################
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 0, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 0, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 0, 1, 8, 1, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 0, 1, 1, 8, 1, 1, 0, 0),
-        # ########################### 256 512 256x8 input:FP16 FP32 interm_cb FP16  #########
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 0, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 0, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 0, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 0, 1, 8, 1, 1, 0, 0),
-        # ("wormhole_b0", 1000, np.array([[256, 512, 256]]), 1, 1, 1, 8, 1, 1, 0, 0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
+        ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
     ],
 )
 def test_matmul_single_core_sharded(
@@ -690,10 +583,11 @@ def test_matmul_single_core_sharded(
     fp32_dest_acc,
     interm_cb_dtype,
     subblock_index,
+    baseline,
 ):
     file_name = PROFILER_LOGS_DIR / "moreh_single_core_Matmul_Sharded.csv"
     header = ["Kernel Duration (Cycles)"]
-    data = []
+    kernel_durations_cycle = []
     for vec in test_vector:
         m = int(vec[0])
         n = int(vec[1])
@@ -712,14 +606,70 @@ def test_matmul_single_core_sharded(
             subblock_index,
         )
         cycle = profile_results_kernel_duration()
+        dev_freq = get_device_freq()
         logger.info("cycle: " + str(cycle))
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / freq / 1000.0
+        time = cycle / dev_freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
-        data.append([cycle])
+        kernel_durations_cycle.append([cycle])
+
+    max_diff = 0.01
+
+    percentage_diff = np.abs(kernel_durations_cycle[0][0] - baseline) / baseline
+    is_within_range = percentage_diff < max_diff
+    if is_within_range == False:
+        logger.info(
+            "Diff is too large! kernel duration: {}, baseline: {}, diff: {}",
+            kernel_durations_cycle[0][0],
+            baseline,
+            percentage_diff,
+        )
+
     write_header = not os.path.exists(file_name)
-    append_to_csv(file_name, header, data, write_header)
-    return
+    append_to_csv(file_name, header, kernel_durations_cycle, write_header)
+    assert is_within_range
+
+
+@pytest.mark.parametrize(
+    "arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id",
+    [
+        ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 0, 12, 0),
+        ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 1, 12, 0),
+    ],
+)
+def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
+    data = []
+    cycle_list = []
+    time_list = []
+    throughput_list = []
+    for _ in range(num_tests):
+        k = int(test_vector[0])
+        n = int(test_vector[1])
+        if data_format == 0:
+            input_size = k * n * 1088 // 1024
+        elif data_format == 1:
+            input_size = k * n * 2048 // 1024
+        run_dram_read_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
+        cycle = profile_results_kernel_duration()
+        time = cycle / freq / 1000.0 / 1000.0
+        throughput = input_size / cycle
+        logger.info("DRAM read cycle: " + str(cycle))
+        logger.info("DRAM read time: " + str(time))
+        logger.info("DRAM read throughput: " + str(throughput))
+        cycle_list.append(cycle)
+        time_list.append(time)
+        throughput_list.append(throughput)
+    cycle = sum(cycle_list) / len(cycle_list)
+    time = sum(time_list) / len(time_list)
+    throughput = sum(throughput_list) / len(throughput_list)
+    logger.info("DRAM read cycle: " + str(cycle))
+    logger.info("DRAM read time: " + str(time))
+    logger.info("DRAM read throughput: " + str(throughput))
+    data.append([throughput])
+    # check within range
+    dev_freq = get_device_freq()
+    bw_bound = 260.0 * dev_freq / 1000.0
+    assert bw_bound <= throughput
 
 
 @pytest.mark.parametrize(

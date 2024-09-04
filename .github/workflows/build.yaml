@@ -8,67 +8,47 @@ jobs:
   build-lib:
     strategy:
       matrix:
-        config: [
-          { type: debug, runs-on: ubuntu-20.04 },
-          { type: release, runs-on: ubuntu-20.04 },
-          { type: assert, runs-on: build },
+        build: [
+          {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-20.04, os: ubuntu-20.04},
+          {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: build, os: ubuntu-20.04},
+          # {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
+          # {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
+          # {type: Release,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ubuntu-22.04},
+          # {type: Debug, cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04, os: ubuntu-22.04},
+          # {type: RelWithDebInfo,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04, os: ubuntu-22.04},
+          {type: Release,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ubuntu-22.04, os: ubuntu-22.04},
         ]
-        arch: [grayskull, wormhole_b0]
-        os: [ubuntu-20.04]
+        arch: [grayskull, wormhole_b0, blackhole]
     env:
       ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ${{ matrix.config.type }}
       # So we can get all the makefile output we want
-      SILENT: 0
-    runs-on: ${{ matrix.config.runs-on }}
-    name: build ${{ matrix.config.type }} ${{ matrix.arch }}
+      VERBOSE: 1
+    runs-on: ${{ matrix.build.runs-on }}
+    name: ${{ matrix.build.type }} ${{ matrix.build.cxx_compiler }} ${{ matrix.arch }} ${{ matrix.build.os }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - uses: ./.github/actions/install-metal-deps
+      - name: Install dependencies
+        if: ${{ matrix.build.runs-on != 'build' }}
+        uses: ./.github/actions/install-metal-deps
         with:
-          os: ubuntu-20.04
-      - uses: ./.github/actions/install-metal-dev-deps
+          os: ${{ matrix.build.os }}
+      - name: Install dev dependencies
+        if: ${{ matrix.build.runs-on != 'build' }}
+        uses: ./.github/actions/install-metal-dev-deps
         with:
-          os: ubuntu-20.04
+          os: ${{ matrix.build.os }}
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal libraries
-        run: make build
-      - name: Remove unnecessary artifacts
+      - name: Build C++ libraries and tests
         run: |
-          rm -rf build/python_env build/git_hooks
-          find build/ -name *.so -or -name *.a -or -name *.o | xargs strip -d
-      - name: 'Tar files'
-        run: tar -cvf ttm_${{ matrix.arch }}-${{ matrix.config.type}}.tar build
-      - name: Upload libraries as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config.type }}
-          path: ttm_${{ matrix.arch }}-${{ matrix.config.type}}.tar
-  build-cpptest:
-    strategy:
-      matrix:
-        config: [debug, release, assert]
-        arch: [grayskull, wormhole_b0]
-        os: [ubuntu-20.04]
-    needs: build-lib
-    name: build cpptest ${{ matrix.config }} ${{ matrix.arch }}
-    env:
-      ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ${{ matrix.config }}
-      # So we can get all the makefile output we want
-      SILENT: 0
-    runs-on: build
-    steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Set up dynamic env vars for build
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build.type }} -DCMAKE_CXX_COMPILER=${{ matrix.build.cxx_compiler }} -DCMAKE_C_COMPILER=${{ matrix.build.c_compiler }} -G Ninja
+          cmake --build build --target tests
+      - name: Check disk space
         run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+          df -h      
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
         with:
-          name: metal-build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.arch }}-${{ matrix.config}}.tar
-      - name: Build tt-metal tests
-        run: make tests
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U0593J2RQRZ # Bill Teng

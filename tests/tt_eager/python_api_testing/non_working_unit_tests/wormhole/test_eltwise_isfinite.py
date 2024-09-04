@@ -6,7 +6,7 @@ import random
 from loguru import logger
 import pytest
 import torch
-import tt_lib as ttl
+import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops, tt_lib_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -46,19 +46,19 @@ def make_in_mem_config(buffer_type):
     if buffer_type is None:
         return None
 
-    return ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, buffer_type)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
 
 
-for memorylayout in [ttl.tensor.Layout.TILE, ttl.tensor.Layout.ROW_MAJOR]:
+for memorylayout in [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]:
     for shape in [(4, 7, 32, 96), (6, 7, 192, 224)]:
-        for bufertype in [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.L1, None]:
+        for bufertype in [ttnn.BufferType.DRAM, ttnn.BufferType.L1, None]:
             test_sweep_args.append(
                 (
                     shape,
-                    [ttl.tensor.DataType.BFLOAT16],
+                    [ttnn.bfloat16],
                     [memorylayout],
                     [make_in_mem_config(bufertype)],
-                    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+                    ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
                     random.randint(1000000, 10000000),
                 )
             )

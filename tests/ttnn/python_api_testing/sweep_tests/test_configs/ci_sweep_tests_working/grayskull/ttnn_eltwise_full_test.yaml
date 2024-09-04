@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-eltwise-full:
+  - eltwise-full:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -17,6 +17,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_scalar_args
+      sanitize-args: False
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
@@ -25,7 +26,7 @@ test-list:
       output-file: eltwise_full_sweep.csv
       env:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
-  - ttnn-eltwise-full:
+  - eltwise-full:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -42,6 +43,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_scalar_args
+      sanitize-args: False
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]

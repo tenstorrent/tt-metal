@@ -2,17 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tensor/tensor.hpp"
-#include "tensor/owned_buffer.hpp"
-#include "tensor/owned_buffer_functions.hpp"
-#include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
-#include "common/constants.hpp"
-#include "tt_numpy/functions.hpp"
-
 #include <algorithm>
 #include <functional>
 #include <random>
+
+#include "common/constants.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "tt_metal/host_api.hpp"
+#include "tt_numpy/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;

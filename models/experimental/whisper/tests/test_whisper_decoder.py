@@ -7,13 +7,14 @@ import torch
 from loguru import logger
 from transformers import WhisperModel, WhisperConfig
 
-import tt_lib
+import ttnn
 
 from models.experimental.whisper.tt.whisper_decoder import TtWhisperDecoder
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
+    skip_for_wormhole_b0,
 )
 
 
@@ -66,9 +67,7 @@ def run_whisper_decoder(device):
     )
     tt_whisper_decoder.eval()
 
-    ttm_encoder_hidden_states = torch2tt_tensor(
-        encoder_hidden_states, device, tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    ttm_encoder_hidden_states = torch2tt_tensor(encoder_hidden_states, device, ttnn.ROW_MAJOR_LAYOUT)
     with torch.no_grad():
         ttm_output = tt_whisper_decoder(
             input_ids=decoder_input_ids,
@@ -81,9 +80,7 @@ def run_whisper_decoder(device):
     ttm_output_to_torch = tt2torch_tensor(ttm_output.last_hidden_state)
     ttm_output_to_torch = torch.squeeze(ttm_output_to_torch, 0)
 
-    does_pass, pcc_message = comp_pcc(
-        pytorch_output.last_hidden_state, ttm_output_to_torch, 0.98
-    )
+    does_pass, pcc_message = comp_pcc(pytorch_output.last_hidden_state, ttm_output_to_torch, 0.98)
     logger.info(pcc_message)
 
     if does_pass:
@@ -94,6 +91,7 @@ def run_whisper_decoder(device):
     assert does_pass
 
 
+@skip_for_wormhole_b0()
 def test_WhipserDecoder_inference(device):
     torch.manual_seed(1234)
     run_whisper_decoder(device=device)

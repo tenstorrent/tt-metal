@@ -1,32 +1,40 @@
-name: "Model perf regressions and output report"
+name: "(Single-card) Model perf tests"
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
 
 jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
   models-perf:
+    needs: build-artifact
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-info: [
-          {arch: grayskull, runs-on: ["perf-grayskull", "self-reset"], machine-type: "bare_metal"},
-          {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "self-reset"], machine-type: "bare_metal"},
+        test-info: [
+          {name: "GS", arch: grayskull, runs-on: ["E150", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
         ]
         model-type: [llm_javelin, cnn_javelin, other]
-    name: "${{ matrix.model-type }} ${{ matrix.runner-info.arch }}"
+    name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
-      CONFIG: ci
+      ARCH_NAME: ${{ matrix.test-info.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     environment: dev
-    runs-on: ${{ matrix.runner-info.runs-on }}
+    runs-on: ${{ matrix.test-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Enable Performance mode
+        run: |
+          sudo cpupower frequency-set -g performance
       - name: Ensure weka mount is active
         run: |
           sudo systemctl restart mnt-MLPerf.mount
@@ -36,13 +44,23 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: make build
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-info.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.test-info.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
       - name: Run performance regressions
-        timeout-minutes: 60
+        id: performance_tests
+        timeout-minutes: 70
         run: |
-          source build/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.runner-info.machine-type }}
+          source ${{ github.workspace }}/python_env/bin/activate
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
+      # TODO: Fix the pipeline before enabling notifications.
+      #- uses: ./.github/actions/slack-report
+      #  if: ${{ failure() }}
+      #  with:
+      #    slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
       - name: Check perf report exists
         id: check-perf-report
         if: ${{ !cancelled() }}
@@ -55,5 +73,9 @@ jobs:
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: perf-report-csv-${{ matrix.model-type }}-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
+          name: perf-report-csv-${{ matrix.model-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+      - name: Disable Performance mode
+        if: always()
+        run: |
+          sudo cpupower frequency-set -g ondemand

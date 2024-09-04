@@ -5,7 +5,7 @@
 import pytest
 import torch
 from torch import nn
-import tt_lib
+import ttnn
 from loguru import logger
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -38,9 +38,7 @@ def run_test_LlamaDecoder_inference(
     tokenizer_name = tokenizer_version
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.float32
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -66,9 +64,7 @@ def run_test_LlamaDecoder_inference(
     position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
 
     # PyTorch output =======================================================================
-    pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(
-        hugging_face_reference_model, decoder_id
-    )
+    pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(hugging_face_reference_model, decoder_id)
     pytorch_LlamaDecoder_model.eval()
     pytorch_out = pytorch_LlamaDecoder_model(x=llama_input, y=position_ids)
 
@@ -85,9 +81,7 @@ def run_test_LlamaDecoder_inference(
         max_position_embeddings,
         configuration,
     )
-    tt_out = tt_LlamaDecoder_model(
-        hidden_states=tt_llama_input, position_ids=position_ids
-    )
+    tt_out = tt_LlamaDecoder_model(hidden_states=tt_llama_input, position_ids=position_ids)
     # transform to PyTorch tensor
     # take only hidden_states tensor if tuple is obtained
     tt_out = tt_to_torch_tensor(tt_out[0])
@@ -120,12 +114,10 @@ def run_test_LlamaDecoder_inference(
         ),
     ),
 )
-def test_LlamaDecoder_inference(
-    model_version, tokenizer_version, batch, seq_len, decoder_id, on_weka, pcc
-):
+def test_LlamaDecoder_inference(model_version, tokenizer_version, batch, seq_len, decoder_id, on_weka, pcc):
     # Initialize the device
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.SetDefaultDevice(device)
+    device = ttnn.open_device(0)
+    ttnn.SetDefaultDevice(device)
 
     run_test_LlamaDecoder_inference(
         device,
@@ -137,4 +129,4 @@ def test_LlamaDecoder_inference(
         on_weka,
         pcc,
     )
-    tt_lib.device.CloseDevice(device)
+    ttnn.close_device(device)

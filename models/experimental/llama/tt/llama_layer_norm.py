@@ -4,8 +4,9 @@
 
 import torch
 from torch import nn
-import tt_lib
 from models.utility_functions import pad_by_zero
+
+import ttnn
 
 
 class TtLlamaRMSNorm(nn.Module):
@@ -30,9 +31,7 @@ class TtLlamaRMSNorm(nn.Module):
 
         # check if it is final norm layer
         if layer_num is not None:
-            pytorch_weights = self.state_dict[
-                f"{base_url}.{layer_num}.{layer_position}.weight"
-            ]
+            pytorch_weights = self.state_dict[f"{base_url}.{layer_num}.{layer_position}.weight"]
         else:
             pytorch_weights = self.state_dict[f"model.norm.weight"]
 
@@ -40,4 +39,4 @@ class TtLlamaRMSNorm(nn.Module):
         self.weight = pad_by_zero(pytorch_weights, self.device)[0]
 
     def forward(self, hidden_states):
-        return tt_lib.tensor.rmsnorm(hidden_states, self.variance_epsilon, self.weight)
+        return ttnn.rms_norm(hidden_states, epsilon=self.variance_epsilon, weight=self.weight)

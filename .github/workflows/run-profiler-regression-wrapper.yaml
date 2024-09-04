@@ -1,0 +1,16 @@
+name: "[post-commit] metal - Run profiler regression"
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      tracy: true
+    secrets: inherit
+  run-profiler-regression:
+    needs: build-artifact-profiler
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    secrets: inherit

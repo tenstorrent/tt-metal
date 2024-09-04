@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
+import ttnn
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
@@ -14,12 +14,13 @@ from models.experimental.whisper.tt.whisper_common import linear
 
 from models.experimental.whisper.tt.whisper_encoder import TtWhisperEncoder
 
+
 @dataclass
 class TtWhisperForAudioClassificationOutput:
-    loss: Optional[tt_lib.tensor.Tensor] = None
-    logits: tt_lib.tensor.Tensor = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    loss: Optional[ttnn.Tensor] = None
+    logits: ttnn.Tensor = None
+    hidden_states: Optional[Tuple[ttnn.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.Tensor]] = None
 
 
 class TtWhisperForAudioClassification(nn.Module):
@@ -37,32 +38,22 @@ class TtWhisperForAudioClassification(nn.Module):
             config=config,
         )
 
-        num_layers = (
-            config.num_hidden_layers + 1
-        )  # transformer layers + input embeddings
+        num_layers = config.num_hidden_layers + 1  # transformer layers + input embeddings
         if config.use_weighted_layer_sum:
             # Not using this parameter for now
             N, C, H, W = 1, 1, 1, num_layers
             weight_init_const = 1.0 / num_layers
-            self.layer_weights = tt_lib.tensor.full(
-                (1, 1, 1, num_layers), weight_init_const
-            )
+            self.layer_weights = ttnn.full((1, 1, 1, num_layers), weight_init_const)
 
-        self.projector_weight = torch2tt_tensor(
-            state_dict[f"projector.weight"], self.device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        self.projector_bias = torch2tt_tensor(
-            state_dict[f"projector.bias"], self.device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        self.projector_weight = torch2tt_tensor(state_dict[f"projector.weight"], self.device, ttnn.ROW_MAJOR_LAYOUT)
+        self.projector_bias = torch2tt_tensor(state_dict[f"projector.bias"], self.device, ttnn.ROW_MAJOR_LAYOUT)
 
         self.classifier_weight = torch2tt_tensor(
             state_dict[f"classifier.weight"],
             self.device,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
-        self.classifier_bias = torch2tt_tensor(
-            state_dict[f"classifier.bias"], self.device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        self.classifier_bias = torch2tt_tensor(state_dict[f"classifier.bias"], self.device, ttnn.ROW_MAJOR_LAYOUT)
 
     def freeze_encoder(self):
         """
@@ -79,14 +70,14 @@ class TtWhisperForAudioClassification(nn.Module):
 
     def forward(
         self,
-        input_features: Optional[tt_lib.tensor.Tensor] = None,
+        input_features: Optional[ttnn.Tensor] = None,
         head_mask: Optional[torch.Tensor] = None,
-        encoder_outputs: Optional[Tuple[Tuple[tt_lib.tensor.Tensor]]] = None,
+        encoder_outputs: Optional[Tuple[Tuple[ttnn.Tensor]]] = None,
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[tt_lib.tensor.Tensor], TtWhisperForAudioClassificationOutput]:
+    ) -> Union[Tuple[ttnn.Tensor], TtWhisperForAudioClassificationOutput]:
         r"""
         labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
             Labels for computing the sequence classification/regression loss. Indices should be in `[0, ...,
@@ -122,19 +113,11 @@ class TtWhisperForAudioClassification(nn.Module):
         'af_za'
         ```"""
 
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if encoder_outputs is None:
             encoder_outputs = self.encoder(
@@ -160,17 +143,13 @@ class TtWhisperForAudioClassification(nn.Module):
             hidden_states = encoder_outputs.last_hidden_state
 
         # Apply Linear layer
-        hidden_states = linear(
-            hidden_states, self.projector_weight, self.projector_bias
-        )
+        hidden_states = linear(hidden_states, self.projector_weight, self.projector_bias)
 
         # Torch mean
         torch_hidden_states = tt2torch_tensor(hidden_states)
         torch_pooled_output = torch_hidden_states.mean(dim=-2)
         # If something changes these dimension -2 should always work
-        pooled_output = torch2tt_tensor(
-            torch_pooled_output, self.device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        pooled_output = torch2tt_tensor(torch_pooled_output, self.device, ttnn.ROW_MAJOR_LAYOUT)
 
         # Apply classifier layer
         logits = linear(pooled_output, self.classifier_weight, self.classifier_bias)

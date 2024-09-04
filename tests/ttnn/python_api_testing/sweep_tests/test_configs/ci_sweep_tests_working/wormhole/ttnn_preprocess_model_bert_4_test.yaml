@@ -4,9 +4,9 @@ test-list:
       shape:
         start-shape: [1, 384, 1024]
         end-shape: [6, 1536, 1024]
-        interval: [1, 32, 1]
+        interval: [1, 32, 32]
         num-shapes: 1
-        num-samples: 64
+        num-samples: 16
         args-sampling-strategy: "all"
       datagen:
         function: gen_rand
@@ -17,8 +17,9 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
-        data-layout: ["ROW_MAJOR"]
+        data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]

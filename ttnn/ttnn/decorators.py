@@ -2,13 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from contextlib import contextmanager
 import dataclasses
-from functools import wraps
-import inspect
-import os
+import sys
 import time
 import traceback
+import types
+
+from contextlib import contextmanager
+from functools import wraps
+from importlib.machinery import ModuleSpec
+from importlib.util import module_from_spec
+from typing import Callable
 
 from loguru import logger
 
@@ -16,7 +20,7 @@ import ttnn
 import ttnn.database
 
 
-def compare_tensors_using_pcc(name, golden_outputs, outputs, desired_pcc, level):
+def compare_tensors_using_pcc(python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level):
     import torch
 
     from models.utility_functions import comp_pcc
@@ -55,7 +59,7 @@ def compare_tensors_using_pcc(name, golden_outputs, outputs, desired_pcc, level)
 
         if not matches:
             logger.error(
-                f"{name}: Comparing output tensor {index} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
+                f"{python_fully_qualified_name}: Comparing output tensor {index} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
             )
 
     return comparison_records
@@ -110,71 +114,6 @@ def register_post_operation_hook(hook):
     POST_OPERATION_HOOKS.pop()
 
 
-def document_input_tensors(name, function, validate_input_tensors):
-    signature = inspect.signature(validate_input_tensors)
-    arguments = {arg_name: None for arg_name in signature.parameters}
-    arguments["operation_name"] = name
-    tensor_names = {
-        arg_name: None for arg_name in arguments if arg_name not in {"operation_name", "args", "kwargs", "_"}
-    }
-
-    tensor_schemas = []
-
-    def document_validate_input_tensor(_):
-        nonlocal tensor_schemas
-
-        def wrapper(*_, **kwargs):
-            tensor_schemas.append(kwargs)
-
-        return wrapper
-
-    original_validate_input_tensor = ttnn.validate_input_tensor
-    ttnn.validate_input_tensor = document_validate_input_tensor(ttnn.validate_input_tensor)
-    try:
-        validate_input_tensors(**arguments)
-    except:
-        pass
-    ttnn.validate_input_tensor = original_validate_input_tensor
-
-    if not tensor_schemas:
-        # Handle the case for the functions without input tensors
-        return
-
-    if len(tensor_names) != len(tensor_schemas):
-        raise RuntimeError(f"Expected {len(tensor_names)} tensor_schemas, got {len(tensor_schemas)}")
-
-    doc = function.__doc__ if function.__doc__ is not None else ""
-    for tensor_name, tensor_schema in zip(tensor_names, tensor_schemas):
-        doc = f"{doc}\n    .. list-table:: {tensor_name}\n\n"
-
-        for index, arg_name in enumerate(tensor_schema.keys()):
-            arg_name = arg_name.replace("_", " ")
-            bullet_point = f"* -" if index == 0 else "  -"
-            doc = f"{doc}        {bullet_point} {arg_name}\n"
-
-        for index, value in enumerate(tensor_schema.values()):
-            if isinstance(value, (list, tuple)):
-
-                def to_string(object_value):
-                    try:
-                        if object_value is None:
-                            return ""
-                        elif isinstance(object_value, ttnn.DataType):
-                            return f"ttnn.{object_value.name.lower()}"
-                        elif isinstance(object_value, ttnn.Layout):
-                            return f"ttnn.{object_value.name}_LAYOUT"
-                        else:
-                            return f"{object_value}"
-                    except Exception as e:
-                        return f"{object_value}"
-
-                value = f"{', '.join([to_string(element) for element in value])}"
-            bullet_point = f"* -" if index == 0 else "  -"
-            doc = f"{doc}        {bullet_point} {value}\n"
-
-    function.__doc__ = f"{doc}\n"
-
-
 def get_devices(object_value):
     devices = set()
     if isinstance(object_value, ttnn.Tensor):
@@ -214,18 +153,14 @@ def get_all_tensors(object_value):
     return get_tensors(object_value, (ttnn.Tensor, torch.Tensor))
 
 
-TENSOR_ID = 0
-
-
 def set_tensor_id(tensor, force=False):
     import torch
 
-    global TENSOR_ID
     if isinstance(tensor, (ttnn.Tensor, torch.Tensor)):
         if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
             return
-        tensor.tensor_id = TENSOR_ID
-        TENSOR_ID += 1
+        tensor.tensor_id = ttnn._ttnn.get_tensor_id()
+        ttnn._ttnn.increment_tensor_id()
     elif isinstance(tensor, (list, tuple)):
         for element in tensor:
             set_tensor_id(element, force)
@@ -369,22 +304,50 @@ def posprocess_global_golden_function_outputs(outputs, golden_outputs):
 
 
 @dataclasses.dataclass
-class Operation:
-    name: str
-    function: callable
-    validate_input_tensors: callable
-    preprocess_golden_function_inputs: callable
-    golden_function: callable
-    postprocess_golden_function_outputs: callable
-    is_cpp_function: bool
+class FastOperation:
+    python_fully_qualified_name: str
+    function: Callable
+    preprocess_golden_function_inputs: Callable
+    golden_function: Callable
+    postprocess_golden_function_outputs: Callable
+    is_cpp_operation: bool
     is_experimental: bool
-    allow_to_fallback_to_golden_function_on_failure: bool
+
+    @property
+    def __name__(self):
+        return self.python_fully_qualified_name
 
     def __gt__(self, other):
-        return self.name < other.name
+        return self.python_fully_qualified_name < other.python_fully_qualified_name
 
     def __hash__(self):
-        return hash(self.name)
+        return hash(self.python_fully_qualified_name)
+
+    def __call__(self, *function_args, **function_kwargs):
+        return self.function(*function_args, **function_kwargs)
+
+    __doc__ = property(lambda self: self.function.__doc__)
+
+
+@dataclasses.dataclass
+class Operation:
+    python_fully_qualified_name: str
+    function: Callable
+    preprocess_golden_function_inputs: Callable
+    golden_function: Callable
+    postprocess_golden_function_outputs: Callable
+    is_cpp_operation: bool
+    is_experimental: bool
+
+    @property
+    def __name__(self):
+        return self.python_fully_qualified_name
+
+    def __gt__(self, other):
+        return self.python_fully_qualified_name < other.python_fully_qualified_name
+
+    def __hash__(self):
+        return hash(self.python_fully_qualified_name)
 
     def __post_init__(self):
         function = self.function
@@ -395,21 +358,6 @@ class Operation:
         self.postprocess_golden_function_outputs = (
             self.postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
         )
-
-        self.will_fallback_to_golden_function_on_failure = (
-            self.allow_to_fallback_to_golden_function_on_failure and self.golden_function is not None
-        )
-        if self.validate_input_tensors is not None:
-            document_input_tensors(self.name, function, self.validate_input_tensors)
-
-        def validate_decorator(function):
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                if self.validate_input_tensors is not None:
-                    self.validate_input_tensors(self.name, *function_args, **function_kwargs)
-                return function(*function_args, **function_kwargs)
-
-            return call_wrapper
 
         def set_output_tensor_id_decorator(function):
             @wraps(function)
@@ -433,24 +381,6 @@ class Operation:
 
             return call_wrapper
 
-        def operation_history_decorator(function):
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                original_operation_history_csv = os.environ.get("OPERATION_HISTORY_CSV", None)
-                os.environ["OPERATION_HISTORY_CSV"] = str(ttnn.CONFIG.report_path / ttnn.database.OPERATION_HISTORY_CSV)
-                if hasattr(ttnn._tt_lib.operations, "clear_operation_history"):
-                    ttnn._tt_lib.operations.clear_operation_history()
-                output = function(*function_args, **function_kwargs)
-                if hasattr(ttnn._tt_lib.operations, "dump_operation_history_to_csv"):
-                    ttnn._tt_lib.operations.dump_operation_history_to_csv()
-                if original_operation_history_csv is not None:
-                    os.environ["OPERATION_HISTORY_CSV"] = original_operation_history_csv
-                else:
-                    del os.environ["OPERATION_HISTORY_CSV"]
-                return output
-
-            return call_wrapper
-
         def comparison_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
@@ -471,7 +401,7 @@ class Operation:
 
                 if self.golden_function is None:
                     logger.debug(
-                        f"{self.name}: Skipping comparison against CPU because golden_function is not provided"
+                        f"{self.python_fully_qualified_name}: Skipping comparison against CPU because golden_function is not provided"
                     )
                     return function_return_value, (
                         local_tensor_comparison_records,
@@ -485,7 +415,7 @@ class Operation:
                 else:
                     output = function_return_value
 
-                logger.debug(f"{self.name}: Comparing against CPU")
+                logger.debug(f"{self.python_fully_qualified_name}: Comparing against CPU")
                 local_golden_function_output = self.golden_function(
                     *local_golden_function_args, **local_golden_function_kwargs
                 )
@@ -500,7 +430,7 @@ class Operation:
                 if local_golden_function_output is not None:
                     set_tensor_id(local_golden_function_output)
                     local_tensor_comparison_records = compare_tensors_using_pcc(
-                        self.name,
+                        self.python_fully_qualified_name,
                         local_golden_function_output,
                         output,
                         desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
@@ -511,7 +441,7 @@ class Operation:
                     set_tensor_id(global_golden_function_output)
                     posprocess_global_golden_function_outputs(output, global_golden_function_output)
                     global_tensor_comparison_records = compare_tensors_using_pcc(
-                        self.name,
+                        self.python_fully_qualified_name,
                         global_golden_function_output,
                         output,
                         desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
@@ -532,44 +462,25 @@ class Operation:
 
             return call_wrapper
 
-        def fallback_to_golden_function_decorator(function):
-            def golden_function(*function_args, **function_kwargs):
-                updated_function_args, updated_function_kwargs = self.preprocess_golden_function_inputs(
-                    function_args, function_kwargs
-                )
-                output = self.golden_function(*updated_function_args, **updated_function_kwargs)
-                output = self.postprocess_golden_function_outputs(output, function_args, function_kwargs)
-                return output
-
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                ran_golden_function = False
-                try:
-                    output = function(*function_args, **function_kwargs)
-                except NotImplementedError:
-                    ran_golden_function = True
-                    logger.warning(f"{self.name}: falling back to CPU due to NotImplementedError")
-                    output = golden_function(*function_args, **function_kwargs)
-                except Exception as e:
-                    ran_golden_function = True
-                    exception_message = "\n".join(str(e).split("\n")[:3])
-                    logger.warning(f"{self.name}: falling back to CPU due to {exception_message}")
-                    output = golden_function(*function_args, **function_kwargs)
-
-                if ttnn.CONFIG.throw_exception_on_fallback and ran_golden_function:
-                    raise RuntimeError(f"Fallbacks are disabled, but {self.name} used a fallback")
-                return output
-
-            return call_wrapper
-
         def runtime_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
-                operation_id = ttnn._ttnn.get_operation_id()
+                if ttnn.CONFIG.report_path is not None:
+                    # If the database already exists, get the operation_id from the latest operation
+                    latest_operation = ttnn.database.query_latest_operation(ttnn.CONFIG.report_path)
+                    if latest_operation is not None:
+                        operation_id = latest_operation.operation_id + 1
+                        ttnn._ttnn.set_python_operation_id(operation_id)
+
+                    latest_tensor = ttnn.database.query_latest_tensor(ttnn.CONFIG.report_path)
+                    if latest_tensor is not None:
+                        tensor_id = latest_tensor.tensor_id + 1
+                        ttnn._ttnn.set_tensor_id(tensor_id)
+
+                operation_id = ttnn._ttnn.get_python_operation_id()
                 is_top_level_operation = len(OPERATION_CALL_STACK) == 1
 
                 decorated_function = function
-                decorated_function = validate_decorator(decorated_function)
 
                 if not is_top_level_operation:
                     return decorated_function(*function_args, **function_kwargs)
@@ -586,7 +497,9 @@ class Operation:
                         ttnn.tracer.enable_tracing()
 
                 if ttnn.tracer.ENABLE_TRACER:
-                    decorated_function = ttnn.tracer.trace_ttnn_operation(self.name, decorated_function)
+                    decorated_function = ttnn.tracer.trace_ttnn_operation(
+                        self.python_fully_qualified_name, decorated_function
+                    )
 
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
                     input_tensors = get_all_tensors((function_args, function_kwargs))
@@ -598,11 +511,13 @@ class Operation:
                     for device in devices:
                         ttnn.synchronize_device(device)
 
-                    logger.debug(f"Started {self.name:50}")
+                    logger.debug(f"Started {self.python_fully_qualified_name:50}")
 
                     if ttnn.CONFIG.report_path is not None:
-                        decorated_function = operation_history_decorator(decorated_function)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, None)
+                        ttnn.database.insert_stack_trace(
+                            ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
+                        )
                         ttnn.database.insert_operation_arguments(
                             ttnn.CONFIG.report_path, operation_id, function_args, function_kwargs
                         )
@@ -613,7 +528,9 @@ class Operation:
                 if ttnn.CONFIG.enable_comparison_mode:
                     decorated_function = comparison_decorator(decorated_function)
 
+                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
                 output = decorated_function(*function_args, **function_kwargs)
+                captured_graph = ttnn.graph.end_graph_capture()
 
                 local_tensor_comparison_records = []
                 local_golden_function_output = []
@@ -632,30 +549,28 @@ class Operation:
                         ttnn.synchronize_device(device)
 
                     output, duration = output.output, output.duration
-                    logger.debug(f"Finished {self.name:50} in {duration:30} seconds")
+                    logger.debug(f"Finished {self.python_fully_qualified_name:50}")
 
                     output_tensors = get_all_tensors(output)
 
                     if ttnn.CONFIG.report_path is not None:
                         ttnn.database.insert_devices(ttnn.CONFIG.report_path, devices)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, duration)
-                        ttnn.database.store_operation_history_records(ttnn.CONFIG.report_path, operation_id)
-                        ttnn.database.insert_stack_trace(
-                            ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
-                        )
                         ttnn.database.insert_output_tensors(ttnn.CONFIG.report_path, operation_id, output_tensors)
                         ttnn.database.insert_tensor_comparison_records(
                             ttnn.CONFIG.report_path,
                             "local_tensor_comparison_records",
                             local_tensor_comparison_records,
-                            local_golden_function_output,
                         )
+                        if global_golden_function_output is not None:
+                            ttnn.database.store_tensors(ttnn.CONFIG.report_path, local_golden_function_output)
                         ttnn.database.insert_tensor_comparison_records(
                             ttnn.CONFIG.report_path,
                             "global_tensor_comparison_records",
                             global_tensor_comparison_records,
-                            global_golden_function_output,
                         )
+                        if global_golden_function_output is not None:
+                            ttnn.database.store_tensors(ttnn.CONFIG.report_path, global_golden_function_output)
                         ttnn.database.insert_buffers(ttnn.CONFIG.report_path, operation_id)
                         if ttnn.CONFIG.enable_detailed_buffer_report:
                             ttnn.database.insert_buffer_pages(ttnn.CONFIG.report_path, operation_id)
@@ -666,6 +581,7 @@ class Operation:
                                 file_name=ttnn.CONFIG.report_path / ttnn.database.GRAPHS_PATH / f"{operation_id}.svg",
                             )
                             # ttnn.database.store_graph(operation_id, ttnn.tracer.GRAPH_STACK[-1])
+                        ttnn.database.insert_captured_graph(ttnn.CONFIG.report_path, operation_id, captured_graph)
 
                 for hook in POST_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs, output)
@@ -678,99 +594,226 @@ class Operation:
 
             return call_wrapper
 
-        if self.will_fallback_to_golden_function_on_failure:
-            function = fallback_to_golden_function_decorator(function)
-        self.function_with_fallback = function
-
-        if not ttnn.CONFIG.enable_fast_runtime_mode:
-            # If fast runtime mode is enabled during import-time, then don't decorate the original function
-            function = runtime_decorator(function)
-
+        function = runtime_decorator(function)
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
-        # If fast runtime mode is enabled during runtime, then only run the original function with the fallback
-        if ttnn.CONFIG.enable_fast_runtime_mode:
-            return self.function_with_fallback(*function_args, **function_kwargs)
         try:
-            OPERATION_CALL_STACK.append(self.name)
+            if not OPERATION_CALL_STACK:
+                ttnn._ttnn.increment_python_operation_id()
+            OPERATION_CALL_STACK.append(self.python_fully_qualified_name)
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:
             OPERATION_CALL_STACK.pop()
-            if not OPERATION_CALL_STACK:
-                ttnn._ttnn.increment_operation_id()
         return output
 
     __doc__ = property(lambda self: self.decorated_function.__doc__)
 
 
-REGISTERED_OPERATIONS = set()
+class RegisteredOperations:
+    def __init__(self):
+        self.operations = set()
+
+    def __iter__(self):
+        return iter(self.operations)
+
+    def __contains__(self, operation):
+        return operation in self.operations
+
+    def add(self, operation, name):
+        if operation in self.operations:
+            raise RuntimeError(f'Operation with name "{name}" is already registered')
+        self.operations.add(operation)
 
 
-def query_operations(include_experimental=False):
+REGISTERED_OPERATIONS = RegisteredOperations()
+
+
+def query_registered_operations(include_experimental=False):
     sorted_operations = sorted(REGISTERED_OPERATIONS)
 
     ttnn_operations = [
         operation
         for operation in sorted_operations
-        if operation.name.startswith("ttnn.") and not operation.name.startswith("ttnn.experimental.")
+        if operation.python_fully_qualified_name.startswith("ttnn.")
+        and not operation.python_fully_qualified_name.startswith("ttnn.experimental.")
     ]
-    ttl_operations = [operation for operation in sorted_operations if operation.name.startswith("ttnn.experimental.")]
+    ttl_operations = [
+        operation
+        for operation in sorted_operations
+        if operation.python_fully_qualified_name.startswith("ttnn.experimental.")
+    ]
     if include_experimental:
         return ttnn_operations + ttl_operations
     else:
         return ttnn_operations
 
 
-def register_operation(
+def dump_operations(csv_file, include_experimental=False):
+    import csv
+    import pandas as pd
+
+    apis = query_registered_operations(include_experimental)
+
+    def to_dict(obj):
+        return {
+            "python_fully_qualified_name": obj.python_fully_qualified_name,
+            "function": str(obj.function),
+            "preprocess_golden_function_inputs": str(obj.preprocess_golden_function_inputs),
+            "golden_function": str(obj.golden_function),
+            "postprocess_golden_function_outputs": str(obj.postprocess_golden_function_outputs),
+            "is_cpp_operation": obj.is_cpp_operation,
+            "is_experimental": obj.is_experimental,
+        }
+
+    df = pd.DataFrame([to_dict(obj) for obj in apis])
+    df.sort_values(by=["is_experimental", "is_cpp_operation", "python_fully_qualified_name"], inplace=True)
+    df["has_golden_function"] = df["golden_function"].apply(lambda golden_function: golden_function is not None)
+    df = df[["python_fully_qualified_name", "is_cpp_operation", "has_golden_function", "is_experimental"]]
+    df.to_csv(csv_file, index=False)
+
+
+def get_golden_function(operation):
+    if operation.golden_function is None:
+        raise RuntimeError(f"{operation} does not have a golden function")
+    return operation.golden_function
+
+
+def get_fallback_function(operation):
+    golden_function = get_golden_function(operation)
+
+    def fallback_function(*function_args, **function_kwargs):
+        preprocess_inputs = operation.preprocess_golden_function_inputs or default_preprocess_golden_function_inputs
+        postprocess_outputs = (
+            operation.postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
+        )
+
+        updated_function_args, updated_function_kwargs = preprocess_inputs(function_args, function_kwargs)
+        output = golden_function(*updated_function_args, **updated_function_kwargs)
+        output = postprocess_outputs(output, function_args, function_kwargs)
+
+        return output
+
+    return fallback_function
+
+
+def attach_golden_function(
+    operation, golden_function, *, preprocess_golden_function_inputs=None, postprocess_golden_function_outputs=None
+):
+    operation.golden_function = golden_function
+    operation.preprocess_golden_function_inputs = (
+        preprocess_golden_function_inputs or default_preprocess_golden_function_inputs
+    )
+    operation.postprocess_golden_function_outputs = (
+        postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
+    )
+
+
+def create_module_if_not_exists(module_name):
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+
+    # Recursively create parent modules if they don't exist
+    parent_module_name, _, child_module_name = module_name.rpartition(".")
+    if parent_module_name:
+        parent_module = create_module_if_not_exists(parent_module_name)
+    else:
+        parent_module = None
+
+    # Create the module
+    new_module = module_from_spec(ModuleSpec(module_name, None))
+
+    if parent_module:
+        setattr(parent_module, child_module_name, new_module)
+    sys.modules[module_name] = new_module
+    return new_module
+
+
+def register_cpp_operation(target_module: types.ModuleType, func_name: str, function: Callable):
+    operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
+
+    operation = operation_class(
+        python_fully_qualified_name=function.python_fully_qualified_name,
+        function=function,
+        golden_function=None,
+        preprocess_golden_function_inputs=None,
+        postprocess_golden_function_outputs=None,
+        is_cpp_operation=True,
+        is_experimental=False,
+    )
+
+    REGISTERED_OPERATIONS.add(operation, func_name)
+    setattr(target_module, func_name, operation)
+
+    return operation
+
+
+def register_python_operation(
     *,
     name,
-    is_cpp_function=False,
     is_experimental=False,
     is_method=False,
-    validate_input_tensors=None,
     golden_function=None,
     preprocess_golden_function_inputs=None,
     postprocess_golden_function_outputs=None,
-    allow_to_fallback_to_golden_function_on_failure=False,
+    doc=None,
 ):
-    if is_cpp_function:
-        will_fallback_to_golden_function_on_failure = (
-            allow_to_fallback_to_golden_function_on_failure and golden_function is not None
-        )
-        if will_fallback_to_golden_function_on_failure:
-            if validate_input_tensors is None:
-                raise RuntimeError(
-                    f"Registering {name}: validate_input_tensors is required for cpp functions with fallbacks"
-                )
-        else:
-            if validate_input_tensors is not None:
-                raise RuntimeError(
-                    f"Registering {name}: validate_input_tensors is not supported for cpp functions without fallbacks because the input tensors are validated in C++"
-                )
-    else:
-        if validate_input_tensors is None:
-            raise RuntimeError(f"Registering {name}: validate_input_tensors is required for non-cpp functions")
+    python_fully_qualified_name = name
 
-    def operation_decorator(function: callable):
-        global REGISTERED_OPERATIONS
+    def operation_decorator(function: Callable):
+        is_cpp_operation = hasattr(function, "__ttnn_operation__")
 
-        operation = Operation(
-            name=name,
+        if is_cpp_operation:
+            raise RuntimeError(f"{function} is a C++ operation, but it is being registered as a Python operation")
+        elif not is_experimental and not is_method:
+            logger.warning(f"Should {python_fully_qualified_name} be migrated to C++?")
+
+        operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
+
+        if not ttnn.CONFIG.enable_fast_runtime_mode:
+            # Wrap function before attaching documentation to avoid errors
+            if doc is not None:
+
+                def doc_decorator(function):
+                    @wraps(function)
+                    def wrapper(*args, **kwargs):
+                        return function(*args, **kwargs)
+
+                    return wrapper
+
+                function = doc_decorator(function)
+                function.__doc__ = doc
+
+        operation = operation_class(
+            python_fully_qualified_name=python_fully_qualified_name,
             function=function,
-            validate_input_tensors=validate_input_tensors,
             golden_function=golden_function,
             preprocess_golden_function_inputs=preprocess_golden_function_inputs,
             postprocess_golden_function_outputs=postprocess_golden_function_outputs,
-            is_cpp_function=is_cpp_function,
+            is_cpp_operation=False,
             is_experimental=is_experimental,
-            allow_to_fallback_to_golden_function_on_failure=allow_to_fallback_to_golden_function_on_failure,
         )
 
-        if operation in REGISTERED_OPERATIONS:
-            raise RuntimeError(f"{operation} is already registered")
-        REGISTERED_OPERATIONS.add(operation)
+        attach_golden_function(
+            operation,
+            golden_function,
+            preprocess_golden_function_inputs=preprocess_golden_function_inputs,
+            postprocess_golden_function_outputs=postprocess_golden_function_outputs,
+        )
 
+        if not is_method:  # Do not export methods
+            module_path, _, func_name = python_fully_qualified_name.rpartition(".")
+            if not module_path:
+                raise RuntimeError("Module path have to have at least 2 tokens!")
+            if not module_path.startswith("ttnn"):
+                raise RuntimeError('Module path must start with "ttnn."')
+
+            target_module = create_module_if_not_exists(module_path)
+
+            REGISTERED_OPERATIONS.add(operation, python_fully_qualified_name)
+            setattr(target_module, func_name, operation)
+
+        # Wrap method appropriately in order to avoid errors
         if is_method:
 
             @wraps(operation)
@@ -784,10 +827,9 @@ def register_operation(
     return operation_decorator
 
 
-def register_ttl_operation_as_ttnn_operation(name, function):
-    function = register_operation(
-        name=name,
-        is_cpp_function=True,
+def register_ttl_operation_as_ttnn_operation(python_fully_qualified_name, function):
+    function = register_python_operation(
+        name=python_fully_qualified_name,
         is_experimental=True,
     )(function)
     return function

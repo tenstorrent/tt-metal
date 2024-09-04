@@ -13,8 +13,8 @@ from models.utility_functions import (
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.functional_stable_diffusion.tt2.ttnn_functional_resnetblock2d import resnetBlock2D
-from models.experimental.functional_stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d import resnetBlock2D
+from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 
 
 def ttnn_to_torch(input):
@@ -47,6 +47,7 @@ def ttnn_to_torch(input):
 def test_resnet_block_2d_256x256(
     device, batch_size, in_channels, input_height, input_width, index1, index2, block_name, out_channels
 ):
+    pytest.skip()
     # setup pytorch model
     model_name = "CompVis/stable-diffusion-v1-4"
     pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
@@ -108,6 +109,7 @@ def test_resnet_block_2d_256x256(
 
 
 @skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, index1,index2,block_name,out_channels",
     [

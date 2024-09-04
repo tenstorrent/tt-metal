@@ -5,7 +5,9 @@ TT_METAL_IMPL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 TT_METAL_IMPL_SRCS = \
 	tt_metal/impl/device/device.cpp \
-	tt_metal/impl/device/multi_device.cpp \
+	tt_metal/impl/device/device_pool.cpp \
+	tt_metal/impl/device/mesh_device.cpp \
+	tt_metal/impl/device/mesh_device_view.cpp \
 	tt_metal/impl/buffers/buffer.cpp \
 	tt_metal/impl/buffers/circular_buffer.cpp \
 	tt_metal/impl/buffers/semaphore.cpp \
@@ -15,7 +17,6 @@ TT_METAL_IMPL_SRCS = \
 	tt_metal/impl/allocator/basic_allocator.cpp \
 	tt_metal/impl/allocator/l1_banking_allocator.cpp \
 	tt_metal/impl/program/program.cpp \
-	tt_metal/impl/dispatch/device_command.cpp \
 	tt_metal/impl/dispatch/debug_tools.cpp \
 	tt_metal/impl/dispatch/command_queue.cpp \
 	tt_metal/impl/debug/dprint_server.cpp \

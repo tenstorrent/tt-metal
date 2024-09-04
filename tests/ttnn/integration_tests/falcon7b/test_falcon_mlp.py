@@ -85,14 +85,3 @@ def test_ttnn_functional_falcon_mlp(device, model_name, batch_size, sequence_len
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.985)
-
-
-def test_ttnn_optimized_functional_mlp():
-    """
-    # Need to convert the optimized impl over to ttnn
-    hidden_states = tt_lib.tensor.falcon_dense_h_to_4h_matmul()
-    # fuse gelu
-    hidden_states = tt_lib.tensor.falcon_dense_4h_to_h_matmul()
-    """
-    pytest.skip()
-    pass

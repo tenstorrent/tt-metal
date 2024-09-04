@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/host_api.hpp"
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/bmm/bmm_op.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "common/constants.hpp"
 #include "tt_numpy/functions.hpp"
 
@@ -50,8 +50,9 @@ int main(int argc, char **argv) {
         Tensor b = tt::numpy::zeros(shapeb, DataType::BFLOAT16).to(Layout::TILE).to(device);
         Tensor b1 = tt::numpy::zeros(shapeb1, DataType::BFLOAT16).to(Layout::TILE).to(device);
 
-        Tensor mm = bmm(a, b).cpu();
-        Tensor mm1 = matmul(a, b1).cpu();
+        Tensor mm = ttnn::operations::matmul::matmul(a, b, /*bias=*/std::nullopt,
+                ttnn::operations::matmul::Matmul{/*program_config=*/std::nullopt, /*bcast_batch=*/std::nullopt,operation::DEFAULT_OUTPUT_MEMORY_CONFIG, /*output_dtype=*/std::nullopt, /*compute_kernel_config=*/std::nullopt, /*untilize_out=*/false, /*user_core_coord=*/std::nullopt, /*user_fused_activation=*/std::nullopt, /*user_run_batched=*/true}).cpu();
+        Tensor mm1 = ttnn::operations::matmul::matmul(a, b1).cpu();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

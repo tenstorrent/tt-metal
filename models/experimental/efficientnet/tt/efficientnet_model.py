@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import ttnn
+
 import copy
-import tt_lib
 from typing import List, Sequence, Union, Tuple, Optional, Any
 from tt_lib.fallback_ops import fallback_ops
 import torchvision
@@ -149,7 +150,7 @@ class TtEfficientNet(torch.nn.Module):
         self.classifier_weight = torch2tt_tensor(
             state_dict["fc.weight" if is_lite else "classifier.1.weight"],
             device,
-            tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+            tt_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
         bias_key = "fc.bias" if is_lite else "classifier.1.bias"
@@ -158,25 +159,25 @@ class TtEfficientNet(torch.nn.Module):
             self.classifier_bias = torch2tt_tensor(
                 state_dict[bias_key],
                 device,
-                tt_layout=tt_lib.tensor.Layout.ROW_MAJOR,
+                tt_layout=ttnn.ROW_MAJOR_LAYOUT,
             )
         else:
             self.classifier_bias = None
 
-        self.classifier_weight = tt_lib.tensor.transpose(self.classifier_weight, -2, -1)
+        self.classifier_weight = ttnn.transpose(self.classifier_weight, -2, -1)
 
     def forward(self, x):
         x = self.features(x)
         x = self.avgpool(x)
 
         last_shape = x.get_legacy_shape()[-1] * x.get_legacy_shape()[-2] * x.get_legacy_shape()[-3]
-        # tt_lib.tensor.reshape won't work here since input tensor is of shape [1, n, 1, 1]
-        x = tt_lib.fallback_ops.reshape(x, x.get_legacy_shape()[0], 1, 1, last_shape)
+        # ttnn.reshape_on_device won't work here since input tensor is of shape [1, n, 1, 1]
+        x = fallback_ops.reshape(x, x.get_legacy_shape()[0], 1, 1, last_shape)
 
-        x = tt_lib.tensor.matmul(x, self.classifier_weight)
+        x = ttnn.matmul(x, self.classifier_weight)
 
         if self.classifier_bias is not None:
-            x = tt_lib.tensor.add(x, self.classifier_bias)
+            x = ttnn.add(x, self.classifier_bias)
 
         return x
 

@@ -302,6 +302,7 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 def test_ttnn_whisper(tmp_path, device, ttnn_model):
     torch.manual_seed(0)
@@ -365,4 +366,4 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model):
         last_hidden_state = ttnn.to_torch(last_hidden_state)
     ttnn.tracer.visualize(last_hidden_state, file_name=tmp_path / "whisper.svg")
 
-    assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.97)
+    assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.964)

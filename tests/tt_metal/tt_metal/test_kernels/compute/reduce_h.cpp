@@ -7,6 +7,7 @@
 #include "debug/dprint.h"
 
 #include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/eltwise_binary.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -14,10 +15,14 @@ void MAIN {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
+#ifndef SHORT_INIT
+    reduce_init<true>(tt::CB::c_in0, tt::CB::c_in2);
+#else
+    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in2, tt::CB::c_out0);
+    reduce_init_delta<false>(tt::CB::c_out0, tt::CB::c_in0, tt::CB::c_in2);
+#endif
 
-    reduce_init<true>(REDUCE_OP, REDUCE_DIM, tt::CB::c_in0, tt::CB::c_in2);
     cb_wait_front(tt::CB::c_in2, 1); // scaler tile from the reader
-
     for (uint32_t nc = 0; nc < NC; nc++) {
 
         constexpr int onetile = 1;
@@ -30,7 +35,7 @@ void MAIN {
             for(uint32_t ht = 0; ht < Ht; ++ht) {
                 cb_wait_front(tt::CB::c_in0, onetile);
                 // REDUCE_OP is expected to come from add_define
-                reduce_tile(REDUCE_OP, REDUCE_DIM, tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
+                reduce_tile(tt::CB::c_in0, tt::CB::c_in2, 0, 0, reduce_dst_idx);
                 cb_pop_front(tt::CB::c_in0, onetile);
             }
 
@@ -40,5 +45,8 @@ void MAIN {
             release_dst(tt::DstMode::Half);
         }
     }
+#ifdef SHORT_INIT
+    reduce_revert_delta(tt::CB::c_out0);
+#endif
 }
 }

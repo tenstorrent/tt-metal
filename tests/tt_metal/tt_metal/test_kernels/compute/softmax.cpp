@@ -86,9 +86,9 @@ void MAIN {
             }
             cb_pop_front(cb_scale_mask, ndst);
             cb_reserve_back(cb_exps, ndst);
-            exp_tile_init(true);
+            exp_tile_init<true>();
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                exp_tile(wt8,true); // exp on DST[0]
+                exp_tile<true>(wt8); // exp on DST[0]
                 pack_tile(wt8, cb_exps); // reuse the exps buffer again, this time in a circular manner
             }
             cb_push_back(cb_exps, ndst);
@@ -116,9 +116,9 @@ void MAIN {
             cb_pop_front(cb_in0, ndst);
 
             cb_reserve_back(cb_exps, ndst);
-            exp_tile_init(true);
+            exp_tile_init<true>();
             for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                exp_tile(wt8, true); // exp on DST[0]
+                exp_tile<true>(wt8); // exp on DST[0]
                 pack_tile(wt8, cb_exps); // DST[0]->cb_id[wt]
             }
             cb_push_back(cb_exps, ndst);
@@ -128,11 +128,11 @@ void MAIN {
 
         ACQ();
         cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+        reduce_init_delta<false>();
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_exps, wt+1); // must be a cumulative wait for correctness
             constexpr uint32_t bcast_scaler0 = 0; // 0th index from bcast_scaler CB
-            reduce_tile(REDUCE_OP, REDUCE_DIM, cb_exps, cb_bcast_scaler, wt, bcast_scaler0, dst0);
+            reduce_tile(cb_exps, cb_bcast_scaler, wt, bcast_scaler0, dst0);
         }
         reduce_revert_delta();
         recip_tile_init();

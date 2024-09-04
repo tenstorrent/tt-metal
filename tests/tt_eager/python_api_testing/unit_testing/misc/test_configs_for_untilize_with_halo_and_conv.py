@@ -7,7 +7,7 @@ import torch
 import numpy
 from loguru import logger
 
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_config_generation_and_validation import (
+from ttnn.operations.conv.untilize_with_halo_config_generation_and_validation import (
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
     validate_input_padded_tensor_and_data_top_left_indices_and_pad_metadata,
     decompose_conv_into_shards_and_generate_tensor_metadata,
@@ -17,15 +17,14 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_confi
     generate_untilize_with_halo_kernel_configs,
     validate_untilize_with_halo_kernel_configs,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config_generation_and_validation import (
+from ttnn.operations.conv.sliding_window_op_config_generation_and_validation import (
     generate_sliding_window_op_sharded_input_top_left_indices,
     validate_conv_sharded_input_top_left_indices,
     validate_max_pool_sharded_input_top_left_indices,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
+from ttnn.operations.conv.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc, comp_pcc
 from tt_lib.utils import _nearest_y
-import tt_lib as ttl
 
 
 # conv params - output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups

@@ -18,12 +18,12 @@ inline const uint32_t get_output_base_id()
    return (OUTPUT_BASE_ID);
 }
 
-inline const uint32_t get_output_src_format(const std::uint32_t output_id)
+inline const unsigned char get_output_src_format(const std::uint32_t output_id)
 {
    return pack_src_format[output_id];
 }
 
-inline const uint32_t get_output_dst_format(const std::uint32_t output_id)
+inline const unsigned char get_output_dst_format(const std::uint32_t output_id)
 {
    return pack_dst_format[output_id];
 }

@@ -21,6 +21,7 @@ from tests.scripts.common import (
     get_git_home_dir_str,
     filter_empty,
     void_for_whb0,
+    void_for_bh,
 )
 from tests.scripts.cmdline_args import (
     get_tt_metal_arguments_from_cmdline_args,
@@ -83,17 +84,11 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
         "tt_metal/tests/test_generic_binary_reader_matmul_large_block",
         "test_generic_binary_reader_matmul_large_block",
     ),
-    TestEntry("tt_metal/tests/test_transpose_hc", "test_transpose_hc"),
-    TestEntry("tt_metal/tests/test_transpose_wh", "test_transpose_wh"),
-    TestEntry("tt_metal/tests/test_reduce_h", "test_reduce_h"),
-    TestEntry("tt_metal/tests/test_reduce_w", "test_reduce_w"),
-    TestEntry("tt_metal/tests/test_reduce_hw", "test_reduce_hw"),
+    void_for_bh(TestEntry("tt_metal/tests/test_transpose_hc", "test_transpose_hc")),
     TestEntry("tt_metal/tests/test_bmm", "test_bmm"),
     # TestEntry("tt_metal/tests/test_flatten", "test_flatten"),
     TestEntry("tt_metal/tests/test_multiple_programs", "test_multiple_programs"),
     TestEntry("tt_metal/tests/test_multi_core_kernel", "test_multi_core_kernel"),
-    TestEntry("tt_metal/tests/test_unpack_tilize", "test_unpack_tilize"),
-    TestEntry("tt_metal/tests/test_unpack_untilize", "test_unpack_untilize"),
     TestEntry("tt_metal/tests/test_interleaved_layouts", "test_interleaved_layouts"),
     TestEntry("tt_metal/tests/test_interleaved_l1_buffer", "test_interleaved_l1_buffer"),
     TestEntry(
@@ -141,6 +136,7 @@ PROGRAMMING_EXAMPLE_ENTRIES = (
     TestEntry("programming_examples/matmul_single_core", "programming_examples/matmul_single_core"),
     TestEntry("programming_examples/matmul_multi_core", "programming_examples/matmul_multi_core"),
     TestEntry("programming_examples/matmul_multicore_reuse", "programming_examples/matmul_multicore_reuse"),
+    TestEntry("programming_examples/contributed/vecadd", "programming_examples/contributed/vecadd"),
     # Does not work on WH yet.
     # TestEntry("programming_examples/matmul_multicore_reuse_mcast", "programming_examples/matmul_multicore_reuse_mcast"),
 )

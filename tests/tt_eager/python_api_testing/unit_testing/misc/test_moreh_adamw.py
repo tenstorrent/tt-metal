@@ -6,7 +6,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-import tt_lib as ttl
+import ttnn
+import ttnn
 import pytest
 from models.utility_functions import (
     skip_for_wormhole_b0,
@@ -14,37 +15,59 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+    get_compute_kernel_options,
+    compute_kernel_options,
+    compute_kernel_ids,
+)
 from loguru import logger
 
 
-@pytest.mark.parametrize(
-    "shape",
-    (
-        (1, 1, 32, 32),  # single
-        (12, 6, 64, 64),  # multi tile
-    ),
-)
-@pytest.mark.parametrize("lr", [0.0, 1e-2])
-@pytest.mark.parametrize("betas", ((0.9, 0.999), (0.5, 0.555)))
-@pytest.mark.parametrize("eps", [1e-06, 1e-08])
-@pytest.mark.parametrize("weight_decay", [0.0, 0.3])
-@pytest.mark.parametrize("amsgrad", [True, False])
-@pytest.mark.parametrize("step", [1, 2, 8])
-def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device):
-    torch.manual_seed(0)
+def create_tt_tensors(cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max_exp_avg_sq, amsgrad, device):
+    def create_tt_tensor(x, device):
+        ret = (
+            ttnn.Tensor(
+                x,
+                ttnn.bfloat16,
+            )
+            .to(ttnn.TILE_LAYOUT)
+            .to(device)
+        )
+        return ret
 
-    N = shape[0]
-    C = shape[1]
-    H = shape[2]
-    W = shape[3]
+    def create_empty_tensor(x, device):
+        ret = ttnn.empty(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        return ret
 
-    x_data = torch.rand((N, C, H, W)).to(torch.bfloat16)
-    y_data = torch.rand((N, C, H, W)).to(torch.bfloat16)
+    # input tensors
+    param_in = create_tt_tensor(cpu_weight, device)
+    grad = create_tt_tensor(cpu_grad, device)
+    exp_avg_in = create_tt_tensor(cpu_exp_avg, device)
+    exp_avg_sq_in = create_tt_tensor(cpu_exp_avg_sq, device)
+    max_exp_avg_sq_in = create_tt_tensor(cpu_max_exp_avg_sq, device) if amsgrad else None
+
+    # output tensors
+    param_out = create_empty_tensor(cpu_weight, device)
+    exp_avg_out = create_empty_tensor(cpu_exp_avg, device)
+    exp_avg_sq_out = create_empty_tensor(cpu_exp_avg_sq, device)
+    max_exp_avg_sq_out = create_empty_tensor(cpu_max_exp_avg_sq, device) if amsgrad else None
+
+    return (
+        (param_in, grad, exp_avg_in, exp_avg_sq_in, max_exp_avg_sq_in),
+        (param_out, exp_avg_out, exp_avg_sq_out, max_exp_avg_sq_out),
+    )
+
+
+def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, compute_kernel_options=None):
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
+
+    x_data = torch.rand(shape).to(torch.bfloat16)
+    y_data = torch.rand(shape).to(torch.bfloat16)
 
     class SimpleModel(nn.Module):
         def __init__(self):
             super(SimpleModel, self).__init__()
-            self.weight = nn.Parameter(torch.randn(N, C, H, W).to(torch.bfloat16)).to(torch.bfloat16)
+            self.weight = nn.Parameter(torch.randn(shape).to(torch.bfloat16)).to(torch.bfloat16)
 
         def forward(self, x):
             return torch.mul(x, self.weight)
@@ -91,89 +114,40 @@ def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
     else:
         cpu_max_exp_avg_sq_result = None
 
-    dev_grad = (
-        ttl.tensor.Tensor(
-            cpu_grad,
-            ttl.tensor.DataType.BFLOAT16,
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
+    tt_input_tensors, tt_output_tensors = create_tt_tensors(
+        cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max_exp_avg_sq, amsgrad, device
     )
 
-    dev_param = (
-        ttl.tensor.Tensor(
-            cpu_weight,
-            ttl.tensor.DataType.BFLOAT16,
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
+    tt_param_in, tt_grad, tt_exp_avg_in, tt_exp_avg_sq_in, tt_max_exp_avg_sq_in = tt_input_tensors
+    tt_param_out, tt_exp_avg_out, tt_exp_avg_sq_out, tt_max_exp_avg_sq_out = tt_output_tensors
+
+    ret_list_ = ttnn.experimental.operations.primary.moreh_adamw(
+        tt_param_in,
+        tt_grad,
+        tt_exp_avg_in,
+        tt_exp_avg_sq_in,
+        lr,
+        betas[0],
+        betas[1],
+        eps,
+        weight_decay,
+        step,
+        amsgrad,
+        tt_max_exp_avg_sq_in,
+        tt_param_out,
+        tt_exp_avg_out,
+        tt_exp_avg_sq_out,
+        tt_max_exp_avg_sq_out,
+        compute_kernel_config=compute_kernel_config,
     )
 
-    dev_exp_avg = (
-        ttl.tensor.Tensor(
-            cpu_exp_avg,
-            ttl.tensor.DataType.BFLOAT16,
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    assert tt_param_out.get_legacy_shape() == list(model.weight.shape)
 
-    dev_exp_avg_sq = (
-        ttl.tensor.Tensor(
-            cpu_exp_avg_sq,
-            ttl.tensor.DataType.BFLOAT16,
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
-
+    param_result = tt_param_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
+    exp_avg_result = tt_exp_avg_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
+    exp_avg_sq_result = tt_exp_avg_sq_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
     if amsgrad:
-        dev_max_exp_avg_sq = (
-            ttl.tensor.Tensor(
-                cpu_max_exp_avg_sq,
-                ttl.tensor.DataType.BFLOAT16,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device)
-        )
-
-    if amsgrad:
-        ret_list_ = ttl.operations.primary.moreh_adamw(
-            dev_param,
-            dev_grad,
-            dev_exp_avg,
-            dev_exp_avg_sq,
-            lr,
-            betas[0],
-            betas[1],
-            eps,
-            weight_decay,
-            step,
-            amsgrad,
-            dev_max_exp_avg_sq,
-        )
-    else:
-        ret_list_ = ttl.operations.primary.moreh_adamw(
-            dev_param,
-            dev_grad,
-            dev_exp_avg,
-            dev_exp_avg_sq,
-            lr,
-            betas[0],
-            betas[1],
-            eps,
-            weight_decay,
-            step,
-            amsgrad,
-        )
-
-    assert dev_param.get_legacy_shape() == list(model.weight.shape)
-
-    param_result = dev_param.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
-    exp_avg_result = dev_exp_avg.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
-    exp_avg_sq_result = dev_exp_avg_sq.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
-    if amsgrad:
-        max_exp_avg_sq_result = dev_max_exp_avg_sq.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+        max_exp_avg_sq_result = tt_max_exp_avg_sq_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
     else:
         max_exp_avg_sq_result = None
 
@@ -205,3 +179,56 @@ def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
         whole_passing &= passing
 
     assert whole_passing
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [32, 32],  # single
+        [4, 3, 2, 6, 64, 64],  # multi tile
+    ],
+)
+@pytest.mark.parametrize("lr", [1e-2])
+@pytest.mark.parametrize("betas", [[0.5, 0.555]])
+@pytest.mark.parametrize("eps", [1e-08])
+@pytest.mark.parametrize("weight_decay", [0.3])
+@pytest.mark.parametrize("amsgrad", [True, False])
+@pytest.mark.parametrize("step", [8])
+def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device):
+    torch.manual_seed(0)
+
+    run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[32, 32]],  # single
+)
+@pytest.mark.parametrize("lr", [1e-2])
+@pytest.mark.parametrize("betas", [[0.5, 0.555]])
+@pytest.mark.parametrize("eps", [1e-08])
+@pytest.mark.parametrize("weight_decay", [0.3])
+@pytest.mark.parametrize("amsgrad", [True, False])
+@pytest.mark.parametrize("step", [8])
+def test_moreh_adamw_callback(shape, lr, betas, eps, weight_decay, amsgrad, step, device, use_program_cache):
+    torch.manual_seed(0)
+    for _ in range(2):
+        run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[32, 32]],  # single
+)
+@pytest.mark.parametrize("lr", [1e-2])
+@pytest.mark.parametrize("betas", [[0.5, 0.555]])
+@pytest.mark.parametrize("eps", [1e-08])
+@pytest.mark.parametrize("weight_decay", [0.3])
+@pytest.mark.parametrize("amsgrad", [True, False])
+@pytest.mark.parametrize("step", [8])
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_adamw_compute_kernel_options(
+    shape, lr, betas, eps, weight_decay, amsgrad, step, compute_kernel_options, device
+):
+    torch.manual_seed(0)
+    run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, compute_kernel_options)

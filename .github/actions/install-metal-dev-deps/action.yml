@@ -29,20 +29,11 @@ runs:
         DEPENDENCIES=$(jq -r --arg os "${{ inputs.os }}" '.[$os] | .[]' $GITHUB_ACTION_PATH/dependencies.json)
         echo $DEPENDENCIES
         sudo apt update
-        sudo apt install -y $DEPENDENCIES
+        sudo apt install -y --no-install-recommends $DEPENDENCIES
     - name: Install doxygen
       shell: bash
       run: |
         curl -L "https://www.doxygen.nl/files/doxygen-1.9.6.linux.bin.tar.gz" -o doxygen-1.9.6.linux.bin.tar.gz
         tar -xvf doxygen-1.9.6.linux.bin.tar.gz
         cd doxygen-1.9.6
-        sudo make install
-    - name: Install gtest
-      shell: bash
-      run: |
-        curl -L "https://github.com/google/googletest/archive/refs/tags/v1.13.0.tar.gz" -o v1.13.0.tar.gz
-        tar -xvf v1.13.0.tar.gz
-        cd googletest-1.13.0
-        cmake -DCMAKE_INSTALL_PREFIX=/usr -DBUILD_SHARED_LIBS=ON .
-        make
         sudo make install

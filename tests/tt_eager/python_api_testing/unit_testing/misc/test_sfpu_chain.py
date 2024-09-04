@@ -5,7 +5,7 @@
 
 import torch
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_pcc
 from loguru import logger
 from models.utility_functions import is_wormhole_b0
@@ -19,27 +19,27 @@ def test_eltwise_unary_chain(device):
     x = torch.randn((N, C, H, W)).bfloat16().float()
 
     xt = (
-        ttl.tensor.Tensor(
+        ttnn.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.TILE_LAYOUT)
         .to(device)
     )
 
-    xtt = ttl.tensor.unary_chain(
+    xtt = ttnn.unary_chain(
         xt,
         [
-            ttl.tensor.FusibleActivation.RELU,
-            [ttl.tensor.FusibleActivation.EXP, False],
-            [ttl.tensor.FusibleActivation.POWER, 2],
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, False),
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2),
         ],
     )
     assert list(xtt.get_legacy_shape()) == [N, C, H, W]
 
-    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     pt_ref = torch.pow(torch.exp(torch.nn.functional.relu(x)), 2)
 
@@ -57,37 +57,34 @@ def test_eltwise_binary_fused(device):
     y = torch.randn((N, C, H, W)).bfloat16().float()
 
     xt = (
-        ttl.tensor.Tensor(
+        ttnn.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.TILE_LAYOUT)
         .to(device)
     )
     yt = (
-        ttl.tensor.Tensor(
+        ttnn.Tensor(
             y.reshape(-1).tolist(),
             y.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
-        .to(ttl.tensor.Layout.TILE)
+        .to(ttnn.TILE_LAYOUT)
         .to(device)
     )
 
-    xtt = ttl.tensor.add(
+    xtt = ttnn.add(
         xt,
         yt,
-        fused_activations=[
-            ttl.tensor.FusibleActivation.RELU,
-            [ttl.tensor.FusibleActivation.POWER, 2],
-        ],
+        activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2)],
     )
     assert list(xtt.get_legacy_shape()) == [N, C, H, W]
 
-    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     pt_ref = torch.pow(torch.nn.functional.relu(x + y), 2)
 

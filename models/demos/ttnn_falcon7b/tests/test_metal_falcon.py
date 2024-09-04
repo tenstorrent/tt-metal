@@ -9,7 +9,6 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
 
-import tt_lib
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
 from models.demos.ttnn_falcon7b.tt.model_config import (
@@ -222,7 +221,7 @@ def test_perf_bare_metal(
     if is_e75(device) and batch == 32:
         pytest.skip("Falcon batch 32 is not supported on E75")
 
-    tt_lib.device.EnableMemoryReports()
+    ttnn.device.EnableMemoryReports()
 
     model_config = get_model_config(model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)

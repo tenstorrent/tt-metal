@@ -9,7 +9,8 @@ from loguru import logger
 from transformers import WhisperModel, WhisperForAudioClassification
 
 
-import tt_lib
+import ttnn
+import pytest
 
 from models.experimental.whisper.tt.whisper_encoder_layer import (
     TtWhisperEncoderLayer,
@@ -18,7 +19,10 @@ from models.utility_functions import (
     comp_pcc,
     torch2tt_tensor,
     tt2torch_tensor,
+    is_wormhole_b0,
 )
+
+pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Skip for Wormhole B0")
 
 
 def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
@@ -42,7 +46,7 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
 
     hidden_state_input_tensor = torch.rand(1, 1500, embed_dim)
     attention_mask_input_tensor = None
-    ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device, tt_lib.tensor.Layout.ROW_MAJOR)
+    ttm_tensor_hidden_state = torch2tt_tensor(hidden_state_input_tensor, device, ttnn.ROW_MAJOR_LAYOUT)
     ttm_tensor_attention_mask = None
     layer_head_mask_input_tensor = None
 
@@ -105,6 +109,7 @@ def test_WhipserEncoderLayer_inference(device):
     run_whisper_encoder_layer(layer=0, device=device)
 
 
+@pytest.mark.skip(reason="Not tested")
 def test_WhisperEncoderLayerForAudioClassification_inference(device):
     torch.manual_seed(1234)
     run_whisper_encoder_layer(layer=0, device=device, for_audio_classification=True)

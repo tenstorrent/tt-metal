@@ -3,10 +3,10 @@
 set -eo pipefail
 
 validate_env_vars() {
-    if [[ -z "$ARCH_NAME" ]]; then
-      echo "Must provide ARCH_NAME in environment" 1>&2
-      exit 1
-    fi
+  if [[ -n "${TT_METAL_HOME}" || -n "${PYTHONPATH}" || -n "${ARCH_NAME}" ]]; then
+    echo "TT_METAL_HOME / PYTHONPATH / ARCH_NAME is set. This is not allowed in production environments"
+    exit 1
+  fi
 }
 
 set_up_end_to_end_tests_env() {
@@ -20,6 +20,11 @@ set_up_end_to_end_tests_env() {
 
   python -m pip install -r requirements.txt
   python -m pip install ../../metal_libs-*.whl
+
+  cd ../../
+  rm -rf tt_metal tt_eager ttnn models
+  echo "Showing current directory"
+  ls -hal
 }
 
 main() {

@@ -86,10 +86,12 @@ inline void llk_unpack_AB_matmul(
             std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX<true>(unpB_src_format, (tile_index_b+ct));
             std::uint32_t address_b = base_address_b + offset_address_b;
 
+            DEBUG_STATUS("UPMW");
             _llk_unpack_AB_matmul_(
                 address_a,
                 address_b
             );
+            DEBUG_STATUS("UPMD");
         }
     }
 }

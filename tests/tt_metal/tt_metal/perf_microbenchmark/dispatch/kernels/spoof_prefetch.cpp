@@ -19,6 +19,7 @@ constexpr uint32_t cmd_cb_pages = get_compile_time_arg_val(5);
 constexpr uint32_t page_batch_size = get_compile_time_arg_val(6);
 constexpr uint32_t dispatch_sync_sem = get_compile_time_arg_val(7);
 
+constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t dispatch_noc_xy = uint32_t(NOC_XY_ENCODING(DISPATCH_NOC_X, DISPATCH_NOC_Y));
 constexpr uint32_t dispatch_cb_page_size = 1 << dispatch_cb_log_page_size;
@@ -32,7 +33,7 @@ void kernel_main() {
     uint32_t cmd_ptr = cmd_cb_base;
     uint32_t dispatch_data_ptr = dispatch_cb_base;
 
-    downstream_cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(dispatch_cb_pages);
+    cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(dispatch_cb_pages);
     for (uint32_t i = 0; i < dispatch_cb_pages; i++) {
         noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
         cmd_ptr += dispatch_cb_page_size;
@@ -40,15 +41,16 @@ void kernel_main() {
     }
 
     int iterations = get_arg_val<int>(0);
-    downstream_cb_release_pages<dispatch_noc_xy, dispatch_cb_sem>(dispatch_cb_pages * iterations);
+    cb_release_pages<my_noc_index, dispatch_noc_xy, dispatch_cb_sem>(dispatch_cb_pages * iterations);
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dispatch_cb_sem));
-    DEBUG_STATUS('Z', 'Z', 'Z');
+    DEBUG_STATUS("ZZZ");
     while (*sem_addr != dispatch_cb_pages * iterations - 96);
     // Send finish, last cmd in the chain
     noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_cb_base), dispatch_cb_page_size);
-    downstream_cb_release_pages<dispatch_noc_xy, dispatch_cb_sem>(1);
+    cb_release_pages<my_noc_index, dispatch_noc_xy, dispatch_cb_sem>(1);
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
 #else
 void kernel_main() {
@@ -60,7 +62,7 @@ void kernel_main() {
         cmd_ptr = cmd_cb_base;
         for (uint32_t j = 0; j < (cmd_cb_pages - 1) / page_batch_size; j++) {
 
-            downstream_cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(page_batch_size);
+            cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(page_batch_size);
             for (uint32_t k = 0; k < page_batch_size; k++) {
                 noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
                 cmd_ptr += dispatch_cb_page_size;
@@ -69,14 +71,15 @@ void kernel_main() {
                     dispatch_data_ptr = dispatch_cb_base;
                 }
             }
-            downstream_cb_release_pages<dispatch_noc_xy, dispatch_cb_sem>(page_batch_size);
+            cb_release_pages<my_noc_index, dispatch_noc_xy, dispatch_cb_sem>(page_batch_size);
         }
     }
 
     // Send finish, last cmd in the chain
-    downstream_cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(1);
+    cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(1);
     noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
-    downstream_cb_release_pages<dispatch_noc_xy, dispatch_cb_sem>(1);
+    cb_release_pages<my_noc_index, dispatch_noc_xy, dispatch_cb_sem>(1);
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
 #endif

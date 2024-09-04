@@ -16,45 +16,39 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 TILE_WIDTH = 32
 
 
-def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -> ttnn.experimental.tensor.CoreRangeSet:
+def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -> ttnn.CoreRangeSet:
     device_grid = device.compute_with_storage_grid_size()
     max_grid_size = (device_grid.y, device_grid.x)
     if isinstance(ncores, int):
         if ncores % max_grid_size[1] == 0:
             core_grid = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
-            grid_coord = ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, core_grid.y - 1)
-            return ttnn.experimental.tensor.CoreRangeSet(
-                {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
-            )
+            grid_coord = ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1)
+            return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
         else:
             if ncores < max_grid_size[1]:
                 core_grid = ttnn.CoreGrid(y=1, x=ncores)
-                grid_coord = ttnn.experimental.tensor.CoreCoord(core_grid.x - 1, 0)
-                return ttnn.experimental.tensor.CoreRangeSet(
-                    {ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord)}
-                )
+                grid_coord = ttnn.CoreCoord(core_grid.x - 1, 0)
+                return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
             else:
                 core_grid_1 = ttnn.CoreGrid(y=ncores // max_grid_size[1], x=max_grid_size[1])
                 core_grid_2 = ttnn.CoreGrid(y=ncores // max_grid_size[1] + 1, x=ncores % max_grid_size[1])
-                grid_coord_1 = ttnn.experimental.tensor.CoreCoord(core_grid_1.x - 1, core_grid_1.y - 1)
-                grid_coord_2 = ttnn.experimental.tensor.CoreCoord(core_grid_2.x - 1, core_grid_2.y - 1)
-                return ttnn.experimental.tensor.CoreRangeSet(
+                grid_coord_1 = ttnn.CoreCoord(core_grid_1.x - 1, core_grid_1.y - 1)
+                grid_coord_2 = ttnn.CoreCoord(core_grid_2.x - 1, core_grid_2.y - 1)
+                return ttnn.CoreRangeSet(
                     {
-                        ttnn.experimental.tensor.CoreRange(ttnn.experimental.tensor.CoreCoord(0, 0), grid_coord_1),
-                        ttnn.experimental.tensor.CoreRange(
-                            ttnn.experimental.tensor.CoreCoord(0, grid_coord_2.y), grid_coord_2
-                        ),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord_1),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, grid_coord_2.y), grid_coord_2),
                     }
                 )
     elif isinstance(ncores, tuple):
         ncores_h, ncores_w = ncores
         assert ncores_h <= max_grid_size[0]
         assert ncores_w <= max_grid_size[1]
-        return ttnn.experimental.tensor.CoreRangeSet(
+        return ttnn.CoreRangeSet(
             {
-                ttnn.experimental.tensor.CoreRange(
-                    ttnn.experimental.tensor.CoreCoord(0, 0),
-                    ttnn.experimental.tensor.CoreCoord(ncores_w - 1, ncores_h - 1),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(ncores_w - 1, ncores_h - 1),
                 )
             }
         )
@@ -113,6 +107,7 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
         [2, 1280, 16, 16],
         [1, 64, 132, 10],
         [1, 32, 8, 8],
+        [2, 640, 32, 32],
     ],
 )
 @pytest.mark.parametrize("scale_h", [2])
@@ -181,7 +176,7 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
     # )
 
     shard_grid = get_shard_grid_from_num_cores(device, ncores)
-    shard_orientation = ttnn.experimental.tensor.ShardOrientation.ROW_MAJOR
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
 
     if shard_strategy == ttnn.ShardStrategy.BLOCK:
         tensor_memory_layout = ttnn.types.TensorMemoryLayout.BLOCK_SHARDED
@@ -196,13 +191,13 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
         shard_height = math.ceil(batch_size * height * width / ncores)
         shard_width = num_channels
     shard_shape = (shard_height, shard_width)
-    shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
 
     ## output shard
     shard_height = shard_height * scale_h * scale_w
     shard_shape = (shard_height, shard_width)
-    shard_spec = ttnn.experimental.tensor.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
     out_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
 
     print(f"in_shard_mem_config: {in_sharded_mem_config}")

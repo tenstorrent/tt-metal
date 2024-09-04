@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt;
 
@@ -15,7 +15,7 @@ void RunCustomCycle(tt_metal::Device *device, int fastDispatch)
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
-    CoreRange all_cores{.start=start_core, .end=end_core};
+    CoreRange all_cores(start_core, end_core);
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(

@@ -9,7 +9,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt::tt_metal;
 
@@ -21,8 +21,8 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(Device* device, v
     for (const bool use_void_star_api: {true, false}) {
 
         size_t buf_size = config.num_pages * config.page_size;
-        vector<std::unique_ptr<Buffer>> buffers;
-        vector<vector<uint32_t>> srcs;
+        std::vector<std::unique_ptr<Buffer>> buffers;
+        std::vector<std::vector<uint32_t>> srcs;
         for (uint i = 0; i < cqs.size(); i++) {
             buffers.push_back(std::make_unique<Buffer>(device, buf_size, config.page_size, config.buftype));
             srcs.push_back(generate_arange_vector(buffers[i]->size()));
@@ -34,7 +34,7 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(Device* device, v
         }
 
         for (uint i = 0; i < cqs.size(); i++) {
-            vector<uint32_t> result;
+            std::vector<uint32_t> result;
             if (use_void_star_api) {
                 result.resize(buf_size / sizeof(uint32_t));
                 EnqueueReadBuffer(cqs[i], *buffers[i], result.data(), true);

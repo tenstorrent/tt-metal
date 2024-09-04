@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <atomic>
+#include <filesystem>
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/report_utils.hpp"
-#include "tt_metal/detail/program.hpp"
+
+namespace fs = std::filesystem;
 
 namespace tt::tt_metal {
 
@@ -64,7 +66,7 @@ std::string kernel_attributes_str(std::shared_ptr<Kernel> kernel) {
     if (std::holds_alternative<DataMovementConfig>(config)) {
         attr_str += "NOC: " + std::to_string(std::get<DataMovementConfig>(config).noc) + " ";
     } else {
-        TT_ASSERT(std::holds_alternative<ComputeConfig>(config));
+        TT_ASSERT(std::holds_alternative<ComputeConfig>(config), fmt::format("Unexpected type {} in {}:{} ",tt::stl::get_active_type_name_in_variant(config),__FILE__, __LINE__));
         auto compute_config = std::get<ComputeConfig>(config);
         std::stringstream math_fidel_str;
         math_fidel_str << compute_config.math_fidelity;
@@ -78,7 +80,7 @@ std::string kernel_attributes_str(std::shared_ptr<Kernel> kernel) {
 }
 
 void CompilationReporter::add_kernel_compile_stats(const Program &program, std::shared_ptr<Kernel> kernel, bool cache_hit, size_t kernel_hash) {
-    unique_lock<mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
 
     if (cache_hit) {
         this->program_id_to_cache_hit_counter_[program.get_id()].hits++;
@@ -101,7 +103,7 @@ void CompilationReporter::add_kernel_compile_stats(const Program &program, std::
 }
 
 void CompilationReporter::flush_program_entry(const Program &program, bool persistent_compilation_cache_enabled) {
-    unique_lock<mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     auto num_cache_misses = this->program_id_to_cache_hit_counter_.at(program.get_id()).misses;
     auto num_cache_hits = this->program_id_to_cache_hit_counter_.at(program.get_id()).hits;
     if (this->total_num_compile_programs_ == 0) {

@@ -7,20 +7,17 @@ from loguru import logger
 
 import torch
 from transformers import BertForQuestionAnswering
-
-import tt_lib as ttl
+import ttnn
 from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from models.experimental.bert.fused_ops.linear import Linear as TtLinear
 from models.utility_functions import comp_pcc, comp_allclose
 
 
-def feed_forward(
-    ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device
-):
+def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device):
     # FF1 init
     ff1 = TtLinear(hidden_dim, ffn_dim, ff1_weighta, ff1_biasa, device)
 
-    ff1_out_activation_fn = ttl.tensor.gelu
+    ff1_out_activation_fn = ttnn.gelu
 
     # FF2 init
     ff2 = TtLinear(ffn_dim, hidden_dim, ff2_weighta, ff2_biasa, device)
@@ -42,66 +39,58 @@ class TtFeedForwardModel(torch.nn.Module):
         super().__init__()
 
         # FF1 params
-        encoder0_ff1_weight = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.weight"]
-        )
-        encoder0_ff1_bias = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.bias"]
-        )
+        encoder0_ff1_weight = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.weight"])
+        encoder0_ff1_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.bias"])
 
         encoder0_ff1_weight_shape = encoder0_ff1_weight.shape
         encoder0_ff1_bias_shape = encoder0_ff1_bias.shape
 
         encoder0_ff1_weight = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 encoder0_ff1_weight.reshape(-1).tolist(),
                 encoder0_ff1_weight.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
         encoder0_ff1_bias = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 encoder0_ff1_bias.reshape(-1).tolist(),
                 encoder0_ff1_bias.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
 
         # FF2 params
-        encoder0_ff2_weight = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.weight"]
-        )
-        encoder0_ff2_bias = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.bias"]
-        )
+        encoder0_ff2_weight = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.weight"])
+        encoder0_ff2_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.bias"])
 
         encoder0_ff2_weight_shape = encoder0_ff2_weight.shape
         encoder0_ff2_bias_shape = encoder0_ff2_bias.shape
 
         encoder0_ff2_weight = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 encoder0_ff2_weight.reshape(-1).tolist(),
                 encoder0_ff2_weight.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
         encoder0_ff2_bias = (
-            ttl.tensor.Tensor(
+            ttnn.Tensor(
                 encoder0_ff2_bias.reshape(-1).tolist(),
                 encoder0_ff2_bias.shape,
-                ttl.tensor.DataType.BFLOAT16,
-                ttl.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(ttnn.TILE_LAYOUT)
             .to(device)
         )
 
@@ -141,39 +130,30 @@ def summarize_stats(t, name):
     print()
 
 
-def run_ffn_inference(
-    device, model_version, batch, seq_len, pcc, model_location_generator
-):
+def run_ffn_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
-        model_name, torchscript=False
-    )
-    tt_ffn_model = TtFeedForwardModel(
-        0, hugging_face_reference_model.state_dict(), device
-    )
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    tt_ffn_model = TtFeedForwardModel(0, hugging_face_reference_model.state_dict(), device)
     pytorch_ffn_model = PytorchFeedForwardModel(hugging_face_reference_model)
 
     # Prepare input
     torch.manual_seed(0)
-    ffn_input = (
-        torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size)
-        * 2
-    ) - 1
+    ffn_input = (torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size) * 2) - 1
 
     pytorch_out = pytorch_ffn_model(ffn_input)
 
     pad_ffn_input = pad_activation(ffn_input)
-    tilized_ffn_input = ttl.tensor.Tensor(
+    tilized_ffn_input = ttnn.Tensor(
         pad_ffn_input.reshape(-1).tolist(),
         pad_ffn_input.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE)
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    ).to(ttnn.TILE_LAYOUT)
     tilized_ffn_input = tilized_ffn_input.to(device)
 
     tt_out = tt_ffn_model(tilized_ffn_input).cpu()
-    tt_out = tt_out.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_out = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
@@ -208,9 +188,5 @@ def run_ffn_inference(
         ("phiyodr/bert-large-finetuned-squad2", 1, 384, 0.99),
     ),
 )
-def test_ffn_inference(
-    device, model_version, batch, seq_len, pcc, model_location_generator
-):
-    run_ffn_inference(
-        device, model_version, batch, seq_len, pcc, model_location_generator
-    )
+def test_ffn_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
+    run_ffn_inference(device, model_version, batch, seq_len, pcc, model_location_generator)

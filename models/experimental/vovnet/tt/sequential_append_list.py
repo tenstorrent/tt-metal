@@ -5,13 +5,10 @@
 import torch.nn as nn
 
 from typing import List
-
-import tt_lib
-
+import ttnn
 from models.experimental.vovnet.tt.separable_conv_norm_act import (
     TtSeparableConvNormAct,
 )
-
 
 
 class TtSequentialAppendList(nn.Sequential):
@@ -46,13 +43,11 @@ class TtSequentialAppendList(nn.Sequential):
             )
             self.mid_convs.append(conv)
 
-    def forward(
-        self, x: tt_lib.tensor.Tensor, concat_list: List[tt_lib.tensor.Tensor]
-    ) -> tt_lib.tensor.Tensor:
+    def forward(self, x: ttnn.Tensor, concat_list: List[ttnn.Tensor]) -> ttnn.Tensor:
         for i, module in enumerate(self.mid_convs):
             if i == 0:
                 concat_list.append(module(x))
             else:
                 concat_list.append(module(concat_list[-1]))
-        x = tt_lib.tensor.concat(concat_list, dim=1)
+        x = ttnn.concat(concat_list, dim=1)
         return x

@@ -1,0 +1,58 @@
+name: "(T3K) T3000 perplexity tests"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 12 * * 6" # This cron schedule runs the workflow every saturday at 12pm
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      arch: '["wormhole_b0"]'
+    secrets: inherit
+  t3000-accuracy-perplexity-tests:
+    needs: build-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            name: t3k perplexity tests,
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "pipeline-perf"],
+          },
+        ]
+    name: ${{ matrix.test-group.name }}
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    environment: dev
+    runs-on: ${{ matrix.test-group.runs-on }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run perplexity tests
+        shell: bash {0}
+        timeout-minutes: 480
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_perplexity_tests.sh
+          run_t3000_tests
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U05RWH3QUPM #Salar Khorasgani

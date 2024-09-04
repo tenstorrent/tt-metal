@@ -3,38 +3,43 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/device/device_pool.hpp"
 
 // A dispatch-agnostic test fixture
 class CommonFixture: public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(tt::tt_metal::Device* device, Program& program) {
+    void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program) {
+        static std::unordered_map<uint64_t, uint32_t> trace_captured;
+        uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {
-            CommandQueue& cq = device->command_queue();
-            EnqueueProgram(cq, program, false);
-            Finish(cq);
+            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::EnqueueProgram(cq, program, false);
+            tt::tt_metal::Finish(cq);
         }
     }
     void WriteBuffer(tt::tt_metal::Device* device, std::shared_ptr<tt::tt_metal::Buffer> in_buffer, std::vector<uint32_t> &src_vec){
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::WriteToBuffer(in_buffer, src_vec);
         } else {
-            CommandQueue& cq = device->command_queue();
-            EnqueueWriteBuffer(cq, in_buffer, src_vec, false);
+            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::EnqueueWriteBuffer(cq, in_buffer, src_vec, false);
         }
     }
     void ReadBuffer(tt::tt_metal::Device* device, std::shared_ptr<tt::tt_metal::Buffer> out_buffer, std::vector<uint32_t> &dst_vec){
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::ReadFromBuffer(out_buffer, dst_vec);
         } else {
-            CommandQueue& cq = device->command_queue();
-            EnqueueReadBuffer(cq, out_buffer, dst_vec, true);
+            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::EnqueueReadBuffer(cq, out_buffer, dst_vec, true);
         }
     }
     int NumDevices() { return this->devices_.size(); }
@@ -43,7 +48,7 @@ public:
 
 protected:
     tt::ARCH arch_;
-    vector<Device*> devices_;
+    vector<tt::tt_metal::Device*> devices_;
     bool slow_dispatch_;
     bool has_remote_devices_;
 
@@ -51,12 +56,13 @@ protected:
         // Skip for slow dispatch for now
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
-            tt::log_debug(tt::LogTest, "Running test using Slow Dispatch");
+            tt::log_info(tt::LogTest, "Running test using Slow Dispatch");
             slow_dispatch_ = true;
         } else {
-            tt::log_debug(tt::LogTest, "Running test using Fast Dispatch");
+            tt::log_info(tt::LogTest, "Running test using Fast Dispatch");
             slow_dispatch_ = false;
         }
+
         // Set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -64,13 +70,15 @@ protected:
         // An extra flag for if we have remote devices, as some tests are disabled for fast
         // dispatch + remote devices.
         this->has_remote_devices_ = num_devices > num_pci_devices;
+        vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices; id++) {
             if (SkipTest(id))
                 continue;
-            auto* device = tt::tt_metal::CreateDevice(id);
-            devices_.push_back(device);
+            ids.push_back(id);
         }
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+        tt::DevicePool::initialize(ids, tt::llrt::OptionsG.get_num_hw_cqs(), DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+        devices_ = tt::DevicePool::instance().get_all_active_devices();
     }
 
     void TearDown() override {
@@ -101,7 +109,7 @@ protected:
 
     void RunTestOnDevice(
         const std::function<void()>& run_function,
-        Device* device
+        tt::tt_metal::Device* device
     ) {
         if (SkipTest(device->id()))
             return;

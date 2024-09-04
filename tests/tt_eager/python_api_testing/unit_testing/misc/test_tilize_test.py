@@ -4,8 +4,8 @@
 
 import pytest
 import torch
+import ttnn
 
-import tt_lib as ttl
 from models.utility_functions import tilize
 
 
@@ -33,11 +33,11 @@ def test_run_tilize_test(nb, nc, nh, nw, multicore, device):
 
     inp = torch.rand(*shape).bfloat16()
 
-    a = ttl.tensor.Tensor(
+    a = ttnn.Tensor(
         inp,
-        ttl.tensor.DataType.BFLOAT16,
+        ttnn.bfloat16,
     ).to(device)
-    b = ttl.tensor.tilize(a, use_multicore=multicore)
+    b = ttnn.tilize(a, use_multicore=multicore)
     c = b.cpu().to_torch()
 
     tilized_inp = tilize(inp)

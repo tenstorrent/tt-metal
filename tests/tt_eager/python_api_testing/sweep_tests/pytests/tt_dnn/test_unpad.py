@@ -5,7 +5,7 @@
 import pytest
 import torch
 from functools import partial
-import tt_lib
+import ttnn
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
@@ -22,11 +22,9 @@ params = [
     pytest.param([[5, 5, 50, 50]], unpad_args)
     for unpad_args in generation_funcs.gen_unpad_args(
         [[5, 5, 50, 50]],
-        dtypes=[[tt_lib.tensor.DataType.BFLOAT16]],
-        layouts=[[tt_lib.tensor.Layout.ROW_MAJOR]],
-        mem_configs=[
-            [tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)]
-        ],
+        dtypes=[[ttnn.bfloat16]],
+        layouts=[[ttnn.ROW_MAJOR_LAYOUT]],
+        mem_configs=[[ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)]],
     )
 ]
 
@@ -34,29 +32,17 @@ params += [
     pytest.param([[5, 5, 64, 96]], unpad_args)
     for unpad_args in generation_funcs.gen_unpad_args(
         [[5, 5, 64, 96]],
-        dtypes=[[tt_lib.tensor.DataType.BFLOAT16]],
-        layouts=[[tt_lib.tensor.Layout.TILE]],
-        mem_configs=[
-            [tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)]
-        ],
+        dtypes=[[ttnn.bfloat16]],
+        layouts=[[ttnn.TILE_LAYOUT]],
+        mem_configs=[[ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)]],
     )
 ]
 
 
 @pytest.mark.parametrize("input_shapes, unpad_args", params)
 def test_run_unpad_test(input_shapes, unpad_args, device):
-    if is_wormhole_b0():
-        if input_shapes == [[5, 5, 64, 96]]:
-            pytest.skip("skip this shape for Wormhole B0")
     datagen_func = [
         generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
     ]
     comparison_func = comparison_funcs.comp_equal
-    run_single_pytorch_test(
-        "unpad",
-        input_shapes,
-        datagen_func,
-        comparison_func,
-        device,
-        unpad_args,
-    )
+    run_single_pytorch_test("unpad", input_shapes, datagen_func, comparison_func, device, unpad_args, ttnn_op=True)

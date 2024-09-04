@@ -6,8 +6,8 @@ from loguru import logger
 import time
 import pytest
 
-from tests.ttnn.integration_tests.resnet.test_ttnn_functional_resnet50 import create_test_infra
-from models.utility_functions import skip_for_wormhole_b0
+from models.demos.ttnn_resnet.tests.ttnn_resnet_test_infra import create_test_infra
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
 import ttnn
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from models.utility_functions import (
@@ -18,13 +18,14 @@ from models.perf.perf_utils import prep_perf_report
 
 
 @skip_for_wormhole_b0("This will be enabled after WH testing")
+@skip_for_grayskull("#9168: Resnet50 performance test failing after removing 1x1s2 matmul fallback into conv")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
         [
             20,
-            "batch_size=20-act_dtype=DataType.BFLOAT8_B-weight_dtype=DataType.BFLOAT8_B-math_fidelity=MathFidelity.LoFi",
+            "batch_size=20-act_dtype=DataType.BFLOAT8_B-weight_dtype=DataType.BFLOAT8_B-math_fidelity=MathFidelity.LoFi-device_params=l1_small_size_24576",
             7363,
         ],
     ],
@@ -50,11 +51,13 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
 
 
 @skip_for_wormhole_b0("This will be enabled after WH testing")
+@skip_for_grayskull("#9168: Resnet50 performance test failing after removing 1x1s2 matmul fallback into conv")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "model_name,batch_size,act_dtype,weight_dtype,math_fidelity,expected_compile_time,expected_inference_time",
-    [("ResNet50", 20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, 23, 0.04)],  ## pass
+    [("ResNet50", 20, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, 15, 0.015)],
 )
 def test_performance(
     device,
@@ -77,9 +80,8 @@ def test_performance(
     for _ in range(num_iterations):
         test_infra.preprocess_torch_input()
         start = time.time()
-        with ttnn.manage_config_attribute("enable_fast_runtime_mode", True):
-            tt_output = test_infra.run()
-            tt_output = ttnn.from_device(tt_output)
+        tt_output = test_infra.run()
+        tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
         enable_persistent_kernel_cache()

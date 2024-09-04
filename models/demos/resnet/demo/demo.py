@@ -8,7 +8,7 @@ from loguru import logger
 from torchvision import models
 from transformers import AutoImageProcessor
 import pytest
-import tt_lib
+import ttnn
 
 
 from models.utility_functions import (
@@ -18,15 +18,15 @@ from models.utility_functions import (
     profiler,
 )
 
-from models.demos.resnet.tests.demo_utils import get_data, get_data_loader, get_batch
+from models.demos.resnet.tests.demo_utils import get_data, get_data_loader, get_batch, load_resnet50_model
 
 from loguru import logger
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 
 resnet_model_config = {
-    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.HiFi2,
-    "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
-    "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
+    "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
+    "WEIGHTS_DTYPE": ttnn.bfloat8_b,
+    "ACTIVATIONS_DTYPE": ttnn.bfloat8_b,
 }
 
 
@@ -41,9 +41,10 @@ def run_resnet_imagenet_inference(
 ):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
+    profiler.clear()
 
     # set up huggingface model - TT model will use weights from this model
-    torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+    torch_resnet50 = load_resnet50_model(model_location_generator)
     torch_resnet50.eval()
 
     state_dict = torch_resnet50.state_dict()
@@ -100,6 +101,7 @@ def run_resnet_inference(
     input_loc,
     imagenet_label_dict,
     device,
+    model_location_generator,
     model_config=resnet_model_config,
     model_version="microsoft/resnet-50",
 ):
@@ -107,7 +109,7 @@ def run_resnet_inference(
     disable_compilation_reports()
 
     # set up huggingface model - TT model will use weights from this model
-    torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+    torch_resnet50 = load_resnet50_model(model_location_generator)
     torch_resnet50.eval()
 
     state_dict = torch_resnet50.state_dict()
@@ -159,7 +161,7 @@ def run_resnet_inference(
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
     tt_out = tt_resnet50(tt_inputs)
-    tt_lib.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     profiler.end("first_model_run_with_compile", force_enable=True)
     tt_out.deallocate()
     del tt_out
@@ -170,7 +172,7 @@ def run_resnet_inference(
     ##### Run Forward on TT Model Start
     profiler.start(f"model_run_for_inference")
     tt_out = tt_resnet50(tt_inputs)
-    tt_lib.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     profiler.end(f"model_run_for_inference")
 
     profiler.start(f"post_processing")
@@ -213,31 +215,22 @@ def run_resnet_inference(
     return measurements, predictions
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, iterations",
     (
-        (8, 400),
         (16, 200),
+        (20, 160),
     ),
 )
 def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, device):
     run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, device)
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_loc",
-    ((8, "models/demos/resnet/demo/images/"),),
+    ((20, "models/demos/resnet/demo/images/"),),
 )
-def test_demo_sample(
-    device,
-    use_program_cache,
-    batch_size,
-    input_loc,
-    imagenet_label_dict,
-):
-    run_resnet_inference(
-        batch_size,
-        input_loc,
-        imagenet_label_dict,
-        device,
-    )
+def test_demo_sample(device, use_program_cache, batch_size, input_loc, imagenet_label_dict, model_location_generator):
+    run_resnet_inference(batch_size, input_loc, imagenet_label_dict, device, model_location_generator)

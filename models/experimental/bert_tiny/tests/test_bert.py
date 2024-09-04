@@ -5,7 +5,6 @@
 import pytest
 from loguru import logger
 import ttnn
-import tt_lib
 from models.experimental.bert_tiny.tt.bert import TtBert
 
 from transformers import BertForQuestionAnswering, BertTokenizer
@@ -40,9 +39,7 @@ def test_bert_inference(
         truncation=True,
         return_tensors="pt",
     )
-    output_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-    )
+    output_mem_config = ttnn.DRAM_MEMORY_CONFIG
     state_dict = hugging_face_reference_model.state_dict()
     tt_ouptut_model = TtBert(
         hugging_face_reference_model.config, state_dict=state_dict, device=device, mem_config=output_mem_config

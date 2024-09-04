@@ -6,7 +6,7 @@ from torch import nn
 
 from typing import Optional, Tuple, List
 
-import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm
 from models.helper_funcs import Linear as TtLinear
@@ -38,21 +38,21 @@ class TtDeiTSelfAttention(nn.Module):
         self.key = TtLinear(config.hidden_size, self.all_head_size, self.key_weight, self.key_bias)
         self.value = TtLinear(config.hidden_size, self.all_head_size, self.value_weight, self.value_bias)
 
-    def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+    def transpose_for_scores(self, x: ttnn.Tensor) -> ttnn.Tensor:
         new_x_shape = list(x.get_legacy_shape())[1:-1] + [
             self.num_attention_heads,
             self.attention_head_size,
         ]
         x = fallback_ops.reshape(x, *new_x_shape)
-        x = tt_lib.tensor.permute(x, (0, 2, 1, 3))
+        x = ttnn.permute(x, (0, 2, 1, 3))
         return x
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
-        head_mask: Optional[tt_lib.tensor.Tensor],
+        hidden_states: ttnn.Tensor,
+        head_mask: Optional[ttnn.Tensor],
         output_attentions: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         key = self.key(hidden_states)
         value = self.value(hidden_states)
         mixed_query_layer = self.query(hidden_states)
@@ -62,15 +62,15 @@ class TtDeiTSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_transposed = tt_lib.tensor.transpose(key_layer, -2, -1)
+        key_layer_transposed = ttnn.transpose(key_layer, -2, -1)
 
-        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed)
+        attention_scores = ttnn.matmul(query_layer, key_layer_transposed)
 
-        attention_head_size_tt = tt_lib.tensor.full(attention_scores.get_legacy_shape(), self.attention_head_size)
-        attention_head_size_tt = tt_lib.tensor.sqrt(attention_head_size_tt)
-        attention_head_size_tt = tt_lib.tensor.recip(attention_head_size_tt)
+        attention_head_size_tt = ttnn.full(attention_scores.get_legacy_shape(), self.attention_head_size)
+        attention_head_size_tt = ttnn.sqrt(attention_head_size_tt)
+        attention_head_size_tt = ttnn.reciprocal(attention_head_size_tt)
 
-        attention_scores = tt_lib.tensor.mul(attention_scores, attention_head_size_tt)
+        attention_scores = ttnn.multiply(attention_scores, attention_head_size_tt)
 
         # Normalize the attention scores to probabilities.
         attention_probs = fallback_ops.softmax(attention_scores, dim=-1)
@@ -79,8 +79,8 @@ class TtDeiTSelfAttention(nn.Module):
         if head_mask is not None:
             attention_probs = attention_probs * head_mask
 
-        context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
-        context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
+        context_layer = ttnn.matmul(attention_probs, value_layer)
+        context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
         new_context_layer_shape = (1,) + tuple(context_layer.get_legacy_shape())[:-2] + (self.all_head_size,)
         context_layer = fallback_ops.reshape(context_layer, *new_context_layer_shape)
 

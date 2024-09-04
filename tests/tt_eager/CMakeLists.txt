@@ -1,47 +1,47 @@
 
 add_library(test_eager_common_libs INTERFACE)
-target_link_libraries(test_eager_common_libs INTERFACE tt_eager test_common_libs)
+target_link_libraries(test_eager_common_libs INTERFACE test_common_libs)
 
 set(TT_EAGER_TESTS_OPS
-    # ccl/test_all_gather_utils           # <- not called in run_tt_eager.py
-    ops/test_average_pool
-    ops/test_eltwise_binary_op
-    ops/test_eltwise_unary_op
-    ops/test_softmax_op
-    ops/test_layernorm_op
-    # ops/test_moreh_adam_op                  # <- not called in run_tt_eager.py
-    # ops/test_moreh_matmul_op                # <- not called in run_tt_eager.py
-    # ops/test_moreh_layernorm_op             # <- not called in run_tt_eager.py
-    ops/test_multi_queue_api
-    ops/test_transpose_op
-    ops/test_transpose_wh_single_core
-    ops/test_transpose_wh_multi_core
-    ops/test_reduce_op
-    ops/test_bcast_op
-    ops/test_bmm_op
-    # ops/test_pad_op                         # <- not called in run_tt_eager.py
-    ops/test_tilize_op
-    ops/test_tilize_zero_padding
-    ops/test_tilize_op_channels_last
-    ops/test_tilize_zero_padding_channels_last
-    ops/test_sfpu
-    ops/test_fold_op
+    ops/ccl/test_ccl_helpers.cpp
+    ops/ccl/test_ccl_tensor_slicers.cpp
+    ops/test_average_pool.cpp
+    ops/test_eltwise_binary_op.cpp
+    ops/test_eltwise_unary_op.cpp
+    ops/test_softmax_op.cpp
+    ops/test_layernorm_op.cpp
+    # ops/test_moreh_adam_op.cpp              # <- not called in run_tt_eager.py
+    # ops/test_moreh_matmul_op.cpp            # <- not called in run_tt_eager.py
+    # ops/test_moreh_layernorm_op.cpp         # <- not called in run_tt_eager.py
+    ops/test_transpose_op.cpp
+    ops/test_transpose_wh_single_core.cpp
+    ops/test_transpose_wh_multi_core.cpp
+    ops/test_bcast_op.cpp
+    ops/test_bmm_op.cpp
+    # ops/test_pad_op.cpp                     # <- not called in run_tt_eager.py
+    ops/test_tilize_op.cpp
+    ops/test_tilize_zero_padding.cpp
+    ops/test_tilize_op_channels_last.cpp
+    ops/test_tilize_zero_padding_channels_last.cpp
+    ops/test_sfpu.cpp
+    ops/test_sliding_window_ops.cpp
+    ops/test_fold_op.cpp
 )
 
 set(TT_EAGER_TESTS_TENSORS
-    tensors/test_copy_and_move
-    tensors/test_host_device_loopback
-    tensors/test_raw_host_memory_pointer
-    # tensors/test_sharded_loopback           # <- not called in run_tt_eager.py
-    tensors/test_async_tensor_apis
+    tensors/test_copy_and_move.cpp
+    tensors/test_host_device_loopback.cpp
+    tensors/test_raw_host_memory_pointer.cpp
+    # tensors/test_sharded_loopback.cpp       # <- not called in run_tt_eager.py
+    tensors/test_async_tensor_apis.cpp
 )
 
 set(TT_EAGER_TESTS_INTEGRATION
-    integration_tests/test_bert
+    integration_tests/test_bert.cpp
 )
 
 set(EAGER_TEST_TARGETS "")  # list of all eager test targets, used in CREATE_EAGER_TEST_EXE
-include(${CMAKE_SOURCE_DIR}/cmake/helper_functions.cmake)
+include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 
 CREATE_EAGER_TEST_EXE("${TT_EAGER_TESTS_OPS}")
 CREATE_EAGER_TEST_EXE("${TT_EAGER_TESTS_TENSORS}")

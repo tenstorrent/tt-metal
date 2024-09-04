@@ -7,27 +7,26 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaForSequenceClassification
 
-import tt_lib
+import pytest
 
 from models.experimental.roberta.tt.roberta_for_sequence_classification import TtRobertaForSequenceClassification
 from models.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,
+    skip_for_wormhole_b0,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
+
+@skip_for_wormhole_b0()
 def test_roberta_for_sequence_classification(device):
     torch.manual_seed(1234)
     base_address = ""
 
     with torch.no_grad():
-        tokenizer = AutoTokenizer.from_pretrained(
-            "cardiffnlp/twitter-roberta-base-emotion"
-        )
-        model = RobertaForSequenceClassification.from_pretrained(
-            "cardiffnlp/twitter-roberta-base-emotion"
-        )
+        tokenizer = AutoTokenizer.from_pretrained("cardiffnlp/twitter-roberta-base-emotion")
+        model = RobertaForSequenceClassification.from_pretrained("cardiffnlp/twitter-roberta-base-emotion")
         model.eval()
 
         # Tt roberta

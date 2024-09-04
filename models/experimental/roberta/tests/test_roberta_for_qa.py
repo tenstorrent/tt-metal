@@ -7,24 +7,21 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaForQuestionAnswering
 
-import tt_lib
+import pytest
 
 from models.experimental.roberta.tt.roberta_for_question_answering import TtRobertaForQuestionAnswering
-from models.utility_functions import (
-    comp_allclose,
-    comp_pcc,
-)
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_wormhole_b0
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
+
+@skip_for_wormhole_b0()
 def test_roberta_qa_inference(device):
     torch.manual_seed(1234)
 
     base_address = f""
 
     tokenizer = AutoTokenizer.from_pretrained("deepset/roberta-base-squad2")
-    torch_model = RobertaForQuestionAnswering.from_pretrained(
-        "deepset/roberta-base-squad2"
-    )
+    torch_model = RobertaForQuestionAnswering.from_pretrained("deepset/roberta-base-squad2")
     torch_model.eval()
 
     tt_model = TtRobertaForQuestionAnswering(
@@ -49,12 +46,8 @@ def test_roberta_qa_inference(device):
         torch_answer_start_index = torch_output.start_logits.argmax()
         torch_answer_end_index = torch_output.end_logits.argmax()
 
-        torch_predict_answer_tokens = inputs.input_ids[
-            0, torch_answer_start_index : torch_answer_end_index + 1
-        ]
-        torch_answer = tokenizer.decode(
-            torch_predict_answer_tokens, skip_special_tokens=True
-        )
+        torch_predict_answer_tokens = inputs.input_ids[0, torch_answer_start_index : torch_answer_end_index + 1]
+        torch_answer = tokenizer.decode(torch_predict_answer_tokens, skip_special_tokens=True)
         logger.info("Torch answered")
         logger.info(torch_answer)
 
@@ -68,24 +61,18 @@ def test_roberta_qa_inference(device):
         tt_answer_start_index = tt_output.start_logits.argmax()
         tt_answer_end_index = tt_output.end_logits.argmax()
 
-        tt_predict_answer_tokens = inputs.input_ids[
-            0, tt_answer_start_index : tt_answer_end_index + 1
-        ]
+        tt_predict_answer_tokens = inputs.input_ids[0, tt_answer_start_index : tt_answer_end_index + 1]
         tt_answer = tokenizer.decode(tt_predict_answer_tokens, skip_special_tokens=True)
         logger.info("TT answered")
         logger.info(tt_answer)
 
         # Compare outputs
-        does_pass_1, pcc_message = comp_pcc(
-            torch_output.start_logits, tt_output.start_logits, 0.98
-        )
+        does_pass_1, pcc_message = comp_pcc(torch_output.start_logits, tt_output.start_logits, 0.98)
 
         logger.info(comp_allclose(torch_output.start_logits, tt_output.start_logits))
         logger.info(pcc_message)
 
-        does_pass_2, pcc_message = comp_pcc(
-            torch_output.end_logits, tt_output.end_logits, 0.98
-        )
+        does_pass_2, pcc_message = comp_pcc(torch_output.end_logits, tt_output.end_logits, 0.98)
 
         logger.info(comp_allclose(torch_output.end_logits, tt_output.end_logits))
         logger.info(pcc_message)

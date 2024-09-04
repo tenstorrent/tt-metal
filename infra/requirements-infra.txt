@@ -1,3 +1,7 @@
-ansible==6.0.0
-ansible-lint==6.7.0
+ansible
+ansible-lint
 check-copyright @ git+https://github.com/espressif/check-copyright.git@master
+loguru
+pydantic
+toolz
+defusedxml

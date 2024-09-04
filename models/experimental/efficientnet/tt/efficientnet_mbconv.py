@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib
+import ttnn
 import math
 
 from dataclasses import dataclass
@@ -45,9 +45,7 @@ class _MBConvConfig:
     block: Callable[..., torch.nn.Module]
 
     @staticmethod
-    def adjust_channels(
-        channels: int, width_mult: float, min_value: Optional[int] = None
-    ) -> int:
+    def adjust_channels(channels: int, width_mult: float, min_value: Optional[int] = None) -> int:
         return _make_divisible(channels * width_mult, 8, min_value)
 
 
@@ -126,9 +124,7 @@ class TtEfficientnetMbConv(torch.nn.Module):
         if not (1 <= cnf.stride <= 2):
             raise ValueError("illegal stride value")
 
-        self.use_res_connect = (
-            cnf.stride == 1 and cnf.input_channels == cnf.out_channels
-        )
+        self.use_res_connect = cnf.stride == 1 and cnf.input_channels == cnf.out_channels
 
         layers: List[torch.nn.Module] = []
 
@@ -142,9 +138,7 @@ class TtEfficientnetMbConv(torch.nn.Module):
                     conv_base_address=f"{base_address}._expand_conv"
                     if is_lite
                     else f"{base_address}.block.{len(layers)}.0",
-                    bn_base_address=f"{base_address}._bn0"
-                    if is_lite
-                    else f"{base_address}.block.{len(layers)}.1",
+                    bn_base_address=f"{base_address}._bn0" if is_lite else f"{base_address}.block.{len(layers)}.1",
                     device=device,
                     in_channels=cnf.input_channels,
                     out_channels=expanded_channels,
@@ -162,9 +156,7 @@ class TtEfficientnetMbConv(torch.nn.Module):
                 conv_base_address=f"{base_address}._depthwise_conv"
                 if is_lite
                 else f"{base_address}.block.{len(layers)}.0",
-                bn_base_address=f"{base_address}._bn1"
-                if is_lite
-                else f"{base_address}.block.{len(layers)}.1",
+                bn_base_address=f"{base_address}._bn1" if is_lite else f"{base_address}.block.{len(layers)}.1",
                 device=device,
                 in_channels=expanded_channels,
                 out_channels=expanded_channels,
@@ -199,9 +191,7 @@ class TtEfficientnetMbConv(torch.nn.Module):
                 conv_base_address=f"{base_address}._project_conv"
                 if is_lite
                 else f"{base_address}.block.{len(layers)}.0",
-                bn_base_address=f"{base_address}._bn2"
-                if is_lite
-                else f"{base_address}.block.{len(layers)}.1",
+                bn_base_address=f"{base_address}._bn2" if is_lite else f"{base_address}.block.{len(layers)}.1",
                 device=device,
                 in_channels=expanded_channels,
                 out_channels=cnf.out_channels,
@@ -222,6 +212,6 @@ class TtEfficientnetMbConv(torch.nn.Module):
 
         if self.use_res_connect:
             # result = self.stochastic_depth(result)
-            result = tt_lib.tensor.add(result, x)
+            result = ttnn.add(result, x)
 
         return result

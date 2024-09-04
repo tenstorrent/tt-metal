@@ -6,6 +6,7 @@
 #include "test_tiles.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
@@ -16,9 +17,8 @@ void measure_latency(string kernel_name) {
     tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-    uint8_t num_hw_cqs = device->num_hw_cqs();
-    CoreCoord producer_logical_core = tt_metal::dispatch_core_manager::get(num_hw_cqs).issue_queue_reader_core(device->id(), channel, 0);
-    CoreCoord consumer_logical_core = tt_metal::dispatch_core_manager::get(num_hw_cqs).command_dispatcher_core(device->id(), channel, 0);
+    CoreCoord producer_logical_core = tt_metal::dispatch_core_manager::instance().prefetcher_core(device->id(), channel, 0);
+    CoreCoord consumer_logical_core = tt_metal::dispatch_core_manager::instance().dispatcher_core(device->id(), channel, 0);
 
     TT_ASSERT(producer_logical_core != consumer_logical_core, "Producer and consumer core are {}. They should not be the same!", producer_logical_core.str());
 

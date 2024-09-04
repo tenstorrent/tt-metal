@@ -10,7 +10,7 @@ from models.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )
-import tt_lib
+import ttnn
 import tt_lib.fallback_ops as fallback_ops
 from models.helper_funcs import Linear as TtLinear
 
@@ -63,22 +63,22 @@ class TtMultiHeadSelfAttention(nn.Module):
 
         self.attention_head_size = self.dim // self.n_heads
 
-    def const_tensor(self, shape: List[int], value: int) -> tt_lib.tensor.Tensor:
-        return tt_lib.tensor.full(shape, value)
+    def const_tensor(self, shape: List[int], value: int) -> ttnn.Tensor:
+        return ttnn.full(shape, value)
 
-    def get_min(self, tensor: tt_lib.tensor.Tensor):
+    def get_min(self, tensor: ttnn.Tensor):
         tensor = tt_to_torch_tensor(tensor)
-        return torch.finfo(tensor.dtype).min
+        return torch.finfo(ttnn.dtype).min
 
     def forward(
         self,
-        query: tt_lib.tensor.Tensor,
-        key: tt_lib.tensor.Tensor,
-        value: tt_lib.tensor.Tensor,
-        mask: tt_lib.tensor.Tensor,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        query: ttnn.Tensor,
+        key: ttnn.Tensor,
+        value: ttnn.Tensor,
+        mask: ttnn.Tensor,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attention: bool = False,
-    ) -> Tuple[tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.Tensor]:
         _, bs, q_length, dim = query.get_legacy_shape()
         k_length = key.get_legacy_shape()[-2]
 
@@ -86,12 +86,12 @@ class TtMultiHeadSelfAttention(nn.Module):
 
         mask_reshape = (bs, 1, 1, k_length)
 
-        def shape(x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
+        def shape(x: ttnn.Tensor) -> ttnn.Tensor:
             x = fallback_ops.reshape(x, bs, -1, self.n_heads, dim_per_head)
-            return tt_lib.tensor.transpose(x, 1, -2)
+            return ttnn.transpose(x, 1, -2)
 
-        def unshape(x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-            x = tt_lib.tensor.transpose(x, 1, -2)
+        def unshape(x: ttnn.Tensor) -> ttnn.Tensor:
+            x = ttnn.transpose(x, 1, -2)
             x = fallback_ops.reshape(x, 1, bs, -1, self.n_heads * dim_per_head)
             return x
 
@@ -100,11 +100,11 @@ class TtMultiHeadSelfAttention(nn.Module):
         v = shape(self.value_linear(value))
 
         dim_per_head_tensor = self.const_tensor(q.get_legacy_shape(), dim_per_head)
-        dim_per_head_tensor = tt_lib.tensor.sqrt(dim_per_head_tensor)
-        dim_per_head_tensor = tt_lib.tensor.recip(dim_per_head_tensor)
+        dim_per_head_tensor = ttnn.sqrt(dim_per_head_tensor)
+        dim_per_head_tensor = ttnn.reciprocal(dim_per_head_tensor)
 
-        q = tt_lib.tensor.mul(q, dim_per_head_tensor)
-        scores = tt_lib.tensor.bmm(q, tt_lib.tensor.transpose(k, -2, -1))
+        q = ttnn.mul(q, dim_per_head_tensor)
+        scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))
         score_value = self.get_min(scores)
         scores = tt_to_torch_tensor(scores)
         mask = tt_to_torch_tensor(mask)
@@ -119,9 +119,9 @@ class TtMultiHeadSelfAttention(nn.Module):
         weights = fallback_ops.softmax(scores, -1)
 
         if head_mask is not None:
-            weights = tt_lib.temsor.mul(weights, head_mask)
+            weights = ttnn.mul(weights, head_mask)
 
-        context = tt_lib.tensor.bmm(weights, v)
+        context = ttnn.matmul(weights, v)
         context = unshape(context)
         context = self.out_linear(context)
 

@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import numpy as np
 
-import tt_lib as ttl
+import ttnn
 from tt_lib.utils import (
     tilize_to_list,
     tilize,
@@ -53,6 +53,7 @@ def test_resnet50_first_conv(
     fuse_relu,
     sharded_out,
 ):
+    pytest.skip("This conv path is deprecated and will be removed during conv refactor efforts")
     compute_grid_size = device.compute_with_storage_grid_size()
     is_e75_grid_size = (compute_grid_size.x * compute_grid_size.y) == 88
     if N == 8 and is_e75_grid_size:
@@ -141,7 +142,7 @@ def test_resnet50_first_conv(
             extra_pad_w_right=1 + extra_padding_for_32B_alignment,
         )
         print("A_cl_host shape", A_cl_host.get_legacy_shape())
-        memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        memory_config = ttnn.L1_MEMORY_CONFIG
 
         # save original shape (N, H, W, C)
         original_A_cl_host_shape = A_cl_host.get_legacy_shape()
@@ -192,11 +193,9 @@ def test_resnet50_first_conv(
             bias_device = None
         per_core_weight_matrix_w_ntiles = (int)(K / 32)
         output_mem_config = (
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
-            if sharded_out
-            else None
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1) if sharded_out else None
         )
-        out = ttl.tensor.optimized_conv(
+        out = ttnn.operations.conv2d.optimized_conv(
             A_cl_device,
             B_tiled,
             bias_device,
@@ -206,14 +205,14 @@ def test_resnet50_first_conv(
             untilize_out,
             has_bias,
             fuse_relu,
-            ttl.tensor.MathFidelity.HiFi4,
-            ttl.tensor.OptimizedConvParallelizationConfig(
+            ttnn.MathFidelity.HiFi4,
+            ttnn.operations.conv2d.OptimizedConvParallelizationConfig(
                 grid_size=grid_size,
                 num_cores_nhw=grid_size[0],
                 per_core_out_matrix_height_ntiles=per_core_out_h_ntiles,
                 per_core_out_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
             ),
-            ttl.tensor.OptimizedConvBlockConfig(
+            ttnn.operations.conv2d.OptimizedConvBlockConfig(
                 act_block_h_ntiles=act_block_h,
                 act_block_w_ntiles=act_block_w,
                 out_subblock_h_ntiles=out_subblock_h,
@@ -223,12 +222,12 @@ def test_resnet50_first_conv(
             output_mem_config,
         )
         if sharded_out:
-            out = ttl.tensor.sharded_to_interleaved(out, memory_config)
+            out = ttnn.sharded_to_interleaved(out, memory_config)
 
         if not untilize_out:
             out_unpadded_shape = [1, 1, N * OH * OW, K]
             assert out_unpadded_shape == list(out.shape_without_padding())
-            out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
+            out = ttnn.format_output_tensor(out, out.shape_without_padding(), device, ttnn.ROW_MAJOR_LAYOUT)
             out = out.reshape(
                 conv_output_shape[0],
                 conv_output_shape[1],
@@ -237,7 +236,7 @@ def test_resnet50_first_conv(
             )
         out = out.cpu()
         assert list(out.get_legacy_shape()) == conv_output_shape
-        assert out.get_layout() == ttl.tensor.Layout.ROW_MAJOR
+        assert out.get_layout() == ttnn.ROW_MAJOR_LAYOUT
 
         # Copy output to host and convert tt tensor to pytorch tensor
         out_result = out.to_torch()

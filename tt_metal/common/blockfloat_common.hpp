@@ -10,13 +10,11 @@
 #include <immintrin.h>
 
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
-using namespace std;
 
-inline uint8_t get_max_exp(const vector<uint32_t> &vec, bool is_exp_a) {
+inline uint8_t get_max_exp(const std::vector<uint32_t> &vec, bool is_exp_a) {
     TT_ASSERT(vec.size() == 16);
     uint32_t max = 0;
 
@@ -46,7 +44,7 @@ inline uint8_t get_max_exp(const vector<uint32_t> &vec, bool is_exp_a) {
     return max;
 }
 
-inline uint32_t get_exp_dword(const vector<uint8_t> &vec) {
+inline uint32_t get_exp_dword(const std::vector<uint8_t> &vec) {
     TT_ASSERT(vec.size() == 4);
 
     uint32_t tmp = 0;

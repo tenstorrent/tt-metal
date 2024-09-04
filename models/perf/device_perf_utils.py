@@ -15,7 +15,7 @@ from tt_metal.tools.profiler.process_model_log import (
 from models.perf.perf_utils import today, process_perf_results
 
 
-def run_device_perf(command, subdir, num_iterations, cols, batch_size):
+def run_device_perf(command, subdir, num_iterations, cols, batch_size, has_signposts=False):
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]
 
@@ -29,7 +29,7 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size):
 
     for _ in range(num_iterations):
         run_device_profiler(command, subdir)
-        r = post_process_ops_log(subdir, duration_cols)
+        r = post_process_ops_log(subdir, duration_cols, has_signposts=has_signposts)
         for d_col in duration_cols:
             results[f"AVG {d_col}"] += r[d_col]
             results[f"MIN {d_col}"] = min(results[f"MIN {d_col}"], r[d_col])
@@ -49,8 +49,9 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size):
     return post_processed_results
 
 
-def check_device_perf(post_processed_results, margin, expected_perf_cols):
+def check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=False):
     expected_results = {}
+    failed = False
     for col, expected_perf in expected_perf_cols.items():
         lower_threshold = (1 - margin) * expected_perf
         upper_threshold = (1 + margin) * expected_perf
@@ -62,9 +63,12 @@ def check_device_perf(post_processed_results, margin, expected_perf_cols):
         )
         passing = lower_threshold <= post_processed_results[col] <= upper_threshold
         if not passing:
+            failed = True
             logger.error(
                 f"{col} {post_processed_results[col]} is outside of expected range ({lower_threshold}, {upper_threshold})"
             )
+    if assert_on_fail:
+        assert not failed, "Some performance metrics are outside of expected range, see above for details."
     return expected_results
 
 

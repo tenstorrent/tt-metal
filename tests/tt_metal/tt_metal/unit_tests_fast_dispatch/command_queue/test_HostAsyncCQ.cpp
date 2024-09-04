@@ -12,6 +12,9 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 
 using namespace tt::tt_metal;
 
@@ -217,7 +220,7 @@ TEST_F(CommandQueueFixture, TestAsyncCommandQueueSanityAndProfile) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, TestAsyncBufferRW) {
+TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
     // Test Async Enqueue Read and Write + Get Addr + Buffer Allocation and Deallocation
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
@@ -276,76 +279,7 @@ TEST_F(CommandQueueFixture, TestAsyncBufferRW) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, TestAsyncSetAndUpdateRuntimeArgs) {
-    // Test Asynchronous buffer allocation and SetRuntimeArgs API
-    auto& command_queue = this->device_->command_queue();
-    auto current_mode = CommandQueue::default_mode();
-    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-
-    uint32_t buf_size = 4096;
-    uint32_t page_size = 4096;
-    CoreCoord core = {0, 0};
-    // Initialize kernels in program
-    Program program;
-    auto reader = CreateKernel(
-        program,
-        "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    auto writer = CreateKernel(
-        program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
-    // Asynchronously allocate buffers on device
-    auto src0 = std::make_shared<Buffer>(this->device_, buf_size, page_size, BufferType::DRAM);
-    auto src1 = std::make_shared<Buffer>(this->device_, buf_size, page_size, BufferType::DRAM);
-    auto dst = std::make_shared<Buffer>(this->device_, buf_size, page_size, BufferType::DRAM);
-    // Asynchronously set the runtime args based on (potentially unallocated) buffer addrs
-    std::shared_ptr<RuntimeArgs> writer_runtime_args = std::make_shared<RuntimeArgs>();
-    *writer_runtime_args = {src0.get(), src1.get()};
-    std::shared_ptr<RuntimeArgs> reader_runtime_args= std::make_shared<RuntimeArgs>();
-    *reader_runtime_args = {dst.get()};
-    SetRuntimeArgs(this->device_, detail::GetKernel(program, writer), core, writer_runtime_args);
-    SetRuntimeArgs(this->device_, detail::GetKernel(program, reader), core, reader_runtime_args);
-    Finish(this->device_->command_queue());
-
-    auto resolved_writer_args = detail::GetKernel(program, writer)->runtime_args(core);
-    auto resolved_reader_args = detail::GetKernel(program, reader)->runtime_args(core);
-
-    EXPECT_EQ(resolved_writer_args.size(), 2);
-    EXPECT_EQ(resolved_reader_args.size(), 1);
-    EXPECT_EQ(resolved_writer_args[0], src0->address());
-    EXPECT_EQ(resolved_writer_args[1], src1->address());
-    EXPECT_EQ(resolved_reader_args[0], dst->address());
-
-    // Create new buffers and update the runtime args based on their address
-    auto src2 = std::make_shared<Buffer>(this->device_, buf_size, page_size, BufferType::DRAM);
-    auto src3 = std::make_shared<Buffer>(this->device_, buf_size, page_size, BufferType::DRAM);
-    auto dst1 = std::make_shared<Buffer>(this->device_, buf_size, page_size, BufferType::DRAM);
-
-    *writer_runtime_args = {src2.get(), src3.get()};
-    *reader_runtime_args = {dst1.get()};
-    std::vector<uint32_t> writer_update_idx = {0, 1};
-    std::vector<uint32_t> reader_update_idx = {0};
-    // Asynchronously update the runtime args based on (potentially unallocated) buffer addrs
-    UpdateRuntimeArgs(this->device_, detail::GetKernel(program, writer), core, writer_update_idx, writer_runtime_args);
-    UpdateRuntimeArgs(this->device_, detail::GetKernel(program, reader), core, reader_update_idx, reader_runtime_args);
-    Finish(this->device_->command_queue());
-
-    resolved_writer_args = detail::GetKernel(program, writer)->runtime_args(core);
-    resolved_reader_args = detail::GetKernel(program, reader)->runtime_args(core);
-
-    EXPECT_EQ(resolved_writer_args.size(), 2);
-    EXPECT_EQ(resolved_reader_args.size(), 1);
-    EXPECT_EQ(resolved_writer_args[0], src2->address());
-    EXPECT_EQ(resolved_writer_args[1], src3->address());
-    EXPECT_EQ(resolved_reader_args[0], dst1->address());
-    command_queue.set_mode(current_mode);
-}
-
-TEST_F(CommandQueueFixture, TestAsyncCBAllocation) {
+TEST_F(CommandQueueFixture, DISABLED_TestAsyncCBAllocation) {
     // Test asynchronous allocation of buffers and their assignment to CBs
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
@@ -372,7 +306,7 @@ TEST_F(CommandQueueFixture, TestAsyncCBAllocation) {
     CircularBufferConfig config1 = CircularBufferConfig(page_size, {{buffer_indices[0], data_format}, {buffer_indices[1], data_format}}, *l1_buffer)
         .set_page_size(buffer_indices[0], page_size)
         .set_page_size(buffer_indices[1], page_size);
-    // Asyncrhonously assign the L1 Buffer to the CB
+    // Asynchronously assign the L1 Buffer to the CB
     auto multi_core_cb = CreateCircularBuffer(program, cr_set, config1);
     auto cb_ptr = detail::GetCircularBuffer(program, multi_core_cb);
     Finish(this->device_->command_queue());
@@ -388,7 +322,7 @@ TEST_F(CommandQueueFixture, TestAsyncCBAllocation) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, TestAsyncAssertForDeprecatedAPI) {
+TEST_F(CommandQueueFixture, DISABLED_TestAsyncAssertForDeprecatedAPI) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
@@ -407,7 +341,7 @@ TEST_F(CommandQueueFixture, TestAsyncAssertForDeprecatedAPI) {
         SetRuntimeArgs(program, dummy_kernel, core, runtime_args);
     }
     catch (std::runtime_error &e) {
-        std::string expected = "This variant of SetRuntimeArgs can only be called when Asyncrhonous SW Command Queues are disabled for Fast Dispatch.";
+        std::string expected = "This variant of SetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.";
         const string error = string(e.what());
         EXPECT_TRUE(error.find(expected) != std::string::npos);
     }

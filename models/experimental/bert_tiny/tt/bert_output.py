@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib
 import ttnn
 import torch.nn as nn
 from typing import Optional
@@ -60,7 +59,7 @@ class TtBertoutput(nn.Module):
             device=self.device,
             put_on_device=False,
         )
-        self.ln = tt_lib.tensor.layernorm
+        self.ln = ttnn.layer_norm
 
     def forward(self, hidden_state: Optional[ttnn.Tensor] = None, input: Optional[ttnn.Tensor] = None):
         out = self.output(hidden_state)
@@ -69,6 +68,6 @@ class TtBertoutput(nn.Module):
         out = ttnn.from_device(out)
         out = ttnn.to_torch(out)
         out = torch_to_tt_tensor_rm(out, self.device, put_on_device=False)
-        ln_out = self.ln(out, eps=1e-12, gamma=self.gamma, beta=self.beta)
+        ln_out = self.ln(out, epsilon=1e-12, weight=self.gamma, bias=self.beta)
         ln_out = tt_to_torch_tensor(ln_out)
         return ttnn.to_device(ttnn.from_torch(ln_out, dtype=ttnn.bfloat16), device=self.device)

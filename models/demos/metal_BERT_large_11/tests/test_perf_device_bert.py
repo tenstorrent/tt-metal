@@ -5,19 +5,10 @@
 import pytest
 
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
+from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 
 
-@pytest.mark.models_device_performance_bare_metal
-@pytest.mark.parametrize(
-    "batch_size, test, expected_perf",
-    [
-        # [9, "BERT_LARGE-batch_9-MIXED_PRECISION_BATCH9", 70],
-        [8, "BERT_LARGE-batch_8-MIXED_PRECISION_BATCH8", 165],
-        # [7, "BERT_LARGE-batch_7-BFLOAT8_B-SHARDED", 240],
-        [12, "BERT_LARGE-batch_12-BFLOAT8_B-SHARDED", 400],
-    ],
-)
-def test_perf_device_bare_metal(batch_size, test, expected_perf):
+def run_bert_perf(batch_size, test, expected_perf):
     subdir = "bert"
     num_iterations = 4
     margin = 0.03
@@ -36,3 +27,32 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
         expected_results=expected_results,
         comments=test,
     )
+
+
+@skip_for_wormhole_b0("Incorrect device metrics for wormhole b0")
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.parametrize(
+    "batch_size, test, expected_perf",
+    [
+        # [9, "BERT_LARGE-batch_9-MIXED_PRECISION_BATCH9", 70],
+        [8, "BERT_LARGE-batch_8-MIXED_PRECISION_BATCH8", 170],
+        # [7, "BERT_LARGE-batch_7-BFLOAT8_B-SHARDED", 240],
+        [12, "BERT_LARGE-batch_12-BFLOAT8_B-SHARDED", 400],
+    ],
+)
+def test_perf_device_bare_metal(batch_size, test, expected_perf):
+    run_bert_perf(batch_size, test, expected_perf)
+
+
+@pytest.mark.skip("#7525: Hangs non-deterministically on device perf")
+@skip_for_grayskull("Incorrect device metrics for grayskull")
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.parametrize(
+    "batch_size, test, expected_perf",
+    [
+        [7, "BERT_LARGE-batch_8-BFLOAT8_B-SHARDED", 280],
+        [8, "BERT_LARGE-batch_8-BFLOAT8_B-SHARDED", 340],
+    ],
+)
+def test_perf_device_bare_metal_wh(batch_size, test, expected_perf):
+    run_bert_perf(batch_size, test, expected_perf)

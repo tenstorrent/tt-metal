@@ -5,7 +5,6 @@
 import torch.nn as nn
 from typing import Union, Tuple
 
-import tt_lib
 import tt_lib.fallback_ops
 
 
@@ -23,9 +22,7 @@ class TtSelectAdaptivePool2d(nn.Module):
         super(TtSelectAdaptivePool2d, self).__init__()
         self.device = device
         assert input_fmt in ("NCHW", "NHWC")
-        self.pool_type = (
-            pool_type or ""
-        )  # convert other falsy values to empty string for consistent TS typing
+        self.pool_type = pool_type or ""  # convert other falsy values to empty string for consistent TS typing
         if not pool_type:
             self.pool = nn.Identity()  # pass through
             self.flatten = nn.Flatten(1)

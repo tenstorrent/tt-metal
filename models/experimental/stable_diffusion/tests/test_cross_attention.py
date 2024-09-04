@@ -7,7 +7,7 @@ from diffusers import StableDiffusionPipeline
 from loguru import logger
 
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     torch_to_tt_tensor,
     torch_to_tt_tensor_rm,
@@ -61,7 +61,7 @@ def test_cross_attn_inference(device):
         # host=host,
         base_address=base_address,
     )
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     tt_input = torch_to_tt_tensor_rm(input, device, put_on_device=False)
     tt_encoder_hidden_states = (
         torch_to_tt_tensor_rm(encoder_hidden_states, device, put_on_device=False)

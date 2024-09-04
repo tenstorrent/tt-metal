@@ -5,7 +5,7 @@
 import torch
 import json
 import numpy as np
-import tt_lib as ttm
+import ttnn
 from models.utility_functions import (
     pad_activation,
     pad_weight,
@@ -58,21 +58,21 @@ def create_padded_tensor(
     while len(input_tensors_shape) < 4:
         input_tensors_shape.insert(0, 1)
 
-    if isinstance(input_tensor, ttm.tensor.Tensor):
+    if isinstance(input_tensor, ttnn.Tensor):
         torch_tensor = input_tensor.to_torch()
     else:
         torch_tensor = input_tensor
 
     # Create tensor on host
-    a = ttm.tensor.Tensor(
+    a = ttnn.Tensor(
         torch_tensor.reshape(-1).tolist(),
         input_tensors_shape,
-        ttm.tensor.DataType.BFLOAT16,
-        ttm.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
     # Pad inputs on host
     a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
-    a_dev = a_pad.to(ttm.tensor.Layout.TILE).to(device)
+    a_dev = a_pad.to(ttnn.TILE_LAYOUT).to(device)
 
     return a_dev
 
@@ -82,7 +82,7 @@ def create_unpadded_tensor(ttm_tensor, input_tensors_shape, input_tensor_start=[
     output_tensor_end = tuple(
         input_tensor_start[i] + input_tensors_shape[i] - 1 for i in range(len(input_tensors_shape))
     )
-    ttm_tensor = ttm_tensor.cpu().to(ttm.tensor.Layout.ROW_MAJOR).unpad(output_tensor_start, output_tensor_end)
+    ttm_tensor = ttm_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad(output_tensor_start, output_tensor_end)
 
     return ttm_tensor
 
@@ -94,13 +94,13 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
         size.insert(0, 1)
 
     tt_tensor = (
-        ttm.tensor.Tensor(
+        ttnn.Tensor(
             py_tensor.reshape(-1).tolist(),
             size,
-            ttm.tensor.DataType.BFLOAT16,
-            ttm.tensor.Layout.ROW_MAJOR,
+            ttnn.bfloat16,
+            ttnn.ROW_MAJOR_LAYOUT,
         )
-        .to(ttm.tensor.Layout.TILE)
+        .to(ttnn.TILE_LAYOUT)
         .to(tt_device)
     )
 
@@ -109,8 +109,8 @@ def torch2tt_tensor(py_tensor: torch.Tensor, tt_device):
 
 def tt2torch_tensor(tt_tensor):
     tt_output = tt_tensor.cpu()
-    if tt_output.get_layout() != ttm.tensor.Layout.ROW_MAJOR:
-        tt_output = tt_output.to(ttm.tensor.Layout.ROW_MAJOR)
+    if tt_output.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        tt_output = tt_output.to(ttnn.ROW_MAJOR_LAYOUT)
     return tt_output.to_torch()
 
 
@@ -131,23 +131,23 @@ def create_padded_tensor(
     while len(input_tensors_shape) < 4:
         input_tensors_shape.insert(0, 1)
 
-    if isinstance(input_tensor, ttm.tensor.Tensor):
+    if isinstance(input_tensor, ttnn.Tensor):
         torch_tensor = input_tensor.to_torch()
     else:
         torch_tensor = input_tensor
 
     # Create tensor on host
-    a = ttm.tensor.Tensor(
+    a = ttnn.Tensor(
         torch_tensor.reshape(-1).tolist(),
         input_tensors_shape,
-        ttm.tensor.DataType.BFLOAT16,
-        ttm.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
 
     # Pad inputs on host
     a_pad = a.pad(output_tensor_shape, input_tensor_start, pad_value)
 
-    a_dev = a_pad.to(ttm.tensor.Layout.TILE).to(device)
+    a_dev = a_pad.to(ttnn.TILE_LAYOUT).to(device)
 
     return a_dev
 

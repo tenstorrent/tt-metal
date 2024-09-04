@@ -49,11 +49,11 @@ def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w):
     torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
-    with pytest.raises(RuntimeError) as exception:
+    with pytest.raises(
+        RuntimeError,
+        match="The number of dimensions in the tensor input does not match the length of the desired ordering",
+    ) as exception:
         ttnn.permute(input_tensor, (0, 1, 2))
-    assert "The number of dimensions in the tensor input does not match the length of the desired ordering" in str(
-        exception.value
-    )
 
 
 @pytest.mark.parametrize(
@@ -104,3 +104,19 @@ def test_add_after_permute(device):
     output = a + b
     output = ttnn.to_torch(output)
     assert_with_pcc(torch_output, output, 0.9999)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [64])
+def test_permute_negative_dim(device, h, w):
+    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.permute(torch_input_tensor, (0, -3, -1, -2))
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
+    output_tensor = ttnn.permute(input_tensor, (0, -3, -1, -2))
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)

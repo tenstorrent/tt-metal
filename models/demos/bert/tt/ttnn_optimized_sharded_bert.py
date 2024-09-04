@@ -20,7 +20,7 @@ def update_model_config(config, batch_size):
     core_grid = ttnn.CoreGrid(y=8, x=batch_size)
 
     program_configs = {
-        "query_key_value_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=4,
             out_subblock_h=1,
@@ -30,7 +30,7 @@ def update_model_config(config, batch_size):
             transpose_mcast=True,
             fused_activation=None,
         ),
-        "query_by_key_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=2,
             out_subblock_h=1,
@@ -38,7 +38,7 @@ def update_model_config(config, batch_size):
             per_core_M=24,
             per_core_N=12,
         ),
-        "attention_probabilities_by_value_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseProgramConfig(
+        "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=12,
             out_subblock_h=4,
@@ -46,7 +46,7 @@ def update_model_config(config, batch_size):
             per_core_M=24,
             per_core_N=2,
         ),
-        "self_output_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=4,
             out_subblock_h=2,
@@ -56,7 +56,7 @@ def update_model_config(config, batch_size):
             transpose_mcast=True,
             fused_activation=None,
         ),
-        "ff1_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=4,
             out_subblock_h=1,
@@ -64,9 +64,9 @@ def update_model_config(config, batch_size):
             per_core_M=12,
             per_core_N=16,
             transpose_mcast=True,
-            fused_activation=(ttnn.experimental.tensor.FusibleActivation.GELU, True),
+            fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
-        "ff2_matmul_program_config": ttnn.experimental.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             in0_block_w=16,
             out_subblock_h=2,
@@ -76,14 +76,14 @@ def update_model_config(config, batch_size):
             transpose_mcast=True,
             fused_activation=None,
         ),
-        "layernorm_program_config": ttnn.experimental.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+        "layernorm_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             subblock_w=4,
             block_h=12,
             block_w=4,
             inplace=True,
         ),
-        "softmax_program_config": ttnn.experimental.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+        "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=(core_grid.x, core_grid.y),
             subblock_w=6,
             block_h=24,
@@ -120,7 +120,7 @@ def bert_attention(
         value,
     ) = ttnn.transformer.split_query_key_value_and_split_heads(
         query_key_value,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         num_heads=num_heads,
     )
     ttnn.deallocate(query_key_value)
@@ -128,7 +128,7 @@ def bert_attention(
     attention_scores = ttnn.matmul(
         query,
         key,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["query_by_key_matmul_program_config"],
     )
@@ -145,7 +145,7 @@ def bert_attention(
     context_layer = ttnn.matmul(
         attention_probabilities,
         value,
-        memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
         program_config=config.program_configs["attention_probabilities_by_value_matmul_program_config"],
     )

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "llrt.hpp"
+#include "hal.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 
@@ -10,7 +11,6 @@
 
 #include <unordered_set>
 #include <mutex>
-#include <fmt/ranges.h>
 #include "dev_msgs.h"
 
 namespace tt {
@@ -86,20 +86,20 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
             range_max = MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE;
             break;
         case 2:
-            range_min = MEM_TRISC0_BASE;
-            range_max = MEM_TRISC0_BASE + MEM_TRISC0_SIZE;
+            range_min = MEM_TRISC0_FIRMWARE_BASE;
+            range_max = MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE;
             break;
         case 3:
-            range_min = MEM_TRISC1_BASE;
-            range_max = MEM_TRISC1_BASE + MEM_TRISC1_SIZE;
+            range_min = MEM_TRISC1_FIRMWARE_BASE;
+            range_max = MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC1_FIRMWARE_SIZE;
             break;
         case 4:
-            range_min = MEM_TRISC2_BASE;
-            range_max = MEM_TRISC2_BASE + MEM_TRISC2_SIZE;
+            range_min = MEM_TRISC2_FIRMWARE_BASE;
+            range_max = MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE;
             break;
         case 5:
             range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
-            range_max = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
+            range_max = eth_l1_mem::address_map::COMMAND_Q_BASE;
             break;
         case 6:
             range_min = MEM_IERISC_FIRMWARE_BASE;
@@ -148,35 +148,17 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ph
     return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
 }
 
-void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg) {
+void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, uint64_t base_addr, bool send_go) {
 
-    bool is_eth_core = is_ethernet_core(core, chip);
-    bool is_active_eth_core = false;
-    bool is_inactive_eth_core = false;
+    msg->kernel_config.mode = DISPATCH_MODE_HOST;
 
-    // Determine whether an ethernet core is active or idle. Their host handshake interfaces are different.
-    if (is_eth_core) {
-        auto active_eth_cores =  tt::Cluster::instance().get_active_ethernet_cores(chip);
-        auto inactive_eth_cores =  tt::Cluster::instance().get_inactive_ethernet_cores(chip);
-        is_active_eth_core = active_eth_cores.find(logical_core_from_ethernet_core(chip, core)) != active_eth_cores.end();
-        is_inactive_eth_core = inactive_eth_cores.find(logical_core_from_ethernet_core(chip, core)) != inactive_eth_cores.end();
-        //we should not be operating on any reserved cores here.
-        assert(is_active_eth_core or is_inactive_eth_core);
-    }
+    uint64_t launch_addr = base_addr + offsetof(launch_msg_t, kernel_config);
+    uint64_t go_addr = base_addr + offsetof(launch_msg_t, go);
 
-    msg->mode = DISPATCH_MODE_HOST;
-    TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
-    if (is_active_eth_core) {
-        tt::Cluster::instance().write_core(
-            (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_ETH_MAILBOX_ADDRESS_HOST(launch));
-    } else {
-        if (is_inactive_eth_core) {
-            tt::Cluster::instance().write_core(
-                (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_IERISC_MAILBOX_ADDRESS_HOST(launch));
-        } else {
-            tt::Cluster::instance().write_core(
-                (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
-        }
+    tt::Cluster::instance().write_core((void *)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
+    tt_driver_atomics::sfence();
+    if (send_go) {
+        tt::Cluster::instance().write_core((void *)&msg->go, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
     }
 }
 
@@ -192,32 +174,6 @@ void print_worker_cores(chip_id_t chip_id) {
     std::cout << std::endl << std::endl;
 }
 
-CircularBufferConfigVec create_circular_buffer_config_vector() {
-    CircularBufferConfigVec circular_buffer_config_vec(
-        NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG, 0);  // init to 0's
-    return circular_buffer_config_vec;
-}
-
-void set_config_for_circular_buffer(
-    CircularBufferConfigVec &circular_buffer_config_vec,
-    uint32_t circular_buffer_index,
-    uint32_t addr_in_bytes,
-    uint32_t size_in_bytes,
-    uint32_t num_pages) {
-
-    uint32_t page_size = size_in_bytes / num_pages;
-    circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index) =
-        addr_in_bytes >> 4;  // convert to addr in 16B words
-    circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 1) =
-        size_in_bytes >> 4;  // convert to addr in 16B words
-    circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 2) = num_pages;
-    circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 3) = page_size >> 4;
-}
-
-void write_circular_buffer_config_vector_to_core(chip_id_t chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec) {
-    write_hex_vec_to_core(chip, core, circular_buffer_config_vec, CIRCULAR_BUFFER_CONFIG_BASE);
-}
-
 ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
 
     ll_api::memory read_mem;
@@ -228,18 +184,18 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
     return read_mem;
 }
 
-void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
+
+uint32_t generate_risc_startup_addr(bool is_eth_core) {
     // Options for handling brisc fw not starting at mem[0]:
     // 1) Program the register for the start address out of reset
     // 2) Encode a jump in crt0 for mem[0]
     // 3) Write the jump to mem[0] here
     // This does #3.  #1 may be best, #2 gets messy (elf files
     // drop any section before .init, crt0 needs ifdefs, etc)
-    vector<uint32_t> jump_to_fw;
     constexpr uint32_t jal_opcode = 0x6f;
     constexpr uint32_t jal_max_offset = 0x0007ffff;
     uint32_t opcode = jal_opcode;
-    uint32_t firmware_base = is_ethernet_core(core, chip_id) ? MEM_IERISC_FIRMWARE_BASE : MEM_BRISC_FIRMWARE_BASE;
+    uint32_t firmware_base = is_eth_core ? MEM_IERISC_FIRMWARE_BASE : MEM_BRISC_FIRMWARE_BASE;
     assert(firmware_base < jal_max_offset);
     // See riscv spec for offset encoding below
     uint32_t jal_offset_bit_20 = 0;
@@ -251,7 +207,13 @@ void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
         jal_offset_bits_10_to_1 |
         jal_offset_bit_11 |
         jal_offset_bits_19_to_12;
-    jump_to_fw.push_back(jal_offset | opcode);
+
+    return jal_offset | opcode;
+}
+
+void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
+    vector<uint32_t> jump_to_fw;
+    jump_to_fw.push_back(generate_risc_startup_addr(is_ethernet_core(core, chip_id)));
     write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
 }
 
@@ -315,15 +277,16 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
         assert(is_active_eth_core or is_inactive_eth_core);
     }
 
-    uint64_t run_mailbox_addr = is_active_eth_core ? GET_ETH_MAILBOX_ADDRESS_HOST(launch.run) :
-                              is_inactive_eth_core ? GET_IERISC_MAILBOX_ADDRESS_HOST(launch.run) : GET_MAILBOX_ADDRESS_HOST(launch.run);
+    tt_metal::HalProgrammableCoreType dispatch_core_type =  is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH :
+        is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH : tt_metal::HalProgrammableCoreType::TENSIX;
+    uint64_t run_mailbox_addr = reinterpret_cast<uint64_t>(&tt_metal::hal.get_dev_addr<launch_msg_t *>(dispatch_core_type, tt_metal::HalMemAddrType::LAUNCH)->go.run);
 
-    std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
+    auto get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
         std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
         // read a single uint32_t even though launch.run is smaller than that
         run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
-        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
+        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, go.run) & 3));
         if (run != run_state && run != RUN_MSG_DONE) {
             fprintf(
                 stderr,
@@ -340,13 +303,25 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
     return get_mailbox_is_done(run_mailbox_addr);
 }
 
-void wait_until_cores_done(chip_id_t device_id,
-                           int run_state,
-                           std::unordered_set<CoreCoord>& not_done_phys_cores) {
-
+void wait_until_cores_done(
+    chip_id_t device_id, int run_state, std::unordered_set<CoreCoord> &not_done_phys_cores, int timeout_ms) {
     // poll the cores until the set of not done cores is empty
     int loop_count = 1;
+    auto start = std::chrono::high_resolution_clock::now();
     while (!not_done_phys_cores.empty()) {
+        if (timeout_ms > 0) {
+            auto now = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+            if (elapsed > timeout_ms) {
+                std::string cores = fmt::format("{}", fmt::join(not_done_phys_cores, ", "));
+                TT_THROW(
+                    "Device {}: Timeout ({} ms) waiting for physical cores to finish: {}.",
+                    device_id,
+                    timeout_ms,
+                    cores);
+            }
+        }
+
         // Print not-done cores
         if (loop_count % 1000 == 0) {
             string not_done_cores_str = "Not done phys cores: ";

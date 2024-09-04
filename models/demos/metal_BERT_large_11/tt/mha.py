@@ -7,9 +7,10 @@ import math
 import torch
 
 from typing import Optional
-import tt_lib
+import ttnn
 from tt_lib.utils import pad_weight
 from models.utility_functions import torch2tt_tensor
+from models.demos.metal_BERT_large_11.tt import custom_matmuls
 
 
 def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
@@ -23,20 +24,20 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     if "OP1_FUSED_QKV_MM_CONFIG" in model_config:
 
         def op1_qkv_fused(activation, qkv_weight, qkv_bias):
-            qkv = tt_lib.operations.primary.matmul(
+            qkv = ttnn.linear(
                 activation,
                 qkv_weight,
                 bias=qkv_bias,
                 program_config=model_config["OP1_FUSED_QKV_MM_CONFIG"],
-                output_mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
-                output_dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
+                memory_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
             )
             return qkv
 
     else:
 
         def op1_qkv_fused(activation, qkv_weight, qkv_bias):
-            qkv = tt_lib.tensor.bert_large_fused_qkv_matmul(
+            qkv = custom_matmuls.bert_large_fused_qkv_matmul(
                 activation,
                 qkv_weight,
                 bias=qkv_bias,
@@ -52,29 +53,29 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
             q_heads,
             kt_heads,
             v_heads,
-        ) = tt_lib.operations.primary.transformers.split_query_key_value_and_split_heads(
+        ) = ttnn.experimental.split_query_key_value_and_split_heads(
             qkv,
             compute_with_storage_grid_size=grid_size,
-            output_mem_config=model_config["OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
+            memory_config=model_config["OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
         )
         return q_heads, kt_heads, v_heads
 
     if "OP3_PRE_SOFTMAX_BMM_CONFIG" in model_config:
 
         def op3_bmm(Q_heads, K_T_heads):
-            qkt = tt_lib.operations.primary.matmul(
+            qkt = ttnn.matmul(
                 Q_heads,
                 K_T_heads,
                 program_config=model_config["OP3_PRE_SOFTMAX_BMM_CONFIG"],
-                output_mem_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-                output_dtype=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
+                memory_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+                dtype=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
             )
             return qkt
 
     else:
 
         def op3_bmm(Q_heads, K_T_heads):
-            qkt = tt_lib.tensor.bert_large_pre_softmax_bmm(
+            qkt = custom_matmuls.bert_large_pre_softmax_bmm(
                 Q_heads,
                 K_T_heads,
                 output_mem_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
@@ -82,9 +83,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
             )
             return qkt
 
-    softmax_program_config = model_config.get(
-        "OP4_SOFTMAX_CONFIG", tt_lib.operations.primary.transformers.SoftmaxDefaultProgramConfig()
-    )
+    softmax_program_config = model_config.get("OP4_SOFTMAX_CONFIG", ttnn.SoftmaxDefaultProgramConfig())
 
     def op4_scale_mask_softmax(qkt, attention_mask):
         # Attention scores computation
@@ -93,7 +92,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         # No-op reshapes are handled within pre-softmax (op 7) and post-softmax bmms (op 9)
         shape = qkt.get_legacy_shape()
         qkt = qkt.reshape(shape[0], 1, shape[1] * shape[2], shape[3])
-        attention_scores = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+        attention_scores = ttnn.scale_mask_softmax_in_place(
             qkt, freciprocal_of_sqrt_hidden_dim, attention_mask, program_config=softmax_program_config
         )
         attention_scores = attention_scores.reshape(shape)
@@ -103,12 +102,12 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     if "OP5_POST_SOFTMAX_BMM_CONFIG" in model_config:
 
         def op5_bmm(attention_scores, V_heads):
-            weighted_activation = tt_lib.operations.primary.matmul(
+            weighted_activation = ttnn.matmul(
                 attention_scores,
                 V_heads,
                 program_config=model_config["OP5_POST_SOFTMAX_BMM_CONFIG"],
-                output_mem_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-                output_dtype=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
+                memory_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+                dtype=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
             )
 
             return weighted_activation
@@ -116,7 +115,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     else:
 
         def op5_bmm(attention_scores, V_heads):
-            weighted_activation = tt_lib.tensor.bert_large_post_softmax_bmm(
+            weighted_activation = custom_matmuls.bert_large_post_softmax_bmm(
                 attention_scores,
                 V_heads,
                 output_mem_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
@@ -129,21 +128,21 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         if num_heads == 1:
             return x
         else:
-            retval = tt_lib.tensor.nlp_concat_heads(
+            retval = ttnn.experimental.nlp_concat_heads(
                 x,
-                output_mem_config=model_config["OP6_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"],
+                memory_config=model_config["OP6_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"],
             )
             return retval
 
     def mha_(activation, attention_mask):
         # TODO: Remove hardcoded shape hack
         if reserve_split_heads_shape is not None:
-            temp = tt_lib.tensor.empty(
+            temp = ttnn.empty(
                 reserve_split_heads_shape,
-                tt_lib.tensor.DataType.BFLOAT16,
-                tt_lib.tensor.Layout.ROW_MAJOR,
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
                 activation.device(),
-                tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
+                ttnn.L1_MEMORY_CONFIG,
             )
         qkv = op1_qkv_fused(activation, qkv_weight, qkv_bias)
         if reserve_split_heads_shape is not None:
@@ -182,13 +181,13 @@ class TtMultiHeadAttentionModel:
             interleaved_str = ""
             if "QKV_INTERLEAVED" in model_config:
                 interleaved_str = f"interleaved_{model_config['QKV_INTERLEAVED']}_"
-            qkv_weight = tt_lib.tensor.load_tensor(
+            qkv_weight = ttnn.load_tensor(
                 str(
                     tt_cache_path
                     / f"{layer_name}.qkv.weight_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
                 )
             ).to(device, model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"])
-            qkv_bias = tt_lib.tensor.load_tensor(
+            qkv_bias = ttnn.load_tensor(
                 str(
                     tt_cache_path
                     / f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.bin"
@@ -227,7 +226,7 @@ class TtMultiHeadAttentionModel:
             qkv_weight = torch2tt_tensor(
                 qkv_weight,
                 device,
-                tt_layout=tt_lib.tensor.Layout.TILE,
+                tt_layout=ttnn.TILE_LAYOUT,
                 tt_memory_config=model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"],
                 tt_dtype=model_config["OP1_FUSED_QKV_MM_WEIGHTS_DTYPE"],
             )
@@ -235,7 +234,7 @@ class TtMultiHeadAttentionModel:
             qkv_bias = torch2tt_tensor(
                 qkv_bias,
                 device,
-                tt_layout=tt_lib.tensor.Layout.TILE,
+                tt_layout=ttnn.TILE_LAYOUT,
                 tt_memory_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
                 tt_dtype=model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
             )
@@ -252,8 +251,6 @@ class TtMultiHeadAttentionModel:
             model_config,
         )
 
-    def __call__(
-        self, activation: tt_lib.tensor.Tensor, attention_mask: Optional[tt_lib.tensor.Tensor] = None
-    ) -> tt_lib.tensor.Tensor:
+    def __call__(self, activation: ttnn.Tensor, attention_mask: Optional[ttnn.Tensor] = None) -> ttnn.Tensor:
         result = self.mha(activation, attention_mask)
         return result

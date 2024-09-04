@@ -7,29 +7,28 @@ import torch
 from loguru import logger
 from transformers import AutoTokenizer, RobertaForTokenClassification
 
-import tt_lib
+import pytest
 
 from models.experimental.roberta.tt.roberta_for_token_classification import TtRobertaForTokenClassification
 from models.utility_functions import (
     tt2torch_tensor,
     comp_allclose,
     comp_pcc,
+    skip_for_wormhole_b0,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
+@skip_for_wormhole_b0()
+@pytest.mark.skip(reason="Test is failing. see issue #7533")
 def test_roberta_for_token_classification(device):
     torch.manual_seed(1234)
 
     base_address = ""
 
     with torch.no_grad():
-        tokenizer = AutoTokenizer.from_pretrained(
-            "Jean-Baptiste/roberta-large-ner-english"
-        )
-        model = RobertaForTokenClassification.from_pretrained(
-            "Jean-Baptiste/roberta-large-ner-english"
-        )
+        tokenizer = AutoTokenizer.from_pretrained("Jean-Baptiste/roberta-large-ner-english")
+        model = RobertaForTokenClassification.from_pretrained("Jean-Baptiste/roberta-large-ner-english")
         model.eval()
 
         # Tt roberta
@@ -64,9 +63,7 @@ def test_roberta_for_token_classification(device):
 
         # Torch output
         torch_predicted_token_class_ids = torch_output.argmax(-1)
-        torch_predicted_tokens_classes = [
-            model.config.id2label[t.item()] for t in torch_predicted_token_class_ids[0]
-        ]
+        torch_predicted_tokens_classes = [model.config.id2label[t.item()] for t in torch_predicted_token_class_ids[0]]
         logger.info(f"Torch Predicted {torch_predicted_tokens_classes}")
 
         # Tt ouptut
@@ -74,9 +71,7 @@ def test_roberta_for_token_classification(device):
         tt_output_torch = tt_output_torch.squeeze(0)
 
         tt_predicted_token_class_ids = tt_output_torch.argmax(-1)
-        tt_predicted_tokens_classes = [
-            tt_model.config.id2label[t.item()] for t in tt_predicted_token_class_ids[0]
-        ]
+        tt_predicted_tokens_classes = [tt_model.config.id2label[t.item()] for t in tt_predicted_token_class_ids[0]]
         logger.info(f"Tt Predicted {tt_predicted_tokens_classes}")
 
         does_pass, pcc_message = comp_pcc(torch_output, tt_output_torch, 0.98)

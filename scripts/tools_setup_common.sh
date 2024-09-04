@@ -17,6 +17,44 @@ remove_default_log_locations(){
     echo "Removed all profiler artifacts"
 }
 
+verify_perf_line_count_floor(){
+    csvLog=$1
+    LINE_COUNT=$2
+
+    lineCount=$(cat $csvLog | wc | awk  'NR == 1 { print $1 }')
+
+    if [[ ! $lineCount =~ ^[0-9]+$ ]]; then
+        echo "Value for line count was $lineCount, not a number !" 1>&2
+        exit 1
+    fi
+
+    if (( lineCount < LINE_COUNT )); then
+        echo "Value for line count was $lineCount, not higher than $LINE_COUNT" 1>&2
+        exit 1
+    fi
+
+    echo "Value for line count was in correct range" 1>&2
+}
+
+verify_perf_line_count(){
+    csvLog=$1
+    LINE_COUNT=$2
+
+    lineCount=$(cat $csvLog | wc | awk  'NR == 1 { print $1 }')
+
+    if [[ ! $lineCount =~ ^[0-9]+$ ]]; then
+        echo "Value for line count was $lineCount, not a number !" 1>&2
+        exit 1
+    fi
+
+    if (( lineCount != LINE_COUNT )); then
+        echo "Value for line count was $lineCount, not equal to $LINE_COUNT" 1>&2
+        exit 1
+    fi
+
+    echo "Value for line count was correct" 1>&2
+}
+
 verify_perf_column(){
     csvLog=$1
     column=$2

@@ -21,6 +21,20 @@ def test_as_tensor(device, height, width):
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
 
 
+@pytest.mark.parametrize("height", [32])
+@pytest.mark.parametrize("width", [32])
+def test_as_tensor_with_device_tilizer(device, height, width):
+    torch_input_tensor = torch.rand((height, width), dtype=torch.bfloat16)
+
+    memory_config = ttnn.L1_MEMORY_CONFIG
+    tensor = ttnn.as_tensor(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config, use_device_tilizer=True
+    )
+
+    torch_output_tensor = ttnn.to_torch(tensor)
+    assert torch.allclose(torch_input_tensor, torch_output_tensor)
+
+
 @pytest.mark.parametrize("height", [7])
 @pytest.mark.parametrize("width", [3])
 def test_as_tensor_with_cache(tmp_path, device, height, width):

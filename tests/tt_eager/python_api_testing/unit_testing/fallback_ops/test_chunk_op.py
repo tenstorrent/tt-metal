@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import tt_lib as ttl
-import tt_lib.fallback_ops
+import ttnn
+import tt_lib.fallback_ops as fallback_ops
+
 from models.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
@@ -24,20 +25,20 @@ def test_chunk_fallback(input_shape, chunks, dim, on_device, device):
     pt_out = torch.chunk(x, chunks, dim)
 
     # Test on host RM
-    t0 = ttl.tensor.Tensor(
+    t0 = ttnn.Tensor(
         x.reshape(-1).tolist(),
         x.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
     )
     if on_device:
         t0 = t0.to(device)
 
-    tt_out = ttl.fallback_ops.chunk(t0, chunks, dim)
+    tt_out = fallback_ops.chunk(t0, chunks, dim)
 
     for i in range(len(pt_out)):
         pt_output = pt_out[i]
-        tt_output = tt_out[i].cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output = tt_out[i].cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         comp_pass, _ = comp_pcc(pt_output, tt_output, 0.9999)
         _, comp_out = comp_allclose_and_pcc(pt_output, tt_output)
         logger.debug(comp_out)

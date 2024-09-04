@@ -11,7 +11,6 @@ import torch
 
 from models.experimental.yolov3.reference.models.common import autopad
 from models.experimental.yolov3.tt.yolov3_conv import TtConv
-import tt_lib
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import (
     torch2tt_tensor,
@@ -26,9 +25,7 @@ class TtDetect(nn.Module):
     dynamic = False  # force grid reconstruction
     export = False  # export mode
 
-    def __init__(
-        self, device, state_dict, base_address, nc=80, anchors=(), ch=(), inplace=True
-    ):
+    def __init__(self, device, state_dict, base_address, nc=80, anchors=(), ch=(), inplace=True):
         # detection layer
         super().__init__()
 
@@ -44,9 +41,7 @@ class TtDetect(nn.Module):
         self.grid = [torch.empty(0) for _ in range(self.nl)]  # init grid
 
         self.anchor_grid = [torch.empty(0) for _ in range(self.nl)]  # init anchor grid
-        self.register_buffer(
-            "anchors", torch.tensor(anchors).float().view(self.nl, -1, 2)
-        )  # shape(nl,na,2)
+        self.register_buffer("anchors", torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
 
         conv_list = []
         for i, x in enumerate(ch):
@@ -86,13 +81,8 @@ class TtDetect(nn.Module):
 
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
 
-            # Cannot be ported further until 5d tensors are supported for tt_lib ops
-            x[i] = (
-                x[i]
-                .view(bs, self.na, self.no, ny, nx)
-                .permute(0, 1, 3, 4, 2)
-                .contiguous()
-            )
+            # Cannot be ported further until 5d tensors are supported for ttnn ops
+            x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
 
             if not self.training:  # inference
                 if self.dynamic or self.grid[i].shape[2:4] != x[i].shape[2:4]:
@@ -106,13 +96,7 @@ class TtDetect(nn.Module):
                 y = torch.cat((xy, wh, conf), 4)
                 z.append(y.view(bs, self.na * nx * ny, self.no))
 
-        return (
-            x
-            if self.training
-            else (torch.cat(z, 1),)
-            if self.export
-            else (torch.cat(z, 1), x)
-        )
+        return x if self.training else (torch.cat(z, 1),) if self.export else (torch.cat(z, 1), x)
 
     def _make_grid(self, nx=20, ny=20, i=0):
         d = self.anchors[i].device
@@ -120,10 +104,6 @@ class TtDetect(nn.Module):
         shape = 1, self.na, ny, nx, 2  # grid shape
         y, x = torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t)
         yv, xv = torch.meshgrid(y, x, indexing="ij")
-        grid = (
-            torch.stack((xv, yv), 2).expand(shape) - 0.5
-        )  # add grid offset, i.e. y = 2.0 * x - 0.5
-        anchor_grid = (
-            (self.anchors[i] * self.stride[i]).view((1, self.na, 1, 1, 2)).expand(shape)
-        )
+        grid = torch.stack((xv, yv), 2).expand(shape) - 0.5  # add grid offset, i.e. y = 2.0 * x - 0.5
+        anchor_grid = (self.anchors[i] * self.stride[i]).view((1, self.na, 1, 1, 2)).expand(shape)
         return grid, anchor_grid

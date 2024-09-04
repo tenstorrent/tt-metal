@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer
 
-import tt_lib
+import ttnn
 
 from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
@@ -17,6 +17,9 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
     is_e75,
+    run_for_grayskull,
+    run_for_wormhole_b0,
+    skip_for_wormhole_b0,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -37,6 +40,7 @@ def run_perf_bert11(
     model_location_generator,
     device,
 ):
+    profiler.clear()
     model_config = get_model_config(batch_size, device.compute_with_storage_grid_size(), model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
@@ -47,7 +51,6 @@ def run_perf_bert11(
     first_attention_mask_key = "first_attention_mask"
     first_run_key = "first_run"
     second_run_accum_key = "second_run_accum"
-    second_run_key = "second_run"
     cpu_key = "ref_key"
 
     HF_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False, low_cpu_mem_usage=True)
@@ -121,7 +124,7 @@ def run_perf_bert11(
             del tt_embedding_inputs
             del tt_embedding
         # Run last inference iteration
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_run_accum_key, force_enable=True)
         del tt_output
 
@@ -144,15 +147,14 @@ def run_perf_bert11(
     logger.info(f"bert11 compile time: {compile_time}")
 
 
-@pytest.mark.models_performance_virtual_machine
+@skip_for_wormhole_b0(reason_str="Didn't test on WH yet")
+@run_for_wormhole_b0(reason_str="WH specific batch size")
+@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
-    (
-        [7, "BFLOAT8_B-SHARDED", 0.05, 14.5, 10],
-        [12, "BFLOAT8_B-SHARDED", 0.05, 14.5, 10],
-    ),
+    ([8, "BFLOAT8_B-SHARDED", 0.0324, 6, 10],),
 )
-def test_perf_virtual_machine(
+def test_perf_bare_metal_wh(
     device,
     use_program_cache,
     batch_size,
@@ -162,9 +164,6 @@ def test_perf_virtual_machine(
     inference_iterations,
     model_location_generator,
 ):
-    if is_e75(device):
-        pytest.skip("Bert large 11 is not supported on E75")
-
     run_perf_bert11(
         batch_size,
         model_config_str,
@@ -176,15 +175,13 @@ def test_perf_virtual_machine(
     )
 
 
+@run_for_grayskull(reason_str="Batch size only supported for GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
-    (
-        [7, "BFLOAT8_B-SHARDED", 0.0364, 10, 10],
-        [12, "BFLOAT8_B-SHARDED", 0.0364, 10, 10],
-    ),
+    ([12, "BFLOAT8_B-SHARDED", 0.0324, 6, 10],),
 )
-def test_perf_bare_metal(
+def test_perf_bare_metal_gs(
     device,
     use_program_cache,
     batch_size,

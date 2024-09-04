@@ -7,7 +7,7 @@
 
 E150:
   1:
-    l1_bank_size:
+    storage_core_bank_size:
       524288
 
     compute_with_storage_grid_range: # Logical only start and end [x, y]
@@ -20,7 +20,7 @@ E150:
     dispatch_cores:
       [[0, -1], [6, -1]]
   2:
-    l1_bank_size:
+    storage_core_bank_size:
       524288
 
     compute_with_storage_grid_range: # Logical only start and end [x, y]
@@ -31,11 +31,11 @@ E150:
       [[2, -1],[3, -1],[4, -1],[5, -1],[8, -1],[9, -1],[10, -1],[11, -1]]
 
     dispatch_cores:
-      [[0, -1], [1, -1], [6, -1], [7, -1]]
+      [[0, -1], [6, -1], [1, -1], [7, -1]]
 
 E75:
   1:
-    l1_bank_size:
+    storage_core_bank_size:
       1048576
 
     compute_with_storage_grid_range: # Logical only start and end [x, y]
@@ -48,7 +48,7 @@ E75:
     dispatch_cores:
       [[11, 0], [11, 4]]
   2:
-    l1_bank_size:
+    storage_core_bank_size:
       1048576
 
     compute_with_storage_grid_range: # Logical only start and end [x, y]
@@ -59,4 +59,4 @@ E75:
       [[11, 2], [11, 3], [11, 6], [11, 7]]
 
     dispatch_cores:
-      [[11, 0], [11, 1], [11, 4], [11, 5]]
+      [[11, 0], [11, 4], [11, 1], [11, 5]]

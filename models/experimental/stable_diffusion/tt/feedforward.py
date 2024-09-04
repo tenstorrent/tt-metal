@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-
+import ttnn
 from typing import Optional
 
 from tt_lib.fallback_ops import fallback_ops
 
-import tt_lib as ttl
+import ttnn
 from models.experimental.stable_diffusion.sd_utils import make_linear
 
 
@@ -36,9 +36,7 @@ class TtGEGLU(nn.Module):
 
         weights = state_dict[f"{base_address}.proj.weight"]
         bias = state_dict[f"{base_address}.proj.bias"]
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         self.proj = make_linear(
             in_features=dim_in,
@@ -48,15 +46,15 @@ class TtGEGLU(nn.Module):
             device=device,
         )
 
-    def gelu(self, gate: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
-        return ttl.tensor.gelu(gate)
+    def gelu(self, gate: ttnn.Tensor) -> ttnn.Tensor:
+        return ttnn.gelu(gate)
 
-    def forward(self, hidden_states: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         hidden_states = self.proj(hidden_states)
         # hidden_states, gate = fallback_ops.chunk(hidden_states, 2, -1)
-        hidden_states, gate = ttl.tensor.split_last_dim_two_chunks_tiled(hidden_states)
+        hidden_states, gate = ttnn.split(hidden_states, 2, 3)
         act = self.gelu(gate)
-        return ttl.tensor.mul(hidden_states, act)
+        return ttnn.multiply(hidden_states, act)
 
 
 class TtFeedForward(nn.Module):
@@ -91,9 +89,7 @@ class TtFeedForward(nn.Module):
         assert activation_fn == "geglu", "except GEGLU, other activation functions are not supported."
         inner_dim = int(dim * mult)
         dim_out = dim_out if dim_out is not None else dim
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-        )
+        self.out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
         if activation_fn == "geglu":
             act_fn = TtGEGLU(
@@ -119,6 +115,6 @@ class TtFeedForward(nn.Module):
             device=device,
         )
 
-    def forward(self, hidden_states: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         hidden_states = self.act_fn(hidden_states)
         return self.linear(hidden_states)

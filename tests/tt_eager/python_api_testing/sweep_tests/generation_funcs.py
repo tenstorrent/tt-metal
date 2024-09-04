@@ -6,7 +6,6 @@ import torch
 import random
 from itertools import permutations, product
 from functools import lru_cache
-import tt_lib as ttl
 import ttnn
 import numpy as np
 from tt_lib.utils import _nearest_32 as nearest_32, tilize
@@ -22,21 +21,21 @@ supported_dtypes = {
     "chalf": torch.chalf,
 }
 
-supported_tt_dtypes = [ttl.tensor.DataType.BFLOAT16]
+supported_tt_dtypes = [ttnn.bfloat16]
 
 supported_tt_layouts = [
-    ttl.tensor.Layout.ROW_MAJOR,
-    ttl.tensor.Layout.TILE,
+    ttnn.ROW_MAJOR_LAYOUT,
+    ttnn.TILE_LAYOUT,
 ]
 
 supported_tt_buffer_types = [
-    ttl.tensor.BufferType.DRAM,
-    ttl.tensor.BufferType.L1,
+    ttnn.BufferType.DRAM,
+    ttnn.BufferType.L1,
 ]
 
 supported_mem_configs = [
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
 ]
 
 
@@ -47,17 +46,23 @@ def gen_func_with_cast(gen_func, dtype, tilize_input=False):
 
 def gen_func_with_cast_tt(gen_func, dtype):
     def tensor_to_dtype(x):
-        if dtype == ttl.tensor.DataType.BFLOAT16:
+        if dtype == ttnn.bfloat16:
             x = x.to(torch.bfloat16)
 
-        elif dtype == ttl.tensor.DataType.BFLOAT8_B:
+        elif dtype == ttnn.bfloat8_b:
             tt_tensor = ttnn.from_torch(
                 x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=None, memory_config=None
             )
 
             x = ttnn.to_torch(tt_tensor)
 
-        elif dtype == ttl.tensor.DataType.UINT32:
+        elif dtype == ttnn.uint16:
+            x = x.to(torch.int16)
+
+        elif dtype == ttnn.uint32:
+            x = x.to(torch.int32)
+
+        elif dtype == ttnn.int32:
             x = x.to(torch.int32)
 
         else:
@@ -261,7 +266,9 @@ def gen_identity(size):
 ###################################################
 
 
-def gen_tensor_pad_args(input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None):
+def gen_tensor_pad_args(
+    input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None, do_sanitize_args=False, coregrid=[]
+):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
     test_args = {}
@@ -278,19 +285,19 @@ def gen_tensor_pad_args(input_shapes, supported_dtypes=None, supported_layouts=N
             "output_tensor_shape": output_tensor_shape,
             "input_tensor_start": input_tensor_start,
             "pad_value": pad_value,
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [None],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         }
     )
 
     return [test_args]
 
 
-def gen_tensor_unpad_args(input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None):
+def gen_tensor_unpad_args(
+    input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None, do_sanitize_args=True, coregrid=[]
+):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
     test_args = {}
@@ -301,19 +308,19 @@ def gen_tensor_unpad_args(input_shapes, supported_dtypes=None, supported_layouts
         {
             "output_tensor_start": output_tensor_start,
             "output_tensor_end": output_tensor_end,
-            "dtype": [ttl.tensor.DataType.BFLOAT16],
-            "layout": [ttl.tensor.Layout.ROW_MAJOR],
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [None],
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         }
     )
 
     return [test_args]
 
 
-def gen_pad_to_tile_args(input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None):
+def gen_pad_to_tile_args(
+    input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None, do_sanitize_args=True, coregrid=[]
+):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
 
@@ -323,18 +330,18 @@ def gen_pad_to_tile_args(input_shapes, supported_dtypes=None, supported_layouts=
 
     test_args = {
         "pad_value": pad_value,
-        "dtype": [ttl.tensor.DataType.BFLOAT16],
-        "layout": [ttl.tensor.Layout.ROW_MAJOR],
+        "dtype": [ttnn.bfloat16],
+        "layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_mem_config": [None],
-        "output_mem_config": ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-        ),
+        "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     }
 
     return [test_args]
 
 
-def gen_unpad_from_tile_args(input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None):
+def gen_unpad_from_tile_args(
+    input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None, do_sanitize_args=True, coregrid=[]
+):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
     assert input_shapes[0][-2] % 32 == 0
@@ -348,57 +355,52 @@ def gen_unpad_from_tile_args(input_shapes, supported_dtypes=None, supported_layo
 
     test_args = {
         "output_tensor_shape": output_tensor_shape,
-        "dtype": [ttl.tensor.DataType.BFLOAT16],
-        "layout": [ttl.tensor.Layout.ROW_MAJOR],
+        "dtype": [ttnn.bfloat16],
+        "layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_mem_config": [None],
-        "output_mem_config": ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-        ),
+        "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     }
 
     return [test_args]
 
 
-def gen_default_dtype_layout_device(input_shapes, dtypes=None, layouts=None, mem_configs=None):
+def gen_default_dtype_layout_device(
+    input_shapes, dtypes=None, layouts=None, mem_configs=None, do_sanitize_args=False, coregrid=[]
+):
     dtype = []
     layout = []
     input_mem_config = []
 
     for input_shape in input_shapes:
-        dtype.append(ttl.tensor.DataType.BFLOAT16)
-        input_mem_config.append(
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-        )
+        dtype.append(ttnn.bfloat16)
+        input_mem_config.append(ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM))
 
         if input_shape[-2] % 32 == 0 and input_shape[-1] % 32 == 0:
-            layout.append(ttl.tensor.Layout.TILE)
+            layout.append(ttnn.TILE_LAYOUT)
         else:
-            layout.append(ttl.tensor.Layout.ROW_MAJOR)
+            layout.append(ttnn.ROW_MAJOR_LAYOUT)
 
     return [
         {
             "dtype": dtype,
             "layout": layout,
             "input_mem_config": input_mem_config,
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         }
     ]
 
 
-def gen_default_dtype_layout_rm_device(input_shapes, dtypes=None, layouts=None, mem_configs=None):
+def gen_default_dtype_layout_rm_device(
+    input_shapes, dtypes=None, layouts=None, mem_configs=None, do_sanitize_args=False, coregrid=[]
+):
     return [
         {
-            "dtype": [ttl.tensor.DataType.BFLOAT16] * len(input_shapes),
-            "layout": [ttl.tensor.Layout.ROW_MAJOR] * len(input_shapes),
-            "input_mem_config": [
-                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-            ]
+            "dtype": [ttnn.bfloat16] * len(input_shapes),
+            "layout": [ttnn.ROW_MAJOR_LAYOUT] * len(input_shapes),
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)]
             * len(input_shapes),
-            "output_mem_config": ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-            ),
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            "use_multicore": True,
         }
     ]
 
@@ -409,16 +411,15 @@ def sanitize_args(input_shapes, input_setup):
 
         if (
             (
-                input_setup[i]["layout"] == ttl.tensor.Layout.TILE and (shape[-2] % 32 != 0 or shape[-1] % 32 != 0)
+                input_setup[i]["layout"] == ttnn.TILE_LAYOUT and (shape[-2] % 32 != 0 or shape[-1] % 32 != 0)
             )  # Shape cannot be tilized
             or (
-                input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
+                input_setup[i]["layout"] == ttnn.ROW_MAJOR_LAYOUT
                 and input_setup[i]["input_mem_config"] != None
                 and shape[-1] % 2 != 0
             )  # Shape cannot be placed as row major on device
             or (
-                input_setup[i]["dtype"] == ttl.tensor.DataType.BFLOAT8_B
-                and input_setup[i]["layout"] != ttl.tensor.Layout.TILE
+                input_setup[i]["dtype"] == ttnn.bfloat8_b and input_setup[i]["layout"] != ttnn.TILE_LAYOUT
             )  # BFLOAT8_B must be tile layout
         ):
             return None
@@ -431,6 +432,7 @@ def gen_dtype_layout_device(
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],  # mem_configs[-1] is output_mem_config
     do_sanitize_args=True,
+    coregrid=[],
 ):
     # last buffer_types option is for output buffer
     dtype_mem_config_layouts = []
@@ -478,15 +480,6 @@ def gen_dtype_layout_device(
     return result
 
 
-def gen_dtype_layout_device_dont_sanitize(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
-
-
 def sanitize_args_layernorm(
     input_shapes, input_setup, runtime_tile_padding_layernorm=False, runtime_tile_padding_add_layernorm=False
 ):
@@ -494,7 +487,7 @@ def sanitize_args_layernorm(
         shape = input_shapes[i]
         if (
             (
-                input_setup[i]["layout"] == ttl.tensor.Layout.TILE
+                input_setup[i]["layout"] == ttnn.TILE_LAYOUT
                 and (
                     (
                         shape[2] % 32 != 0
@@ -507,13 +500,12 @@ def sanitize_args_layernorm(
                 )
             )  # Shape cannot be tilized
             or (
-                input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
+                input_setup[i]["layout"] == ttnn.ROW_MAJOR_LAYOUT
                 and input_setup[i]["input_mem_config"] != None
                 and shape[3] % 2 != 0
             )  # Shape cannot be placed as row major on device
             or (
-                input_setup[i]["dtype"] == ttl.tensor.DataType.BFLOAT8_B
-                and input_setup[i]["layout"] != ttl.tensor.Layout.TILE
+                input_setup[i]["dtype"] == ttnn.bfloat8_b and input_setup[i]["layout"] != ttnn.TILE_LAYOUT
             )  # BFLOAT8_B must be tile layout
         ):
             return None
@@ -581,6 +573,8 @@ def gen_layernorm_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=False,
+    coregrid=[],
 ):
     return gen_dtype_layout_device_layernorm(
         input_shapes,
@@ -597,6 +591,8 @@ def gen_add_layernorm_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=False,
+    coregrid=[],
 ):
     return gen_dtype_layout_device_layernorm(
         input_shapes,
@@ -608,20 +604,13 @@ def gen_add_layernorm_args(
     )
 
 
-def gen_bert_qkv_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
-
-
 def gen_permute_args(
     input_shapes,
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     dim_to_permute = []
 
@@ -634,17 +623,28 @@ def gen_permute_args(
             dtypes,
             layouts,
             mem_configs,
+            do_sanitize_args=do_sanitize_args,
         ):
+            if input_info["layout"][0] == ttnn.ROW_MAJOR_LAYOUT:
+                # Last dim of output must be divisible by 2 for row_major
+                last_dim = permute_dims[-1]
+                last_dim_shape = input_shapes[0][last_dim]
+
+                if last_dim_shape % 2 == 1:
+                    continue
+
             if input_info is not None:
                 input_info.update({"permute_dims": permute_dims})
                 yield input_info
 
 
-def gen_fill_rm_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_fill_rm_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
     H = input_shapes[0][-2]
     W = input_shapes[0][-1]
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             input_info["hOnes"] = random.randint(1, H)
             input_info["wOnes"] = random.randint(1, W)
@@ -655,11 +655,20 @@ def gen_fill_rm_args(input_shapes, dtypes, layouts, mem_configs):
             yield input_info
 
 
-def gen_fill_ones_rm_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_fill_ones_rm_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    do_sanitize_args=True,
+    coregrid=[],
+):
     H = input_shapes[0][-2]
     W = input_shapes[0][-1]
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             input_info["hOnes"] = random.randint(1, H)
             input_info["wOnes"] = random.randint(1, W)
@@ -703,10 +712,12 @@ def _gen_reshape_args_from_volume(volume, step, out_dims=4):
 
 def gen_reshape_args(
     input_shapes,
-    dtypes=[[ttl.tensor.DataType.BFLOAT16]],
-    layouts=[[ttl.tensor.Layout.TILE]],
-    mem_configs=[[ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)]],
+    dtypes=[[ttnn.bfloat16]],
+    layouts=[[ttnn.TILE_LAYOUT]],
+    mem_configs=[[ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)]],
     max_out_shapes=2,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     vol = 1
 
@@ -729,6 +740,7 @@ def gen_reshape_args(
             dtypes,
             layouts,
             mem_configs,
+            do_sanitize_args=do_sanitize_args,
         ):
             if input_info is not None:
                 input_info.update(reshape_dims)
@@ -741,12 +753,9 @@ def gen_reshape_args(
             break
 
 
-def gen_split_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_split_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             maxdim = len(input_shapes[0]) - 1
@@ -764,13 +773,17 @@ def gen_split_args(input_shapes, dtypes, layouts, mem_configs):
 def gen_tilize_with_val_padding_args(
     input_shapes,
     dtypes=[supported_tt_dtypes],
-    layouts=[[ttl.tensor.Layout.ROW_MAJOR]],
+    layouts=[[ttnn.ROW_MAJOR_LAYOUT]],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             pad_sizes = (10, 10, 64, 64)
             output_tensor_shape = [
@@ -783,7 +796,6 @@ def gen_tilize_with_val_padding_args(
             ]
             output_tensor_shape[-2] = nearest_32(output_tensor_shape[-2])
             output_tensor_shape[-1] = nearest_32(output_tensor_shape[-1])
-            input_tensor_start = [0, 0, 0, 0]
             pad_value = random.uniform(-100, 100)
             # Cast to bfloat16 then back to float for exact match
             pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
@@ -791,7 +803,6 @@ def gen_tilize_with_val_padding_args(
             input_info.update(
                 {
                     "output_tensor_shape": output_tensor_shape,
-                    "input_tensor_start": input_tensor_start,
                     "pad_value": pad_value,
                 }
             )
@@ -803,22 +814,25 @@ def gen_untilize_with_unpadding_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
     assert input_shapes[0][-2] % 32 == 0
     assert input_shapes[0][-1] % 32 == 0
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
-            output_tensor_start = [0, 0, 0, 0]
-            output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
+            output_tensor_end = [random.randrange(0, input_shapes[0][i], 1) for i in range(4)]
             if output_tensor_end[-1] % 2 == 0:
                 output_tensor_end[-1] += 1
             input_info.update(
                 {
-                    "output_tensor_start": output_tensor_start,
                     "output_tensor_end": output_tensor_end,
+                    "use_multicore": True,
                 }
             )
             yield input_info
@@ -829,13 +843,17 @@ def gen_pad_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
-            if input_info["layout"][0] == ttl.tensor.Layout.ROW_MAJOR:
+            if input_info["layout"][0] == ttnn.ROW_MAJOR_LAYOUT:
                 pad_sizes = (10, 10, 64, 64)
                 output_tensor_shape = [
                     random.randint(input_shapes[0][i], input_shapes[0][i] + pad_sizes[i]) for i in range(4)
@@ -854,7 +872,7 @@ def gen_pad_args(
                         "pad_value": pad_value,
                     }
                 )
-            elif input_info["layout"][0] == ttl.tensor.Layout.TILE:
+            elif input_info["layout"][0] == ttnn.TILE_LAYOUT:
                 pad_sizes = (10, 10, 64, 64)
                 output_tensor_shape = [
                     random.randrange(
@@ -887,13 +905,17 @@ def gen_unpad_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
 
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
-            if input_info["layout"][0] == ttl.tensor.Layout.ROW_MAJOR:
+            if input_info["layout"][0] == ttnn.ROW_MAJOR_LAYOUT:
                 output_tensor_start = [0, 0, 0, 0]
                 output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
                 if output_tensor_end[-1] % 2 == 0:
@@ -904,7 +926,7 @@ def gen_unpad_args(
                         "output_tensor_end": output_tensor_end,
                     }
                 )
-            elif input_info["layout"][0] == ttl.tensor.Layout.TILE:
+            elif input_info["layout"][0] == ttnn.TILE_LAYOUT:
                 output_tensor_start = [0, 0, 0, 0]
                 output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
                 output_tensor_end[-2] = max(nearest_32(output_tensor_end[-2]), 32) - 1
@@ -918,29 +940,6 @@ def gen_unpad_args(
             yield input_info
 
 
-def gen_lamb_optimized_args(
-    input_shapes,
-    dtypes,
-    layouts,
-    mem_configs,
-    dtype=torch.bfloat16,
-):
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
-        if input_info is not None:
-            beta1 = random.uniform(0.8, 0.99)  # (0.8, 0.99) (0.9, 0.9)
-            beta2 = random.uniform(0.99, 0.9999)  # (0.99, 0.9999) (0.999, 0.999)
-            step_size = random.uniform(1e-4, 1e-2)  # (1e-4, 1e-2) (1e-3, 1e-3)
-            eps = random.uniform(1e-7, 1e-5)  # (1e-7, 1e-5) (1e-6, 1e-6)
-            weight_decay = random.uniform(0.001, 0.05)  # (0.001, 0.05) (0.01, 0.01)
-
-            input_info.update({"beta1": beta1})
-            input_info.update({"beta2": beta2})
-            input_info.update({"step_size": step_size})
-            input_info.update({"eps": eps})
-            input_info.update({"weight_decay": weight_decay})
-            yield input_info
-
-
 def gen_scalar_args(
     input_shapes,
     dtypes,
@@ -950,8 +949,12 @@ def gen_scalar_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             if dtype.is_floating_point:
                 scalar = torch.tensor(1, dtype=dtype).uniform_(low, high).item()
@@ -966,14 +969,11 @@ def gen_conv2d_args(
     dtypes,
     layouts,
     mem_configs,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_conv_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "conv_params",
-        torch.int,
+        input_shapes, dtypes, layouts, mem_configs, "conv_params", torch.int, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -985,8 +985,12 @@ def gen_conv_scalar_args(
     mem_configs,
     arg0_name="conv_params",
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
-    for input_info in gen_dtype_layout_device(input_shapes, supported_dtypes, supported_layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, supported_dtypes, supported_layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         lowStride = 1
         highStride = 4
         padH = 0
@@ -1018,16 +1022,11 @@ def gen_scalar_symmetric_args(
     low=0.01,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        arg_name,
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, arg_name, low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             sign = (torch.tensor(1, dtype=torch.int).random_(0, 2) * 2 - 1).item()
@@ -1043,16 +1042,11 @@ def gen_power_args(
     low=0,
     high=10,
     dtype=torch.int,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "exponent",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "exponent", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1065,16 +1059,11 @@ def gen_relu_min_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "lower_limit",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "lower_limit", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1087,24 +1076,29 @@ def gen_relu_max_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "upper_limit",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "upper_limit", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
 
 def gen_scale_mask_softmax_in_place_args(
-    input_shapes, dtypes, layouts, mem_configs, low=1, high=100, dtype=torch.bfloat16
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=1,
+    high=100,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
-    for input_info in gen_scalar_args(input_shapes, dtypes, layouts, mem_configs, "scale", low, high, dtype):
+    for input_info in gen_scalar_args(
+        input_shapes, dtypes, layouts, mem_configs, "scale", low, high, dtype, do_sanitize_args=do_sanitize_args
+    ):
         yield input_info
 
 
@@ -1116,8 +1110,12 @@ def gen_lerp_binary_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
-    for input_info in gen_scalar_args(input_shapes, dtypes, layouts, mem_configs, "weight", low, high, dtype):
+    for input_info in gen_scalar_args(
+        input_shapes, dtypes, layouts, mem_configs, "weight", low, high, dtype, do_sanitize_args=do_sanitize_args
+    ):
         yield input_info
 
 
@@ -1129,6 +1127,8 @@ def gen_subalpha_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1139,6 +1139,7 @@ def gen_subalpha_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
@@ -1151,6 +1152,8 @@ def gen_addalpha_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1161,6 +1164,7 @@ def gen_addalpha_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
@@ -1173,6 +1177,8 @@ def gen_logit_args(
     low=-10,
     high=0.99,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1183,6 +1189,8 @@ def gen_logit_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
+        coregrid=[],
     ):
         yield input_info
 
@@ -1195,8 +1203,10 @@ def gen_shrink_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
-    for input_info in (
+    for input_info in gen_scalar_args(
         input_shapes,
         supported_dtypes,
         supported_layouts,
@@ -1205,6 +1215,8 @@ def gen_shrink_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
+        coregrid=[],
     ):
         yield input_info
 
@@ -1217,6 +1229,8 @@ def gen_bias_gelu_unary_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1227,6 +1241,7 @@ def gen_bias_gelu_unary_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
@@ -1239,16 +1254,11 @@ def gen_logical_immediate_args(
     low=0,
     high=100,
     dtype=torch.int32,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "immediate",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "immediate", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1261,16 +1271,11 @@ def gen_shrink_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "_lambda",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "_lambda", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1283,6 +1288,8 @@ def gen_leaky_relu_args(
     low=0,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1293,6 +1300,7 @@ def gen_leaky_relu_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
@@ -1305,27 +1313,34 @@ def gen_elu_args(
     low=-10,
     high=10,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "alpha",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "alpha", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
 
-def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs):
-    input_info = gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-    )
+def gen_celu_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=0.01,
+    high=10,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    for input_info in gen_scalar_symmetric_args(
+        input_shapes, dtypes, layouts, mem_configs, "alpha", low, high, dtype, do_sanitize_args=do_sanitize_args
+    ):
+        yield input_info
+
+
+def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
+    input_info = gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args)
 
     test_args_combinations = []
 
@@ -1343,13 +1358,15 @@ def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs):
     return test_args_combinations
 
 
-def gen_activation_args(input_shapes, dtypes, layouts, mem_configs):
-    input_info = gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-    )
+def gen_activation_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    input_info = gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args)
 
     test_args_combinations = []
 
@@ -1376,12 +1393,11 @@ def gen_two_scalar_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             if dtype.is_floating_point:
@@ -1402,17 +1418,11 @@ def gen_clip_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_two_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "low",
-        "high",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "low", "high", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         if input_info["low"] > input_info["high"]:
             input_info["low"], input_info["high"] = (
@@ -1430,6 +1440,8 @@ def gen_threshold_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_two_scalar_args(
         input_shapes,
@@ -1441,12 +1453,25 @@ def gen_threshold_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         yield input_info
 
 
-def gen_hardtanh_args(input_shapes, dtypes, layouts, mem_configs, low=-10, high=10, dtype=torch.bfloat16):
-    for input_info in gen_two_scalar_args(input_shapes, dtypes, layouts, mem_configs, "low", "high", low, high, dtype):
+def gen_hardtanh_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=-10,
+    high=10,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    for input_info in gen_two_scalar_args(
+        input_shapes, dtypes, layouts, mem_configs, "low", "high", low, high, dtype, do_sanitize_args=do_sanitize_args
+    ):
         if input_info["low"] > input_info["high"]:
             input_info["low"], input_info["high"] = (
                 input_info["high"],
@@ -1464,12 +1489,11 @@ def gen_polyval_args(
     max_num_coeffs=10,
     low=-100,
     high=100,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             num_coeffs = torch.tensor(1, dtype=torch.int).random_(1, max_num_coeffs + 1).item()
@@ -1478,7 +1502,7 @@ def gen_polyval_args(
             yield input_info
 
 
-def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=100):
+def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=100, do_sanitize_args=True):
     for input_info in gen_two_scalar_args(
         input_shapes,
         dtypes,
@@ -1489,6 +1513,8 @@ def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=1
         low,
         high,
         torch.int,
+        do_sanitize_args=do_sanitize_args,
+        coregrid=[],
     ):
         if input_info["start"] > input_info["end"]:
             input_info["start"], input_info["end"] = (
@@ -1512,26 +1538,18 @@ def gen_logical_immediate_args(
     low=0,
     high=100,
     dtype=torch.int32,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        buffer_types,
-        "immediate",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, buffer_types, "immediate", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
 
-def gen_concat_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_concat_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             dim = -1
@@ -1548,25 +1566,17 @@ def gen_concat_args(input_shapes, dtypes, layouts, mem_configs):
             yield input_info
 
 
-def gen_geglu_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_geglu_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             input_info.update({"dim": -1})
             yield input_info
 
 
-def gen_tilize_args(input_shapes, dtypes, layouts, mem_configs):
-    input_info = gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-    )
+def gen_tilize_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
+    input_info = gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args)
 
     new_input_info = []
 
@@ -1583,71 +1593,6 @@ def gen_tilize_args(input_shapes, dtypes, layouts, mem_configs):
             yield info
 
 
-def sanitize_args_bert(input_shapes, input_setup):
-    for i in range(len(input_shapes)):
-        shape = input_shapes[i]
-
-        if (
-            input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
-            and input_setup[i]["input_mem_config"] != None
-            and shape[3] % 2 != 0
-        ) or (  # Shape cannot be placed as row major on device
-            input_setup[i]["dtype"] == ttl.tensor.DataType.BFLOAT8_B
-            and input_setup[i]["layout"] != ttl.tensor.Layout.TILE
-        ):  # BFLOAT8_B must be tile layout
-            return None
-    return input_setup
-
-
-def gen_dtype_layout_device_bert(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],  # mem_configs[-1] is outpu_mem_config
-):
-    # last buffer_types option is for output buffer
-    dtype_mem_config_layouts = []
-
-    for i in range(len(input_shapes)):
-        dtype_mem_config_layout = []
-
-        for dtype, layout, input_mem_config in product(
-            dtypes[i],
-            layouts[i],
-            mem_configs[i],
-        ):
-            dtype_mem_config_layout.append({"dtype": dtype, "layout": layout, "input_mem_config": input_mem_config})
-
-        dtype_mem_config_layouts.append(dtype_mem_config_layout)
-
-    result = []
-
-    for out_mem_config in mem_configs[-1]:
-        for dtype_mem_config_layout_combination in product(*dtype_mem_config_layouts):
-            out = sanitize_args_bert(input_shapes, dtype_mem_config_layout_combination)
-
-            if out is not None:
-                dtype = []
-                layout = []
-                input_mem_config = []
-
-                for x in dtype_mem_config_layout_combination:
-                    dtype.append(x["dtype"])
-                    layout.append(x["layout"])
-                    input_mem_config.append(x["input_mem_config"])
-
-                result.append(
-                    {
-                        "dtype": dtype,
-                        "layout": layout,
-                        "input_mem_config": input_mem_config,
-                        "output_mem_config": out_mem_config,
-                    }
-                )
-
-    return result
-
-
 def gen_polygamma_args(
     input_shapes,
     supported_dtypes,
@@ -1656,6 +1601,8 @@ def gen_polygamma_args(
     low=-1,
     high=10,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1666,6 +1613,7 @@ def gen_polygamma_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         # the n(int) order of the polygamma function is b/w 1 to 10
         k_order = np.random.randint(1, 10)
@@ -1681,6 +1629,8 @@ def gen_rop_args(
     low=-1,
     high=10,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
         input_shapes,
@@ -1691,20 +1641,12 @@ def gen_rop_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
         # the n(int) order of the polygamma function is b/w 1 to 10
         factor = random.uniform(0.1, 10.0)
         input_info.update({"factor": factor})
         yield input_info
-
-
-def gen_embeddings_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
 
 
 def gen_repeat_interleave_args(
@@ -1715,17 +1657,11 @@ def gen_repeat_interleave_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_two_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "repeat",
-        "dim",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "repeat", "dim", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         repeats = np.random.randint(1, 5)
         dims = np.random.choice([0, 2])
@@ -1733,12 +1669,9 @@ def gen_repeat_interleave_args(
         yield input_info
 
 
-def gen_glu_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_glu_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             # max_dim = len(input_shapes[0]) - 1
@@ -1748,12 +1681,9 @@ def gen_glu_args(input_shapes, dtypes, layouts, mem_configs):
             yield input_info
 
 
-def gen_dim_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_dim_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True):
     for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
     ):
         if input_info is not None:
             max_dim = len(input_shapes[0]) - 1
@@ -1767,6 +1697,8 @@ def gen_rmsnorm_args(
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
+    do_sanitize_args=False,
+    coregrid=[],
 ):
     return gen_dtype_layout_device_layernorm(
         input_shapes,
@@ -1778,15 +1710,6 @@ def gen_rmsnorm_args(
     )
 
 
-def gen_groupnorm_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
-
-
 def gen_power_fp_args(
     input_shapes,
     dtypes,
@@ -1795,16 +1718,11 @@ def gen_power_fp_args(
     low=0,
     high=10,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "exponent",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "exponent", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1819,8 +1737,12 @@ def gen_isclose_args(
     atol_low=1e-9,
     atol_high=1e-7,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
-    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
         if input_info is not None:
             if dtype.is_floating_point:
                 rtol = torch.tensor(1, dtype=dtype).uniform_(rtol_low, rtol_low).item()
@@ -1834,24 +1756,6 @@ def gen_isclose_args(
 
             input_info.update({"rtol": rtol, "atol": atol, "equal_nan": False})
             yield input_info
-
-
-def gen_ttnn_layernorm_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
-
-
-def gen_ttnn_rmsnorm_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
 
 
 def gen_rand_exclude_range(size, excluderange=None, low=0, high=100):
@@ -1884,32 +1788,17 @@ def gen_ttnn_repeat_interleave_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_two_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "repeat",
-        "dim",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "repeat", "dim", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         shapes_size = len(input_shapes)
         repeats = np.random.randint(1, 5)
         dims = np.random.choice([0, shapes_size - 1])
         input_info.update({"repeat": repeats, "dim": dims})
         yield input_info
-
-
-def gen_ttnn_groupnorm_args(
-    input_shapes,
-    dtypes=[supported_tt_dtypes],
-    layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs],
-):
-    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
 
 
 def gen_upsample_args(
@@ -1920,16 +1809,11 @@ def gen_upsample_args(
     low=2,
     high=10,
     dtype=torch.int32,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        buffer_types,
-        "scale_factor",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, buffer_types, "scale_factor", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         yield input_info
 
@@ -1942,6 +1826,8 @@ def gen_softplus_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_two_scalar_args(
         input_shapes,
@@ -1953,28 +1839,18 @@ def gen_softplus_args(
         low,
         high,
         dtype,
+        do_sanitize_args=do_sanitize_args,
     ):
+        if input_info["beta"] == 0.0 and input_info["threshold"] > 0.0:
+            continue
         yield input_info
 
 
 def gen_min_max_dim_args(
-    input_shapes,
-    dtypes,
-    layouts,
-    mem_configs,
-    low=0,
-    high=4,
-    dtype=torch.int,
+    input_shapes, dtypes, layouts, mem_configs, low=0, high=4, dtype=torch.int, do_sanitize_args=True, coregrid=[]
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "dim",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "dim", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         rank = len(input_shapes[0])
         choices = [(rank - 1,), (rank - 2,)]
@@ -1993,16 +1869,11 @@ def gen_dim_args(
     low=-100,
     high=100,
     dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
 ):
     for input_info in gen_scalar_args(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-        "dim",
-        low,
-        high,
-        dtype,
+        input_shapes, dtypes, layouts, mem_configs, "dim", low, high, dtype, do_sanitize_args=do_sanitize_args
     ):
         rank = len(input_shapes[0])
 
@@ -2018,3 +1889,394 @@ def gen_dim_args(
 
         input_info.update({"dim": dims})
         yield input_info
+
+
+def gen_repeat_args(
+    input_shapes, dtypes, layouts, mem_configs, low=-100, high=100, dtype=torch.bfloat16, do_sanitize_args=False
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "shape",
+        low,
+        high,
+        dtype,
+    ):
+        shapes_size = len(input_shapes[0])
+        shapes = []
+
+        for i in range(0, shapes_size):
+            rand_shape = np.random.randint(1, 3)
+            shapes.append(rand_shape)
+
+        input_info.update({"shape": shapes})
+        yield input_info
+
+
+def gen_sharded_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=0,
+    high=10,
+    dtype=torch.int,
+    do_sanitize_args=False,
+):
+    for input_info in gen_scalar_args(
+        input_shapes, dtypes, layouts, mem_configs, "num_slices", 2, 10, dtype, do_sanitize_args=do_sanitize_args
+    ):
+        yield input_info
+
+
+def gen_three_scalar_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    arg0_name="scalar0",
+    arg1_name="scalar1",
+    arg2_name="scalar2",
+    low0=-100,
+    high0=100,
+    low1=-100,
+    high1=100,
+    low2=-100,
+    high2=100,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
+        if input_info is not None:
+            if dtype.is_floating_point:
+                scalar0 = torch.tensor(1, dtype=dtype).uniform_(low0, high0).item()
+                scalar1 = torch.tensor(1, dtype=dtype).uniform_(low1, high1).item()
+                scalar2 = torch.tensor(1, dtype=dtype).uniform_(low2, high2).item()
+            else:
+                scalar0 = torch.tensor(1, dtype=dtype).random_(low0, high0).item()
+                scalar1 = torch.tensor(1, dtype=dtype).random_(low1, high1).item()
+                scalar2 = torch.tensor(1, dtype=dtype).random_(low2, high2).item()
+            input_info.update({arg0_name: scalar0, arg1_name: scalar1, arg2_name: scalar2})
+            yield input_info
+
+
+def gen_sharded_args_coregrid(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=-100,
+    high=100,
+    dtype=torch.int,
+    do_sanitize_args=True,
+):
+    for input_info in gen_three_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "num_slices",
+        "x_core",
+        "y_core",
+        2,
+        10,
+        1,
+        6,
+        1,
+        6,
+        dtype,
+        do_sanitize_args=do_sanitize_args,
+    ):
+        yield input_info
+
+
+def gen_fmod_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1,
+    high=10,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "value",
+        low,
+        high,
+        dtype,
+        do_sanitize_args=do_sanitize_args,
+        coregrid=coregrid,
+    ):
+        input_info.update({"value": random.randint(-100, 100) + 0.5})
+
+        yield input_info
+
+
+def gen_dtype_layout_device_coregrid(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],  # mem_configs[-1] is output_mem_config
+    xcoregrid=None,
+    ycoregrid=None,
+    do_sanitize_args=True,
+):
+    # last buffer_types option is for output buffer
+    dtype_mem_config_layouts = []
+
+    for i in range(len(input_shapes)):
+        dtype_mem_config_layout = []
+
+        for dtype, layout, input_mem_config in product(
+            dtypes[i],
+            layouts[i],
+            mem_configs[i],
+        ):
+            dtype_mem_config_layout.append({"dtype": dtype, "layout": layout, "input_mem_config": input_mem_config})
+
+        dtype_mem_config_layouts.append(dtype_mem_config_layout)
+
+    result = []
+
+    for out_mem_config in mem_configs[-1]:
+        for dtype_mem_config_layout_combination in product(*dtype_mem_config_layouts):
+            if do_sanitize_args:
+                out = sanitize_args(input_shapes, dtype_mem_config_layout_combination)
+            else:
+                out = 1
+
+            if out is not None:
+                dtype = []
+                layout = []
+                input_mem_config = []
+
+                for x in dtype_mem_config_layout_combination:
+                    dtype.append(x["dtype"])
+                    layout.append(x["layout"])
+                    input_mem_config.append(x["input_mem_config"])
+
+                result.append(
+                    {
+                        "dtype": dtype,
+                        "layout": layout,
+                        "input_mem_config": input_mem_config,
+                        "output_mem_config": out_mem_config,
+                        "xcoregrid": xcoregrid,
+                        "ycoregrid": ycoregrid,
+                    }
+                )
+
+    return result
+
+
+def gen_dtype_layout_device_matmul(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],  # mem_configs[-1] is output_mem_config
+    xcoregrid=-1,
+    ycoregrid=-1,
+    do_sanitize_args=True,
+):
+    # last buffer_types option is for output buffer
+    dtype_mem_config_layouts = []
+
+    for i in range(len(input_shapes)):
+        dtype_mem_config_layout = []
+
+        for dtype, layout, input_mem_config in product(
+            dtypes[i],
+            layouts[i],
+            mem_configs[i],
+        ):
+            dtype_mem_config_layout.append({"dtype": dtype, "layout": layout, "input_mem_config": input_mem_config})
+
+        dtype_mem_config_layouts.append(dtype_mem_config_layout)
+
+    result = []
+
+    for out_mem_config in mem_configs[-1]:
+        for dtype_mem_config_layout_combination in product(*dtype_mem_config_layouts):
+            if do_sanitize_args:
+                out = sanitize_args(input_shapes, dtype_mem_config_layout_combination)
+            else:
+                out = 1
+
+            if out is not None:
+                dtype = []
+                layout = []
+                input_mem_config = []
+
+                for x in dtype_mem_config_layout_combination:
+                    dtype.append(x["dtype"])
+                    layout.append(x["layout"])
+                    input_mem_config.append(x["input_mem_config"])
+
+                result.append(
+                    {
+                        "dtype": dtype,
+                        "layout": layout,
+                        "input_mem_config": input_mem_config,
+                        "output_mem_config": out_mem_config,
+                        "xcoregrid": xcoregrid,
+                        "ycoregrid": ycoregrid,
+                    }
+                )
+
+    return result
+
+
+def gen_matmul_coregrid_args(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],
+    do_sanitize_args=False,
+    coregrid=[],
+):
+    xmin = coregrid[0]
+    xmax = coregrid[1]
+    ymin = coregrid[2]
+    ymax = coregrid[3]
+
+    assert xmin < xmax
+    assert ymin < ymax
+
+    xcoregrid = random.randint(xmin, xmax)
+    ycoregrid = random.randint(ymin, ymax)
+
+    return gen_dtype_layout_device_matmul(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        xcoregrid,
+        ycoregrid,
+        do_sanitize_args,
+    )
+
+
+def gen_bitwise_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1,
+    high=10,
+    dtype=torch.int32,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "value",
+        low,
+        high,
+        dtype,
+        do_sanitize_args=do_sanitize_args,
+        coregrid=coregrid,
+    ):
+        input_info.update({"value": random.randint(low, high) for _ in range(5)})
+
+        yield input_info
+
+
+def gen_floor_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1,
+    high=10,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "value",
+        low,
+        high,
+        dtype,
+        do_sanitize_args=do_sanitize_args,
+        coregrid=coregrid,
+    ):
+        input_info.update({"value": random.uniform(low, high) + 0.5})
+
+        yield input_info
+
+
+def gen_div_no_nan_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1,
+    high=10,
+    dtype=torch.bfloat16,
+    do_sanitize_args=True,
+    coregrid=[],
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "value",
+        low,
+        high,
+        dtype,
+        do_sanitize_args=do_sanitize_args,
+        coregrid=coregrid,
+    ):
+        input_info.update({"value": random.uniform(low, high)})
+
+        yield input_info
+
+
+def gen_topk_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
+        if input_info is not None:
+            # max_dim = len(input_shapes[0]) - 1
+            # dim = random.randint(0, max_dim)
+            # max_k = input_shapes[0][dim]
+            # k = random.randint(1, max_k-1)
+            # largest = random.choice([True, False])
+
+            # input_info.update({"dim": dim})
+            # input_info.update({"k": k})
+            # input_info.update({"largest": largest})
+
+            input_info.update({"dim": -1})
+            input_info.update({"k": 32})
+            input_info.update({"largest": True})
+            yield input_info
+
+
+def gen_argmax_args(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=True, coregrid=[]):
+    for input_info in gen_dtype_layout_device(
+        input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=do_sanitize_args
+    ):
+        if input_info is not None:
+            max_dim = len(input_shapes[0]) - 1
+            dim = random.choice([max_dim, None])
+            input_info.update({"dim": dim})
+            yield input_info

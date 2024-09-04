@@ -8,21 +8,14 @@
 
 #pragma once
 
-#include "tt_metal/common/core_coord.h"
-#include "tt_metal/impl/device/device.hpp"
-
 namespace tt {
-
-enum DebugPrintHartFlags : unsigned int {
-    DPRINT_RISCV_NC  = 1,
-    DPRINT_RISCV_TR0 = 2,
-    DPRINT_RISCV_TR1 = 4,
-    DPRINT_RISCV_TR2 = 8,
-    DPRINT_RISCV_BR  = 16,
-};
 
 constexpr int DPRINT_NRISCVS = 5;
 constexpr int DPRINT_NRISCVS_ETH = 1;
+
+namespace tt_metal {
+    class Device;
+}
 
 /*
 @brief Attaches a device to be monitored by the print server. If no devices were present on the

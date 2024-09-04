@@ -17,10 +17,7 @@ runs:
         venv-dir: ${{ github.workspace }}/python_env
         cache-dependency-path: |
           tt_metal/python_env/requirements-dev.txt
+          docs/requirements-docs.txt
           pyproject.toml
-        install-cmd: make python_env/dev PYTHON_ENV=${{ github.workspace }}/python_env -B
-    - name: Install Editable Python dependencies (TTNN, Stubs)
-      shell: bash
-      run: |
-        source ${{ github.workspace }}/python_env/bin/activate
-        make python_env/dev/editable PYTHON_ENV=${{ github.workspace }}/python_env -B
+          create_venv.sh
+        install-cmd: ./create_venv.sh

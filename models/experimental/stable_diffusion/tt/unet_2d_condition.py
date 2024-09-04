@@ -21,7 +21,7 @@ from models.experimental.stable_diffusion.tt.unet_2d_blocks import (
 from models.experimental.stable_diffusion.tt.unet_2d_blocks import (
     TtCrossAttnUpBlock2D as CrossAttnUpBlock2D,
 )
-import tt_lib as ttl
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.stable_diffusion.tt.experimental_ops import Conv2d
 
@@ -409,7 +409,7 @@ class UNet2DConditionModel(nn.Module):
         if self.use_fallback_ops:
             self.conv_act = fallback_ops.silu
         else:
-            self.conv_act = ttl.tensor.silu
+            self.conv_act = ttnn.silu
 
         conv_out_w = state_dict[f"{self.base_address_with_dot}conv_out.weight"]
         conv_out_b = state_dict[f"{self.base_address_with_dot}conv_out.bias"]
@@ -424,14 +424,14 @@ class UNet2DConditionModel(nn.Module):
 
     def forward(
         self,
-        sample: ttl.tensor.Tensor,
+        sample: ttnn.Tensor,
         timestep: int,
         encoder_hidden_states,
         class_labels=None,
         attention_mask=None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
-    ) -> ttl.tensor.Tensor:
+    ) -> ttnn.Tensor:
         r"""
         Args:
             sample (`torch.FloatTensor`): (batch, channel, height, width) noisy inputs tensor

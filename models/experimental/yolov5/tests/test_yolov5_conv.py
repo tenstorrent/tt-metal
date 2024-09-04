@@ -3,12 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-
-import tt_lib
+import ttnn
 import torch
 from loguru import logger
-
-from tt_lib.fallback_ops import fallback_ops
+import ttnn
 from models.experimental.yolov5.reference.models.common import DetectMultiBackend
 from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv, TtYolov5Conv2D
 from models.utility_functions import (
@@ -25,9 +23,7 @@ def test_Yolov5_Conv2D(device):
     half = False
     block = 1
 
-    refence_model = DetectMultiBackend(
-        weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half
-    )
+    refence_model = DetectMultiBackend(weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half)
     refence_module = refence_model.model.model[block].conv
 
     in_channels = refence_module.in_channels
@@ -68,7 +64,7 @@ def test_Yolov5_Conv2D(device):
     tt_out = tt_module(test_input)
 
     tt_out = tt_out.cpu()
-    tt_out = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_out = tt_out.to(ttnn.ROW_MAJOR_LAYOUT)
 
     tt_out = tt2torch_tensor(tt_out)
 
@@ -93,9 +89,7 @@ def test_Yolov5_Silu(device):
     half = False
     block = 1
 
-    refence_model = DetectMultiBackend(
-        weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half
-    )
+    refence_model = DetectMultiBackend(weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half)
     refence_module = refence_model.model.model[block].act
 
     torch.manual_seed(0)
@@ -103,7 +97,7 @@ def test_Yolov5_Silu(device):
     pt_out = refence_module(test_input)
 
     test_input = torch2tt_tensor(test_input, device)
-    tt_out = tt_lib.tensor.silu(test_input)
+    tt_out = ttnn.silu(test_input)
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
@@ -124,9 +118,7 @@ def test_Yolov5_conv(device):
     half = False
     block = 1
 
-    refence_model = DetectMultiBackend(
-        weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half
-    )
+    refence_model = DetectMultiBackend(weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half)
 
     refence_module = refence_model.model.model[block]
 
@@ -188,9 +180,7 @@ def test_Yolov5_Conv2D_real(device):
     half = False
     block = 0
 
-    refence_model = DetectMultiBackend(
-        weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half
-    )
+    refence_model = DetectMultiBackend(weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half)
     refence_module = refence_model.model.model[block].conv
 
     in_channels = refence_module.in_channels
@@ -232,7 +222,7 @@ def test_Yolov5_Conv2D_real(device):
     tt_out = tt_module(test_input)
 
     tt_out = tt_out.cpu()
-    tt_out = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR)
+    tt_out = tt_out.to(ttnn.ROW_MAJOR_LAYOUT)
 
     tt_out = tt2torch_tensor(tt_out)
 

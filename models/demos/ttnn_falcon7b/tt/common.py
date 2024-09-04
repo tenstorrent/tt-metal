@@ -14,35 +14,6 @@ def strip_state_dict_prefix(state_dict, prefix):
     return {k[len(prefix) + 1 :]: v for k, v in state_dict.items() if k.startswith(prefix)}
 
 
-def from_torch_cached(
-    filename,
-    torch_tensor,
-    device=None,
-    dtype=None,
-    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    layout=ttnn.TILE_LAYOUT,
-    unsqueeze_to_4d=False,
-):
-    filename = f"{filename}_{dtype.name}.bin"
-    try:
-        tensor = ttnn.load_tensor(filename)
-        if tuple(tensor.shape) != tuple(torch_tensor.shape):
-            logger.warning(
-                f"Cached file {filename} has shape {tensor.shape}, expected {torch_tensor.shape}, regenerating cache"
-            )
-            raise RuntimeError
-        logger.info(f"Loaded cache for {filename} of shape {tensor.shape}")
-    except (FileNotFoundError, RuntimeError):
-        tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout)
-        logger.info(f"Generating cache for {filename} of shape {tensor.shape}")
-        Path(filename).parent.mkdir(parents=True, exist_ok=True)
-        ttnn.dump_tensor(filename, tensor)
-    if unsqueeze_to_4d:
-        tensor = ttnn.unsqueeze_to_4D(tensor)
-    tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
-    return tensor
-
-
 def create_custom_preprocessor(model_config, tt_cache_path, device, base_file_name=None, weights_mesh_mapper=None):
     def rotary_embedding_custom_processor(torch_model, name):
         parameters = {}
@@ -53,60 +24,66 @@ def create_custom_preprocessor(model_config, tt_cache_path, device, base_file_na
 
         if isinstance(torch_model, transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding):
             parameters["cos_cached"] = ttnn.as_tensor(
-                torch_model.cos_cached.unsqueeze(0).unsqueeze(0),
+                torch_model.cos_cached,
                 dtype=model_config["COS_CACHED_WEIGHTS_DTYPE"],
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=model_config["DEFAULT_MEMCFG"],
                 cache_file_name=f"{base_file_path}.cos_cached",
+                preprocess=lambda tensor: tensor.unsqueeze(0).unsqueeze(0),
                 mesh_mapper=weights_mesh_mapper,
             )
             parameters["sin_cached"] = ttnn.as_tensor(
-                torch_model.sin_cached.unsqueeze(0).unsqueeze(0),
+                torch_model.sin_cached,
                 dtype=model_config["SIN_CACHED_WEIGHTS_DTYPE"],
                 device=device,
                 memory_config=model_config["DEFAULT_MEMCFG"],
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=f"{base_file_path}.sin_cached",
+                preprocess=lambda tensor: tensor.unsqueeze(0).unsqueeze(0),
                 mesh_mapper=weights_mesh_mapper,
             )
         elif isinstance(torch_model, torch.nn.Linear):
             parameters["weight"] = ttnn.as_tensor(
-                torch_model.weight.T.contiguous(),
+                torch_model.weight,
                 dtype=ttnn.bfloat8_b,
                 device=device,
                 memory_config=model_config["DEFAULT_MEMCFG"],
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=f"{base_file_path}.weight",
+                preprocess=lambda tensor: tensor.T.contiguous(),
                 mesh_mapper=weights_mesh_mapper,
             )
             if torch_model.bias is not None:
                 parameters["bias"] = ttnn.as_tensor(
-                    torch_model.bias.reshape((1, -1)),
+                    torch_model.bias,
                     dtype=ttnn.bfloat8_b,
                     device=device,
                     memory_config=model_config["DEFAULT_MEMCFG"],
                     layout=ttnn.TILE_LAYOUT,
                     cache_file_name=f"{base_file_path}.bias",
+                    preprocess=lambda tensor: tensor.reshape((1, -1)),
                     mesh_mapper=weights_mesh_mapper,
                 )
         elif isinstance(torch_model, torch.nn.LayerNorm):
             parameters["weight"] = ttnn.as_tensor(
-                torch_model.weight.reshape((1, -1)),
+                torch_model.weight,
                 dtype=ttnn.bfloat16,
                 device=device,
                 memory_config=model_config["DEFAULT_MEMCFG"],
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=f"{base_file_path}.weight",
+                preprocess=lambda tensor: tensor.reshape((1, -1)),
                 mesh_mapper=weights_mesh_mapper,
             )
             parameters["bias"] = ttnn.as_tensor(
-                torch_model.bias.reshape((1, -1)),
+                torch_model.bias,
                 dtype=ttnn.bfloat16,
                 device=device,
                 memory_config=model_config["DEFAULT_MEMCFG"],
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=f"{base_file_path}.bias",
+                preprocess=lambda tensor: tensor.reshape((1, -1)),
                 mesh_mapper=weights_mesh_mapper,
             )
 

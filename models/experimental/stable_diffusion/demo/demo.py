@@ -30,7 +30,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
 )
 
-import tt_lib as ttl
+import ttnn
 from models.experimental.stable_diffusion.tt.unet_2d_condition import UNet2DConditionModel as tt_unet_condition
 from models.experimental.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
@@ -106,9 +106,9 @@ def make_tt_unet(state_dict):
 
 def demo():
     # Initialize the device
-    device = ttl.device.CreateDevice(0)
+    device = ttnn.open_device(0)
 
-    ttl.device.SetDefaultDevice(device)
+    ttnn.SetDefaultDevice(device)
     # enable_persistent_kernel_cache()
     disable_persistent_kernel_cache()
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
@@ -259,7 +259,7 @@ def demo():
     pil_images = [Image.fromarray(image) for image in images][0]
     pil_images.save(f"{experiment_name}_tt.png")
 
-    ttl.device.CloseDevice(device)
+    ttnn.close_device(device)
 
 
 """

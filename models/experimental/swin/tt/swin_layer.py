@@ -6,6 +6,8 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
+import ttnn
+
 from models.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
@@ -19,7 +21,7 @@ from models.experimental.swin.swin_utils import (
     window_reverse,
 )
 
-import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 
 
@@ -135,12 +137,12 @@ class TtSwinLayer(nn.Module):
 
     def forward(
         self,
-        hidden_states: tt_lib.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         input_dimensions: Tuple[int, int],
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: Optional[bool] = False,
         always_partition: Optional[bool] = False,
-    ) -> Tuple[tt_lib.tensor.Tensor, tt_lib.tensor.Tensor]:
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         if not always_partition:
             self.set_shift_and_window_size(input_dimensions)
         else:
@@ -202,11 +204,11 @@ class TtSwinLayer(nn.Module):
         if was_padded:
             attention_windows = attention_windows[:, :height, :width, :]
         attention_windows = fallback_ops.reshape(attention_windows, 1, batch_size, height * width, channels)
-        hidden_states = tt_lib.tensor.add(shortcut, attention_windows)
+        hidden_states = ttnn.add(shortcut, attention_windows)
 
         layer_output = self.LayerNorm_after(hidden_states)
         layer_output = self.intermediate(layer_output)
-        layer_output = tt_lib.tensor.add(hidden_states, self.output(layer_output))
+        layer_output = ttnn.add(hidden_states, self.output(layer_output))
 
         layer_outputs = (layer_output, attention_outputs[1]) if output_attentions else (layer_output,)
         return layer_outputs

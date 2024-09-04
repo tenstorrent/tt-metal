@@ -5,7 +5,7 @@
 import torch.nn as nn
 import logging
 
-import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm
 from models.experimental.hrnet.hrnet_utils import create_batchnorm
@@ -19,10 +19,8 @@ class TtInterpolate(nn.Module):
         self.scale_factor = scale_factor
         self.mode = mode
 
-    def forward(self, x: tt_lib.tensor.Tensor):
-        out = fallback_ops.interpolate(
-            x, scale_factor=self.scale_factor, mode=self.mode
-        )
+    def forward(self, x: ttnn.Tensor):
+        out = fallback_ops.interpolate(x, scale_factor=self.scale_factor, mode=self.mode)
         return out
 
 
@@ -54,30 +52,22 @@ class TtHighResolutionModule(nn.Module):
 
         self.multi_scale_output = multi_scale_output
 
-        self.branches = self._make_branches(
-            num_branches, block, num_blocks, num_channels
-        )
+        self.branches = self._make_branches(num_branches, block, num_blocks, num_channels)
         self.fuse_layers = self._make_fuse_layers()
 
     def _check_branches(self, num_branches, num_blocks, num_inchannels, num_channels):
         if num_branches != len(num_blocks):
-            error_msg = "NUM_BRANCHES({}) <> NUM_BLOCKS({})".format(
-                num_branches, len(num_blocks)
-            )
+            error_msg = "NUM_BRANCHES({}) <> NUM_BLOCKS({})".format(num_branches, len(num_blocks))
             logger.error(error_msg)
             raise ValueError(error_msg)
 
         if num_branches != len(num_channels):
-            error_msg = "NUM_BRANCHES({}) <> NUM_CHANNELS({})".format(
-                num_branches, len(num_channels)
-            )
+            error_msg = "NUM_BRANCHES({}) <> NUM_CHANNELS({})".format(num_branches, len(num_channels))
             logger.error(error_msg)
             raise ValueError(error_msg)
 
         if num_branches != len(num_inchannels):
-            error_msg = "NUM_BRANCHES({}) <> NUM_INCHANNELS({})".format(
-                num_branches, len(num_inchannels)
-            )
+            error_msg = "NUM_BRANCHES({}) <> NUM_INCHANNELS({})".format(num_branches, len(num_inchannels))
             logger.error(error_msg)
             raise ValueError(error_msg)
 
@@ -128,9 +118,7 @@ class TtHighResolutionModule(nn.Module):
             for j in range(num_branches):
                 if j > i:
                     self.conv_weight = torch_to_tt_tensor_rm(
-                        self.state_dict[
-                            f"{self.base_address}.fuse_layers.{i}.{j}.0.weight"
-                        ],
+                        self.state_dict[f"{self.base_address}.fuse_layers.{i}.{j}.0.weight"],
                         self.device,
                         put_on_device=False,
                     )
@@ -165,9 +153,7 @@ class TtHighResolutionModule(nn.Module):
                     for k in range(i - j):
                         if k == i - j - 1:
                             self.conv_weight = torch_to_tt_tensor_rm(
-                                self.state_dict[
-                                    f"{self.base_address}.fuse_layers.{i}.{j}.{k}.0.weight"
-                                ],
+                                self.state_dict[f"{self.base_address}.fuse_layers.{i}.{j}.{k}.0.weight"],
                                 self.device,
                                 put_on_device=False,
                             )
@@ -195,9 +181,7 @@ class TtHighResolutionModule(nn.Module):
                             )
                         else:
                             self.conv_weight = torch_to_tt_tensor_rm(
-                                self.state_dict[
-                                    f"{self.base_address}.fuse_layers.{i}.{j}.{k}.0.weight"
-                                ],
+                                self.state_dict[f"{self.base_address}.fuse_layers.{i}.{j}.{k}.0.weight"],
                                 self.device,
                                 put_on_device=False,
                             )
@@ -221,7 +205,7 @@ class TtHighResolutionModule(nn.Module):
                                         bias=False,
                                     ),
                                     self.bn,
-                                    tt_lib.tensor.relu,
+                                    ttnn.relu,
                                 ]
                             )
                     merged_list = [item for sublist in conv3x3s for item in sublist]
@@ -235,7 +219,7 @@ class TtHighResolutionModule(nn.Module):
     def get_num_inchannels(self):
         return self.num_inchannels
 
-    def forward(self, x: tt_lib.tensor.Tensor):
+    def forward(self, x: ttnn.Tensor):
         if self.num_branches == 1:
             return [self.branches[0](x[0])]
 
@@ -254,14 +238,14 @@ class TtHighResolutionModule(nn.Module):
 
             for j in range(1, self.num_branches):
                 if i == j:
-                    y = tt_lib.tensor.add(y, x[j])
+                    y = ttnn.add(y, x[j])
                 else:
                     res = x[j]
                     module_list = self.fuse_layers[i][j]
                     res = module_list[0](res) if module_list[0] else res
                     for k in range(1, len(module_list)):
                         res = module_list[k](res) if module_list[k] is not None else res
-                    y = tt_lib.tensor.add(y, res)
-            x_fuse.append(tt_lib.tensor.relu(y))
+                    y = ttnn.add(y, res)
+            x_fuse.append(ttnn.relu(y))
 
         return x_fuse

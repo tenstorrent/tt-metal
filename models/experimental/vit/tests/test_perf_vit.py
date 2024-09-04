@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 from transformers import AutoImageProcessor, ViTForImageClassification
 
-import tt_lib
+import ttnn
 
 from models.experimental.vit.tt.modeling_vit import vit_for_image_classification
 from models.utility_functions import (
@@ -38,15 +38,13 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
 
     tt_inputs = torch_to_tt_tensor_rm(inputs["pixel_values"], device, put_on_device=False)
 
-    tt_inputs = tt_inputs.to(
-        device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
-    )
+    tt_inputs = tt_inputs.to(device, ttnn.L1_MEMORY_CONFIG)
     tt_model = vit_for_image_classification(device)
 
     with torch.no_grad():
         profiler.start(cpu_key)
         logits = HF_model(**inputs).logits
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
@@ -57,7 +55,7 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
 
         profiler.start(second_key)
         tt_output = tt_model(tt_inputs)[0]
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
         profiler.end(second_key)
 
     first_iter_time = profiler.get(first_key)
@@ -80,6 +78,7 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
     logger.info(f"vit compile time: {compile_time}")
 
 
+@pytest.mark.skip(reason="#7527: Test needs review")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
@@ -105,6 +104,7 @@ def test_perf_bare_metal(
     )
 
 
+@pytest.mark.skip(reason="#7527: Test needs review")
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",

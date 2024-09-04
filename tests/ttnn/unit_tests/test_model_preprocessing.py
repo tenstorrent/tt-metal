@@ -21,7 +21,7 @@ from ttnn.model_preprocessing import (
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0, skip_for_grayskull
 
 
 @contextlib.contextmanager
@@ -60,6 +60,7 @@ def test_linear(device, model_name, batch_size, m_size, k_size, n_size):
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("model_name", [None, "conv"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_input_channels", [128])
@@ -108,6 +109,7 @@ def test_conv(
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("model_name", [None, "conv_relu_conv"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_input_channels", [128])
@@ -180,6 +182,7 @@ def test_conv_relu_conv(
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("model_name", [None, "nested_conv_relu_conv"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_input_channels", [128])
@@ -261,6 +264,7 @@ def test_nested_conv_relu_conv(
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("model_name", [None, "conv_relu_linear"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("num_input_channels", [128])
@@ -324,7 +328,7 @@ def test_conv_relu_linear(
     output_tensor = ttnn.relu(output_tensor)
     output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.reshape(output_tensor, (-1, num_output_channels))
+    output_tensor = ttnn.get_fallback_function(ttnn.reshape)(output_tensor, (-1, num_output_channels))
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = output_tensor @ linear.weight + linear.bias
     output_tensor = ttnn.to_torch(output_tensor)
@@ -374,10 +378,11 @@ def test_module_with_childen_and_parameters(device, batch_size, m_size, k_size, 
     output_tensor = functional_ttnn(input_tensor, parameters)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99988)
 
 
 @skip_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("use_conv_bias", [True, False])
 def test_conv2d_with_batch_norm2d(device, use_conv_bias):
     torch.manual_seed(0)
@@ -470,6 +475,8 @@ def test_conv2d_with_batch_norm2d(device, use_conv_bias):
 
 
 @skip_for_wormhole_b0()
+@skip_for_grayskull("see issue #11917")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_resnet_with_module_cache(device):
     torch.manual_seed(0)
 

@@ -1,0 +1,60 @@
+name: "[internal] UMD Unit tests"
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 15
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - grayskull
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - E150
+          - N150
+          - N300
+          - BH
+      timeout:
+        required: false
+        type: number
+        default: 15
+
+jobs:
+  umd-unit-tests:
+    name: ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on:
+      - ${{ inputs.runner-label }}
+      - cloud-virtual-machine
+      - in-service
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ inputs.arch }}
+      LOGURU_LEVEL: INFO
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build UMD device and tests
+        run: |
+          cmake -B build -G Ninja
+          cmake --build build --target umd_tests
+      - name: Run UMD unit tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: build/test/umd/${{ inputs.arch }}/unit_tests

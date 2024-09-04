@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/host_api.hpp"
-#include "tensor/tensor.hpp"
-#include "tt_dnn/op_library/bcast/bcast_op.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "common/constants.hpp"
 #include "third_party/magic_enum/magic_enum.hpp"
 #include <tt_numpy/functions.hpp>
@@ -16,6 +16,8 @@
 using namespace tt;
 using namespace tt_metal;
 using namespace constants;
+
+
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -40,15 +42,15 @@ int main(int argc, char **argv) {
 
         auto run_operations = [&shapes, device] {
             for (const auto shape : shapes) {
-                for (auto bcast_dim: magic_enum::enum_values<BcastOpDim>()) {
+                for (auto bcast_dim: magic_enum::enum_values<ttnn::BcastOpDim>()) {
                     auto input_shape_a = shape;
-                    if (bcast_dim == BcastOpDim::H) {
+                    if (bcast_dim == ttnn::BcastOpDim::H) {
                         input_shape_a[-1] = 32;
                     }
-                    else if (bcast_dim == BcastOpDim::W) {
+                    else if (bcast_dim == ttnn::BcastOpDim::W) {
                         input_shape_a[-2] = 32;
                     }
-                    else if (bcast_dim == BcastOpDim::HW) {
+                    else if (bcast_dim == ttnn::BcastOpDim::HW) {
                         // do nothing
                     } else {
                         throw std::runtime_error("Unsupported Dim!");
@@ -57,8 +59,8 @@ int main(int argc, char **argv) {
                     Tensor a = tt::numpy::random::random(input_shape_a).to(Layout::TILE).to(device);
                     Tensor b = tt::numpy::zeros({1, 1, TILE_HEIGHT, TILE_WIDTH}, DataType::BFLOAT16).to(Layout::TILE).to(device);
 
-                    for (auto bcast_math: magic_enum::enum_values<BcastOpMath>()) {
-                        Tensor c = bcast(a, b, bcast_math, bcast_dim);
+                    for (auto bcast_math: magic_enum::enum_values<ttnn::BcastOpMath>()) {
+                        Tensor c = ttnn::bcast(0,a, b, bcast_math, bcast_dim);
                         Tensor d = c.cpu();
 
                         ////////////////////////////////////////////////////////////////////////////
@@ -73,28 +75,28 @@ int main(int argc, char **argv) {
             {
                 Tensor a = tt::numpy::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
                 Tensor b = tt::numpy::zeros({1, 1, 32, 4544}, DataType::BFLOAT16).to(Layout::TILE).to(device);
-                Tensor c = bcast(a, b, BcastOpMath::MUL, BcastOpDim::H);
+                Tensor c = ttnn::bcast(0, a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
                 Tensor a = tt::numpy::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
                 Tensor b = tt::numpy::zeros({1, 1, 32, 4544}, DataType::BFLOAT16).to(Layout::TILE).to(device);
-                Tensor c = bcast(a, b, BcastOpMath::ADD, BcastOpDim::H);
+                Tensor c = ttnn::bcast(0,a, b, ttnn::BcastOpMath::ADD, ttnn::BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
                 Tensor a = tt::numpy::random::random({1, 71, 32, 32}).to(Layout::TILE).to(device);
                 Tensor b = tt::numpy::zeros({1, 1, 32, 32}, DataType::BFLOAT16).to(Layout::TILE).to(device);
-                Tensor c = bcast(a, b, BcastOpMath::MUL, BcastOpDim::HW);
+                Tensor c = ttnn::bcast(0,a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
                 Tensor d = c.cpu();
             }
 
             {
                 Tensor a = tt::numpy::random::random({1, 71, 32, 64}).to(Layout::TILE).to(device);
                 Tensor b = tt::numpy::zeros({1, 1, 32, 32}, DataType::BFLOAT16).to(Layout::TILE).to(device);
-                Tensor c = bcast(a, b, BcastOpMath::MUL, BcastOpDim::HW);
+                Tensor c = ttnn::bcast(0,a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
                 Tensor d = c.cpu();
             }
         };

@@ -13,13 +13,18 @@
 #include "llk_math_common.h"
 #include "llk_operands.h"
 #include "llk_param_structs.h"
+#include "debug/status.h"
 
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
+template <bool untilize_en = false>
+inline void llk_math_hw_configure_disaggregated() { /*Unused for GS*/ }
 
 inline void llk_math_wait_for_dest_available() {
+    DEBUG_STATUS("MWDW");
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+    DEBUG_STATUS("MWDD");
 }
 
 template <bool is_fp32_dest_acc_en = false /*not used*/>

@@ -17,12 +17,12 @@ import ttnn
 
 def get_expected_times(functional_whisper):
     return {
-        ttnn_functional_whisper: (30.0, 7.0),
-        ttnn_optimized_functional_whisper: (30.0, 7.0),
+        ttnn_functional_whisper: (11, 4.16),
+        ttnn_optimized_functional_whisper: (1.2, 1.35),
     }[functional_whisper]
 
 
-@skip_for_wormhole_b0()
+@skip_for_wormhole_b0(reason_str="Not tested on single WH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["openai/whisper-base"])
@@ -69,15 +69,14 @@ def test_performance(device, use_program_cache, model_name, batch_size, sequence
         )
 
         start = time.time()
-        with ttnn.manage_config_attribute("enable_fast_runtime_mode", True):
-            tt_output = functional_whisper.whisper(
-                config,
-                input_embeds,
-                decoder_hidden_states,
-                decoder_attention_mask=decoder_attention_mask,
-                parameters=parameters,
-            )
-            tt_output = ttnn.to_torch(tt_output)
+        tt_output = functional_whisper.whisper(
+            config,
+            input_embeds,
+            decoder_hidden_states,
+            decoder_attention_mask=decoder_attention_mask,
+            parameters=parameters,
+        )
+        tt_output = ttnn.to_torch(tt_output)
         end = time.time()
 
         duration = end - start

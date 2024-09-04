@@ -5,8 +5,8 @@
 import pytest
 import torch
 from torch import nn
-import tt_lib
 from loguru import logger
+import ttnn
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from models.utility_functions import (
@@ -31,16 +31,12 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         return result
 
 
-def run_test_LlamaAttention_inference(
-    device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-):
+def run_test_LlamaAttention_inference(device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc):
     model_name = model_version
     tokenizer_name = tokenizer_version
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.float32
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32)
     hugging_face_reference_model.eval()
 
     configuration = hugging_face_reference_model.config
@@ -68,9 +64,7 @@ def run_test_LlamaAttention_inference(
     position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
 
     # PyTorch output =======================================================================
-    pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(
-        hugging_face_reference_model, layer_num
-    )
+    pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
     pytorch_out = pytorch_LlamaAttention_model(x=attention_input, y=position_ids)
 
     # TT hardware execution =================================================================
@@ -119,13 +113,9 @@ def run_test_LlamaAttention_inference(
         ),
     ),
 )
-def test_LlamaAttention_inference(
-    model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-):
-    device = tt_lib.device.CreateDevice(0)
-    tt_lib.device.SetDefaultDevice(device)
+def test_LlamaAttention_inference(model_version, tokenizer_version, batch, seq_len, on_weka, pcc):
+    device = ttnn.open_device(0)
+    ttnn.SetDefaultDevice(device)
 
-    run_test_LlamaAttention_inference(
-        device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-    )
-    tt_lib.device.CloseDevice(device)
+    run_test_LlamaAttention_inference(device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc)
+    ttnn.close_device(device)

@@ -11,7 +11,6 @@
 #include <tensix_types.h>
 #include "cfg_defines.h"
 #include "dev_mem_map.h"
-#include "dev_mem_map_versim.h"
 
 // Convenience and type defines
 typedef std::uint32_t uint;
@@ -140,7 +139,6 @@ typedef std::uint8_t byte;
 #define RISCV_DEBUG_REG_INSTRN_BUF_CTRL0        (RISCV_DEBUG_REGS_START_ADDR | 0x0A0)
 #define RISCV_DEBUG_REG_INSTRN_BUF_CTRL1        (RISCV_DEBUG_REGS_START_ADDR | 0x0A4)
 #define RISCV_DEBUG_REG_INSTRN_BUF_STATUS       (RISCV_DEBUG_REGS_START_ADDR | 0x0A8)
-#define RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD        (RISCV_DEBUG_REGS_START_ADDR | 0x064)
 #define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0     (RISCV_DEBUG_REGS_START_ADDR | 0x0F0)
 #define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK1     (RISCV_DEBUG_REGS_START_ADDR | 0x0F4)
 #define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK2     (RISCV_DEBUG_REGS_START_ADDR | 0x0F8)

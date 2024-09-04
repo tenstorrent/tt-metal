@@ -5,7 +5,6 @@
 import pytest
 import torch
 import json
-import tt_lib
 from loguru import logger
 
 from transformers import T5Model
@@ -13,9 +12,12 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
-    is_e75
+    is_e75,
+    is_wormhole_b0,
 )
 from models.experimental.t5.tt.t5_block import TtT5Block
+
+pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Skip for Wormhole B0")
 
 
 def run_test_T5Block_inference(device, model_name, input_h, input_w):

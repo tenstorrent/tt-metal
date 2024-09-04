@@ -12,7 +12,7 @@ from models.utility_functions import (
     torch_to_tt_tensor_rm,
 )
 
-import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.swin.tt.swin_encoder import TtSwinEncoder
 from models.experimental.swin.tt.swin_embeddings import TtSwinEmbeddings
@@ -21,11 +21,11 @@ from dataclasses import dataclass
 
 @dataclass
 class TtSwinModelOutput:
-    last_hidden_state: tt_lib.tensor.Tensor = None
-    pooler_output: Optional[tt_lib.tensor.Tensor] = None
-    hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    attentions: Optional[Tuple[tt_lib.tensor.Tensor]] = None
-    reshaped_hidden_states: Optional[Tuple[tt_lib.tensor.Tensor]] = None
+    last_hidden_state: ttnn.Tensor = None
+    pooler_output: Optional[ttnn.Tensor] = None
+    hidden_states: Optional[Tuple[ttnn.Tensor]] = None
+    attentions: Optional[Tuple[ttnn.Tensor]] = None
+    reshaped_hidden_states: Optional[Tuple[ttnn.Tensor]] = None
 
 
 class TtSwinModel(nn.Module):
@@ -83,10 +83,10 @@ class TtSwinModel(nn.Module):
 
     def get_head_mask(
         self,
-        head_mask: Optional[tt_lib.tensor.Tensor],
+        head_mask: Optional[ttnn.Tensor],
         num_hidden_layers: int,
         is_attention_chunked: bool = False,
-    ) -> tt_lib.tensor.Tensor:
+    ) -> ttnn.Tensor:
         if head_mask is not None:
             torch_head_mask = tt_to_torch_tensor(head_mask)
         else:
@@ -107,9 +107,9 @@ class TtSwinModel(nn.Module):
 
     def forward(
         self,
-        pixel_values: Optional[tt_lib.tensor.Tensor] = None,
-        bool_masked_pos: Optional[tt_lib.tensor.Tensor] = None,
-        head_mask: Optional[tt_lib.tensor.Tensor] = None,
+        pixel_values: Optional[ttnn.Tensor] = None,
+        bool_masked_pos: Optional[ttnn.Tensor] = None,
+        head_mask: Optional[ttnn.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
@@ -146,7 +146,7 @@ class TtSwinModel(nn.Module):
 
         pooled_output = None
         if self.pooler is not None:
-            sequence_output_transpose = tt_lib.tensor.transpose(sequence_output, -2, -1)
+            sequence_output_transpose = ttnn.transpose(sequence_output, -2, -1)
             sequence_output_transpose = tt_to_torch_tensor(sequence_output_transpose).squeeze(0)
             pooled_output = self.pooler(sequence_output_transpose)
             pooled_output = torch.flatten(pooled_output, 1)

@@ -15,7 +15,8 @@ test-list:
           high: 512
       comparison:
         function: comp_pcc
-      args-gen: gen_embeddings_args
+      args-gen: gen_dtype_layout_device
+      sanitize-args: False
       output-file: embeddings_sweep.csv
       args:
         inputs:

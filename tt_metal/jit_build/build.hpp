@@ -5,18 +5,26 @@
 #pragma once
 #include <thread>
 #include <string>
+#include <future>
 
 #include "common/tt_backend_api_types.hpp"
+#include "common/executor.hpp"
 #include "common/utils.hpp"
 #include "common/core_coord.h"
 #include "jit_build/data_format.hpp"
 #include "jit_build/settings.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/tt_stl/aligned_allocator.hpp"
 #include "llrt/rtoptions.hpp"
 
 
 namespace tt::tt_metal {
+
+static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;
+
+template <typename T>
+using vector_cache_aligned = std::vector<T, tt::stl::aligned_allocator<T, CACHE_LINE_ALIGNMENT>>;
 
 class JitBuildSettings;
 
@@ -37,7 +45,7 @@ class JitBuildEnv {
 
   public:
     JitBuildEnv();
-    void init(uint32_t device_id, tt::ARCH arch);
+    void init(uint32_t build_key, tt::ARCH arch);
 
     tt::ARCH get_arch() const { return arch_; }
     const string& get_root_path() const { return root_; }
@@ -69,7 +77,7 @@ class JitBuildEnv {
 
 // All the state used for a build in an abstract base class
 // Contains everything needed to do a build (all settings, methods, etc)
-class JitBuildState {
+class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
   protected:
     const JitBuildEnv& env_;
 
@@ -86,8 +94,8 @@ class JitBuildState {
     string includes_;
     string lflags_;
 
-    vector<string> srcs_;
-    vector<string> objs_;
+    vector_cache_aligned<std::string> srcs_;
+    vector_cache_aligned<std::string> objs_;
 
     string link_objs_;
 
@@ -131,7 +139,6 @@ class JitBuildDataMovement : public JitBuildState {
 
   public:
     JitBuildDataMovement(const JitBuildEnv& env, int which, bool is_fw = false);
-    void pre_compile(const string& kernel_in_path, const string& op_out_path) const;
 };
 
 class JitBuildCompute : public JitBuildState {
@@ -144,7 +151,6 @@ class JitBuildEthernet : public JitBuildState {
   private:
   public:
     JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw = false);
-    void pre_compile(const string& kernel_in_path, const string& op_out_path) const;
 };
 
 // Abstract base class for kernel specialization
@@ -155,17 +161,28 @@ class JitBuildSettings {
     virtual const string& get_full_kernel_name() const = 0;
     virtual void process_defines(const std::function<void (const string& define, const string &value)>) const = 0;
     virtual void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const = 0;
+  private:
+    bool use_multi_threaded_compile = true;
 };
 
 void jit_build(const JitBuildState& build, const JitBuildSettings *settings, const string& kernel_in_path);
 void jit_build_set(const JitBuildStateSet& builds, const JitBuildSettings *settings, const string& kernel_in_path);
 void jit_build_subset(const JitBuildStateSubset& builds, const JitBuildSettings *settings, const string& kernel_in_path);
 
-inline const string jit_build_get_kernel_compile_outpath(int device_id) {
+inline const string jit_build_get_kernel_compile_outpath(int build_key) {
     // TODO(pgk), get rid of this
     // The test infra needs the output dir.  Could put this in the device, but we plan
     // to remove the device dependence in the future, so putting this here for now
-    return llrt::OptionsG.get_root_dir() + "/built/" + std::to_string(device_id) + "/kernels/";
+    return llrt::OptionsG.get_root_dir() + "/built/" + std::to_string(build_key) + "/kernels/";
 }
 
+inline void launch_build_step(const std::function<void()> build_func, std::vector<std::shared_future<void>>& events) {
+  events.emplace_back(detail::async(build_func));
+}
+
+inline void sync_build_step(std::vector<std::shared_future<void>>& events) {
+  for (auto & f : events) {
+    f.get();
+  }
+}
 } // namespace tt::tt_metal

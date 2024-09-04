@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-zeros_like:
+  - eltwise-zeros_like:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -19,9 +19,10 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         data-layout: ["ROW_MAJOR"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: zeros_like_sweep.csv

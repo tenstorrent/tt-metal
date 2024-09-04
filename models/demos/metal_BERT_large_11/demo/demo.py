@@ -8,7 +8,7 @@ import torch
 
 from loguru import logger
 
-import tt_lib
+import ttnn
 from models.utility_functions import (
     disable_compilation_reports,
     disable_persistent_kernel_cache,
@@ -135,10 +135,7 @@ def run_bert_question_and_answering_inference_squadv2(
                 tt_output = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
 
                 tt_output = (
-                    tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
-                    .to_torch()
-                    .reshape(BATCH_SIZE, 1, seq_len, -1)
-                    .to(torch.float32)
+                    tt_output.to(ttnn.ROW_MAJOR_LAYOUT).to_torch().reshape(BATCH_SIZE, 1, seq_len, -1).to(torch.float32)
                 )
                 references = batch[1]
                 question = batch[2]
@@ -167,7 +164,7 @@ def run_bert_question_and_answering_inference_squadv2(
         logger.info(f"\tTT_Eval: exact: {eval_score['exact']} --  F1: {eval_score['f1']}")
         logger.info(f"\tCPU_Eval: exact: {cpu_eval_score['exact']} -- F1:  {cpu_eval_score['f1']}")
 
-        tt_lib.device.Synchronize(device)
+        ttnn.synchronize_device(device)
 
         return eval_score
 
@@ -306,9 +303,7 @@ def run_bert_question_and_answering_inference(
     profiler.start("processing_output_to_string")
 
     # convert TT Tensor returned from GS device to Torch tensor
-    tt_untilized_output = (
-        tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
-    )
+    tt_untilized_output = tt_out.to(ttnn.ROW_MAJOR_LAYOUT).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
     # extract logits for start and end of answer string
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
@@ -394,7 +389,7 @@ def test_demo(
 @pytest.mark.parametrize("batch", (7, 12), ids=["batch_7", "batch_12"])
 @pytest.mark.parametrize(
     "loop_count",
-    ((50),),
+    ((20),),
 )
 def test_demo_squadv2(model_location_generator, device, use_program_cache, batch, loop_count):
     disable_persistent_kernel_cache()

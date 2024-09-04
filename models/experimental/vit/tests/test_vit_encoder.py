@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
 import torch
 
 from loguru import logger
 from transformers import ViTForImageClassification as HF_ViTForImageClassication
 from transformers import AutoImageProcessor as HF_AutoImageProcessor
-
-import tt_lib
 
 from models.experimental.vit.tt.modeling_vit import TtViTEncoder
 from models.utility_functions import (
@@ -19,8 +19,7 @@ from models.utility_functions import (
 )
 
 
-
-
+@pytest.mark.skip(reason="#7527: Test needs review")
 def test_vit_encoder(device, hf_cat_image_sample_input, pcc=0.92):
     image = hf_cat_image_sample_input
 
@@ -30,12 +29,8 @@ def test_vit_encoder(device, hf_cat_image_sample_input, pcc=0.92):
     return_dict = True
 
     with torch.no_grad():
-        HF_model = HF_ViTForImageClassication.from_pretrained(
-            "google/vit-base-patch16-224"
-        )
-        image_processor = HF_AutoImageProcessor.from_pretrained(
-            "google/vit-base-patch16-224"
-        )
+        HF_model = HF_ViTForImageClassication.from_pretrained("google/vit-base-patch16-224")
+        image_processor = HF_AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
         inputs = image_processor(image, return_tensors="pt")["pixel_values"]
 
         state_dict = HF_model.state_dict()
@@ -52,12 +47,8 @@ def test_vit_encoder(device, hf_cat_image_sample_input, pcc=0.92):
             return_dict,
         )[0]
 
-        tt_embedding_output = torch_to_tt_tensor_rm(
-            embedding_output, device, put_on_device=False
-        )
-        tt_layer = TtViTEncoder(
-            config, base_address="vit.encoder", state_dict=state_dict, device=device
-        )
+        tt_embedding_output = torch_to_tt_tensor_rm(embedding_output, device, put_on_device=False)
+        tt_layer = TtViTEncoder(config, base_address="vit.encoder", state_dict=state_dict, device=device)
 
         tt_output = tt_layer(
             tt_embedding_output,

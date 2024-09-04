@@ -7,7 +7,7 @@ from diffusers import StableDiffusionPipeline
 from loguru import logger
 
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import (
     torch_to_tt_tensor,
     tt_to_torch_tensor,
@@ -176,7 +176,7 @@ def test_run_transformer_inference(device):
         state_dict=state_dict,
         base_address=base_address,
     )
-    ttl.device.Synchronize(device)
+    ttnn.synchronize_device(device)
     tt_out = tt_transformer(tt_input, tt_encoder_hidden_states)
     tt_output = tt_to_torch_tensor(tt_out)
 

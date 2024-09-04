@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 
-import tt_lib
+import ttnn
 
 from models.helper_funcs import Linear as TTLinear
 from models.utility_functions import (
@@ -25,9 +25,7 @@ class TtRobertaPooler(nn.Module):
         device,
     ):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
-        )
+        self.mem_config = ttnn.L1_MEMORY_CONFIG
         self.device = device
 
         self.dense_weight = pad_by_zero(state_dict[f"{base_address}.dense.weight"], self.device)[0]
@@ -40,14 +38,12 @@ class TtRobertaPooler(nn.Module):
         )
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight, -2, -1)
-        x = tt_lib.tensor.matmul(x, weight, self.mem_config)
-        x = tt_lib.tensor.bcast(
+        weight = ttnn.transpose(weight, -2, -1)
+        x = ttnn.matmul(x, weight, memory_config=self.mem_config)
+        x = ttnn.add(
             x,
             bias,
-            tt_lib.tensor.BcastOpMath.ADD,
-            tt_lib.tensor.BcastOpDim.H,
-            self.mem_config,
+            memory_config=self.mem_config,
         )
         return x
 
@@ -62,5 +58,5 @@ class TtRobertaPooler(nn.Module):
         tt_first_token_tensor = torch2tt_tensor(first_token_tensor, self.device)
 
         pooled_output = self.dense_linear(tt_first_token_tensor)
-        pooled_output = tt_lib.tensor.tanh(pooled_output, self.mem_config)
+        pooled_output = ttnn.tanh(pooled_output, memory_config=self.mem_config)
         return pooled_output

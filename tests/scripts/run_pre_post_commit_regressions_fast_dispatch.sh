@@ -24,5 +24,3 @@ export PYTHONPATH=$TT_METAL_HOME
 
 ./tests/scripts/run_cpp_unit_tests.sh
 
-# build docs
-./tests/scripts/run_build_docs.sh

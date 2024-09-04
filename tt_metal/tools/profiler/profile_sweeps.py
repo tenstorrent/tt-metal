@@ -29,7 +29,7 @@ def main(directory, result):
     for txt_file in txt_files:
         basename = os.path.splitext(os.path.basename(txt_file))[0]
         outFolder = f"{result}/{basename}"
-        command = f"source build/python_env/bin/activate & python tests/tt_eager/python_api_testing/sweep_tests/run_pytorch_test.py -i {txt_file} -o {outFolder}"
+        command = f"source python_env/bin/activate & python tests/tt_eager/python_api_testing/sweep_tests/run_pytorch_test.py -i {txt_file} -o {outFolder}"
         profile_output_folder = f"{outFolder}/profile"
 
         if do_run:

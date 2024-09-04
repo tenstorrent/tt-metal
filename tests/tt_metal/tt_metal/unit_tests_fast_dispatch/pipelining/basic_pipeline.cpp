@@ -21,6 +21,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -155,28 +156,24 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     for (auto core : cores) {
         CoreRange cr(core, core);
 
-        auto sender_semaphore = tt_metal::CreateSemaphore(program, cr, INVALID);
-        auto receiver_semaphore = tt_metal::CreateSemaphore(program, cr, INVALID);
-        auto l1_valid_value_semaphore = tt_metal::CreateSemaphore(program, cr, VALID);
-
-        tt::log_debug("SENDER SEM ADDR {}", sender_semaphore);
-        tt::log_debug("RECEIVER SEM ADDR {}", receiver_semaphore);
-        tt::log_debug("L1 VALID VALUE SEM ADDR {}", l1_valid_value_semaphore);
+        auto sender_semaphore_id = tt_metal::CreateSemaphore(program, cr, INVALID);
+        auto receiver_semaphore_id = tt_metal::CreateSemaphore(program, cr, INVALID);
+        auto l1_valid_value_semaphore_id = tt_metal::CreateSemaphore(program, cr, VALID);
 
         vector<uint32_t> init_vec;
         sems.emplace(core, init_vec);
-        sems.at(core).push_back(sender_semaphore);
-        sems.at(core).push_back(receiver_semaphore);
-        sems.at(core).push_back(l1_valid_value_semaphore);
+        sems.at(core).push_back(sender_semaphore_id);
+        sems.at(core).push_back(receiver_semaphore_id);
+        sems.at(core).push_back(l1_valid_value_semaphore_id);
     }
 
     for (int core_id = 0; core_id < num_cores; core_id++) {
         // TODO(agrebenisan):  Once semaphores are properly allocated at 16B-aligned addresses, then
         // will make proper sems. For now, using the original code.
         CoreCoord core = cores[core_id];
-        auto sender_semaphore_addr = sems[core].at(0);
-        auto receiver_semaphore_addr = sems[core].at(1);
-        auto l1_valid_value_addr = sems[core].at(2);
+        auto sender_semaphore_id = sems[core].at(0);
+        auto receiver_semaphore_id = sems[core].at(1);
+        auto l1_valid_value_id = sems[core].at(2);
 
         if (core_id == 0) {
             SetRuntimeArgs(
@@ -192,8 +189,8 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
                 {(uint32_t)device->worker_core_from_logical_core(cores[core_id - 1]).x,
                  (uint32_t)device->worker_core_from_logical_core(cores[core_id - 1]).y,
                  (uint32_t)num_tiles,
-                 (uint32_t)sender_semaphore_addr,
-                 (uint32_t)receiver_semaphore_addr,
+                 (uint32_t)sender_semaphore_id,
+                 (uint32_t)receiver_semaphore_id,
                  (uint32_t)num_repetitions});
         }
 
@@ -211,9 +208,9 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
                 {(uint32_t)device->worker_core_from_logical_core(cores[core_id + 1]).x,
                  (uint32_t)device->worker_core_from_logical_core(cores[core_id + 1]).y,
                  (uint32_t)num_tiles,
-                 (uint32_t)sender_semaphore_addr,
-                 (uint32_t)receiver_semaphore_addr,
-                 (uint32_t)l1_valid_value_addr,
+                 (uint32_t)sender_semaphore_id,
+                 (uint32_t)receiver_semaphore_id,
+                 (uint32_t)l1_valid_value_id,
                  (uint32_t)num_repetitions});
         }
     }

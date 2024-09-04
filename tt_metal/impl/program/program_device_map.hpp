@@ -2,30 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unordered_map>
-#include <cstdint>
+#pragma once
 
+#include <cstdint>
+#include <unordered_map>
+#include <variant>
+#include <vector>
+
+#include "tt_metal/common/core_coord.h"
+
+namespace tt::tt_metal {
+
+using transfer_info_cores = std::variant<CoreCoord, CoreRange>;
 
 struct transfer_info {
-    std::uint32_t size_in_bytes;
-    std::uint32_t dst;
-    std::uint32_t dst_noc_encoding;
-    std::uint32_t num_receivers;
-    bool last_transfer_in_group;
+    std::uint32_t dst_base_addr;
+    std::vector<std::pair<transfer_info_cores, std::uint32_t>> dst_noc_info;  // noc_encoding, num_mcast_dests
     bool linked;
+    std::vector<std::uint32_t> data;
 };
 
-enum class PageTransferType { MULTICAST, UNICAST };
-
-struct ProgramDeviceMap {
-    std::uint32_t num_workers;
-    vector<std::uint32_t> program_pages;
-    std::unordered_map<PageTransferType, vector<transfer_info>> program_page_transfers;
-    std::unordered_map<PageTransferType, vector<transfer_info>> runtime_arg_page_transfers;
-    std::unordered_map<PageTransferType, vector<transfer_info>> cb_config_page_transfers;
-    std::unordered_map<PageTransferType, vector<transfer_info>> go_signal_page_transfers;
-    std::unordered_map<PageTransferType, vector<std::uint32_t>> num_transfers_in_program_pages;
-    std::unordered_map<PageTransferType, vector<std::uint32_t>> num_transfers_in_runtime_arg_pages;
-    std::unordered_map<PageTransferType, vector<std::uint32_t>> num_transfers_in_cb_config_pages;
-    std::unordered_map<PageTransferType, vector<std::uint32_t>> num_transfers_in_go_signal_pages;
+struct kernel_bins_transfer_info {
+    std::vector<std::uint32_t> dst_base_addrs;  // BRISC, NCRISC, TRISC etc..
+    std::vector<std::uint32_t> page_offsets;    // offsets into paged buffer in DRAM
+    std::vector<std::uint32_t> lengths;         // WriteLinear lengths
+    std::vector<tt::RISCV> riscvs;              // RISC that each span is targeted for, for binaries
 };
+
+struct ProgramTransferInfo {
+    std::uint32_t num_active_cores;
+    std::unordered_map<std::uint32_t, std::vector<transfer_info>> multicast_semaphores;  // WritePacked, sorted by dst
+    std::unordered_map<std::uint32_t, std::vector<transfer_info>> unicast_semaphores;    // WritePacked, sorted by dst
+    std::vector<std::tuple<transfer_info_cores, std::uint32_t, kernel_bins_transfer_info>>
+        kernel_bins;                         // noc_encoding, num_mcast_dests, transfer_info
+    std::vector<std::uint32_t> binary_data;  // Holds binary data for all program kernels
+};
+
+}  // namespace tt::tt_metal

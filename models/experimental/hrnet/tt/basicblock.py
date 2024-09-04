@@ -4,7 +4,7 @@
 
 import torch.nn as nn
 
-import tt_lib
+import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm
 from models.experimental.hrnet.hrnet_utils import create_batchnorm
@@ -50,11 +50,11 @@ class TtBasicBlock(nn.Module):
         residual = x
         out = self.conv1(x)
         out = self.bn1(out)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.relu(out)
 
         out = self.conv2(out)
         out = self.bn2(out)
-        out = tt_lib.tensor.add(out, residual)
-        out = tt_lib.tensor.relu(out)
+        out = ttnn.add(out, residual)
+        out = ttnn.relu(out)
 
         return out

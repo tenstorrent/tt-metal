@@ -1,6 +1,12 @@
 Converting torch Model to ttnn
 ###############################
 
+.. note::
+   This particular example only works on Grayskull.
+
+   Not all converted models may be functional on all Tenstorrent hardware
+   (Grayskull, Wormhole, or others). Functionality is on a case-by-case basis.
+
 There are many ways to convert a torch model to ttnn.
 
 This is the recommend approach:
@@ -235,8 +241,4 @@ And the optimized model can be something like this:
 More examples
 *************
 
-Additional examples can be found in:
-    #. tests/ttnn/integration_tests/bert/
-    #. tests/ttnn/integration_tests/bloom/
-    #. tests/ttnn/integration_tests/t5/
-    #. tests/ttnn/integration_tests/whisper/
+Additional examples can be found in `the integration tests <https://github.com/tenstorrent/tt-metal/tree/main/tests/ttnn/integration_tests>`_.

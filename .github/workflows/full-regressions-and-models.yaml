@@ -18,14 +18,14 @@ jobs:
       fail-fast: false
       matrix:
         arch: [grayskull, wormhole_b0]
-        frequent-type: [models, api]
+        frequent-type: [api]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
-      CONFIG: ci
       LOGURU_LEVEL: INFO
       TT_METAL_SLOW_DISPATCH_MODE: 1
-    runs-on: model-runner-${{ matrix.arch }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on: ["model-runner-${{ matrix.arch }}", "in-service"]
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Ensure weka mount is active

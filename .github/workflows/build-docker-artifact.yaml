@@ -1,0 +1,43 @@
+name: "Build tt-metal docker artifact"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  build-docker-image:
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      CONFIG: ci
+      SILENT: 0
+      VERBOSE: 1
+      TT_METAL_DOCKER_IMAGE: tt-metalium/ubuntu-20.04-amd64
+      TT_METAL_DOCKER_IMAGE_TAG: ${{ github.sha }}
+    environment: dev
+    runs-on:
+      - build-docker
+      - in-service
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Docker image
+        run: |
+          ./scripts/docker/build_docker_image.sh ${{ env.TT_METAL_DOCKER_IMAGE }}:${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+      - name: Determine Docker Image Tag
+        id: set-image
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=dev-${GITHUB_ACTOR}" >> $GITHUB_ENV
+          fi
+      - name: Push Docker image to GitHub Container Registry
+        run: |
+          GITHUB_REPO_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ env.TT_METAL_DOCKER_IMAGE }}:${{ env.IMAGE_TAG }}
+          docker tag ${{ env.TT_METAL_DOCKER_IMAGE }}:${{ env.TT_METAL_DOCKER_IMAGE_TAG }} $GITHUB_REPO_DOCKER_IMAGE_TAG
+          docker push $GITHUB_REPO_DOCKER_IMAGE_TAG

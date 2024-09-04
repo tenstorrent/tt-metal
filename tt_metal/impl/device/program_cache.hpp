@@ -5,27 +5,28 @@
 #pragma once
 
 #include <unordered_map>
-#include <memory>
-#include "tt_metal/common/logger.hpp"
+
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/tt_stl/unique_any.hpp"
 
 namespace tt::tt_metal {
 
 namespace program_cache {
 
 namespace detail {
-// Generic Program Cache: This data structure is tied to a device handle and can store generic program types from TT-Metal
-// and TT-Eager using std::shared_ptr<void>.
+// Generic Program Cache: This data structure is tied to a device handle and can store generic program types from
+// TT-Metal and TT-Eager using tt::stl::concepts::unique_any.
 struct ProgramCache {
-    inline std::optional<std::shared_ptr<void>> find(uint64_t program_hash) {
-        auto cache_hit = this->cache_.count(program_hash) > 0;
-        if (cache_hit) {
-            return this->cache_.at(program_hash);
-        }
-        return std::nullopt;
+    inline bool contains(uint64_t program_hash) { return this->cache_.count(program_hash) > 0; }
+
+    template <typename T>
+    inline T& get(uint64_t program_hash) {
+        return this->cache_.at(program_hash).get<T>();
     }
-    inline void insert(uint64_t program_hash, std::shared_ptr<void> program_ptr) {
-        this->cache_[program_hash] = program_ptr;
+
+    template <typename T>
+    inline void insert(uint64_t program_hash, T&& program) {
+        this->cache_.insert({program_hash, std::move(program)});
     }
 
     void enable() {
@@ -48,7 +49,10 @@ struct ProgramCache {
 
    private:
     inline static bool is_enabled_ = false;
-    std::unordered_map<uint64_t, std::shared_ptr<void>> cache_{};
+
+    static constexpr auto MAX_CACHED_PROGRAM_SIZE = 4192;
+    static constexpr auto ALIGNMENT = 32;
+    std::unordered_map<uint64_t, tt::stl::unique_any<MAX_CACHED_PROGRAM_SIZE, ALIGNMENT>> cache_{};
 };
 
 }

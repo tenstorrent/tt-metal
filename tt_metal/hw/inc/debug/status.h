@@ -13,25 +13,26 @@
 //
 #pragma once
 
+#include <utility>
+
 #include "dev_msgs.h"
 
-#if defined (WATCHER_ENABLED) && !defined(WATCHER_DISABLE_STATUS)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_STATUS)
+#include <cstddef>
 
-inline uint32_t get_debug_status()
-{
-    return 0;
+template <size_t N, size_t... Is>
+constexpr uint32_t fold(const char (&s)[N], std::index_sequence<Is...>) {
+    static_assert(sizeof...(Is) <= 4, "Up to 4 characters allowed in DEBUG_STATUS");
+    return ((static_cast<uint32_t>(s[Is]) << (8 * Is)) | ...);
 }
 
-template<typename... Types>
-inline uint32_t get_debug_status(uint32_t c, Types... rest)
-{
-    return (c == 0) ? 0 : (get_debug_status(rest...) << 8) | c;
+template <size_t N>
+constexpr uint32_t helper(const char (&s)[N]) {
+    return fold(s, std::make_index_sequence<N - 1>{});
 }
 
-template<typename... Types>
-inline void write_debug_status(volatile tt_l1_ptr uint32_t *debug_status, uint32_t c, Types... rest)
-{
-    uint32_t x = get_debug_status(c, rest...);
+template<uint32_t x>
+inline void write_debug_status(volatile tt_l1_ptr uint32_t *debug_status) {
     *debug_status = x;
 }
 
@@ -47,12 +48,13 @@ inline void write_debug_status(volatile tt_l1_ptr uint32_t *debug_status, uint32
 #define DEBUG_STATUS_MAILBOX_OFFSET (2 + COMPILE_FOR_TRISC)
 #endif
 
-#define DEBUG_STATUS_MAILBOX (volatile tt_l1_ptr uint32_t *)&((*GET_MAILBOX_ADDRESS_DEV(debug_status))[DEBUG_STATUS_MAILBOX_OFFSET])
+#define DEBUG_STATUS_MAILBOX \
+    (volatile tt_l1_ptr uint32_t *)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_status))[DEBUG_STATUS_MAILBOX_OFFSET])
 
-#define DEBUG_STATUS(x...) write_debug_status(DEBUG_STATUS_MAILBOX, x, 0)
+#define DEBUG_STATUS(x) write_debug_status<helper(x)>(DEBUG_STATUS_MAILBOX)
 
-#else // !WATCHER_ENABLED
+#else  // !WATCHER_ENABLED
 
-#define DEBUG_STATUS(x...)
+#define DEBUG_STATUS(x)
 
-#endif // WATCHER_ENABLED
+#endif  // WATCHER_ENABLED

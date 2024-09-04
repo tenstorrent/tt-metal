@@ -1,6 +1,6 @@
 ---
 test-list:
-  - ttnn-eltwise-xlogy:
+  - eltwise-xlogy:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -25,6 +25,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
+      sanitize-args: False
       args:
         inputs:
           - input-1:

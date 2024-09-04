@@ -7,8 +7,7 @@ import torch.nn as nn
 # import torch.nn.functional as F
 import torch
 
-import tt_lib as ttl
-from tt_lib.fallback_ops import fallback_ops
+import ttnn
 
 from models.experimental.stable_diffusion.tt.residual_block import TtResnetBlock2D
 from models.experimental.stable_diffusion.tt.upsample_2d import TtUpsample2D
@@ -87,23 +86,29 @@ class TtUpBlock2D(nn.Module):
 
     def forward(
         self,
-        hidden_states: ttl.tensor.Tensor,
+        hidden_states: ttnn.Tensor,
         res_hidden_states_tuple,
         temb=None,
         upsample_size=None,
-    ) -> ttl.tensor.Tensor:
-        device = ttl.device.GetDefaultDevice()
-        if not isinstance(hidden_states,ttl.tensor.Tensor):
-            hidden_states = ttl.tensor.Tensor(hidden_states.reshape(-1).tolist(),hidden_states.shape,
-                                              ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.ROW_MAJOR).to(device)
+    ) -> ttnn.Tensor:
+        device = ttnn.GetDefaultDevice()
+        if not isinstance(hidden_states, ttnn.Tensor):
+            hidden_states = ttnn.Tensor(
+                hidden_states.reshape(-1).tolist(), hidden_states.shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT
+            ).to(device)
         for resnet in self.resnets:
             # pop res hidden states
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
-            if isinstance(res_hidden_states,(ttl.tensor.Tensor,)):
+            if isinstance(res_hidden_states, (ttnn.Tensor,)):
                 on_dev_res_hidden_states = res_hidden_states
             else:
-                on_dev_res_hidden_states = ttl.tensor.Tensor(res_hidden_states.reshape(-1).tolist(),res_hidden_states.shape,ttl.tensor.DataType.BFLOAT16,ttl.tensor.Layout.ROW_MAJOR).to(device)
+                on_dev_res_hidden_states = ttnn.Tensor(
+                    res_hidden_states.reshape(-1).tolist(),
+                    res_hidden_states.shape,
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                ).to(device)
 
             hidden_states = concat([hidden_states, on_dev_res_hidden_states], dim=1)
             hidden_states = resnet(hidden_states, temb)

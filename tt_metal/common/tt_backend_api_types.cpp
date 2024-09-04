@@ -10,6 +10,7 @@ std::string tt::get_string(tt::ARCH arch) {
         case tt::ARCH::GRAYSKULL: return "GRAYSKULL"; break;
         case tt::ARCH::WORMHOLE: return "WORMHOLE"; break;
         case tt::ARCH::WORMHOLE_B0: return "WORMHOLE_B0"; break;
+        case tt::ARCH::BLACKHOLE: return "BLACKHOLE"; break;
         case tt::ARCH::Invalid: return "Invalid"; break;
         default: return "Invalid"; break;
     }
@@ -21,6 +22,7 @@ std::string tt::get_string_lowercase(tt::ARCH arch) {
         case tt::ARCH::GRAYSKULL: return "grayskull"; break;
         case tt::ARCH::WORMHOLE: return "wormhole"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole_b0"; break;
+        case tt::ARCH::BLACKHOLE: return "blackhole"; break;
         case tt::ARCH::Invalid: return "invalid"; break;
         default: return "invalid"; break;
     }
@@ -37,6 +39,8 @@ tt::ARCH tt::get_arch_from_string(const std::string &arch_str) {
         arch = tt::ARCH::WORMHOLE;
     } else if ((arch_str == "wormhole_b0") || (arch_str == "WORMHOLE_B0")) {
         arch = tt::ARCH::WORMHOLE_B0;
+    } else if ((arch_str == "blackhole") || (arch_str == "BLACKHOLE")) {
+        arch = tt::ARCH::BLACKHOLE;
     } else if ((arch_str == "Invalid") || (arch_str == "INVALID")) {
         arch = tt::ARCH::Invalid;
     } else {

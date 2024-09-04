@@ -33,9 +33,9 @@ TEST_F(N300DeviceFixture, ValidateEthernetConnectivity) {
 
     ASSERT_TRUE(device_0_active_eth_cores.size() == 2);
     ASSERT_TRUE(device_1_active_eth_cores.size() == 2);
-    //mmio device (0) has 4 ports (0, 1, 2 , 3) reserved for umd non-mmio access.
+    //mmio device (0) has 2 ports (8, 9) reserved for umd non-mmio access.
     //mmio device (0) port 15 is reserved for syseng tools.
-    ASSERT_TRUE(device_0->get_inactive_ethernet_cores().size() == 9);
+    ASSERT_TRUE(device_0->get_inactive_ethernet_cores().size() == 13);
     ASSERT_TRUE(device_1->get_inactive_ethernet_cores().size() == 14);
 
     for (const auto& core : device_0_active_eth_cores) {
@@ -138,7 +138,7 @@ TEST_F(N300DeviceFixture, ValidatePhysicalCoreConversion) {
             expected_mapping_logical_to_physical.at(logical_core));
     }
     // Check an invalid core type
-    EXPECT_ANY_THROW(device_0->physical_core_from_logical_core(CoreCoord(0, 0), CoreType::DRAM));
+    EXPECT_ANY_THROW(device_0->physical_core_from_logical_core(CoreCoord(0, 0), CoreType::PCIE));
 }
 
 TEST_F(N300DeviceFixture, ValidateEthernetSockets) {

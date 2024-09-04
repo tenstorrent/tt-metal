@@ -28,13 +28,12 @@ ALWI void transpose_wh_init(uint32_t icb, uint32_t ocb = 16)
 {
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(true, true, icb) ));
     MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
+    MATH(( llk_math_hw_configure_disaggregated() ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_init(ocb) ));
-    PACK(( llk_setup_outputs() ));
     PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>() ));
 
-    UNPACK(( llk_setup_operands() ));
     UNPACK(( llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(0, true) ));
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)  ));
 }

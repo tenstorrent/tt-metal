@@ -22,13 +22,18 @@
 * LLK PACK
 *************************************************************************/
 
-template <bool untilize = false, bool zero_output = false>
+template <bool untilize = false, bool zero_output = false, bool tilize = false/*unused*/>
 inline void llk_pack_mop_config(const uint32_t output) {
     constexpr bool write_tile_header = false;
     _llk_pack_mop_config_<untilize, zero_output, DstTileFaceLayout::RowMajor, write_tile_header>();
 }
 
-template <bool untilize = false, bool is_fp32_dest_acc_en = false /*not used*/>
+template <
+    bool untilize = false,
+    bool is_fp32_dest_acc_en = false/*unused*/,
+    ReluType relu_type = ReluType::NO_RELU/*unused*/,
+    std::uint32_t relu_threshold = 0/*unused*/,
+    bool tilize = false/*unused*/>
 inline void llk_pack_hw_configure(const llk_pack_params_t *pack_params) {
 
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
@@ -42,7 +47,7 @@ inline void llk_pack_hw_configure(const llk_pack_params_t *pack_params) {
     );
 }
 
-template <bool untilize = false, bool is_fp32_dest_acc_en = false /*not used*/, ReluType relu_type = ReluType::NO_RELU, std::uint32_t relu_threshold = 0>
+template <bool untilize = false, bool is_fp32_dest_acc_en = false /*not used*/, ReluType relu_type = ReluType::NO_RELU, std::uint32_t relu_threshold = 0, bool tilize = false/*unused*/>
 inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
     llk_pack_params_t llk_pack_params = {
         .pack_output = pack_output, .relu_config = {.f = {.ApplyRelu = (std::uint32_t)relu_type, .Threshold = relu_threshold,}}};
@@ -69,7 +74,10 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
     llk_pack_reduce_hw_configure<untilize, type, dim, is_fp32_dest_acc_en>(&llk_pack_params);
 }
 
-template <bool untilize = false, bool zero_output = false>
+template <
+    bool untilize = false,
+    bool zero_output = false,
+    bool tilize = false/*unused*/>
 inline void llk_pack_init(const std::uint32_t pack_output = 16) {
 
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -115,18 +123,22 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 * LLK PACK UNTILIZE
 *************************************************************************/
 
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim>
+template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
 inline void llk_pack_untilize_init(std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
     const std::uint32_t output_id = get_output_id(output);
 
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim>(
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal>(
         pack_dst_format[output_id],
         face_r_dim,
         num_faces
     );
+
+    if constexpr (diagonal) {
+        TT_SETADCXX(p_setadc::PAC, 1-1, 0x0);
+    }
 }
 
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim>
+template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
 inline void llk_pack_untilize(const std::uint32_t block_rt_dim, const std::uint32_t output, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const std::uint32_t block_c_index = 0) {
 
     const std::uint32_t output_id = get_output_id(output);
@@ -134,7 +146,7 @@ inline void llk_pack_untilize(const std::uint32_t block_rt_dim, const std::uint3
 
     for (std::uint32_t block_rt=0; block_rt<block_rt_dim; block_rt++) {
 
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim>(
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal>(
             pack_tile_addr,
             pack_dst_format[output_id],
             face_r_dim,
@@ -164,9 +176,9 @@ inline void llk_pack_dest_section_done() {
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 
-template <bool untilize = false>
+template <bool untilize = false, bool diagonal = false>
 inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
-    _llk_init_packer_dest_offset_registers_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize>();
+    _llk_init_packer_dest_offset_registers_<DstSync::SyncHalf, DstTileFaceLayout::RowMajor, untilize, diagonal>();
 }
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false /*unused*/>

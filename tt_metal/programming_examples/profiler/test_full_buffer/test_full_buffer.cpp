@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/impl/device/device.hpp"
 
 using namespace tt;
 

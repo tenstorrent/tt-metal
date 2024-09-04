@@ -23,6 +23,7 @@ bool use_coherent_data_g = false;
 uint32_t hugepage_buffer_size_g = 256 * 1024 * 1024;
 uint32_t dev_hugepage_base = dispatch_buffer_page_size_g;
 std::pair<uint32_t, uint32_t> default_ptrs = std::make_pair(dev_hugepage_base, 0);
+uint32_t hugepage_issue_buffer_size_g;
 
 inline void gen_dispatcher_pad_to_page(vector<uint32_t>& cmds, uint32_t page_size) {
     uint32_t num_words_in_page = page_size / sizeof(uint32_t);
@@ -98,7 +99,11 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
     uint32_t l1_buf_base = align(L1_UNRESERVED_BASE, dispatch_buffer_page_size_g);
 
     std::vector<uint32_t> dispatch_cmds;
-    gen_dispatcher_host_write_cmd(dispatch_cmds, data_size);
+    CQDispatchCmd cmd;
+    memset(&cmd, 0, sizeof(CQDispatchCmd));
+    cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
+    cmd.write_linear_host.length = data_size + sizeof(CQDispatchCmd);
+    add_dispatcher_cmd(dispatch_cmds, cmd, data_size);
     gen_dispatcher_pad_to_page(dispatch_cmds, dispatch_buffer_page_size_g);
     uint32_t dev_output_num_words = total_size / sizeof(uint32_t);
     gen_dispatcher_terminate_cmd(dispatch_cmds);
@@ -136,8 +141,16 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
         dispatch_cb_sem, // ugly, share an address
         dispatch_buffer_size_blocks_g,
         prefetch_sync_sem,
+        default_ptrs.second,
         dev_hugepage_base,
-        hugepage_buffer_size_g};
+        hugepage_buffer_size_g,
+        0,    // unused downstream_cb_base
+        0,    // unused downstream_cb_size
+        0,    // unused my_downstream_cb_sem_id
+        0,    // unused downstream_cb_sem_id
+        0,    // unused split_dispatch_page_preamble_size
+        true,
+        true};
     std::vector<uint32_t> spoof_prefetch_compile_args = {
         l1_buf_base,
         log_dispatch_buffer_page_size_g,
@@ -171,22 +184,20 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
     vector<uint32_t> args = {1};
     tt::tt_metal::SetRuntimeArgs(program, sp1, spoof_prefetch_core, args);
 
-    std::map<string, string> dispatch_defines = {
-        {"PREFETCH_NOC_X", std::to_string(phys_spoof_prefetch_core.x)},
-        {"PREFETCH_NOC_Y", std::to_string(phys_spoof_prefetch_core.y)},
-        {"MY_NOC_X", std::to_string(phys_dispatch_core.x)},
-        {"MY_NOC_Y", std::to_string(phys_dispatch_core.y)},
-    };
+    constexpr NOC my_noc_index = NOC::NOC_0;
+    constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
 
-    auto d1 = tt::tt_metal::CreateKernel(
-        program,
+    configure_kernel_variant<true, true>(program,
         "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-        {dispatch_core},
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = dispatch_compile_args,
-            .defines = dispatch_defines});
+        dispatch_compile_args,
+        dispatch_core,
+        phys_dispatch_core,
+        phys_spoof_prefetch_core,
+        {0, 0},
+        device,
+        my_noc_index,
+        my_noc_index,
+        my_noc_index);
 
     // Need a separate thread for SD
     if (read_ptr_update.has_value()) {
@@ -198,7 +209,7 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
                 run_mailbox_read_val = tt::llrt::read_hex_vec_from_core(device->id(), phys_dispatch_core, run_mailbox_address & ~0x3, sizeof(uint32_t));
                 run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
             } while (run != RUN_MSG_GO);
-            sleep(2);
+            sleep(1);
             std::vector<uint32_t> read_ptr_update_val = {(read_ptr_update.value().first >> 4) | (read_ptr_update.value().second << 31)};
             tt::llrt::write_hex_vec_to_core(
                 device->id(), phys_dispatch_core, read_ptr_update_val, CQ_COMPLETION_READ_PTR);
@@ -235,7 +246,7 @@ TEST_F(DeviceSingleCardFixture, TestWriteHostWrap) {
 
 TEST_F(DeviceSingleCardFixture, TestWriteHostStall) {
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base, 1}, {dev_hugepage_base, 0}, std::make_pair(dev_hugepage_base + 11 * dispatch_buffer_page_size_g, 0)));
-    EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base, 1}, {hugepage_buffer_size_g - 5 * dispatch_buffer_page_size_g + dev_hugepage_base, 0}, std::make_pair(dev_hugepage_base + 1 * dispatch_buffer_page_size_g, 1)));
+    EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base, 1}, {dev_hugepage_base + 5 * dispatch_buffer_page_size_g, 0}, std::make_pair(dev_hugepage_base + 11 * dispatch_buffer_page_size_g, 0)));
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 1}, {dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 0}, std::make_pair(dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 1)));
 }
 

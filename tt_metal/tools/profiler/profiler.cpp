@@ -7,7 +7,6 @@
 #include <iomanip>
 #include <filesystem>
 
-
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tools/profiler/profiler.hpp"
@@ -16,6 +15,7 @@
 #include "hostdevcommon/profiler_common.h"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 namespace tt {
 
@@ -66,8 +66,8 @@ void DeviceProfiler::readRiscProfilerResults(
         riscEndIndices.push_back(kernel_profiler::HOST_BUFFER_END_INDEX_ER);
     }
 
-
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR] == 0) &&
+        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_ER] == 0))
     {
         return;
@@ -79,15 +79,17 @@ void DeviceProfiler::readRiscProfilerResults(
         if (bufferEndIndex > 0)
         {
             uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
-            if (bufferEndIndex > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC)
+            if ((control_buffer[kernel_profiler::DROPPED_ZONES] >> riscEndIndex) & 1)
             {
-                log_warning("Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc {},  bufferEndIndex = {}, host_size = {}", device_id, worker_core.x, worker_core.y, tracy::riscName[riscEndIndex], bufferEndIndex , PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC );
-                bufferEndIndex = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
+                std::string warningMsg = fmt::format("Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc {},  bufferEndIndex = {}", device_id, worker_core.x, worker_core.y, tracy::riscName[riscEndIndex], bufferEndIndex);
+                TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
+                log_warning(warningMsg.c_str());
             }
 
             uint32_t riscNumRead = 0;
             uint32_t coreFlatIDRead = 0;
             uint32_t runCounterRead = 0;
+            uint32_t runHostCounterRead = 0;
 
             bool newRunStart = false;
 
@@ -108,7 +110,9 @@ void DeviceProfiler::readRiscProfilerResults(
                     //TODO(MO): Cleanup magic numbers
                     riscNumRead = profile_buffer[index] & 0x7;
                     coreFlatIDRead = (profile_buffer[index] >> 3) & 0xFF;
-                    runCounterRead = profile_buffer[index + 1];
+                    runCounterRead = profile_buffer[index + 1] & 0xFFFF;
+                    runHostCounterRead = (profile_buffer[index + 1] >> 16 ) & 0xFFFF;
+
                 }
                 else
                 {
@@ -148,6 +152,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
                             dumpResultToFile(
                                     runCounterRead,
+                                    runHostCounterRead,
                                     device_id,
                                     worker_core,
                                     coreFlatID,
@@ -166,6 +171,7 @@ void DeviceProfiler::readRiscProfilerResults(
                         uint32_t time_L = opTime_L;
                         dumpResultToFile(
                                 runCounterRead,
+                                runHostCounterRead,
                                 device_id,
                                 worker_core,
                                 coreFlatID,
@@ -180,11 +186,13 @@ void DeviceProfiler::readRiscProfilerResults(
         riscNum ++;
     }
 
-    std::vector<uint32_t> zero_buffer(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+    std::vector<uint32_t> control_buffer_reset(PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
+    control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer->address();
+
     tt::llrt::write_hex_vec_to_core(
             device_id,
             worker_core,
-            zero_buffer,
+            control_buffer_reset,
             PROFILER_L1_BUFFER_CONTROL);
 }
 
@@ -198,6 +206,7 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp)
 
 void DeviceProfiler::dumpResultToFile(
         uint32_t run_id,
+        uint32_t run_host_id,
         int device_id,
         CoreCoord core,
         int core_flat,
@@ -234,9 +243,11 @@ void DeviceProfiler::dumpResultToFile(
         source_line = stoi(source_line_str);
     }
 
-    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(run_id, device_id, core.x, core.y, risc_num, timer_id, timestamp, source_line, source_file, zone_name, zone_phase);
+    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(run_host_id, device_id, core.x, core.y, risc_num, timer_id, timestamp, source_line, source_file, zone_name, zone_phase);
 
-    device_events.push_back(event);
+    auto ret = device_events.insert(event);
+
+    if (!ret.second) return;
 
     firstTimestamp(timestamp);
 
@@ -244,7 +255,7 @@ void DeviceProfiler::dumpResultToFile(
     {
         log_file.open(log_path);
         log_file << "ARCH: " << get_string_lowercase(device_architecture) << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
-        log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], stat value, Run ID, zone name, zone phase, source line, source file" << std::endl;
+        log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], stat value, run ID, run host ID,  zone name, zone phase, source line, source file" << std::endl;
         new_log = false;
     }
     else
@@ -253,7 +264,7 @@ void DeviceProfiler::dumpResultToFile(
     }
 
     //log_file << fmt::format("{:4},{:3},{:3},{:>7},{:7},{:15},{:15},{:5},{:>25},{:>6},{:6},{}",
-    log_file << fmt::format("{},{},{},{},{},{},{},{},{},{},{},{}",
+    log_file << fmt::format("{},{},{},{},{},{},{},{},{},{},{},{},{}",
             device_id,
             core.x,
             core.y,
@@ -262,6 +273,7 @@ void DeviceProfiler::dumpResultToFile(
             timestamp,
             stat_value,
             run_id,
+            run_host_id,
             zone_name,
             magic_enum::enum_name(zone_phase),
             source_line,
@@ -273,7 +285,7 @@ void DeviceProfiler::dumpResultToFile(
 
 DeviceProfiler::DeviceProfiler(const bool new_logs)
 {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
     new_log = new_logs;
     output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
@@ -284,8 +296,9 @@ DeviceProfiler::DeviceProfiler(const bool new_logs)
 
 DeviceProfiler::~DeviceProfiler()
 {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     ZoneScoped;
+    pushTracyDeviceResults();
     for (auto tracyCtx : device_tracy_contexts)
     {
         TracyTTDestroy(tracyCtx.second);
@@ -296,7 +309,7 @@ DeviceProfiler::~DeviceProfiler()
 
 void DeviceProfiler::setNewLogFlag(bool new_log_flag)
 {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     new_log = new_log_flag;
 #endif
 }
@@ -304,7 +317,7 @@ void DeviceProfiler::setNewLogFlag(bool new_log_flag)
 
 void DeviceProfiler::setOutputDir(const std::string& new_output_dir)
 {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     std::filesystem::create_directories(new_output_dir);
     output_dir = new_output_dir;
 #endif
@@ -313,7 +326,7 @@ void DeviceProfiler::setOutputDir(const std::string& new_output_dir)
 
 void DeviceProfiler::setDeviceArchitecture(tt::ARCH device_arch)
 {
-#if defined(PROFILER)
+#if defined(TRACY_ENABLE)
     device_architecture = device_arch;
 #endif
 }
@@ -351,11 +364,14 @@ void DeviceProfiler::generateZoneSourceLocationsHashes()
     }
 }
 
+
 void DeviceProfiler::dumpResults (
         Device *device,
-        const vector<CoreCoord> &worker_cores){
-#if defined(PROFILER)
+        const vector<CoreCoord> &worker_cores,
+        bool lastDump){
+#if defined(TRACY_ENABLE)
     ZoneScoped;
+
     auto device_id = device->id();
     device_core_frequency = tt::Cluster::instance().get_device_aiclk(device_id);
 
@@ -365,7 +381,29 @@ void DeviceProfiler::dumpResults (
     {
         std::vector<uint32_t> profile_buffer(output_dram_buffer->size()/sizeof(uint32_t), 0);
 
-        tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
+        const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+        if (USE_FAST_DISPATCH)
+        {
+            if (lastDump)
+            {
+                if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores())
+                {
+                    tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
+                }
+            }
+            else
+            {
+                EnqueueReadBuffer(device->command_queue(),output_dram_buffer, profile_buffer, true);
+            }
+        }
+        else
+        {
+            if (!lastDump)
+            {
+                tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
+            }
+        }
+
 
         for (const auto &worker_core : worker_cores) {
             readRiscProfilerResults(
@@ -374,26 +412,6 @@ void DeviceProfiler::dumpResults (
                 worker_core);
 
         }
-
-        for (const auto &worker_core : worker_cores) {
-            std::pair<uint32_t, CoreCoord> device_core = {device_id, worker_core};
-            if (device_tracy_contexts.find(device_core) == device_tracy_contexts.end())
-            {
-                auto tracyCtx = TracyTTContext();
-                std::string tracyTTCtxName = fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
-                TracyTTContextPopulate(tracyCtx, smallest_timestamp, 1000.f / (float)device_core_frequency);
-                TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
-
-                device_tracy_contexts.emplace(
-                        device_core,
-                        tracyCtx
-                    );
-            }
-        }
-
-        std::sort (device_events.begin(), device_events.end());
-
-        pushTracyDeviceResults();
     }
     else
     {
@@ -404,11 +422,75 @@ void DeviceProfiler::dumpResults (
 
 void DeviceProfiler::pushTracyDeviceResults()
 {
-#if defined(PROFILER) && defined(TRACY_ENABLE)
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+    std::set<std::pair<uint32_t, CoreCoord>> device_cores_set;
+    std::vector<std::pair<uint32_t, CoreCoord>> device_cores;
     for (auto& event: device_events)
     {
         std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x,event.core_y}};
+        auto ret = device_cores_set.insert(device_core);
+        if (ret.second )
+        {
+            device_cores.push_back(device_core);
+        }
+    }
 
+    double delay = 0;
+    double frequency = 0;
+    uint64_t cpuTime = 0;
+
+    for (auto& device_core: device_cores)
+    {
+        int device_id = device_core.first;
+        CoreCoord worker_core = device_core.second;
+
+        if (device_core_sync_info.find(worker_core) != device_core_sync_info.end())
+        {
+            cpuTime = get<0>(device_core_sync_info.at(worker_core));
+            delay = get<1>(device_core_sync_info.at(worker_core));
+            frequency = get<2>(device_core_sync_info.at(worker_core));
+            log_info("Device {} sync info are, frequency {} GHz,  delay {} cycles and, sync point {} seconds",
+                        device_id,
+                        frequency,
+                        delay,
+                        cpuTime);
+        }
+    }
+
+    for (auto& device_core: device_cores)
+    {
+        int device_id = device_core.first;
+        CoreCoord worker_core = device_core.second;
+
+        if (delay == 0.0 || frequency == 0.0)
+        {
+            delay = smallest_timestamp;
+            frequency = device_core_frequency/1000.0;
+            cpuTime = TracyGetCpuTime();
+            log_warning("For device {}, core {},{} default frequency was used and its zones will be out of sync", device_id, worker_core.x, worker_core.y);
+        }
+
+
+        if (device_tracy_contexts.find(device_core) == device_tracy_contexts.end())
+        {
+            auto tracyCtx = TracyTTContext();
+            std::string tracyTTCtxName = fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
+
+            TracyTTContextPopulate(tracyCtx, cpuTime, delay, frequency);
+
+            TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
+
+            device_tracy_contexts.emplace(
+                    device_core,
+                    tracyCtx
+                );
+        }
+    }
+
+    for (auto& event: device_events)
+    {
+        std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x,event.core_y}};
         if (event.zone_phase == tracy::TTDeviceEventPhase::begin)
         {
             TracyTTPushStartZone(device_tracy_contexts[device_core], event);

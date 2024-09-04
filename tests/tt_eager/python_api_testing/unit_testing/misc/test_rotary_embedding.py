@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 
-import tt_lib as ttl
+import ttnn
 from models.utility_functions import comp_pcc, divup, is_grayskull
 
 
@@ -36,8 +36,8 @@ def apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx=None):
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
-@pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("sincos_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("sincos_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharded, input_dtype, sincos_dtype, device):
     torch.manual_seed(0)
 
@@ -48,18 +48,18 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
     sin_cached = torch.randn(sin_cos_shape).bfloat16().float()
 
     if out_sharded:
-        out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
+        out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
     else:
-        out_mem_config = ttl.tensor.MemoryConfig()
+        out_mem_config = ttnn.MemoryConfig()
 
-    xt = ttl.tensor.Tensor(x, input_dtype)
+    xt = ttnn.Tensor(x, input_dtype)
     if xt.get_legacy_shape()[-2] % 32 == 0 and xt.get_legacy_shape()[-1] % 32 == 0:
-        xt = xt.to(ttl.tensor.Layout.TILE)
-    elif input_dtype == ttl.tensor.DataType.BFLOAT8_B:
+        xt = xt.to(ttnn.TILE_LAYOUT)
+    elif input_dtype == ttnn.bfloat8_b:
         pytest.skip()
 
     if in_sharded or out_sharded:
-        if xt.get_layout() != ttl.tensor.Layout.TILE:
+        if xt.get_layout() != ttnn.TILE_LAYOUT:
             pytest.skip("Sharding support required tile size")
         num_blocks = xt.volume() // xt.get_legacy_shape()[-1] // 32
         compute_grid_size = device.compute_with_storage_grid_size()
@@ -70,30 +70,30 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
 
         if in_sharded:
             Ht = divup(num_blocks, num_cores)
-            shard_grid = ttl.tensor.CoreRangeSet(
-                ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
+            shard_grid = ttnn.CoreRangeSet(
+                ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
             )
-            input_shard_spec = ttl.tensor.ShardSpec(
+            input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
                     Ht * 32,
                     xt.get_legacy_shape()[-1],
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             )
-            input_mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
+            input_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
     else:
         xt = xt.to(device)
 
-    cost = ttl.tensor.Tensor(cos_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    sint = ttl.tensor.Tensor(sin_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    xtt = ttl.tensor.rotary_embedding(xt, cost, sint, output_mem_config=out_mem_config)
+    cost = ttnn.Tensor(cos_cached, sincos_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin_cached, sincos_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, memory_config=out_mem_config)
 
-    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached)
 
@@ -110,8 +110,8 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
 @pytest.mark.parametrize("token_idx", [0, 128, 129, 1024, 1025])
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
-@pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-@pytest.mark.parametrize("sincos_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("sincos_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_rotary_embedding_decode(
     W, Z, Y, X, cache_size, token_idx, in_sharded, out_sharded, input_dtype, sincos_dtype, device
 ):
@@ -122,18 +122,18 @@ def test_rotary_embedding_decode(
     sin_cached = torch.randn(sin_cos_shape).bfloat16().float()
 
     if out_sharded:
-        out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
+        out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
     else:
-        out_mem_config = ttl.tensor.MemoryConfig()
+        out_mem_config = ttnn.MemoryConfig()
 
-    xt = ttl.tensor.Tensor(x, input_dtype)
+    xt = ttnn.Tensor(x, input_dtype)
     if xt.get_legacy_shape()[-2] % 32 == 0 and xt.get_legacy_shape()[-1] % 32 == 0:
-        xt = xt.to(ttl.tensor.Layout.TILE)
-    elif input_dtype == ttl.tensor.DataType.BFLOAT8_B:
+        xt = xt.to(ttnn.TILE_LAYOUT)
+    elif input_dtype == ttnn.bfloat8_b:
         pytest.skip()
 
     if in_sharded or out_sharded:
-        if xt.get_layout() != ttl.tensor.Layout.TILE:
+        if xt.get_layout() != ttnn.TILE_LAYOUT:
             pytest.skip("Sharding support required tile size")
         num_blocks = xt.volume() // xt.get_legacy_shape()[-1] // 32
         compute_grid_size = device.compute_with_storage_grid_size()
@@ -144,32 +144,32 @@ def test_rotary_embedding_decode(
 
         if in_sharded:
             Ht = divup(num_blocks, num_cores)
-            shard_grid = ttl.tensor.CoreRangeSet(
-                ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
+            shard_grid = ttnn.CoreRangeSet(
+                ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
             )
-            input_shard_spec = ttl.tensor.ShardSpec(
+            input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
                     Ht * 32,
                     xt.get_legacy_shape()[-1],
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             )
-            input_mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
+            input_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
     else:
         xt = xt.to(device)
 
-    cost = ttl.tensor.Tensor(cos_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    sint = ttl.tensor.Tensor(sin_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    xtt = ttl.tensor.rotary_embedding(xt, cost, sint, token_idx, out_mem_config)
+    cost = ttnn.Tensor(cos_cached, sincos_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin_cached, sincos_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx, memory_config=out_mem_config)
     if out_sharded:
-        xtt = ttl.tensor.sharded_to_interleaved(xtt)
+        xtt = ttnn.sharded_to_interleaved(xtt)
 
-    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx)
 
@@ -183,8 +183,8 @@ def test_rotary_embedding_decode(
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("in_sharded", [True])
 @pytest.mark.parametrize("out_sharded", [True])
-@pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.FLOAT32])
-@pytest.mark.parametrize("sincos_dtype", [ttl.tensor.DataType.FLOAT32])
+@pytest.mark.parametrize("input_dtype", [ttnn.float32])
+@pytest.mark.parametrize("sincos_dtype", [ttnn.float32])
 def test_rotary_embedding_prefill_fp32(
     W, Z, Y, X, cache_size, in_sharded, out_sharded, input_dtype, sincos_dtype, device
 ):
@@ -197,18 +197,18 @@ def test_rotary_embedding_prefill_fp32(
     sin_cached = torch.randn(sin_cos_shape).bfloat16().float()
 
     if out_sharded:
-        out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
+        out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
     else:
-        out_mem_config = ttl.tensor.MemoryConfig()
+        out_mem_config = ttnn.MemoryConfig()
 
-    xt = ttl.tensor.Tensor(x, input_dtype)
+    xt = ttnn.Tensor(x, input_dtype)
     if xt.get_legacy_shape()[-2] % 32 == 0 and xt.get_legacy_shape()[-1] % 32 == 0:
-        xt = xt.to(ttl.tensor.Layout.TILE)
-    elif input_dtype == ttl.tensor.DataType.BFLOAT8_B:
+        xt = xt.to(ttnn.TILE_LAYOUT)
+    elif input_dtype == ttnn.bfloat8_b:
         pytest.skip()
 
     if in_sharded or out_sharded:
-        if xt.get_layout() != ttl.tensor.Layout.TILE:
+        if xt.get_layout() != ttnn.TILE_LAYOUT:
             pytest.skip("Sharding support required tile size")
         num_blocks = xt.volume() // xt.get_legacy_shape()[-1] // 32
         compute_grid_size = device.compute_with_storage_grid_size()
@@ -219,30 +219,30 @@ def test_rotary_embedding_prefill_fp32(
 
         if in_sharded:
             Ht = divup(num_blocks, num_cores)
-            shard_grid = ttl.tensor.CoreRangeSet(
-                ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
+            shard_grid = ttnn.CoreRangeSet(
+                ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
             )
-            input_shard_spec = ttl.tensor.ShardSpec(
+            input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
                     Ht * 32,
                     xt.get_legacy_shape()[-1],
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             )
-            input_mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
+            input_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
     else:
         xt = xt.to(device)
 
-    cost = ttl.tensor.Tensor(cos_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    sint = ttl.tensor.Tensor(sin_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    xtt = ttl.tensor.rotary_embedding(xt, cost, sint, output_mem_config=out_mem_config)
+    cost = ttnn.Tensor(cos_cached, sincos_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin_cached, sincos_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, memory_config=out_mem_config)
 
-    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached)
 
@@ -257,8 +257,8 @@ def test_rotary_embedding_prefill_fp32(
 @pytest.mark.parametrize("token_idx", [0, 128])
 @pytest.mark.parametrize("in_sharded", [True])
 @pytest.mark.parametrize("out_sharded", [True])
-@pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.FLOAT32])
-@pytest.mark.parametrize("sincos_dtype", [ttl.tensor.DataType.FLOAT32])
+@pytest.mark.parametrize("input_dtype", [ttnn.float32])
+@pytest.mark.parametrize("sincos_dtype", [ttnn.float32])
 def test_rotary_embedding_decode_fp32(
     W, Z, Y, X, cache_size, token_idx, in_sharded, out_sharded, input_dtype, sincos_dtype, device
 ):
@@ -269,18 +269,18 @@ def test_rotary_embedding_decode_fp32(
     sin_cached = torch.randn(sin_cos_shape).bfloat16().float()
 
     if out_sharded:
-        out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
+        out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
     else:
-        out_mem_config = ttl.tensor.MemoryConfig()
+        out_mem_config = ttnn.MemoryConfig()
 
-    xt = ttl.tensor.Tensor(x, input_dtype)
+    xt = ttnn.Tensor(x, input_dtype)
     if xt.get_legacy_shape()[-2] % 32 == 0 and xt.get_legacy_shape()[-1] % 32 == 0:
-        xt = xt.to(ttl.tensor.Layout.TILE)
-    elif input_dtype == ttl.tensor.DataType.BFLOAT8_B:
+        xt = xt.to(ttnn.TILE_LAYOUT)
+    elif input_dtype == ttnn.bfloat8_b:
         pytest.skip()
 
     if in_sharded or out_sharded:
-        if xt.get_layout() != ttl.tensor.Layout.TILE:
+        if xt.get_layout() != ttnn.TILE_LAYOUT:
             pytest.skip("Sharding support required tile size")
         num_blocks = xt.volume() // xt.get_legacy_shape()[-1] // 32
         compute_grid_size = device.compute_with_storage_grid_size()
@@ -291,32 +291,32 @@ def test_rotary_embedding_decode_fp32(
 
         if in_sharded:
             Ht = divup(num_blocks, num_cores)
-            shard_grid = ttl.tensor.CoreRangeSet(
-                ttl.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
+            shard_grid = ttnn.CoreRangeSet(
+                ttnn.experimental.tensor.num_cores_to_corerange_set(num_cores, compute_grid_size, True)
             )
-            input_shard_spec = ttl.tensor.ShardSpec(
+            input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
                     Ht * 32,
                     xt.get_legacy_shape()[-1],
                 ],
-                ttl.tensor.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardOrientation.ROW_MAJOR,
                 False,
             )
-            input_mem_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1, input_shard_spec
+            input_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
     else:
         xt = xt.to(device)
 
-    cost = ttl.tensor.Tensor(cos_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    sint = ttl.tensor.Tensor(sin_cached, sincos_dtype).to(ttl.tensor.Layout.TILE).to(device)
-    xtt = ttl.tensor.rotary_embedding(xt, cost, sint, token_idx, out_mem_config)
+    cost = ttnn.Tensor(cos_cached, sincos_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin_cached, sincos_dtype).to(ttnn.TILE_LAYOUT).to(device)
+    xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx, memory_config=out_mem_config)
     if out_sharded:
-        xtt = ttl.tensor.sharded_to_interleaved(xtt)
+        xtt = ttnn.sharded_to_interleaved(xtt)
 
-    tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx)
 
