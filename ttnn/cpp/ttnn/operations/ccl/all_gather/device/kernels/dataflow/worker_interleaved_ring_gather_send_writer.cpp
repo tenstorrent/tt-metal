@@ -13,8 +13,28 @@
 void kernel_main() {
     uint32_t arg_idx = 0;
     const uint32_t dst_addr = get_arg_val<uint32_t>(arg_idx++);
+    const bool sender_enabled = get_arg_val<uint32_t>(arg_idx++) == 1;
+    if (!sender_enabled) {
+        return;
+    }
     const uint32_t eth_sender_l1_base_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_sender_l1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_transfers = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_full_chunks = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_pages_per_full_chunk = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t rem_num_pages = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t input_start_idx = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_start_idx = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_start_addr_offset = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t row_start_idx = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t col_start_idx = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t row_offset = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t col_offset = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_rows = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_cols = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t eth_sender_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t eth_sender_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    const bool fuse_op = get_arg_val<uint32_t>(arg_idx++);
 
     #ifdef SHARDED_MEM_LAYOUT
     uint32_t output_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
@@ -25,48 +45,32 @@ void kernel_main() {
     arg_idx += output_shard_grid_ncols;
     #endif
 
-    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t num_transfers = get_compile_time_arg_val(1);
-    constexpr uint32_t num_full_chunks = get_compile_time_arg_val(2);
-    constexpr uint32_t page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t num_pages_per_full_chunk = get_compile_time_arg_val(5);
-    constexpr uint32_t rem_num_pages = get_compile_time_arg_val(6);
-    constexpr uint32_t input_start_idx = get_compile_time_arg_val(7);
-    constexpr uint32_t output_start_idx = get_compile_time_arg_val(8);
-    constexpr uint32_t output_start_addr_offset = get_compile_time_arg_val(9);
-    constexpr uint32_t row_start_idx = get_compile_time_arg_val(10);
-    constexpr uint32_t col_start_idx = get_compile_time_arg_val(11);
-    constexpr uint32_t row_offset = get_compile_time_arg_val(12);
-    constexpr uint32_t col_offset = get_compile_time_arg_val(13);
-    constexpr uint32_t num_rows = get_compile_time_arg_val(14);
-    constexpr uint32_t num_cols = get_compile_time_arg_val(15);
-    constexpr uint32_t input_start_ring_idx = get_compile_time_arg_val(16);
-    volatile uint32_t *const writer_send_sem_ptr = reinterpret_cast<volatile uint32_t *const >(get_semaphore(get_compile_time_arg_val(17)));
-    constexpr uint32_t eth_sender_noc_x = get_compile_time_arg_val(18);
-    constexpr uint32_t eth_sender_noc_y = get_compile_time_arg_val(19);
-    constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(20);
-    constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(21);
-    constexpr bool fuse_op = get_compile_time_arg_val(22);
-
     /* Args for overlapped all gather */
     OpSignaler op_signaler;
 
-    if constexpr(fuse_op) {
+    if (fuse_op) {
         op_signaler = OpSignaler(arg_idx);
     }
 
-    static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
+    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    constexpr uint32_t output_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t input_start_ring_idx = get_compile_time_arg_val(3);
+    volatile uint32_t *const writer_send_sem_ptr = reinterpret_cast<volatile uint32_t *const >(get_semaphore(get_compile_time_arg_val(4)));
+    constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(5);
+    constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(6);
+
+    // static_assert(half_cb_n_pages > rem_num_pages, "half_cb_n_pages must be greater than or equal to rem_num_pages");
 
     #ifdef SHARDED_MEM_LAYOUT
-    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(23));
-    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(24);
-    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(25);
-    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(26);
-    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(27);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(28);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(29);
-    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(30) != 0;
+    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(7));
+    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(8);
+    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(9);
+    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(10);
+    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(11);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(12);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(13);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(14) != 0;
     #endif
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -133,14 +137,14 @@ void kernel_main() {
 
     uint32_t ID = (my_y[0] << 16) | my_x[0];
 
-    if constexpr(num_full_chunks > 0) {
+    if (num_full_chunks > 0) {
         for (uint32_t c = 0; c < num_full_chunks; ++c) {
             sender.wait_for_empty_write_slot();
             write_and_send_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, num_pages_per_full_chunk, page_size, sender);
         }
     }
 
-    if constexpr(rem_num_pages > 0) {
+    if (rem_num_pages > 0) {
         sender.wait_for_empty_write_slot();
         write_and_send_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size, sender);
         ASSERT(num_pages_per_full_chunk == 0 || num_pages_per_full_chunk > rem_num_pages);
@@ -148,20 +152,20 @@ void kernel_main() {
         pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
     }
 
-    if constexpr(fuse_op) {
+    if (fuse_op) {
         // Synchronize and signal that the local tensor slice is available
         op_signaler.synchronize_workers_and_signal_op();
     }
 
     // num_transfers = num_devices - 1
     for (uint32_t i = 1; i < num_transfers; ++i) {
-        if constexpr(num_full_chunks > 0) {
+        if (num_full_chunks > 0) {
             for (uint32_t c = 0; c < num_full_chunks; ++c) {
                 sender.wait_for_empty_write_slot();
                 sender.send_payload_blocking(cb_id_in0, num_pages_per_full_chunk, page_size);
             }
         }
-        if constexpr(rem_num_pages > 0) {
+        if (rem_num_pages > 0) {
             sender.wait_for_empty_write_slot();
             sender.send_payload_blocking(cb_id_in0, rem_num_pages, page_size);
             ASSERT(num_pages_per_full_chunk == 0 || num_pages_per_full_chunk > rem_num_pages);
