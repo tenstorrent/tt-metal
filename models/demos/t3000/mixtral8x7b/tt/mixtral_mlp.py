@@ -82,6 +82,7 @@ class TtMixtralMLP(LightweightModule):
                 activation="silu" if not pc_1 else None,
                 program_config=pc_1,
             )
+
             w3_out = ttnn.linear(
                 x,
                 self.w3,
@@ -92,10 +93,9 @@ class TtMixtralMLP(LightweightModule):
             )
 
             x.deallocate(True)
-            w2_in = ttnn.multiply(w1_out, w3_out)
+            w2_in = ttnn.multiply(w1_out, w3_out, output_tensor=w1_out)
 
             w3_out.deallocate(True)
-            w1_out.deallocate(True)
 
             w2_out = ttnn.linear(
                 w2_in,

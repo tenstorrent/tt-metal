@@ -82,7 +82,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
         # input = torch.randn(1, 32, 4096)
         pt_decode_input_bsh = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         start_pos = generation_start_pos + i
-        current_pos = start_pos % model_args.sliding_window
+        start_pos_ids = [start_pos for _ in range(batch)]
 
         decode_input_b1sh, attn_mask, attn_mask_torch = prepare_inputs_ttnn_prefill(
             pt_decode_input_bsh,
@@ -91,8 +91,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
         # Run TT model
         tt_out_b1sh = tt_model(
             decode_input_b1sh,
-            start_pos,
-            current_pos,
+            start_pos_ids,
             attn_mask,
             rot_mats,
             transformation_mats,
