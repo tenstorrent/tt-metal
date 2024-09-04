@@ -17,20 +17,20 @@ python models/demos/t3000/mixtral8x7b/scripts/repack_weights.py <path_to_checkpo
 
 ### Set up environment
 1. Set async and dispatch over ethernet cores env vars:
-```
+```bash
 export TT_METAL_ASYNC_DEVICE_QUEUE=1
 export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
 2. Prepare the weight cache directory:
 
-```
+```bash
 # Make a directory for ttnn to cache weights into. This speeds up subsequent runs.
 mkdir <weight_cache_dir>
 ```
 
 3. Set up environment variables:
-```
+```bash
 export MIXTRAL_CKPT_DIR=<repacked_output_dir>
 export MIXTRAL_TOKENIZER_PATH=<path_to_tokenizer_dir>
 export MIXTRAL_CACHE_PATH=<weights_cache_dir>
@@ -38,7 +38,7 @@ export MIXTRAL_CACHE_PATH=<weights_cache_dir>
 
 Note that the cached weights folder structure will contain the general and instruct cached weights in separate directories, like so:
 
-```
+```bash
 <weights_cache_dir>
   /mixtral_tensor_cache_bfp8
   /mixtral_tensor_cache_instruct_bfp8
@@ -46,7 +46,7 @@ Note that the cached weights folder structure will contain the general and instr
 ```
 
 4. Cache the weights (first-time setup):
-```
+```bash
 # Build a full 32 layer model to cache the weights. This will take some time.
 pytest -svv models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mixtral_model_inference[wormhole_b0-True-1-32-output]
 ```
@@ -63,22 +63,27 @@ To facilitate this, we provide a very large input with over 100k tokens (the maj
 - For context lengths higher than 4k tokens, we support a maximum batch size of 16.
 - For context lenghts below 4k tokens, we support a maximum batch size of 32.
 
-```
-# Run the demo with a pre-written batch of 32 user prompts
+#### Run the demo with a pre-written batch of 32 user prompts
 
-# Prefill & Decode demo
+- Prefill & Decode demo
+```bash
 pytest -svv models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py::test_mixtral8x7b_demo[wormhole_b0-True-16k-general]
+```
 
-# Decode-only demo
+- Decode-only demo
+```bash
 pytest -svv models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-general]
 ```
 
 We also provide an input file with 32 user question-prompt for instruct weights (don't forget to update your flags to the correct weights!):
-```
-# Prefill & Decode demo
-pytest -svv models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py::test_mixtral8x7b_demo[wormhole_b0-True-16k-instruct]
 
-# Decode-only demo
+- Prefill & Decode demo
+```bash
+pytest -svv models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py::test_mixtral8x7b_demo[wormhole_b0-True-16k-instruct]
+```
+
+- Decode-only demo
+```bash
 pytest -svv models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[wormhole_b0-True-instruct]
 ```
 
