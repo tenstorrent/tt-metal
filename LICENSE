@@ -204,6 +204,10 @@
 
 Third-Party Dependencies:
 
+The following dependencies are utilized by this project and are included in a distributed build of a Python Wheel:
+
+- sfpi-gcc - [License available here](https://github.com/tenstorrent-metal/sfpi-rel-temp/blob/master/LICENSE)[and here](https://github.com/tenstorrent-metal/sfpi-rel-temp/blob/master/compiler/LICENSE)
+
 The following dependencies are utilized by this project but are not explicitly
 distributed as part of the software:
 
