@@ -356,8 +356,25 @@ class QueueIndexPointer {
  * of the link is ready to start sending/receiving messages. We perform a handshake to ensure that's
  * case. Before handshaking, we make sure to clear any of the channel sync datastructures local
  * to our core.
+ *
+ * The handshaking process is split into two parts for the sender/master and two parts for the
+ * the slave. The handshake is broken into 2 parts so that the master can initiate the handshake
+ * as early as possible so the message can be "in flight" over the ethernet link while other EDM
+ * initialization is taking place.
+ *
+ * Important note about handshaking: the sender/master canNOT complete the handshake until all receiver
+ * channels are initialized. Otherwise we have a race between channel initialization on the receiver side
+ * and real payload data (and signals) using those channels.
+ *
+ * The basic protocol for the handshake is to use the reserved space at erisc_info[0] where the master writes
+ * and sends payload available information to that channel. The receive must acknowledge that message and upon
+ * doing so, considers the handshake complete.
  */
-FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
+namespace handshake {
+
+static constexpr uint32_t A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH = 1000000000;
+
+FORCE_INLINE void initialize_edm_common_datastructures(std::uint32_t handshake_register_address) {
     reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[4] = 1;
     reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[5] = 1;
     reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[6] = 0x1c0ffee1;
@@ -369,15 +386,34 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
         erisc_info->channels[i].receiver_ack = 0;
     }
     *(volatile tt_l1_ptr uint32_t *)handshake_register_address = 0;
-    if (is_sender) {
-        eth_wait_receiver_done();
-        eth_send_bytes(handshake_register_address, handshake_register_address, 16);
-        eth_wait_for_receiver_done();
-    } else {
-        eth_wait_for_bytes(16);
-        eth_receiver_channel_done(0);
-    }
 }
+
+FORCE_INLINE void sender_side_start(std::uint32_t handshake_register_address) {
+    initialize_edm_common_datastructures(handshake_register_address);
+    eth_wait_receiver_done(A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
+    while (eth_txq_reg_read(0, ETH_TXQ_CMD) != 0) {
+        asm volatile("nop");
+    }
+    eth_send_bytes(handshake_register_address, handshake_register_address, 16);
+}
+
+FORCE_INLINE void sender_side_finish(std::uint32_t handshake_register_address) {
+    eth_wait_for_receiver_done(A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
+}
+
+FORCE_INLINE void receiver_side_start(std::uint32_t handshake_register_address) {
+    initialize_edm_common_datastructures(handshake_register_address);
+}
+
+FORCE_INLINE void receiver_side_finish(std::uint32_t handshake_register_address) {
+    eth_wait_for_bytes(16, A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
+    while (eth_txq_reg_read(0, ETH_TXQ_CMD) != 0) {
+        asm volatile("nop");
+    }
+    eth_receiver_channel_done(0);
+}
+} // namespace handshake
+
 
 template <uint32_t NUM_CHANNELS>
 FORCE_INLINE void initialize_transaction_buffer_addresses(

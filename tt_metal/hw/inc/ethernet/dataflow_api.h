@@ -228,15 +228,21 @@ void eth_write_remote_reg(uint32_t reg_addr, uint32_t value) {
  * |-------------------|---------------------------------------------------------|----------|-------------|----------|
  */
 FORCE_INLINE
-void eth_wait_for_receiver_done() {
+void eth_wait_for_receiver_done(uint32_t wait_min = 0) {
     internal_::eth_send_packet(
         0,
 
         ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
         ((uint32_t)(&(erisc_info->channels[0].bytes_sent))) >> 4,
         1);
+    uint32_t count = 0;
     while (erisc_info->channels[0].bytes_sent != 0) {
-        run_routing();
+        if (count == wait_min) {
+            count = 0;
+            run_routing();
+        } else {
+            count++;
+        }
     }
 }
 
@@ -313,9 +319,15 @@ void eth_wait_for_receiver_channel_done(uint32_t channel) {
  * | channel                     | Which transaction channel to block on                   | uint32_t | 0..7        | True     |
  */
 FORCE_INLINE
-void eth_wait_receiver_done() {
+void eth_wait_receiver_done(uint32_t wait_min = 0) {
+    uint32_t count = 0;
     while (erisc_info->channels[0].bytes_sent != 0) {
-        run_routing();
+        if (count == wait_min) {
+            count = 0;
+            run_routing();
+        } else {
+            count++;
+        }
     }
 }
 
@@ -332,9 +344,15 @@ void eth_wait_receiver_done() {
  * | num_bytes         | Size of data transfer in bytes, must be multiple of 16  | uint32_t | 0..256kB | True     |
  */
 FORCE_INLINE
-void eth_wait_for_bytes(uint32_t num_bytes) {
+void eth_wait_for_bytes(uint32_t num_bytes, uint32_t wait_min = 0) {
+    uint32_t count = 0;
     while (erisc_info->channels[0].bytes_sent != num_bytes) {
-        run_routing();
+        if (count == wait_min) {
+            count = 0;
+            run_routing();
+        } else {
+            count++;
+        }
     }
 }
 
