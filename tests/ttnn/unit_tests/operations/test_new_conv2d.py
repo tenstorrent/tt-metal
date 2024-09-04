@@ -68,6 +68,7 @@ def run_conv(
     debug=False,
     groups=1,
     has_bias=True,
+    shard_layout=None,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -111,9 +112,8 @@ def run_conv(
         )
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
-    if type(use_1d_systolic_array) == ttnn.TensorMemoryLayout:
-        shard_layout = use_1d_systolic_array
-    else:
+
+    if shard_layout is None:
         shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
@@ -1527,25 +1527,17 @@ def test_conv_core_nondivis(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width,  act_block_w_div, shard_layout",
     (
-        # (128, 128, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (256, 2048, 8, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (512, 2048, 16, 16, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (768, 768, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (1280, 1280, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (1280, 1280, 8, 8, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (1280, 2560, 8, 8, 2, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (768, 768, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (1280, 1280, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (1280, 1280, 8, 8, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (1280, 2560, 8, 8, 2, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         (128, 128, 8, 8, 1, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
         (128, 128, 16, 16, 1, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
         (128, 128, 32, 32, 1, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
-        # (64, 64, 512, 256, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        # #Width Sharded
-        # (128, 128, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (256, 2048, 8, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (512, 2048, 16, 16, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (768, 768, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (1280, 1280, 16, 16, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (1280, 1280, 8, 8, 1, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        # (1280, 2560, 8, 8, 2, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (32, 32, 64, 64, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (32, 32, 128, 64, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (16, 16, 528, 80, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (32, 16, 264, 40, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
     ),
 )
 @pytest.mark.parametrize(
@@ -1601,8 +1593,9 @@ def test_conv_dilation(
         stride,
         pad,
         pad,
-        shard_layout,
+        True,
         config_override,
+        shard_layout=shard_layout,
         output_layout=output_layout,
         dilation=dilation,
         has_bias=False,
