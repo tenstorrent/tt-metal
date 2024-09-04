@@ -296,7 +296,6 @@ def run_test_LlamaModel_end_to_end(
         ("llama3"),
     ),
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 17068032}], indirect=True)
 @pytest.mark.parametrize(
     "generation_length, expected_compile_time, expected_inference_time",
     (
@@ -310,6 +309,7 @@ def run_test_LlamaModel_end_to_end(
     ),
     ids=["gen32", "gen128", "gen2048"],
 )
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 14227456}], indirect=True)
 def test_Llama_perf_host(
     generation_length,
     expected_compile_time,
