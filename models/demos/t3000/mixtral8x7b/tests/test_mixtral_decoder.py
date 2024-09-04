@@ -78,8 +78,6 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
         decode_input_b1sh = prepare_inputs_ttnn(
             pt_decode_input_bsh,
             model_args.dim,
-            start_pos,
-            model_args,
             tt_model.mesh_device,
         )
 
