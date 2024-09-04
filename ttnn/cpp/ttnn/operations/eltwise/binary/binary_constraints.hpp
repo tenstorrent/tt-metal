@@ -562,11 +562,46 @@ class EltwiseOpConstraintsFactory
         const ttnn::Shape& input_shape_b,
         const tt::tt_metal::MemoryConfig& memory_config_b)
     {
+        // void BinaryDeviceOperation::validate_on_program_cache_hit(
+        auto batch_size_0_a = input_shape_a.rank() >= 4 ? input_shape_a[-4] : 1;
+        auto batch_size_1_a = input_shape_a.rank() >= 3 ? input_shape_a[-3] : 1;
         auto height_a = input_shape_a[-2];
         auto width_a = input_shape_a[-1];
 
+        auto batch_size_0_b = input_shape_b.rank() >= 4 ? input_shape_b[-4] : 1;
+        auto batch_size_1_b = input_shape_b.rank() >= 3 ? input_shape_b[-3] : 1;
         auto height_b = input_shape_b[-2];
         auto width_b = input_shape_b[-1];
+
+        // Input shape b must be the same as or broadcastable to input shape a
+        if (batch_size_0_a != batch_size_0_b) {
+            if (! (batch_size_0_a > batch_size_0_b and batch_size_0_b == 1))
+            {
+                // "ttnn::operations::binary::BinaryDeviceOperation: batch size mismatch");
+                return EltwiseOpTypes::NotSupported;
+            }
+        }
+        if (batch_size_1_a != batch_size_1_b) {
+            if (! (batch_size_1_a > batch_size_1_b and batch_size_1_b == 1))
+            {
+                // "ttnn::operations::binary::BinaryDeviceOperation: batch size mismatch");
+                return EltwiseOpTypes::NotSupported;
+            }
+        }
+        if (height_a != height_b) {
+            if (! (height_a > height_b and height_b == 1))
+            {
+                // "ttnn::operations::binary::BinaryDeviceOperation: height mismatch");
+                return EltwiseOpTypes::NotSupported;
+            }
+        }
+        if (width_a != width_b) {
+            if (! (width_a > width_b and width_b == 1))
+            {
+                // "ttnn::operations::binary::BinaryDeviceOperation: width mismatch");
+                return EltwiseOpTypes::NotSupported;
+            }
+        }
 
         if (ElementWiseMultiCoreConstraintsBuilder::check_input_parameters(input_shape_a, memory_config_a, input_shape_b, memory_config_b)) {
             return EltwiseOpTypes::ElementWiseMultiCore;
