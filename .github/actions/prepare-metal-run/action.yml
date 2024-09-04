@@ -26,4 +26,5 @@ runs:
       run: tar -xvf ttm_${{ inputs.arch }}.tar
     - uses: ./.github/actions/install-python-deps
     - name: Collect Workflow Telemetry
-      uses: catchpoint/workflow-telemetry-action@v2  
+      if: ${{ !cancelled() }}
+      uses: catchpoint/workflow-telemetry-action@v2
