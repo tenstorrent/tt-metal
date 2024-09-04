@@ -213,6 +213,7 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     const std::optional<Tensor> &optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    using namespace tt::constants;
     // Cast Float Scalar to a device tensor
     auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
     host_buffer[0] = scalar;

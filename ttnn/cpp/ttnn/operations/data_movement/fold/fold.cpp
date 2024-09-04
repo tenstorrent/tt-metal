@@ -11,6 +11,7 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/reshape/reshape.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "tt_metal/common/constants.hpp"
 
 #include "fold.hpp"
 
@@ -20,6 +21,7 @@ namespace ttnn::operations::data_movement {
 std::vector<Tensor> fold_with_transpose_(
     uint8_t queue_id, const Tensor& input, const std::optional<const tt::tt_metal::Shape>& output_shape, uint32_t stride_h, uint32_t stride_w, uint32_t pad_c, uint32_t pad_h, uint32_t pad_w) {
 
+    using namespace tt::constants;
     Device * device;
 
     // Get the device
@@ -131,6 +133,7 @@ ttnn::MemoryConfig create_sharded_memory_config(ttnn::Shape tensor_shape, CoreCo
 std::vector<Tensor> fold_with_transpose_sharded_(
     uint8_t queue_id, const Tensor& input, const std::optional<const tt::tt_metal::Shape>& output_shape, uint32_t stride_h, uint32_t stride_w, uint32_t pad_c, uint32_t pad_h, uint32_t pad_w, CoreCoord grid_size, const std::optional<MemoryConfig> override_memory_config) {
 
+    using namespace tt::constants;
     Device * device;
 
     // Get the device

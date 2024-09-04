@@ -31,6 +31,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreShardedOptimized::create(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
@@ -252,6 +253,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreShardedOptimized::override_
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::constants;
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;

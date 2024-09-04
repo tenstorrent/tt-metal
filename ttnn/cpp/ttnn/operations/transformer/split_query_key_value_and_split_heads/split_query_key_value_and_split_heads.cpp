@@ -132,9 +132,9 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
 
     uint32_t head_size = hidden_dim / num_heads;
     uint32_t padded_head_size = hidden_dim_padded / num_heads;
-    TT_FATAL(head_size % TILE_WIDTH == 0,
+    TT_FATAL(head_size % tt::constants::TILE_WIDTH == 0,
             fmt::format("Invalid head size: {}. The head size must be a multiple of the tile width ({}). Please adjust the dimensions accordingly.",
-                        head_size, TILE_WIDTH));
+                        head_size, tt::constants::TILE_WIDTH));
 
     TT_FATAL(padded_head_size == head_size,
             fmt::format("Padding error: Head size {} should not include additional tile padding, but padded head size was found to be {}. Ensure that no extra padding is applied.",
