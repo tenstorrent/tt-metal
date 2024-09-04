@@ -76,10 +76,16 @@ def get_version(metal_build_config):
     }
 
 
+def get_is_from_precompiled():
+    """Additional option if the precompiled C++ libs are already in-place."""
+    return os.environ.get("TT_FROM_PRECOMPILED") == "True"
+
+
 @dataclass(frozen=True)
 class MetalliumBuildConfig:
     is_srcdir_build = get_is_srcdir_build()
     arch_name = get_arch_name()
+    is_from_precompiled=get_is_from_precompiled()
 
 
 metal_build_config = MetalliumBuildConfig()
@@ -130,14 +136,20 @@ class CMakeBuild(build_ext):
             build_dir.mkdir(parents=True)
 
         cmake_args = []
+        
+        if not metal_build_config.is_from_precompiled:      
+            nproc = subprocess.check_output(["nproc"]).decode().strip()
+            build_args = [f"-j{nproc}"]
 
-        nproc = subprocess.check_output(["nproc"]).decode().strip()
-        build_args = [f"-j{nproc}"]
-
-        subprocess.check_call(["cmake", "-G", "Ninja", source_dir, *cmake_args], cwd=build_dir, env=build_env)
-        subprocess.check_call(
+            subprocess.check_call(["cmake", "-G", "Ninja", source_dir, *cmake_args], cwd=build_dir, env=build_env)
+            subprocess.check_call(
             ["cmake", "--build", ".", "--target", "install", *build_args], cwd=build_dir, env=build_env
-        )
+            )
+        else:
+            assert ((build_dir / "lib").exists() and
+                    (source_dir / "runtime").exists()), \
+                "The precompiled option is selected via `TT_FROM_PRECOMPILED` \
+            env var. Please place files into `build/lib` and `runtime` folders."
 
         subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
         subprocess.check_call(["ls", "-hal", "build/lib"], cwd=source_dir, env=build_env)
@@ -167,6 +179,7 @@ class CMakeBuild(build_ext):
 
     def is_editable_install_(self):
         return self.inplace
+
 
 
 # Include tt_metal_C for kernels and src/ and tools
