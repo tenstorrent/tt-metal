@@ -53,6 +53,7 @@ run_perf_models_cnn_javelin() {
     local test_marker=$2
 
     # Run tests
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests/test_unet_perf.py -m $test_marker
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=480
 
     ## Merge all the generated reports
@@ -83,6 +84,8 @@ run_device_perf_models() {
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/ttnn_resnet/tests -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests/test_unet_perf.py -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mamba/tests -m $test_marker
 
