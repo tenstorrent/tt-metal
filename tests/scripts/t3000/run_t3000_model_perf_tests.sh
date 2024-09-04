@@ -27,7 +27,8 @@ run_t3000_mixtral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mixtral_tests"
 
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_perf.py -m "model_perf_t3000" ; fail+=$?
+  # env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_perf.py -m "model_perf_t3000" ; fail+=$?
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/t3000/mixtral8x7b/tests/test_mixtral_perf.py
 
   # Record the end time
   end_time=$(date +%s)
