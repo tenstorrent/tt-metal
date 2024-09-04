@@ -136,11 +136,12 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     auto [num_cores_used, y_tiles_per_core] = get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_y_dim, num_cores);
 
-    uint32_t per_core_tiles = y_tiles_per_core * num_tiles_x_dim * z;
+    uint32_t x_tiles_per_core = num_tiles_x_dim;
+    uint32_t tiles_per_core = y_tiles_per_core * num_tiles_x_dim * z;
 
     // FIXME: remove debugging stuff
     std::cout << "Num chunks: " << num_chunks << std::endl;
-    std::cout << "Per core tiles: " << per_core_tiles << std::endl;
+    std::cout << "Per core tiles: " << tiles_per_core << std::endl;
     // endFIXME: remove debugging stuff
 
     uint32_t start_core_x = 0;
@@ -171,7 +172,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     bool out_is_dram = output_buffers[0]->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    uint32_t z_stride_read = num_tiles_y_dim * num_tiles_x_dim; // increase z by going through an x-y plane.
+    uint32_t z_stride_read = num_tiles_x_dim * num_tiles_y_dim; // increase z by going through an x-y plane.
     uint32_t y_stride_read = num_tiles_x_dim; // advance by the width to go down in height
 
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
@@ -180,23 +181,26 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
                                                       (std::uint32_t)in0_is_dram,
 
                                                       // READER COMPILE TIME ARGS
-                                                      (std::uint32_t)(z / num_cores_z),
-                                                      (std::uint32_t)per_core_tiles_x,
-                                                      (std::uint32_t)per_core_tiles_y,
+                                                      (std::uint32_t)z,
                                                       (std::uint32_t)z_stride_read,
                                                       (std::uint32_t)y_stride_read,
-                                                      (std::uint32_t)num_chunks};
+                                                      (std::uint32_t)y_tiles_per_core,
+                                                      (std::uint32_t)x_tiles_per_core
+                                                    };
 
-    uint32_t z_stride_write = num_tiles_per_z / num_chunks;
-    uint32_t y_stride_write = per_core_tiles_y * (num_cores_c / num_chunks);
+    uint32_t z_stride_write = (num_tiles_x_dim * num_tiles_y_dim) / num_chunks;
+    uint32_t y_stride_write = num_tiles_x_dim / num_chunks;
+
+    uint32_t x_tiles_per_bank = num_tiles_x_dim / num_chunks;
+
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
                                                       (std::uint32_t)tile_dtype_is_bfloat16,
                                                       (std::uint32_t)out_is_dram,
 
-                                                      (std::uint32_t)per_core_tiles_x,
-                                                      (std::uint32_t)per_core_tiles_y,
+                                                      (std::uint32_t)y_tiles_per_core,
+                                                      (std::uint32_t)x_tiles_per_bank,
 
-                                                      (std::uint32_t)(z / num_cores_z),
+                                                      (std::uint32_t)z,
                                                       (std::uint32_t)z_stride_write,
                                                       (std::uint32_t)y_stride_write,
                                                       (std::uint32_t)num_chunks};

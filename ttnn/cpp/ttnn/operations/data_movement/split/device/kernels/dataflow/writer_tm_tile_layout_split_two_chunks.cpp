@@ -16,15 +16,15 @@ void kernel_main() {
     constexpr uint32_t out_is_dram = get_compile_time_arg_val(1);
     // WRITER COMPILE TIME ARGS
     //constexpr uint32_t out_num_tiles_per_tensor = get_compile_time_arg_val(2);
-    constexpr uint32_t per_core_tiles_y = get_compile_time_arg_val(2);
-    constexpr uint32_t per_core_tiles_x = get_compile_time_arg_val(3);
+    constexpr uint32_t y_tiles_per_core = get_compile_time_arg_val(2);
+    constexpr uint32_t x_tiles_per_bank = get_compile_time_arg_val(3);
     constexpr uint32_t z = get_compile_time_arg_val(4);
     constexpr uint32_t z_stride = get_compile_time_arg_val(5);
     constexpr uint32_t y_stride = get_compile_time_arg_val(6);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(7);
 
     // WRITER RUNTIME ARGS
-    uint32_t out_tensor_tile_id = get_arg_val<uint32_t>(0);
+    uint32_t writer_core_id = get_arg_val<uint32_t>(0);
     std::array<uint32_t, num_chunks> out_addrs;
 
     for (uint32_t i = 1; i <= num_chunks; i++) {
@@ -65,12 +65,12 @@ void kernel_main() {
         uint32_t z_stride_cum = 0;
         for (uint32_t k = 0; k < z; k++) {
             uint32_t y_stride_cum = 0;
-            for (uint32_t j = 0; j < per_core_tiles_y; j++) {
-                for (uint32_t i = 0; i < per_core_tiles_x; i++) {
+            for (uint32_t j = 0; j < y_tiles_per_core; j++) {
+                for (uint32_t i = 0; i < x_tiles_per_bank; i++) {
                     uint32_t tile_id = y_stride_cum + z_stride_cum + i;
                     cb_wait_front(cb_id_out0, onetile);
                     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-                    noc_async_write_tile(tile_id + out_tensor_tile_id, s, l1_read_addr);
+                    noc_async_write_tile(tile_id, s, l1_read_addr);
                     noc_async_write_barrier();
                     cb_pop_front(cb_id_out0, onetile);
 #ifdef DEBUG
