@@ -14,6 +14,9 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.utility_functions import torch_random
 
 
+TIMEOUT = 5
+
+
 class TensorMemoryConfigs(enum.Enum):
     BLOCK_Y5_X7 = enum.auto()
     BLOCK_Y7_X5_COL = enum.auto()

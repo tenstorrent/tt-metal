@@ -140,7 +140,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
 
         const auto& input = inputs.at(i);
         const auto input_addr = input.buffer()->address();
-        const auto num_tiles = input.volume() / TILE_HW;
+        const auto num_tiles = input.volume() / tt::constants::TILE_HW;
         const auto [origin_h, origin_w] = origin_hw_vec.at(i);
 
         // reader

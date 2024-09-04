@@ -351,8 +351,7 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Launch Device Operation");
-    ttnn::increment_device_operation_id();
-    auto device_operation_id = ttnn::get_device_operation_id();
+    auto device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
 
     // Create output tensor first
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);

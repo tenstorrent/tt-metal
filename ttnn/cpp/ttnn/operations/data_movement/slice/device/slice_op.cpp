@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/common/constants.hpp"
 #include "slice_op.hpp"
 #include "slice_program_factory.hpp"
 
@@ -18,7 +19,7 @@ inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tens
 
     uint32_t num_pages = tensor.volume();
     if (tensor.get_layout() == Layout::TILE) {
-        num_pages /= TILE_HW;
+        num_pages /= tt::constants::TILE_HW;
     } else {
         uint32_t page_width = shape[-1];
         num_pages /= page_width;
@@ -35,6 +36,7 @@ inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tens
 }
 
 uint32_t get_tiled_start_offset(const Tensor &input_tensor, const Shape &slice_start) {
+    using namespace tt::constants;
     uint32_t num_input_pages = input_tensor.volume() / (TILE_HW);
     const auto& shape = input_tensor.get_legacy_shape();
     uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
@@ -66,6 +68,7 @@ uint32_t get_rm_start_offset(const Tensor &tensor, const Shape &slice_start) {
 
 void SliceDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+    using namespace tt::constants;
     const auto &input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
