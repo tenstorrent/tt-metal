@@ -56,7 +56,7 @@ run_profiling_test(){
 
     run_additional_T3000_test
 
-    #run_async_mode_T3000_test
+    run_async_mode_T3000_test
 
     TT_METAL_DEVICE_PROFILER=1 pytest $PROFILER_TEST_SCRIPTS_ROOT/test_device_profiler.py
 
