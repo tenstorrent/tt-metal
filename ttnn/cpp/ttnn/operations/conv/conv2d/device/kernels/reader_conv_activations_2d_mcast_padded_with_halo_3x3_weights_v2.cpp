@@ -22,6 +22,26 @@ inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uin
 }
 #endif
 
+template<int window_height, int window_width>
+FORCE_INLINE void read_dilated_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr, const uint32_t reader_channel_idx,
+        const uint32_t conv_act_c_bytes, const uint32_t stride_h_bytes, const uint32_t stride_w_bytes) {
+
+    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_bytes);
+    #pragma GCC unroll 3
+    for(uint32_t outer = 0; outer < window_height; outer++) {
+        uint32_t act_l1_read_addr_row_offset = act_l1_read_addr_plus_offset;
+        for (uint32_t inner = 0; inner < window_width; inner++) {
+            //Read the partial depth.
+            noc_async_read_one_packet_with_state<true>(act_l1_read_addr_row_offset, l1_write_addr_act);
+            //Increment by full depth to go to the next pixel
+            l1_write_addr_act += conv_act_c_bytes;
+            act_l1_read_addr_row_offset += stride_w_bytes;
+        }
+        //Go to the next row
+        act_l1_read_addr_plus_offset += stride_h_bytes;
+    }
+}
+
 FORCE_INLINE
 void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr, const uint32_t reader_channel_idx,
         const uint32_t conv_act_c_read_bytes, const uint32_t coalesced_read_bytes, const uint32_t stride_h_bytes) {
@@ -49,6 +69,8 @@ void kernel_main() {
     constexpr uint32_t window_inner                     = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_h_datums               = get_compile_time_arg_val(10);
     constexpr uint32_t weight_size_w                    = get_compile_time_arg_val(12); //Input filter window width
+    constexpr uint32_t padded_conv_act_size_w           = get_compile_time_arg_val(13);
+    constexpr uint32_t weight_size_h                    = get_compile_time_arg_val(15); //Input filter window width
     constexpr uint32_t act_num_blocks_h                 = get_compile_time_arg_val(16);
     constexpr uint32_t act_block_num_tiles              = get_compile_time_arg_val(17);
     constexpr uint32_t act_w_num_outer                  = get_compile_time_arg_val(18);
@@ -117,7 +139,14 @@ void kernel_main() {
     // Fully create act matrix and tilize it before mcast
     // set_state uses just x/y from the get_noc_addr, addr is ignored
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
-    noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+    if(dilation_w==1)
+    {
+        noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+    }
+    else
+    {
+        noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), conv_act_c_read_bytes);
+    }
 
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
@@ -125,14 +154,28 @@ void kernel_main() {
         cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
         uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
 
-        constexpr uint32_t stride_h_bytes = (conv_act_size_w + 2) * conv_act_c_read_bytes;
-        // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
-        for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
-            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-            read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
-            read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+        constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
+        constexpr uint32_t stride_w_bytes = conv_act_c_read_bytes * dilation_w;
 
-            reader_idx++;
+        // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
+        if(dilation_w==1)
+        {
+            for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
+                uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+                read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+
+                reader_idx++;
+            }
+        }
+        else
+        {
+            for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
+                uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                read_dilated_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
+                read_dilated_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
+                reader_idx++;
+            }
         }
         // incrementing num issued in one shot is actually slower
         // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
