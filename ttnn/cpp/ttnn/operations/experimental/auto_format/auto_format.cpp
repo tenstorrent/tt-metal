@@ -15,7 +15,6 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
-using namespace tt::constants;
 
 namespace ttnn::operations::experimental::auto_format{
 
@@ -42,6 +41,7 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryCo
 // Used in backward_ops.cpp
 // See: Remove auto format within permute_op.cpp #9404
 Tensor AutoFormat::move_tensor_to_device_and_pad(const Tensor& input, Device *device, Layout target_layout, std::optional<MemoryConfig> target_mem_config){
+    using namespace tt::constants;
     const auto intended_shape = input.get_shape();
     const auto device_shape = input.get_legacy_shape();
     const auto new_intended_shape = std::array<std::uint32_t, 4>{intended_shape[0], intended_shape[1], intended_shape[-2], intended_shape[-1]};
