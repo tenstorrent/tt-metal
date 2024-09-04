@@ -526,6 +526,16 @@ def filter_by_id_range(rows, id_range):
 def main(csv_file, signpost, ignore_signposts, min_percentage, id_range):
     df = pd.read_csv(csv_file)
     
+    # Add a column for original row numbers
+    df['ORIGINAL_ROW'] = df.index + 2  # +2 to match Excel row numbers (1-based + header)
+    
+    # Sort the DataFrame by "HOST START TS" column
+    if 'HOST START TS' in df.columns:
+        print(colored("Sorting CSV by 'HOST START TS' column...", "cyan"))
+        df = df.sort_values(by='HOST START TS')
+    else:
+        print(colored("Warning: 'HOST START TS' column not found. CSV will not be sorted.", "yellow"))
+    
     # Check if the file contains multiple devices
     if 'DEVICE ID' in df.columns and df['DEVICE ID'].nunique() > 1:
         print(colored(f"Detected data from {df['DEVICE ID'].nunique()} devices. Merging device data...", "cyan"))
@@ -537,9 +547,9 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range):
     prev_row = None
     device_ops = 0
     host_ops = 0
-    for idx, row in df.iterrows():
+    for _, row in df.iterrows():
         op_data, current_dispatch_latency = analyze_op(row, prev_row)
-        op_data['ID'] = Cell(idx + 2) # Match excel row number: counts from 1 and has a header row
+        op_data['ID'] = Cell(row['ORIGINAL_ROW'])  # Use the original row number
         rows.append(op_data)
         prev_row = row
         
