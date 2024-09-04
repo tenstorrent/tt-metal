@@ -243,8 +243,13 @@ class TtLlamaModel_optimized:
             # )
 
             # xs = ttnn.interleaved_to_sharded(xs, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
+            # User can provide a single start pos which applies to the whole batch or a list of start positions
+            if isinstance(start_pos, int):
+                cache_idxs = torch.tensor([start_pos for _ in range(batch)], dtype=torch.int64)
+            else:
+                cache_idxs = start_pos
 
-            rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=batch)
+            rot_mat = get_rotation_mat(self.rot_emb, cache_idxs, seq_len, batch=batch)
             assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
 
             rot_mats = ttnn.as_tensor(
@@ -252,7 +257,7 @@ class TtLlamaModel_optimized:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 # device=self.mesh_device,
-                cache_file_name=cache_name(f"rot_mat_decode_b{batch}_{start_pos}"),
+                # cache_file_name=cache_name(f"rot_mat_decode_b{batch}_{start_pos}"),
                 # memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
@@ -262,7 +267,6 @@ class TtLlamaModel_optimized:
 
             attn_masks = None
 
-            cache_idxs = torch.tensor([start_pos for _ in range(batch)])
             cache_idxs_tt = ttnn.as_tensor(
                 cache_idxs,
                 dtype=ttnn.int32,

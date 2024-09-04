@@ -165,7 +165,7 @@ class TtLlamaModelForGeneration:
 
         self._update_model_config("prefill", batch, seq_len)
 
-        tt_inp_emb, start_pos, rot_mat, attn_mask = self.tt_model.prepare_inputs(
+        tt_inp_emb, start_pos, rot_mat, attn_mask, _ = self.tt_model.prepare_inputs(
             tokens, start_pos=start_pos, valid_seq_len=seq_len
         )
 

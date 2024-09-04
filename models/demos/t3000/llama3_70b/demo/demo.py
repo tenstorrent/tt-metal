@@ -28,6 +28,7 @@ from models.demos.t3000.llama2_70b.demo.demo import main, construct_arg
     ),
     ids=("chat_completion", "text_completion", "tale_two_cities"),
 )
+@pytest.mark.parametrize("trace_mode", (True, False), ids=("trace_mode_on", "trace_mode_off"))
 @pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))
 @pytest.mark.parametrize(
@@ -65,6 +66,7 @@ from models.demos.t3000.llama2_70b.demo.demo import main, construct_arg
     ((32, 2048), (16, 8192), (1, 128 * 1024)),
     ids=("short_context", "long_context", "128k_context"),
 )
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 14227456}], indirect=True)
 def test_LlamaModel_demo(
     # model args
     implementation,
@@ -82,6 +84,7 @@ def test_LlamaModel_demo(
     t3k_mesh_device,
     n_devices,
     decode_only,
+    trace_mode,
     llama_version,
     ground_truth,
     max_batch_size,
@@ -120,6 +123,7 @@ def test_LlamaModel_demo(
         n_devices=n_devices,
         cache_path=cache_path,
         decode_only=decode_only,
+        trace_mode=trace_mode,
         llama_version=llama_version,
         ground_truth=ground_truth,
     )
