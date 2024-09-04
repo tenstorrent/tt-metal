@@ -108,7 +108,7 @@ def run_test_LlamaModel_inference(
         model_config,
         configuration,
         cache_path=cache_path,
-        # read_cache=True
+        read_cache=True,
     )
 
     if model_config["LLM_MODE"] == "prefill":
