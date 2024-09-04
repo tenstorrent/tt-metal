@@ -9,8 +9,10 @@ CONTRIBUTING.md @tt-rkim
 
 CODEOWNERS @tt-rkim
 
-INSTALLING.md @tt-rkim
+INSTALLING.md @tt-rkim @TT-billteng
 METALIUM_GUIDE.md @davorchap
+
+# Dependencies
 
 third_party/ @tt-rkim @TT-billteng
 
@@ -22,6 +24,7 @@ pyproject.toml @tt-rkim @TT-billteng
 requirements*.txt @tt-rkim @TT-billteng
 setup_hugepages.py @tt-rkim @TT-billteng
 
+scripts/docker @TT-billteng
 scripts/build_scripts/ @tt-rkim @vtangTT @TT-billteng
 scripts/build_scripts/build_with_profiler_opt.sh @mo-tenstorrent @tt-rkim
 cmake/ @tt-rkim @vtangTT @TT-billteng
