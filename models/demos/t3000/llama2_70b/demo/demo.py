@@ -135,7 +135,7 @@ def build_generator(model_args, tt_args):
     generator = Llama.build(
         ckpt_dir=model_args.ckpt_dir,
         tokenizer_path=model_args.tokenizer_path,
-        max_seq_len=model_args.max_seq_len,
+        max_seq_len=model_args.max_kv_context_len,
         max_batch_size=model_args.max_batch_size,
         skip_model_load=model_args.skip_model_load,
         n_layers=1 if model_args.implementation == "tt" else model_args.num_layers,
@@ -162,7 +162,11 @@ def get_sampling_func(top_k, top_p, temperature):
 
 def load_prompts_file(model_args, data_args, tokenizer):
     # Load prompts from json
-    prompts = json.load(open(data_args.prompts_file))
+    # If text file:
+    if data_args.prompts_file.endswith(".txt"):
+        prompts = [open(data_args.prompts_file).read()]
+    else:
+        prompts = json.load(open(data_args.prompts_file))
     # Encode the prompt
     if data_args.chat:
         formatter = ChatFormat(tokenizer)
@@ -350,8 +354,9 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     (
         (True, "models/demos/t3000/llama2_70b/demo/data/multi_prompt_chat.json"),
         (False, "models/demos/t3000/llama2_70b/demo/data/multi_prompt.json"),
+        (False, "models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt"),
     ),
-    ids=("chat_completion", "text_completion"),
+    ids=("chat_completion", "text_completion", "tale_two_cities"),
 )
 @pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))

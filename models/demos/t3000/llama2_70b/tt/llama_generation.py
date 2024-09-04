@@ -83,11 +83,11 @@ class TtLlamaModelForGeneration:
 
         return logits
 
-    def prefill_forward_single_user(self, tokens: torch.Tensor, start_pos: int, user_id: int):
+    def prefill_forward_single_user(self, tokens: torch.Tensor, start_pos: int, user_id: int, unpadded_seq_len=None):
         batch, seq_len = tokens.shape
         assert batch == 1
         assert start_pos == 0, "start_pos must be 0 for prefill_forward_single_user"
-        assert seq_len in [128, 2048], f"Only prefill up to 128 or 2048 tokens is supported, got {seq_len}"
+        assert seq_len in [128, 2048, 8 * 1024], f"Only prefill up to 128 or 2048 tokens is supported, got {seq_len}"
 
         self._update_model_config("prefill", batch, seq_len)
 
@@ -101,6 +101,7 @@ class TtLlamaModelForGeneration:
             start_pos,
             attn_mask,
             user_id=user_id,
+            unpadded_seq_len=unpadded_seq_len,
         )
 
         del tt_inp_emb
@@ -114,23 +115,26 @@ class TtLlamaModelForGeneration:
 
     def prefill_forward(self, tokens: torch.Tensor, start_pos: int):
         batch, seq_len = tokens.shape
-        assert seq_len <= 2048, f"Only prefill up to 2048 tokens is supported, got {seq_len}"
+        assert seq_len <= 8 * 1024, f"Only prefill up to 2048 tokens is supported, got {seq_len}"
 
-        prefill_seq_len = 128 if seq_len <= 128 else 2048
+        prefill_seq_len = 128 if seq_len <= 128 else 2048 if seq_len <= 2048 else 8 * 1024
         self._update_model_config("prefill", batch, prefill_seq_len)
 
         batch, seq_len = tokens.shape
         output_logits = torch.zeros(batch, seq_len, self.params.vocab_size)
-        padded_seq_len = 128 if seq_len <= 128 else 2048
         # pad tokens to 128 or 2048
-        prefill_ids = torch.cat([tokens, torch.zeros(batch, padded_seq_len - seq_len).long()], dim=-1)
+        prefill_ids = torch.cat([tokens, torch.zeros(batch, prefill_seq_len - seq_len).long()], dim=-1)
 
         for user_id in range(batch):
             logger.info(f"Filling kv cache for user {user_id + 1}")
 
-            logits = self.prefill_forward_single_user(prefill_ids[user_id : user_id + 1], start_pos, user_id)
+            logits = self.prefill_forward_single_user(
+                prefill_ids[user_id : user_id + 1], start_pos, user_id, unpadded_seq_len=seq_len
+            )
 
-            output_logits[user_id] = logits[:, :seq_len, :]
+            # output_logits[user_id] = logits[:, :seq_len, :]
+            # Since we give unpadded_seq_len, only the tile containing the last token is returned
+            output_logits[user_id] = logits[:, seq_len % 32 : seq_len % 32 + 1, :]
 
         logger.info(f"Finished prefill for all users up to {seq_len} tokens, Starting decode...")
 

@@ -155,26 +155,26 @@ class TtLlamaMLP_optimized:
         w1_out.deallocate(True)
         w3_out.deallocate(True)
 
-        hidden_states = ttnn.matmul(
+        hidden_states_mm = ttnn.matmul(
             hidden_states,
             self.w2,
             program_config=self.model_config["PADDED_FF2_MM_PROGCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
             dtype=self.model_config["BFLOAT16_DTYPE"],
         )
-
+        hidden_states.deallocate(True)
         # Prefill Reshape fix (reverse)
-        hidden_states = ttnn.reshape(hidden_states, (1, 1, seq_len, self.hidden_size))
+        hidden_states_mm = ttnn.reshape(hidden_states_mm, (1, 1, seq_len, self.hidden_size))
 
         hidden_states_reduced = ttnn.reduce_scatter(
-            hidden_states,
+            hidden_states_mm,
             scatter_dim=3,
-            math_op=ttnn.experimental.tensor.ReduceOpMath.SUM,
+            math_op=ttnn.ReduceType.Sum,
             num_links=1,
             memory_config=self.model_config["DRAM_MEMCFG"],
         )
 
-        hidden_states.deallocate(True)
+        hidden_states_mm.deallocate(True)
 
         return hidden_states_reduced
 
@@ -218,7 +218,7 @@ class TtLlamaMLP_optimized:
         hidden_states_reduced = ttnn.reduce_scatter(
             hidden_states,
             scatter_dim=3,
-            math_op=ttnn.experimental.tensor.ReduceOpMath.SUM,
+            math_op=ttnn.ReduceType.Sum,
             num_links=1,
             memory_config=self.model_config["ATTN_ADD_OUTPUT_MEMCFG"],
         )

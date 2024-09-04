@@ -272,9 +272,10 @@ class TtLlamaModel_optimized:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
+        unpadded_seq_len=None,
     ) -> ttnn.Tensor:
         if self.model_config["LLM_MODE"] == "prefill":
-            return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
+            return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id, unpadded_seq_len=unpadded_seq_len)
         elif self.model_config["LLM_MODE"] == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
         else:
@@ -359,6 +360,7 @@ class TtLlamaModel_optimized:
         start_pos: int,
         attn_masks: List[ttnn.Tensor],
         user_id: int = 0,
+        unpadded_seq_len=None,
     ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
@@ -380,11 +382,21 @@ class TtLlamaModel_optimized:
         if self.llama3:
             self.model_config["LM_HEAD_MM_PROGCFG"] = self.model_config["LLAMA3_LM_HEAD_MM_PROGCFG"]
 
-        _, _, seq_len, _ = norm_out_replicated.shape
+        _, _, seq_len, dmodel = norm_out_replicated.shape
 
-        max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
-        batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
-        norm_out_replicated = ttnn.reshape(norm_out_replicated, (1, batch_dim, seq_len // batch_dim, -1))
+        if unpadded_seq_len:
+            last_token_tile = unpadded_seq_len // 32  # Todo: minus 1 for index rather than seqlen?
+            # Slice out the last max_mm_seq_len. This will have to change so that we slice the row of tiles which contains the true last token index
+            norm_out_replicated = ttnn.slice(
+                norm_out_replicated,
+                (0, 0, last_token_tile * 32, 0),
+                (0, 0, (last_token_tile + 1) * 32 - 1, dmodel - 1),
+                memory_config=self.model_config["DRAM_MEMCFG"],
+            )
+        else:
+            max_mm_seq_len = self.model_config["MAX_MM_SEQ_LEN"]
+            batch_dim = 1 if seq_len < max_mm_seq_len else seq_len // max_mm_seq_len  # Find the division factor
+            norm_out_replicated = ttnn.reshape(norm_out_replicated, (1, batch_dim, seq_len // batch_dim, -1))
 
         lm_head_out = ttnn.matmul(
             norm_out_replicated,
@@ -392,9 +404,11 @@ class TtLlamaModel_optimized:
             program_config=self.model_config["LM_HEAD_MM_PROGCFG"],
             memory_config=self.model_config["DRAM_MEMCFG"],
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
+            dtype=ttnn.bfloat8_b,
         )
         norm_out_replicated.deallocate(True)
 
-        lm_head_out = ttnn.reshape(lm_head_out, (1, 1, seq_len, -1))
+        if not unpadded_seq_len:
+            lm_head_out = ttnn.reshape(lm_head_out, (1, 1, seq_len, -1))
 
         return lm_head_out

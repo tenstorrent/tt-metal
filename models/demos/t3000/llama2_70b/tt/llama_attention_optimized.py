@@ -49,6 +49,8 @@ class TtLlamaAttention_optimized:
         self.cache_path = cache_path
         self.transformation_mats = transformation_mats
 
+        self.kv_dtype = ttnn.bfloat8_b
+
         self.load_weights()
         self.init_kv_cache()
 
@@ -85,7 +87,7 @@ class TtLlamaAttention_optimized:
                     mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=0),
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=self.model_config["DRAM_MEMCFG"],
-                    dtype=ttnn.bfloat8_b,
+                    dtype=self.kv_dtype,
                     cache_file_name=self.cache_path / f"empty_attn_cache{cache_k.shape}",
                 ),
                 self.mesh_device,
@@ -392,13 +394,13 @@ class TtLlamaAttention_optimized:
         keys = self.layer_past[0]
         # Fill cache expects batch in dim0
         keys_reshaped = ttnn.reshape(keys, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.fill_cache(keys_reshaped, ttnn.experimental.typecast(key_layer, ttnn.bfloat8_b), user_id)
+        ttnn.fill_cache(keys_reshaped, ttnn.experimental.typecast(key_layer, self.kv_dtype), user_id)
 
         # FILL V CACHE
         values = self.layer_past[1]
         # Fill cache expects batch in dim0
         values_reshaped = ttnn.reshape(values, [self.max_batch_size, self.n_local_kv_heads, -1, self.head_dim])
-        ttnn.fill_cache(values_reshaped, ttnn.experimental.typecast(value_layer, ttnn.bfloat8_b), user_id)
+        ttnn.fill_cache(values_reshaped, ttnn.experimental.typecast(value_layer, self.kv_dtype), user_id)
 
         # SDPA
         attn_output = ttnn.transformer.scaled_dot_product_attention(
