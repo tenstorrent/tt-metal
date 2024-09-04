@@ -614,20 +614,20 @@ def run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, input_df, device
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "iterations",
-    [2],
-    ids=["loops2"],
+    [1],
+    ids=["loops1"],
 )
 @pytest.mark.parametrize("input_df", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "inp_shape",
     [
-        (1, 1, 32, 4096),
+        (1, 1, 32, 8192),
     ],
     ids=["8K"],
 )
 @pytest.mark.parametrize(
     "n_devices",
-    [2],
+    [8],
     # [4, 8],
 )
 @pytest.mark.parametrize(
@@ -642,12 +642,10 @@ def run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, input_df, device
     ],
 )
 def test_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, input_df, iterations, all_devices):
-    # if len(all_devices) != 8:
-    #     pytest.skip("Not T3000!")
-
-    # devices = get_devices_for_t3000(all_devices, n_devices)
-
     devices = all_devices[:n_devices]
+
+    if len(devices) == 8:
+        devices = get_devices_for_t3000(devices, n_devices)
 
     run_distributed_layernorm(inp_shape, n_devices, is_rmsnorm, input_df, devices, iterations=iterations)
 
