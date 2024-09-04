@@ -25,6 +25,7 @@ nll_loss_backward = ttnn._ttnn.operations.moreh.moreh_nll_loss_backward
 nll_loss_unreduced_backward = ttnn._ttnn.operations.moreh.moreh_nll_loss_unreduced_backward
 norm = ttnn._ttnn.operations.moreh.moreh_norm
 norm_backward = ttnn._ttnn.operations.moreh.moreh_norm_backward
+sgd = ttnn._ttnn.operations.moreh.moreh_sgd
 softmax = ttnn._ttnn.operations.moreh.moreh_softmax
 softmax_backward = ttnn._ttnn.operations.moreh.moreh_softmax_backward
 softmin = ttnn._ttnn.operations.moreh.moreh_softmin

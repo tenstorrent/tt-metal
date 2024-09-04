@@ -304,9 +304,10 @@ void initialize_dims_with_range(std::vector<int64_t> &dims, uint32_t input_rank)
 std::vector<int64_t> get_dim(
     const std::optional<std::variant<int64_t, std::vector<int64_t>>> &dim, uint32_t input_rank);
 
-std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const tt::tt_metal::LegacyShape& shape);
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const tt::tt_metal::LegacyShape &shape);
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const tt::tt_metal::LegacyShape& shape, uint32_t dim);
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(
+    const tt::tt_metal::LegacyShape &shape, uint32_t dim);
 
 }  // namespace primary
 }  // namespace operations
