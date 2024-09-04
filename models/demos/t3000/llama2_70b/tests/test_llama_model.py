@@ -153,9 +153,9 @@ def run_test_LlamaModel_inference(
 
         # Send to device
         if model_config["LLM_MODE"] == "decode":
-            tt_inp_emb = ttnn.to_device(
-                tt_inp_emb, t3k_mesh_device, memory_config=model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-            )
+            tt_inp_emb = ttnn.to_device(tt_inp_emb, t3k_mesh_device, memory_config=model_config["DRAM_MEMCFG"])
+            tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
+            tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
             rot_mat = ttnn.to_device(rot_mat, t3k_mesh_device, memory_config=model_config["ROT_MAT_MM_IN1_MEMCFG"])
             cache_idxs = ttnn.to_device(cache_idxs, t3k_mesh_device, memory_config=model_config["DRAM_MEMCFG"])
 

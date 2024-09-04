@@ -61,12 +61,12 @@ class TtLlamaModelForGeneration:
             return self.prefill_forward(tokens, start_pos)
 
     def capture_trace(self, tokens: torch.Tensor, start_pos: int):
-        tt_inp_emb, start_pos, rot_mat, attn_mask, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos)
+        tt_inp, start_pos, rot_mat, attn_mask, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos)
 
         # Compile model
-        tt_inp_emb = ttnn.to_device(
-            tt_inp_emb, self.mesh_device, memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-        )
+        tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=self.model_config["DRAM_MEMCFG"])
+        tt_inp_emb = self.tt_model.tt_embd(tt_inp)
+        tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
         rot_mat = ttnn.to_device(rot_mat, self.mesh_device, memory_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
         cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=self.model_config["DRAM_MEMCFG"])
         tt_logits = self.tt_model(
@@ -81,6 +81,8 @@ class TtLlamaModelForGeneration:
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
         # Run TT model
+        tt_inp_emb = self.tt_model.tt_embd(tt_inp)
+        tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
         tt_logits = self.tt_model(
             tt_inp_emb,
             rot_mat,
@@ -92,23 +94,26 @@ class TtLlamaModelForGeneration:
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
-        return trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits
+        return trace_id, tt_inp, rot_mat, cache_idxs_tt, tt_logits
+
+    def delete_trace(self, trace_id):
+        ttnn.release_trace(self.mesh_device, trace_id)
 
     def decode_forward_trace(
-        self, tokens: torch.Tensor, start_pos: int, trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits
+        self, tokens: torch.Tensor, start_pos: int, trace_id, tt_inp, rot_mat, cache_idxs_tt, tt_logits
     ):
         self._update_model_config("decode", tokens.shape[0], 1)
         batch = tokens.shape[0]
 
         # Update preallocated tensors
         (
-            updated_tt_inp_emb,
+            updated_tt_inp,
             start_pos,
             updated_rot_mat,
             updated_attn_mask,
             updated_cache_idxs_tt,
         ) = self.tt_model.prepare_inputs(tokens, start_pos)
-        ttnn.copy_host_to_device_tensor(updated_tt_inp_emb, tt_inp_emb)
+        ttnn.copy_host_to_device_tensor(updated_tt_inp, tt_inp)
         ttnn.copy_host_to_device_tensor(updated_rot_mat, rot_mat)
         ttnn.copy_host_to_device_tensor(updated_cache_idxs_tt, cache_idxs_tt)
 
@@ -126,10 +131,10 @@ class TtLlamaModelForGeneration:
     def decode_forward(self, tokens: torch.Tensor, start_pos: int):
         self._update_model_config("decode", tokens.shape[0], 1)
         batch = tokens.shape[0]
-        tt_inp_emb, start_pos, rot_mat, attn_mask, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos)
-        tt_inp_emb = ttnn.to_device(
-            tt_inp_emb, self.mesh_device, memory_config=self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"]
-        )
+        tt_inp, start_pos, rot_mat, attn_mask, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos)
+        tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=self.model_config["DRAM_MEMCFG"])
+        tt_inp_emb = self.tt_model.tt_embd(tt_inp)
+        tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
         rot_mat = ttnn.to_device(rot_mat, self.mesh_device, memory_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
         cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=self.model_config["DRAM_MEMCFG"])
         tt_logits = self.tt_model(

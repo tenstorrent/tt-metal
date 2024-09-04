@@ -260,6 +260,7 @@ def run_decode(
 
     # capture trace
     if trace_mode:
+        logger.info("Capturing trace")
         trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits = model.capture_trace(
             tokens[:, prev_pos:min_prompt_len], prev_pos
         )
@@ -267,8 +268,7 @@ def run_decode(
     for cur_pos in range(min_prompt_len, total_len):
         start = time()
         input_tokens = tokens[:, prev_pos:cur_pos]
-        if trace_mode:
-            assert tokens.shape[1] == 1, "Trace mode only supports decoding"
+        if trace_mode and input_tokens.shape[1] == 1:
             logits = model.decode_forward_trace(
                 input_tokens, prev_pos, trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits
             )
@@ -302,6 +302,11 @@ def run_decode(
     elif return_full_logits:
         full_logits = torch.cat(full_logits, dim=1)
         output = (output, full_logits)
+
+    # delete trace
+    if trace_mode:
+        model.delete_trace(trace_id)
+
     return output
 
 
@@ -380,6 +385,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     ),
     ids=("chat_completion", "text_completion", "tale_two_cities"),
 )
+@pytest.mark.parametrize("trace_mode", (True, False), ids=("trace_mode_on", "trace_mode_off"))
 @pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))
 @pytest.mark.parametrize(
@@ -417,6 +423,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     ((32, 2048), (16, 8192), (1, 128 * 1024)),
     ids=("short_context", "long_context", "128k_context"),
 )
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 14227456}], indirect=True)
 def test_LlamaModel_demo(
     # model args
     implementation,
@@ -434,6 +441,7 @@ def test_LlamaModel_demo(
     t3k_mesh_device,
     n_devices,
     decode_only,
+    trace_mode,
     llama_version,
     ground_truth,
     max_batch_size,
@@ -473,6 +481,7 @@ def test_LlamaModel_demo(
         n_devices=n_devices,
         cache_path=cache_path,
         decode_only=decode_only,
+        trace_mode=trace_mode,
         ground_truth=ground_truth,
     )
     main(args)

@@ -184,19 +184,20 @@ class TtLlamaModel_optimized:
             inp_ids,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-            memory_config=self.model_config["DRAM_MEMCFG"],
+            # device=self.mesh_device,
+            # memory_config=self.model_config["DRAM_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
         )
-        x = ttnn.to_device(x, self.mesh_device)
-
-        xs = self.tt_embd(x)
 
         if self.model_config["LLM_MODE"] == "prefill":
             assert (
                 seq_len % 128 == 0 and seq_len > 0
             ), "Prefill mode only supports seqlen as a multiple of 128 up to 8k (llama3) and 2k (llama2)"
             assert batch == 1, "prefill mode only supports batch size 1"
+
+            x = ttnn.to_device(x, self.mesh_device, memory_config=self.model_config["DRAM_MEMCFG"])
+
+            xs = self.tt_embd(x)
             assert xs.shape == (batch, 1, seq_len, self.hidden_size // self.num_devices)
 
             cos_gathered, sin_gathered = gather_cos_sin(
@@ -233,15 +234,15 @@ class TtLlamaModel_optimized:
 
         elif self.model_config["LLM_MODE"] == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
-            assert xs.shape == (
-                seq_len,
-                1,
-                self.model_config["PADDED_BATCH_SIZE"],
-                self.hidden_size // self.num_devices,
-            )
+            xs = x
+            # assert xs.shape == (
+            #     seq_len,
+            #     1,
+            #     self.model_config["PADDED_BATCH_SIZE"],
+            #     self.hidden_size // self.num_devices,
+            # )
 
             # xs = ttnn.interleaved_to_sharded(xs, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-            xs = ttnn.from_device(xs)
 
             rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch=batch)
             assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
