@@ -26,7 +26,7 @@ def test_unet_model(batch, groups, device, use_program_cache, reset_seeds):
     ttnn_model = unet_shallow_ttnn.UNet(parameters, device)
 
     torch_output_tensor = model(torch_input)
-    output_tensor = ttnn_model(ttnn_input, list(torch_input.shape))
+    output_tensor = ttnn_model(ttnn_input)
 
     B, C, H, W = torch_output_tensor.shape
     ttnn_tensor = ttnn.to_torch(output_tensor).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)
