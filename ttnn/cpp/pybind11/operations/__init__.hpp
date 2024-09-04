@@ -39,6 +39,7 @@
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
+#include "ttnn/operations/moreh/moreh_pybind.hpp"
 
 namespace py = pybind11;
 
