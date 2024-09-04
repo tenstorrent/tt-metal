@@ -127,7 +127,7 @@ void MAIN {
             num_output_tiles / MAX_TILES_PER_REDUCTION;  // For now, only pow of 2 number of channels are supported.
     }
 
-    tilizeA_B_reduce_init(
+    tilizeA_B_reduce_init<true>(
         in_cb_id,
         in_scalar_cb_id,
         num_tiles_for_reduction,
