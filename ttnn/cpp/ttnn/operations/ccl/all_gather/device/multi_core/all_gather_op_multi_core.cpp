@@ -603,6 +603,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             // We can have overlap between a link's sender and receiver worker grids if we have the semaphores at different addresses
             // Get receiver and sender CoreRangeSets
             const auto& worker_core_vector = worker_core_map.at(std::make_pair(i, direction));
+            // ensure the vector is size of 2
+            TT_FATAL(worker_core_vector.size() == 2, "Worker core vector should contain receiver and sender cores sets only");
             const auto& receiver_workers = worker_core_vector[0];  // Receiver cores
             const auto& sender_workers = worker_core_vector[1];    // Sender cores
 
@@ -1038,8 +1040,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
 
                         log_trace(tt::LogOp, "Worker {} RW rt args", b);
                         log_trace(tt::LogOp, "\toutput_buffer->address(): {}", output_buffer->address());
-                        log_trace(tt::LogOp, "\tworker_sender_reader.x: {}", worker_sender_reader.x);
-                        log_trace(tt::LogOp, "\tworker_sender_reader.y: {}", worker_sender_reader.y);
+                        log_trace(tt::LogOp, "\tworker_sender_reader.x: {}", sender_core_x);
+                        log_trace(tt::LogOp, "\tworker_sender_reader.y: {}", sender_core_y);
                         log_trace(tt::LogOp, "\treceiver_num_transfers: {}", receiver_worker_num_transfers.at(i).at(b));
                         log_trace(tt::LogOp, "\tnum_full_chunks_per_worker.at(b): {}", num_full_chunks_per_worker.at(b));
                         log_trace(tt::LogOp, "\tpages_per_eth_l1_buffer.at(b): {}", pages_per_eth_l1_buffer.at(b));
