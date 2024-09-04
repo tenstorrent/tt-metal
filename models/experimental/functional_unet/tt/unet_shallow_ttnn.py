@@ -484,11 +484,12 @@ class UNet:
 
     def bottleneck(self, x):
         if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.interleaved_to_sharded(
-            x,
-            self.bnc_sharded_memory_config,
-        )
+            x = ttnn.reshard(x, self.bnc_sharded_memory_config)
+        else:
+            x = ttnn.interleaved_to_sharded(
+                x,
+                self.bnc_sharded_memory_config,
+            )
         x = self.bnc(x)
         return self.bnc2(x)
 
