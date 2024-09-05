@@ -93,8 +93,9 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             .set_page_size(out_cb_index, output_page_size)
             .set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
-    if (src_is_dram && input_unit_size % DRAM_ALIGNMENT != 0) {
-        uint32_t scratch_cb_page_size = align(input_unit_size, DRAM_ALIGNMENT);
+    uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+    if (src_is_dram && input_unit_size % dram_alignment != 0) {
+        uint32_t scratch_cb_page_size = align(input_unit_size, dram_alignment);
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
             tt::tt_metal::CircularBufferConfig(1 * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
                 .set_page_size(scratch_cb_index, scratch_cb_page_size);
@@ -234,10 +235,11 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                 }
             }
 
-            bool aligned = src_is_dram ? curr_idx_w % DRAM_ALIGNMENT == 0 : true;
+            uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+            bool aligned = src_is_dram ? curr_idx_w % dram_alignment == 0 : true;
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
-                aligned_width_offset = tt::round_down(curr_idx_w, DRAM_ALIGNMENT);
+                aligned_width_offset = tt::round_down(curr_idx_w, dram_alignment);
                 aligned_offset = curr_idx_w - aligned_width_offset;
                 aligned_shard_width = aligned_offset + shard_width;
             } else {
