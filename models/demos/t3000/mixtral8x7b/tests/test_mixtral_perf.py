@@ -198,7 +198,15 @@ def test_mixtral_model_with_prefill_perf(
     (
         input_tokens_prefill_pt,
         encoded_prompts,
-    ) = preprocess_inputs_prefill(prompts, tokenizer, model_args, dtype, False, t3k_mesh_device)
+    ) = preprocess_inputs_prefill(
+        prompts,
+        tokenizer,
+        model_args,
+        dtype,
+        False,
+        t3k_mesh_device,
+        2,
+    )
 
     profiler.end("preprocessing_inputs")
 
