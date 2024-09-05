@@ -49,6 +49,18 @@ inline void calculate_fmod(const uint value, const uint recip) {
         }
         v_endif;
 
+        constexpr auto iter = 10;
+        for(int l=0; l<iter; l++)
+        {
+            v_if(v>=s){
+                v = s - v;
+            }
+            v_endif;
+        }
+        v_if(sfpi::abs(v)-s==0.0f){
+            v = 0.0f;
+        }
+        v_endif;
         dst_reg[0] = v;
         dst_reg++;
     }
