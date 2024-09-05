@@ -41,3 +41,29 @@ setup_ttnn_test_target(unit_tests_ttnn)
 setup_ttnn_test_target(unit_tests_ttnn_ccl)
 setup_ttnn_test_target(test_multi_device)
 setup_ttnn_test_target(galaxy_unit_tests_ttnn)
+
+# setup ttnn_mlir_interface unit test
+set(UNIT_TEST_MLIR_LIB unit_test_mlir_interface_lib)
+add_executable(${UNIT_TEST_MLIR_LIB} ${CMAKE_CURRENT_SOURCE_DIR}/test_mlir_interface_lib.cpp)
+
+target_link_libraries(${UNIT_TEST_MLIR_LIB} PRIVATE
+    ttnn_mlir_interface
+    gtest
+    gtest_main
+    ttnn # doesnt build without it - to figure out
+
+    # tests/ttnn/unit_tests/gtests/CMakeFiles/unittest_mlir_interface_lib.dir/test_mlir_interface_lib.cpp.o: in function `testing::AssertionResult testing::internal::CmpHelperEQFailure<int, int>(char const*, char const*, int const&, int const&)':
+    # test_mlir_interface_lib.cpp:(.text._ZN7testing8internal18CmpHelperEQFailureIiiEENS_15AssertionResultEPKcS4_RKT_RKT0_[_ZN7testing8internal18CmpHelperEQFailureIiiEENS_15AssertionResultEPKcS4_RKT_RKT0_]+0x88): undefined reference to `testing::internal::EqFailure(char const*, char const*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, bool)'
+    # clang++-17: error: linker command failed with exit code 1 (use -v to see invocation)
+    # ninja: build stopped: subcommand failed.
+)
+
+get_target_property(MLIR_INTERFACE_PUBLIC_HEADER ttnn_mlir_interface PUBLIC_HEADER)
+get_filename_component(MLIR_INTERFACE_PUBLIC_HEADER_INCLUDE ${MLIR_INTERFACE_PUBLIC_HEADER} DIRECTORY)
+
+target_include_directories(${UNIT_TEST_MLIR_LIB} PRIVATE
+    ${gtest_SOURCE_DIR}/include
+    ${MLIR_INTERFACE_PUBLIC_HEADER_INCLUDE}
+)
+
+set_target_properties(${UNIT_TEST_MLIR_LIB} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/ttnn)

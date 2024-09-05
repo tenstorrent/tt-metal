@@ -449,3 +449,49 @@ set_target_properties(ttnn PROPERTIES
     CXX_VISIBILITY_PRESET "default"
     ADDITIONAL_CLEAN_FILES "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_ttnn.so;${PROJECT_SOURCE_DIR}/ttnn/ttnn.egg-info"
 )
+
+# mlir interface library settings
+set(MLIR_INTERFACE_LIB ttnn_mlir_interface)
+
+set(MLIR_INTERFACE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/mlir_interface_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/types_str_wrapper.cpp
+)
+
+add_library(${MLIR_INTERFACE_LIB} STATIC ${MLIR_INTERFACE_SOURCES})
+
+target_compile_options(${MLIR_INTERFACE_LIB}  PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_definitions(${MLIR_INTERFACE_LIB}  PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)
+endif()
+
+set(MLIR_INTERFACE_PUBLIC_HEADER
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/mlir_interface_api.hpp
+)
+
+# target_include_directories(${MLIR_INTERFACE_LIB} PRIVATE
+#     ${PROJECT_SOURCE_DIR}/
+#     ${PROJECT_SOURCE_DIR}/ttnn/cpp/
+#     ${PROJECT_SOURCE_DIR}/tt_metal
+#     ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
+#     ${UMD_HOME}
+# )
+
+# link everything (temporary to get going)
+
+target_include_directories(${MLIR_INTERFACE_LIB} PRIVATE ${TTNN_PUBLIC_INCLUDE_DIRS})
+target_link_libraries(${MLIR_INTERFACE_LIB} PRIVATE ${TTNN_PUBLIC_LINK_LIBRARIES})
+target_link_directories(${MLIR_INTERFACE_LIB} PRIVATE ${TTNN_PUBLIC_LINK_DIRS})
+# target_precompile_headers(${MLIR_INTERFACE_LIB} PRIVATE ${TTNN_PRECOMPILED_HEADERS})
+
+
+set_target_properties(${MLIR_INTERFACE_LIB} PROPERTIES
+    OUTPUT_NAME "${MLIR_INTERFACE_LIB}"
+    PREFIX ""
+    SUFFIX ".a"
+    # BUILD_RPATH "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
+    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
+    CXX_VISIBILITY_PRESET "default"
+    PUBLIC_HEADER "${MLIR_INTERFACE_PUBLIC_HEADER}"
+)
+# end of mlir

@@ -275,6 +275,17 @@ install(TARGETS ttnn
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
+
+install(TARGETS ttnn_mlir_interface
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT tt_build_artifacts
+)
+get_target_property(MLIR_INTERFACE_PUBLIC_HEADER ttnn_mlir_interface PUBLIC_HEADER)
+message(STATUS "1 MLIR_INTERFACE_PUBLIC_HEADERS: ${MLIR_INTERFACE_PUBLIC_HEADER}")
+install(FILES ${MLIR_INTERFACE_PUBLIC_HEADERS} DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+
 if(WITH_PYTHON_BINDINGS)
     # Install .so into src files for pybinds implementation
     install(FILES ${PROJECT_BINARY_DIR}/lib/_ttnn.so
