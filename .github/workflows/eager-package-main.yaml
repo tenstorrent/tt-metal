@@ -19,7 +19,7 @@ jobs:
     needs: build-artifact-for-precompiled
     # Since this depends on build-artifact if we use from-precompiled, otherwise it's
     # a standalone job if we do not use from-precompiled
-    if: always()
+    if: ${{ always() }}
     strategy:
       matrix:
         os: [ubuntu-20.04, ubuntu-22.04]
