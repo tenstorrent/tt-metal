@@ -33,7 +33,7 @@ enum class BinaryBackwardOpType {
     DIV_BW,
     MUL_BW,
     REMAINDER_BW,
-    BINARY_FMOD_BW,
+    FMOD_BW,
 };
 
 std::vector<Tensor> _atan2_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
@@ -42,7 +42,6 @@ std::vector<Tensor> _xlogy_bw( const Tensor& grad, const Tensor& input, const Te
 std::vector<Tensor> _hypot_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _ldexp_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _logaddexp_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
-std::vector<Tensor> _binary_fmod_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _sub_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _gt_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
 std::vector<Tensor> _assign_bw( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config);
@@ -99,13 +98,6 @@ template <>
 struct OpHandler<BinaryBackwardOpType::LOGADDEXP_BW> {
     static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
         return _logaddexp_bw(grad, input, other, output_mem_config);
-    }
-};
-
-template <>
-struct OpHandler<BinaryBackwardOpType::BINARY_FMOD_BW> {
-    static std::vector<Tensor> handle( const Tensor& grad, const Tensor& input, const Tensor& other, const std::optional<MemoryConfig>& output_mem_config ) {
-        return _binary_fmod_bw(grad, input, other, output_mem_config);
     }
 };
 

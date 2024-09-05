@@ -297,12 +297,5 @@ ttnn.attach_golden_function(
     ),
 )
 
-ttnn.attach_golden_function(
-    ttnn.fmod_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward_overload(
-        torch.fmod, grad, a, b, *args, **kwargs
-    ),
-)
-
 
 __all__ = []

@@ -220,6 +220,21 @@ struct ExecuteBackwardRemainder {
 
 };
 
+struct ExecuteBackwardFmod {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        float scalar,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+};
+
 
 }  // operations::binary
 
@@ -230,7 +245,6 @@ constexpr auto hypot_bw = ttnn::register_operation<"ttnn::hypot_bw", operations:
 constexpr auto ldexp_bw = ttnn::register_operation<"ttnn::ldexp_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::LDEXP_BW>>();
 constexpr auto logaddexp_bw = ttnn::register_operation<"ttnn::logaddexp_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::LOGADDEXP_BW>>();
 constexpr auto logaddexp2_bw = ttnn::register_operation<"ttnn::logaddexp2_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::LOGADDEXP2_BW>>();
-constexpr auto binary_fmod_bw = ttnn::register_operation<"ttnn::binary_fmod_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::BINARY_FMOD_BW>>();
 constexpr auto squared_difference_bw = ttnn::register_operation<"ttnn::squared_difference_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::SQUARED_DIFFERENCE_BW>>();
 constexpr auto min_bw = ttnn::register_operation<"ttnn::min_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::MIN_BW>>();
 constexpr auto max_bw = ttnn::register_operation<"ttnn::max_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::MAX_BW>>();
@@ -260,5 +274,9 @@ constexpr auto div_bw = ttnn::register_operation<"ttnn::div_bw", operations::bin
 constexpr auto remainder_bw = ttnn::register_operation<
     "ttnn::remainder_bw",
     operations::binary_backward::ExecuteBackwardRemainder>();
+
+constexpr auto fmod_bw = ttnn::register_operation<
+    "ttnn::fmod_bw",
+    operations::binary_backward::ExecuteBackwardFmod>();
 
 }  // namespace ttnn
