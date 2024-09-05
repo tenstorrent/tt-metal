@@ -214,16 +214,36 @@ def run_sweeps(module_name, suite_name, vector_id):
             vector_index = VECTOR_INDEX_PREFIX + sweep_name
             print(f"SWEEPS: Executing tests for module {sweep_name}...")
             try:
-                response = client.search(
-                    index=vector_index,
-                    query={"match": {"tag.keyword": SWEEPS_TAG}},
-                    aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
-                )
-                suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
-                if len(suites) == 0:
-                    print(
-                        f"SWEEPS: No suites found for module {module_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again. Continuing..."
+                if not suite_name:
+                    response = client.search(
+                        index=vector_index,
+                        query={"match": {"tag.keyword": SWEEPS_TAG}},
+                        aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
                     )
+                    suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
+                else:
+                    response = client.search(
+                        index=vector_index,
+                        query={
+                            "bool": {
+                                "must": [
+                                    {"match": {"tag.keyword": SWEEPS_TAG}},
+                                    {"match": {"suite_name.keyword": suite_name}},
+                                ]
+                            }
+                        },
+                        aggregations={"suites": {"terms": {"field": "suite_name.keyword", "size": 10000}}},
+                    )
+                    suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
+                if len(suites) == 0:
+                    if not suite_name:
+                        print(
+                            f"SWEEPS: No suites found for module {sweep_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suites of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again. Continuing..."
+                        )
+                    else:
+                        print(
+                            f"SWEEPS: No suite named {suite_name} found for module {sweep_name}, with tag {SWEEPS_TAG}. If you meant to run the CI suite of tests, use '--tag ci-main' in your test command, otherwise, run the parameter generator with your own tag and try again. Continuing..."
+                        )
                     continue
 
                 module_pbar = pbar_manager.counter(total=len(suites), desc=f"Module: {sweep_name}", leave=False)
@@ -367,15 +387,10 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args(sys.argv[1:])
-
-    if not args.module_name and args.suite_name:
-        parser.print_help()
-        print("ERROR: Module name is required if suite name is specified.")
-        exit(1)
-
     if not args.module_name and args.vector_id:
         parser.print_help()
         print("ERROR: Module name is required if vector id is specified.")
+        exit(1)
 
     global ELASTIC_CONNECTION_STRING
     ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
