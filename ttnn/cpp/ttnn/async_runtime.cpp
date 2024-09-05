@@ -12,7 +12,7 @@ using DeviceBuffer = std::shared_ptr<Buffer>;
 using queue_id = uint8_t;
 
 DeviceBuffer allocate_interleaved_buffer_on_device(
-    uint32_t buffer_size_bytes,
+    size_t buffer_size_bytes,
     Device* device,
     const Shape& shape,
     DataType data_type,
@@ -23,12 +23,12 @@ DeviceBuffer allocate_interleaved_buffer_on_device(
 }
 
 DeviceBuffer allocate_contiguous_buffer_on_device(
-    uint32_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
+    size_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
     return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
 }
 
 DeviceBuffer allocate_sharded_buffer_on_device(
-    uint32_t buffer_size_bytes,
+    size_t buffer_size_bytes,
     Device* device,
     const Shape& shape,
     DataType data_type,
@@ -49,13 +49,14 @@ DeviceBuffer allocate_sharded_buffer_on_device(
 }
 
 DeviceBuffer allocate_buffer_on_device(
-    uint32_t buffer_size_bytes,
+    size_t buffer_size_bytes,
     types::Device* device,
     const Shape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
     const std::optional<ShardSpecBuffer>& shard_spec) {
+    std::cout << "buffer_size_bytes " << buffer_size_bytes << std::endl;
     if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         return allocate_interleaved_buffer_on_device(
             buffer_size_bytes, device, shape, data_type, layout, memory_config);

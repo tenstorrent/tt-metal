@@ -2639,7 +2639,8 @@ void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md) {
             alloc_md.bottom_up,
             std::nullopt);
     }
-    buffer->set_address(static_cast<uint64_t>(allocated_addr));
+    TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
+    buffer->set_address(static_cast<DeviceAddr>(allocated_addr));
 }
 
 void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool bottom_up, bool blocking) {

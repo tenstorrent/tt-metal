@@ -179,7 +179,7 @@ void validate_sharded_buffer_allocation(
 namespace detail {
 
 DeviceBuffer allocate_interleaved_buffer_on_device(
-    uint32_t buffer_size_bytes,
+    size_t buffer_size_bytes,
     Device* device,
     const Shape& shape,
     DataType data_type,
@@ -190,12 +190,12 @@ DeviceBuffer allocate_interleaved_buffer_on_device(
 }
 
 DeviceBuffer allocate_contiguous_buffer_on_device(
-    uint32_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
+    size_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
     return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
 }
 
 DeviceBuffer allocate_sharded_buffer_on_device(
-    uint32_t buffer_size_bytes,
+    size_t buffer_size_bytes,
     Device* device,
     const Shape& shape,
     DataType data_type,
@@ -213,7 +213,7 @@ DeviceBuffer allocate_sharded_buffer_on_device(
 }  // namespace detail
 
 DeviceBuffer allocate_buffer_on_device(
-    uint32_t buffer_size_bytes,
+    size_t buffer_size_bytes,
     Device* device,
     const Shape& shape,
     DataType data_type,
