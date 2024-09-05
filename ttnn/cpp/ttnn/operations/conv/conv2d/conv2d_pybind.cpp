@@ -17,20 +17,6 @@ namespace conv2d {
 
 void py_bind_conv2d(py::module& module) {
 
-    module.def("conv", &conv, R"doc(
-        Perform a conv ``A x B`` with two tensors
-        This op tilizes tensor A and untilizes the output
-
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | Argument     | Description                                                                                | Data type | Valid range | Required |
-        +==============+============================================================================================+===========+=============+==========+
-        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    )doc");
     bind_registered_operation(
         module,
         ttnn::conv2d,
@@ -128,47 +114,6 @@ void py_bind_conv2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("queue_id") = 0}
     );
-
-    module.def(
-        "optimized_conv",
-        &optimized_conv,
-        py::arg("a").noconvert(),
-        py::arg("b").noconvert(),
-        py::kw_only(),
-        py::arg("bias").noconvert() = std::nullopt,
-        py::arg("conv_reader_indices").noconvert() = std::nullopt,
-        py::arg("conv_params").noconvert(),
-        py::arg("output_channels").noconvert(),
-        py::arg("untilize_out").noconvert(),
-        py::arg("has_bias").noconvert(),
-        py::arg("fuse_relu").noconvert(),
-        py::arg("math_fidelity").noconvert(),
-        py::arg("parallelization_config").noconvert(),
-        py::arg("block_config").noconvert(),
-        py::arg("extra_padding_for_32_B_alignment").noconvert() = 0,
-        py::arg("memory_config").noconvert() = std::nullopt,
-        py::arg("dtype").noconvert() = std::nullopt,
-        py::arg("input_tensor_shape").noconvert() = std::nullopt,
-        py::arg("use_shallow_conv_variant").noconvert() = false,
-        py::arg("transpose_mcast").noconvert() = true,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        py::arg("enable_act_double_buffer").noconvert() = false,
-        py::arg("enable_split_reader").noconvert() = false,
-        py::arg("enable_subblock_padding").noconvert() = false,
-        R"doc(
-        Perform a conv ``A x B`` with two tensors
-        This op tilizes tensor A and untilizes the output
-
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | Argument     | Description                                                                                | Data type | Valid range | Required |
-        +==============+============================================================================================+===========+=============+==========+
-        | a            | Conv activation TT tensor (CHANNELS LAST                                                   | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | b            | Conv weight TT tensor (TILED)                                                              | Tensor    |             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-        | conv_params  | Conv parameters list: kernel size H, kernel size W ,stride H,stride W,pad H,pad W          |Vector<int>|             | Yes      |
-        +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
-    )doc");
 
     module.def(
         "get_conv_padded_input_shape_and_mem_config",
