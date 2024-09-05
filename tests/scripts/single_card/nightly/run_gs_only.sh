@@ -10,7 +10,7 @@ fail=0
 
 echo "Running model nightly tests for GS only"
 
-env pytest -n auto models/demos/resnet/tests/test_metal_resnet50_performant.py ; fail+=$?
+env pytest -n auto models/demos/ttnn_resnet/tests/test_ttnn_resnet50_performant.py ; fail+=$?
 
 if [[ $fail -ne 0 ]]; then
   exit 1

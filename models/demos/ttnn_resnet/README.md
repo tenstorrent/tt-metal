@@ -14,13 +14,13 @@ ResNet50 is a deep convolutional neural network architecture with 50 layers, des
 ## Demo
 
 + To run the demo use:
-`pytest --disable-warnings models/demos/ttnn_resnet/demo/demo.py::test_demo_sample[16-models/demos/resnet/demo/images/-device_params0]`
-; where 16 is the batch size, and `models/demos/resnet/demo/images/` is where the images are located. Our model supports batch size of 2 and 1 as well, however the demo focuses on batch size 16 which has the highest throughput among the three options. This demo includes preprocessing, postprocessing and inference time for batch size 16. The demo will run the images through the inference thrice. First, discover the optimal shard scheme. Second to capture the compile time, and cache all the ops. Third, to capture the best inference time on TT hardware.
+`pytest --disable-warnings models/demos/ttnn_resnet/demo/demo.py::test_demo_sample[16-models/demos/ttnn_resnet/demo/images/-device_params0]`
+; where 16 is the batch size, and `models/demos/ttnn_resnet/demo/images/` is where the images are located. Our model supports batch size of 2 and 1 as well, however the demo focuses on batch size 16 which has the highest throughput among the three options. This demo includes preprocessing, postprocessing and inference time for batch size 16. The demo will run the images through the inference thrice. First, discover the optimal shard scheme. Second to capture the compile time, and cache all the ops. Third, to capture the best inference time on TT hardware.
 
 + Our second demo is designed to run ImageNet dataset, run this with
 `pytest --disable-warnings models/demos/ttnn_resnet/demo/demo.py::test_demo_imagenet[16-100-device_params0]`; again 16 refer to batch size here and 100 is number of iterations(batches), hence the model will process 100 batch of size 16, total of 1600 images.
 
-Note that the first time the model is run, ImageNet images must be downloaded from huggingface and stored in  `models/demos/resnet/demo/images/`; therefore you need to login to huggingface using your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
+Note that the first time the model is run, ImageNet images must be downloaded from huggingface and stored in  `models/demos/ttnn_resnet/demo/images/`; therefore you need to login to huggingface using your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
 To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
 
 

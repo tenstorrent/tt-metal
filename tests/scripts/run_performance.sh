@@ -77,8 +77,6 @@ run_device_perf_models() {
         env pytest models/demos/ttnn_falcon7b/tests -m $test_marker --timeout=360
 
         env pytest models/demos/bert/tests -m $test_marker
-
-        env pytest models/demos/resnet/tests -m $test_marker
     fi
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
