@@ -560,11 +560,7 @@ endforeach()
 ### Setup TTNN as a shared library with optional Python bindings
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor)
 add_subdirectory(cpp/ttnn/deprecated)
-set(TTNN_FINAL_SRC
-    ${TTNN_SRC}
-    ${QUEUE_SRCS}
-    ${TENSOR_SRCS}
-    ${TT_DNN_SRCS})
+
 
 set(TTNN_PUBLIC_INCLUDE_DIRS
     ${UMD_HOME}
@@ -613,12 +609,15 @@ endif()
 
 set(ALL_TTNN_SUBLIBRARIES)
 
+message("TTNN_PUBLIC_INCLUDE_DIRS: ${TTNN_PUBLIC_INCLUDE_DIRS}")
+message("TTNN_PUBLIC_LINK_LIBRARIES: ${TTNN_PUBLIC_LINK_LIBRARIES}")
 foreach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
     set(SUBLIBRARY_SRCS ${TTNN_SRC})
     list(FILTER SUBLIBRARY_SRCS INCLUDE REGEX "${SUBLIBRARY_PATH}")
+    list(FILTER TTNN_SRC EXCLUDE REGEX "${SUBLIBRARY_PATH}")
     if(SUBLIBRARY_SRCS)
         string(REPLACE "/"  "_"  SUBLIBRARY_NAME ${SUBLIBRARY_PATH})
-        add_library(${SUBLIBRARY_NAME} STATIC ${SUBLIBRARY_SRCS})
+        add_library(${SUBLIBRARY_NAME} OBJECT ${SUBLIBRARY_SRCS})
         target_include_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
         target_link_libraries(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
         target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
@@ -627,9 +626,15 @@ foreach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
 
         list(APPEND ALL_TTNN_SUBLIBRARIES ${SUBLIBRARY_NAME})
     endif()
-endforeach(SUBLIBRARY ${TTNN_SUBLIBRARIES})
+endforeach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
 
-add_library(ttnn SHARED ${TTNN_BASE_SRCS})
+set(TTNN_FINAL_SRC
+    ${TTNN_BASE_SRCS}
+    ${QUEUE_SRCS}
+    ${TENSOR_SRCS}
+    ${TT_DNN_SRCS})
+
+add_library(ttnn SHARED ${TTNN_FINAL_SRC})
 target_compile_options(ttnn PUBLIC -MP -Wno-int-to-pointer-cast -fno-var-tracking)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
